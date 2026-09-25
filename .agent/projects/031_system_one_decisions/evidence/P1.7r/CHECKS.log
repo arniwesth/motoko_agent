@@ -1,0 +1,17 @@
+p17r: check control_capability_list_empty.ail clean
+p17r: check control_capability_list_inline.ail clean
+p17r: check control_capability_list_named_wide.ail exit 1: Error: type error in tools/ext_ambient_inventory/fixtures/hook_scope/control_capability_list_named_wide (decl 1): type unification failed at [function application at tools/ext_ambient_inventory/fixtures/hook_scope/control_capability_list_named_wide.ail:27:39]: failed to unify parameter 0: failed to unify effect rows: incompatible closed rows: r1 has extra labels [], r2 has extra labels [Env]
+p17r: check control_capability_list_same_kind.ail clean
+p17r: check control_ext_ports_call.ail clean
+p17r: check control_hook_reaches_env.ail exit 1: Error: type error in tools/ext_ambient_inventory/fixtures/hook_scope/control_hook_reaches_env (decl 8): type unification failed at [function application at tools/ext_ambient_inventory/fixtures/hook_scope/control_hook_reaches_env.ail:57:17]: failed to unify parameter 0: failed to unify effect rows: incompatible closed rows: r1 has extra labels [], r2 has extra labels [Env]
+p17r: check control_interpolated_call.ail exit 1: Error: type error in tools/ext_ambient_inventory/fixtures/hook_scope/control_interpolated_call (decl 8): type unification failed at [function application at tools/ext_ambient_inventory/fixtures/hook_scope/control_interpolated_call.ail:54:17]: failed to unify parameter 0: failed to unify effect rows: incompatible closed rows: r1 has extra labels [], r2 has extra labels [Clock]
+p17r: check control_named_hook_in_register.ail clean
+p17r: check control_registration_only.ail clean
+p17r: check reject_applied_local.ail exit 1: Error: type error in tools/ext_ambient_inventory/fixtures/hook_scope/reject_applied_local (decl 0): undefined variable: None at tools/ext_ambient_inventory/fixtures/hook_scope/reject_applied_local.ail:25:50
+p17r: check reject_binding_unresolvable.ail exit 1: Error: type error in tools/ext_ambient_inventory/fixtures/hook_scope/reject_binding_unresolvable (decl 7): undefined variable: some_hook_from_nowhere at tools/ext_ambient_inventory/fixtures/hook_scope/reject_binding_unresolvable.ail:51:15
+p17r: check reject_capability_list_arity.ail exit 1: Error: type error in tools/ext_ambient_inventory/fixtures/hook_scope/reject_capability_list_arity (decl 1): type unification failed at [function application at tools/ext_ambient_inventory/fixtures/hook_scope/reject_capability_list_arity.ail:18:40]: TC_ARITY_001: function expects 2 argument(s), but 1 provided
+p17r: check reject_capability_list_computed.ail clean
+p17r: check reject_capability_list_element.ail clean
+p17r: check reject_capability_list_juxtaposed.ail exit 1: Error: type error in tools/ext_ambient_inventory/fixtures/hook_scope/reject_capability_list_juxtaposed (decl 2): type unification failed at [list concat left at tools/ext_ambient_inventory/fixtures/hook_scope/reject_capability_list_juxtaposed.ail:25:47]: cannot unify type constructor Capability with *types.TList
+p17r: check reject_capability_list_unknown_kind.ail exit 1: Error: type error in tools/ext_ambient_inventory/fixtures/hook_scope/reject_capability_list_unknown_kind (decl 1): undefined variable: Judge at tools/ext_ambient_inventory/fixtures/hook_scope/reject_capability_list_unknown_kind.ail:20:28
+p17r: check reject_unknown_callee.ail clean

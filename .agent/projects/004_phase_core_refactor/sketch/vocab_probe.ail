@@ -1,0 +1,22 @@
+-- Adjudication probe for review findings P1-R1 / P2-R3 (co-location scope):
+-- can a SEPARATE module consume EXPORTED types that merely EMBED or CARRY
+-- sealed (unexported) types? Reviewers assumed no; prior probes only tested
+-- importing the sealed type NAME directly.
+module vocab_probe
+
+import std/list (length)
+
+type SealedH = MkSealedH([int])          -- sealed: constructor + name unexported
+type SealedP = MkSealedP(int)            -- sealed payload type
+
+export type StateP = { step: int, hist: SealedH }          -- exported record EMBEDDING sealed
+export type DecisionP = CallModelP(SealedP) | FailP(string) -- exported variant CARRYING sealed
+
+export func mk_state(step: int) -> StateP { { step: step, hist: MkSealedH([step]) } }
+export func advance(s: StateP) -> StateP {
+  match s.hist { MkSealedH(xs) => { step: s.step + 1, hist: MkSealedH(xs ++ [s.step + 1]) } }
+}
+export func hist_size(s: StateP) -> int { match s.hist { MkSealedH(xs) => length(xs) } }
+export func mk_payload(n: int) -> SealedP { MkSealedP(n) }
+export func payload_val(p: SealedP) -> int { match p { MkSealedP(n) => n } }
+

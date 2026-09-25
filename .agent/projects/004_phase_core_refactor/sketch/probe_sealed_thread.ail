@@ -1,0 +1,8 @@
+-- Threads a value of UNEXPORTED type Sealed without naming the type.
+module probe_sealed_thread
+import std/io (println)
+import hist_opaque (mk_sealed, unseal)
+export func main() -> () ! {IO} {
+  let s = mk_sealed(42);
+  println("unsealed=${show(unseal(s))}")
+}

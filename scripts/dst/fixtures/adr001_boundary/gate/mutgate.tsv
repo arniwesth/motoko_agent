@@ -1,0 +1,11 @@
+# PLAN-001 (031) P0.3 -- mutgate spec for the registration-shape gate (013 GATE-mutation-red-submission-precondition.md).
+# fix_id <TAB> target_file <TAB> sed_expr <TAB> test_cmd ; run in a throw-away clone only:
+#   bash .agent/projects/013_core_architecture_for_dst/mutgate.sh --spec scripts/dst/fixtures/adr001_boundary/gate/mutgate.tsv --clone-from /workspaces/motoko_agent --repo /workspaces/mutgate-031-p03
+# Every test_cmd exits 0 on success by itself -- no `| grep -q` (pipefail + SIGPIPE scores baseline red).
+p03_shadow_let	tools/ext_ambient_inventory/hook_scope.py	s/            if name in hop.lets:/            if False and name in hop.lets:/	python3 tools/ext_ambient_inventory/hook_scope.py --gate-fixtures --only fx_shadow,fx_import_shadow,fx_delegate_shadow,fx_delegate_import_shadow
+p03_shadow_param	tools/ext_ambient_inventory/hook_scope.py	s/            if name in hop.params:/            if False and name in hop.params:/	python3 tools/ext_ambient_inventory/hook_scope.py --gate-fixtures --only fx_param_shadow,fx_delegate_param
+p03_inline_lambda	tools/ext_ambient_inventory/hook_scope.py	s/self._shape_reject("payload-inline-lambda", home,/_ = ("payload-inline-lambda", home,/	python3 tools/ext_ambient_inventory/hook_scope.py --gate-fixtures --only fx_inline_lambda,fx_form_inline_func
+p03_result_field	tools/ext_ambient_inventory/hook_scope.py	s/if self.registration_shape == "config-caps" and not self.shape_rejections:/if self.registration_shape == "config-caps":/	python3 tools/ext_ambient_inventory/hook_scope.py --gate-fixtures --only fx_computed,fx_match,fx_unknown,fx_partial
+p03_head	tools/ext_ambient_inventory/hook_scope.py	s/^\(                    \)self._shape_reject($/\1_ = (/;s/if self.registration_shape == "config-caps" and not self.shape_rejections:/if not self.shape_rejections:/	python3 tools/ext_ambient_inventory/hook_scope.py --gate-fixtures --only fx_form_named_list
+p03_exit	tools/ext_ambient_inventory/hook_scope.py	s/^        return 1$/        return 0/	python3 tools/ext_ambient_inventory/derive.py --hook-scope >/dev/null 2>&1; test $? -eq 1
+p03_selftest_yield	tools/ext_ambient_inventory/hook_scope.py	s/self._shape_reject("payload-inline-lambda", home,/_ = ("payload-inline-lambda", home,/	make ext_hook_scope_selftest >/dev/null 2>&1

@@ -1,0 +1,195 @@
+-- per_seed_bench.ail — the harness behind `measured_ms_per_seed()`.
+--
+-- It BUILDS N seeds through the same path `corpus_pr_dst.ail`'s `build_seed`
+-- takes — generated through the real driver, programmed, encoded, PERSISTED and
+-- LOADED BACK — because that is the quantity the constant names. Nothing here
+-- asserts: the bench exists to be timed, and its output is the seed count and a
+-- byte total so a run that did no work cannot be mistaken for a fast one.
+--
+-- The plumbing below is copied from `scripts/dst/corpus_pr_dst.ail` rather than
+-- reimplemented: a per-seed cost measured under a different profile, a different
+-- generator version or different bounds is a cost for a different seed.
+--
+--   MOTOKO_BENCH_SEEDS=N ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+--     --ai-stub --entry main evidence/D11-CEIL/per_seed_bench.ail
+--
+-- Time it from the SHELL. Two counts give the slope (which excludes process
+-- start); one count of 100 gives the file's own method (which includes it).
+
+module evidence/D11_CEIL/per_seed_bench
+
+import std/io (println)
+import std/list as List (length)
+import std/string as Str (length, foldChars, charCode)
+import std/ai (Message)
+import std/option (Option, None, Some)
+import std/result (Result, Ok, Err)
+import std/json (Json, jo)
+import std/env (getEnvOr)
+import src/core/config (CostRates, VerificationConfig)
+import src/core/session as Session
+import src/core/session (TracedSessionResult)
+import src/core/test/stub_step (GeneratedWorld)
+import src/core/ports (WorldState, empty_world_state)
+import src/core/types (Msg)
+import src/core/tool_contract (ToolCallEnvelope)
+import src/core/dst_interaction (Interaction)
+import src/core/dst_generator (GeneratorBounds, generator_state, choose_environment)
+import src/core/dst_program (ExecutionProgram, program_schema_version)
+import src/core/dst_persistence (
+  Encoded, EncodeRefused, encode_artifact, artifact_identity,
+  persist_program, persist_rule, artifact_path,
+  Loaded, LoadRefused, LoadIoError, load_program
+)
+import src/core/dst_driver_only (driver_only_manifest)
+import src/core/dst_profile (ExecutionManifest)
+import pkg/sunholo/motoko_ext_abi/types (
+  PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome,
+  BudgetPlan, BudgetPatch, Delegate, PureCtx, AiCtx, ProviderCtx, InterceptCtx,
+  ProcessCtx, ExtRuntime, NoDecision, NoIntercept, PassThrough, Pending,
+  DenyAfterTimeout, PromptPatch, ToolPolicyDecision, ToolSchema
+)
+import src/core/test/ext_fixture (fixture_hooks)
+
+-- Driver plumbing — copied verbatim from corpus_pr_dst.ail.
+func msg(role: string, content: string) -> Message {
+  { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
+}
+func history() -> [Message] { [msg("system", "s"), msg("user", "u")] }
+func budget() -> BudgetPlan { { total: 10, solver: 6, verifier: 4 } }
+func zero_rates() -> CostRates { { input_per_1m_millicents: 0, output_per_1m_millicents: 0 } }
+
+func generator_id() -> string { "motoko_driver_only" }
+func generator_version() -> string { "1" }
+
+func bounds() -> GeneratorBounds {
+  { max_interactions: 96,
+    max_chunks_per_interaction: 4,
+    max_payload_bytes: 512,
+    max_resource_size: 8,
+    max_clock_advance_ms: 2000,
+    chunk_draw_hi: 3 }
+}
+
+func generated_world(seed: int) -> WorldState {
+  let g = generator_state(generator_id(), generator_version(), seed, bounds());
+  let e = choose_environment(g, "initial_world");
+  { empty_world_state() | gen: e.state, env: e.entries }
+}
+
+func no_describe(_config: Json) -> [ToolSchema] { [] }
+func no_prompt(_ctx: PureCtx) -> PromptPatch { { prepend: [], append: [] } }
+func no_budget(_ctx: PureCtx, _plan: BudgetPlan) -> BudgetPatch {
+  { requested_total: None, requested_solver: None, requested_verifier: None }
+}
+func no_handle(ctx: ProviderCtx, _call: ToolCallEnvelope)
+  -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace}  { { decision: { Delegate }, next_state: ctx.world } }
+func no_intercept(ctx: InterceptCtx, _text: string)
+  -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: { NoIntercept }, next_state: ctx.world } }
+func no_solver(ctx: ProcessCtx, _text: string)
+  -> FinalizeOutcome ! {Process}  { { decision: { NoDecision }, next_state: ctx.world } }
+func passthrough_pre_step(ctx: AiCtx, _msgs: [Msg])
+  -> PreStepOutcome ! {AI, IO, Trace}  { { decision: { PassThrough }, next_state: ctx.world } }
+func pending_policy(_ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+  Pending("generated: approval required", DenyAfterTimeout)
+}
+
+func approval_rt(id: string) -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  let hooks = fixture_hooks(id, {
+    config: jo([]),
+    tools: [],
+    describe: no_describe,
+    prompt: no_prompt,
+    budget: no_budget,
+    compact: passthrough_pre_step,
+    policy: pending_policy,
+    provide: no_handle,
+    intercept: no_intercept,
+    judge: no_solver
+  });
+  { registry: { entries: [hooks] }, strict_mode: false, verification: v }
+}
+
+func run_generated(id: string, w: WorldState) -> TracedSessionResult
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  Session.run_v2_session_traced(
+    approval_rt(id), "task", "", false, budget(), "phase-c-model", history(), ".",
+    12, false, 0, zero_rates(), GeneratedWorld(w))
+}
+
+pure func run_manifest() -> ExecutionManifest {
+  driver_only_manifest("HEAD", "ailang 0.33.0", "8.0", "{}",
+                       ["ai_step", "env_get", "tool_handle"], ["clock_now"], "HEAD")
+}
+
+pure func program_of(w: WorldState, initial: WorldState) -> ExecutionProgram {
+  { schema_version: program_schema_version(),
+    generator_id: initial.gen.id,
+    generator_version: initial.gen.version,
+    seed: initial.gen.seed,
+    initial_world: {
+      messages_and_policy: "{\"messages\":[\"system\",\"user\"],\"policy\":\"driver_only\"}",
+      synthetic_environment: initial.env,
+      files: [],
+      clock_epoch: initial.clock_ms,
+      extension_profile: "driver_only/1"
+    },
+    bounds: initial.gen.bounds,
+    manifest: run_manifest(),
+    interactions: w.log }
+}
+
+-- A store of its own, so a bench run neither reads nor clobbers the bank the
+-- PR target persists under `.ailang/dst-corpus`.
+pure func store_root() -> string { ".ailang/dst-corpus-bench" }
+
+-- ONE SEED, the whole path: generated, programmed, encoded, persisted, loaded
+-- back. The loaded bytes are returned so that dropping the load-back would
+-- change the output rather than only the time.
+func build_seed(seed: int) -> int
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let initial = generated_world(seed);
+  let r = run_generated("bench_${seed}", initial);
+  let p = program_of(r.world, initial);
+  let encoded = encode_artifact(p);
+  let bytes_len = match encoded { Encoded(b) => Str.length(b), EncodeRefused(_) => 0 };
+  let _outcome = persist_rule(persist_program(store_root(), p));
+  let path = artifact_path(store_root(), p);
+  match load_program(path) {
+    Loaded(lp) => match encode_artifact(lp) {
+      Encoded(b) => Str.length(b),
+      EncodeRefused(_) => 0
+    },
+    LoadRefused(_) => 0,
+    LoadIoError(_) => 0
+  }
+}
+
+func build_range(next: int, last: int, acc: int) -> int
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  if next > last then acc
+  else {
+    let here = build_seed(next);
+    build_range(next + 1, last, acc + here)
+  }
+}
+
+pure func parse_nonneg(s: string) -> Option[int] {
+  let acc = Str.foldChars(digit_step, { ok: true, any: false, v: 0 }, s);
+  if acc.ok && acc.any then Some(acc.v) else None
+}
+
+pure func digit_step(acc: { ok: bool, any: bool, v: int }, c: string) -> { ok: bool, any: bool, v: int } {
+  let code = Str.charCode(c);
+  if code >= 48 && code <= 57 then { ok: acc.ok, any: true, v: acc.v * 10 + (code - 48) }
+  else { ok: false, any: acc.any, v: acc.v }
+}
+
+export func main() -> ()
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let raw = getEnvOr("MOTOKO_BENCH_SEEDS", "100");
+  let n = match parse_nonneg(raw) { None => 100, Some(v) => if v > 0 then v else 100 };
+  let total = build_range(1, n, 0);
+  println("BENCH seeds=${n} loaded_bytes=${total}")
+}

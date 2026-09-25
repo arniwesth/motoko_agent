@@ -1,0 +1,540 @@
+From d3c9ff680c952718cbca958339aee758216183c8 Mon Sep 17 00:00:00 2001
+From: Arni Westh <arni.westh@gmail.com>
+Date: Fri, 31 Jul 2026 06:53:58 +0000
+Subject: [PATCH 1/2] prototype: stepWithStreamRecorded on released v0.31.0
+ (motoko 009 spike, never merges)
+
+---
+ internal/builtins/ai.go      |   1 +
+ internal/builtins/ai_step.go |  69 +++++++++++++++++++++
+ internal/effects/ai_step.go  | 113 +++++++++++++++++++++++++++++++++++
+ std/ai.ail                   |  25 ++++++++
+ 4 files changed, 208 insertions(+)
+
+diff --git a/internal/builtins/ai.go b/internal/builtins/ai.go
+index a2dce829a..1edf2cc6e 100644
+--- a/internal/builtins/ai.go
++++ b/internal/builtins/ai.go
+@@ -24,6 +24,7 @@ func init() {
+ 	registerAIStepWithCache()
+ 	// M-AI-STEP-STREAMING (v0.18.7) — typed-StepResult streaming variant
+ 	registerAIStepWithStream()
++	registerAIStepWithStreamRecorded()
+ }
+ 
+ // _ai_call: Call the AI oracle with a string input
+diff --git a/internal/builtins/ai_step.go b/internal/builtins/ai_step.go
+index 81bfbb1b3..04cfbea37 100644
+--- a/internal/builtins/ai_step.go
++++ b/internal/builtins/ai_step.go
+@@ -451,6 +451,75 @@ func streamUsageRecordType(T *types.Builder) types.Type {
+ 	)
+ }
+ 
++// ============================================================================
++// _ai_step_with_stream_recorded — PROTOTYPE of the proposed upstream
++// recorded-stream API. Preserves immediate callbacks and additionally returns
++// the exact ordered observed chunks with the final outcome, on BOTH outcomes.
++// NOT an upstream feature; see the motoko 009 spike.
++// ============================================================================
++
++func makeAIStepWithStreamRecordedType() types.Type {
++	T := types.NewBuilder()
++	onChunkType := T.Func(streamChunkType(T)).Returns(T.Unit()).Build()
++	return T.Func(
++		T.String(),
++		T.List(messageRecordType(T)),
++		T.List(toolSchemaRecordType(T)),
++		T.List(cacheBreakpointRecordType(T)),
++		onChunkType,
++	).
++		Returns(T.Record(
++			types.Field("chunks", T.List(streamChunkType(T))),
++			types.Field("outcome", T.App("Result", stepResultRecordType(T), aiErrorRecordType(T))),
++		)).
++		Effects("AI")
++}
++
++func aiStepWithStreamRecordedImpl(ctx *effects.EffContext, args []eval.Value) (eval.Value, error) {
++	if err := ctx.RequireCapWithBudget("AI", ""); err != nil {
++		return nil, err
++	}
++	return effects.Call(ctx, "AI", "stepWithStreamRecorded", args)
++}
++
++func registerAIStepWithStreamRecorded() {
++	err := RegisterEffectBuiltin(BuiltinSpec{
++		Module:  "std/ai",
++		Name:    "_ai_step_with_stream_recorded",
++		NumArgs: 5,
++		Effect:  "AI",
++		Type:    makeAIStepWithStreamRecordedType,
++		Impl:    aiStepWithStreamRecordedImpl,
++		Metadata: &BuiltinMetadata{
++			Description: "Streaming multi-turn AI completion that preserves immediate per-chunk callbacks and returns the exact ordered observed chunks with the final outcome",
++			LongDesc: `Identical to _ai_step_with_stream except the return shape:
++
++  { chunks: [StreamChunk], outcome: Result[StepResult, AIError] }
++
++The chunks are returned on BOTH outcomes, so a stream that fails part-way
++still yields every chunk observed before the failure. Callbacks still fire
++immediately at arrival; the returned log is an exact, non-duplicating record
++of what the callback saw.`,
++			Params: []ParamDoc{
++				{Name: "model", Description: "Model ID (or empty for handler default)"},
++				{Name: "messages", Description: "Conversation as list[Message]"},
++				{Name: "tools", Description: "Tool catalog as list[ToolSchema]"},
++				{Name: "cache_breakpoints", Description: "Opt-in cache hints as list[CacheBreakpoint]"},
++				{Name: "on_chunk", Description: "Callback (StreamChunk) -> () invoked per chunk"},
++			},
++			Returns:   "{ chunks: [StreamChunk], outcome: Result[StepResult, AIError] }",
++			SeeAlso:   []string{"_ai_step_with_stream", "std/ai.stepWithStreamRecorded"},
++			Since:     "prototype",
++			Stability: StabilityExperimental,
++			Tags:      []string{"ai", "result", "streaming", "recorded"},
++			Category:  "ai",
++		},
++	})
++	if err != nil {
++		panic("failed to register _ai_step_with_stream_recorded builtin: " + err.Error())
++	}
++}
++
+ func registerAIStepWithStream() {
+ 	err := RegisterEffectBuiltin(BuiltinSpec{
+ 		Module:  "std/ai",
+diff --git a/internal/effects/ai_step.go b/internal/effects/ai_step.go
+index 37ba18777..e7ca108ab 100644
+--- a/internal/effects/ai_step.go
++++ b/internal/effects/ai_step.go
+@@ -52,6 +52,7 @@ func init() {
+ 	RegisterOp("AI", "step", aiStep)
+ 	RegisterOp("AI", "stepWithCache", aiStepWithCache)
+ 	RegisterOp("AI", "stepWithStream", aiStepWithStream)
++	RegisterOp("AI", "stepWithStreamRecorded", aiStepWithStreamRecorded)
+ }
+ 
+ // ============================================================================
+@@ -410,6 +411,118 @@ func aiStepWithStream(ctx *EffContext, args []eval.Value) (eval.Value, error) {
+ 	return makeOkStepResult(resp), nil
+ }
+ 
++// ============================================================================
++// aiStepWithStreamRecorded — PROTOTYPE of the proposed upstream recorded-stream
++// API (motoko_agent/.agent/projects/009_motoko_dst_execution/
++// UPSTREAM-REQUEST-ailang-recorded-stream-api.md). NOT an upstream feature.
++//
++// Identical to aiStepWithStream except the return shape: it preserves
++// immediate per-chunk callbacks AND returns the exact ordered list of observed
++// chunks alongside the final outcome:
++//
++//   { chunks: [StreamChunk], outcome: Result[StepResult, AIError] }
++//
++// The chunks are returned on BOTH outcomes. That is the point of the shape: a
++// Result[{result, chunks}, AIError] discards every chunk observed before a
++// mid-stream failure, which is the case a deterministic replay most depends on.
++// ============================================================================
++
++func aiStepWithStreamRecorded(ctx *EffContext, args []eval.Value) (eval.Value, error) {
++	if len(args) < 5 {
++		return nil, fmt.Errorf("E_AI_TYPE_ERROR: stepWithStreamRecorded: expected 5 arguments, got %d", len(args))
++	}
++	model, ok := args[0].(*eval.StringValue)
++	if !ok {
++		return nil, fmt.Errorf("E_AI_TYPE_ERROR: stepWithStreamRecorded: expected string model, got %T", args[0])
++	}
++	messagesArg, ok := args[1].(*eval.ListValue)
++	if !ok {
++		return nil, fmt.Errorf("E_AI_TYPE_ERROR: stepWithStreamRecorded: expected list[Message] messages, got %T", args[1])
++	}
++	toolsArg, ok := args[2].(*eval.ListValue)
++	if !ok {
++		return nil, fmt.Errorf("E_AI_TYPE_ERROR: stepWithStreamRecorded: expected list[ToolSchema] tools, got %T", args[2])
++	}
++	breakpointsArg, ok := args[3].(*eval.ListValue)
++	if !ok {
++		return nil, fmt.Errorf("E_AI_TYPE_ERROR: stepWithStreamRecorded: expected list[CacheBreakpoint] cache_breakpoints, got %T", args[3])
++	}
++	onChunkFn := args[4]
++	if onChunkFn == nil {
++		return nil, fmt.Errorf("E_AI_TYPE_ERROR: stepWithStreamRecorded: on_chunk callback is nil")
++	}
++	if ctx.AI == nil {
++		return makeRecordedStream(nil, makeAIErrorResultRecord(ai.NewAIError(ai.CodeProviderNotFound, ErrNoAIHandler.Error(), false))), nil
++	}
++	if ctx.FnCaller == nil {
++		return makeRecordedStream(nil, makeAIErrorResultRecord(ai.NewAIError(ai.CodeInternal, "stepWithStreamRecorded: FnCaller not wired (evaluator integration missing)", false))), nil
++	}
++
++	messages, conversionErr := decodeMessages(messagesArg)
++	if conversionErr != nil {
++		return makeRecordedStream(nil, makeAIErrorResultRecord(ai.NewAIError(ai.CodeSchemaValidation, conversionErr.Error(), false))), nil
++	}
++	tools, conversionErr := decodeToolSchemas(toolsArg)
++	if conversionErr != nil {
++		return makeRecordedStream(nil, makeAIErrorResultRecord(ai.NewAIError(ai.CodeSchemaValidation, conversionErr.Error(), false))), nil
++	}
++	breakpoints, conversionErr := decodeCacheBreakpoints(breakpointsArg)
++	if conversionErr != nil {
++		return makeRecordedStream(nil, makeAIErrorResultRecord(ai.NewAIError(ai.CodeSchemaValidation, conversionErr.Error(), false))), nil
++	}
++
++	// Tee every chunk to the live callback (immediate projection) and to the
++	// returned log (exact parity, no duplicate delivery).
++	recorded := make([]eval.Value, 0, 16)
++	chunkCount := 0
++	onChunk := func(chunk ai.StreamChunk) {
++		chunkCount++
++		encoded := encodeStreamChunk(chunk)
++		if encoded == nil {
++			return
++		}
++		recorded = append(recorded, encoded)
++		if _, err := ctx.FnCaller(onChunkFn, encoded); err != nil {
++			ctx.RecordAIEffect("stepWithStreamRecorded.callback",
++				[]string{fmt.Sprintf("chunk:%d", chunkCount)},
++				fmt.Sprintf(errResultPrefix, err.Error()),
++				nil,
++			)
++		}
++	}
++
++	resp, err := ctx.AI.StepWithStream(model.Value, messages, tools, breakpoints, onChunk)
++	if err != nil {
++		aiErr := classifyOpError(err)
++		ctx.RecordAIEffect("stepWithStreamRecorded",
++			[]string{truncateForTrace(model.Value), fmt.Sprintf("messages:%d tools:%d cache:%d chunks:%d", len(messages), len(tools), len(breakpoints), chunkCount)},
++			fmt.Sprintf(errResultPrefix, aiErr.Code),
++			ctx.AI.LastRoutingMetadata(),
++		)
++		return makeRecordedStream(recorded, makeAIErrorResultRecord(aiErr)), nil
++	}
++
++	ctx.RecordAIEffect("stepWithStreamRecorded",
++		[]string{truncateForTrace(model.Value), fmt.Sprintf("messages:%d tools:%d cache:%d chunks:%d", len(messages), len(tools), len(breakpoints), chunkCount)},
++		fmt.Sprintf("text:%s tool_calls:%d finish:%s cache_read:%d cache_create:%d", truncateForTrace(resp.Text), len(resp.ToolCalls), resp.FinishReason, resp.CacheReadInputTokens, resp.CacheCreationInputTokens),
++		ctx.AI.LastRoutingMetadata(),
++	)
++	return makeRecordedStream(recorded, makeOkStepResult(resp)), nil
++}
++
++// makeRecordedStream builds { chunks: [StreamChunk], outcome: Result[...] }.
++func makeRecordedStream(chunks []eval.Value, outcome eval.Value) eval.Value {
++	if chunks == nil {
++		chunks = []eval.Value{}
++	}
++	return &eval.RecordValue{
++		Fields: map[string]eval.Value{
++			"chunks":  &eval.ListValue{Elements: chunks},
++			"outcome": outcome,
++		},
++	}
++}
++
+ // encodeStreamChunk converts a Go ai.StreamChunk variant into the matching
+ // AILANG `StreamChunk` ADT. Mirrors the type definitions in std/ai.ail
+ // (see M-AI-STEP-STREAMING design doc for shape contract).
+diff --git a/std/ai.ail b/std/ai.ail
+index 035091ba1..85bed3cc6 100644
+--- a/std/ai.ail
++++ b/std/ai.ail
+@@ -336,6 +336,31 @@ export func stepWithStream(
+ ) -> Result[StepResult, AIError] ! {AI} =
+   _ai_step_with_stream(model, messages, tools, cache_breakpoints, on_chunk)
+ 
++-- RecordedStream is what stepWithStreamRecorded returns: the exact ordered
++-- list of observed chunks plus the final typed outcome. `chunks` is populated
++-- on BOTH outcomes — a stream that fails part-way still returns every chunk
++-- observed before the failure, which is the case a deterministic recorder
++-- most depends on.
++export type RecordedStream = {
++  chunks: [StreamChunk],
++  outcome: Result[StepResult, AIError]
++}
++
++-- stepWithStreamRecorded: stepWithStream that also returns what it streamed.
++--
++-- The callback still fires immediately at each chunk's arrival, so live
++-- rendering is unchanged. The returned `chunks` is an exact, non-duplicating
++-- record of the same sequence, which lets a caller record a live exchange and
++-- replay it deterministically without widening the callback's effect row.
++export func stepWithStreamRecorded(
++  model: string,
++  messages: [Message],
++  tools: [ToolSchema],
++  cache_breakpoints: [CacheBreakpoint],
++  on_chunk: (StreamChunk) -> () ! {IO}
++) -> RecordedStream ! {AI} =
++  _ai_step_with_stream_recorded(model, messages, tools, cache_breakpoints, on_chunk)
++
+ -- runTools: convenience loop driver for multi-turn tool dispatch.
+ --
+ -- Calls step in a loop until the model returns finish_reason != "tool_calls"
+-- 
+2.43.0
+
+
+From e87e86cc4c5e7516ca80480a1d9cbb6af4d725ac Mon Sep 17 00:00:00 2001
+From: Arni Westh <arni.westh@gmail.com>
+Date: Fri, 31 Jul 2026 11:49:35 +0000
+Subject: [PATCH 2/2] prototype: add recorded-stream Go tests (motoko 009
+ spike, never merges)
+
+---
+ .../ai_step_with_stream_recorded_test.go      | 244 ++++++++++++++++++
+ 1 file changed, 244 insertions(+)
+ create mode 100644 internal/effects/ai_step_with_stream_recorded_test.go
+
+diff --git a/internal/effects/ai_step_with_stream_recorded_test.go b/internal/effects/ai_step_with_stream_recorded_test.go
+new file mode 100644
+index 000000000..78928b04c
+--- /dev/null
++++ b/internal/effects/ai_step_with_stream_recorded_test.go
+@@ -0,0 +1,244 @@
++package effects
++
++// Tests for aiStepWithStreamRecorded — the recorded-stream variant that keeps
++// immediate per-chunk callback delivery AND returns the exact ordered observed
++// chunks alongside the final outcome.
++//
++// The properties under test are the three the consumer depends on:
++//
++//   1. delivery AND capture, not either — the callback still fires per chunk
++//      while the same chunks come back in the result;
++//   2. chunks on BOTH outcomes — a stream that fails part-way still returns
++//      every chunk observed before the failure;
++//   3. identity, not reconstruction — the returned chunks are the values
++//      handed to the callback, in order, and concatenating the ContentDelta
++//      payloads still equals StepResult.message.content.
++//
++// The success-path fake is the shared fakeStepHandler from ai_step_test.go.
++// The error path needs its own: fakeStepHandler returns before emitting
++// anything when Step fails, so "chunks then error" was previously untestable.
++
++import (
++	"errors"
++	"testing"
++
++	"github.com/sunholo-data/ailang/internal/ai"
++	"github.com/sunholo-data/ailang/internal/eval"
++)
++
++// partialThenFailHandler emits real chunks and *then* fails, which is the
++// case the recorded API exists for and the one a Result[{result, chunks}, ...]
++// shape would silently discard.
++type partialThenFailHandler struct {
++	chunks []string
++	err    error
++}
++
++func (h *partialThenFailHandler) Call(_ string) (string, error)        { return "", nil }
++func (h *partialThenFailHandler) CallJson(_, _ string) (string, error) { return "", nil }
++func (h *partialThenFailHandler) CallImage(_, out, _ string) (string, error) {
++	return out, nil
++}
++func (h *partialThenFailHandler) CallImageBase64(_, _ string) (string, error) { return "", nil }
++func (h *partialThenFailHandler) Step(_ string, _ []ai.Message, _ []ai.ToolSchema) (*ai.Response, error) {
++	return nil, h.err
++}
++func (h *partialThenFailHandler) StepWithCache(_ string, _ []ai.Message, _ []ai.ToolSchema, _ []ai.CacheBreakpoint) (*ai.Response, error) {
++	return nil, h.err
++}
++func (h *partialThenFailHandler) StepWithStream(_ string, _ []ai.Message, _ []ai.ToolSchema, _ []ai.CacheBreakpoint, onChunk func(ai.StreamChunk)) (*ai.Response, error) {
++	for _, c := range h.chunks {
++		onChunk(ai.StreamContentDelta{Text: c})
++	}
++	return nil, h.err
++}
++
++// recordedArgs builds the 5-argument call shape shared by these tests.
++func recordedArgs() []eval.Value {
++	return []eval.Value{
++		&eval.StringValue{Value: "gpt-4o"},
++		&eval.ListValue{Elements: []eval.Value{
++			&eval.RecordValue{Fields: map[string]eval.Value{
++				"role":       &eval.StringValue{Value: "user"},
++				"content":    &eval.StringValue{Value: "hi"},
++				"tool_calls": &eval.ListValue{Elements: []eval.Value{}},
++			}},
++		}},
++		&eval.ListValue{Elements: []eval.Value{}},
++		&eval.ListValue{Elements: []eval.Value{}},
++		&eval.UnitValue{},
++	}
++}
++
++// splitRecorded destructures the { chunks, outcome } record.
++func splitRecorded(t *testing.T, out eval.Value) ([]eval.Value, *eval.TaggedValue) {
++	t.Helper()
++	rec, ok := out.(*eval.RecordValue)
++	if !ok {
++		t.Fatalf("result type = %T, want *eval.RecordValue", out)
++	}
++	chunks, ok := rec.Fields["chunks"].(*eval.ListValue)
++	if !ok {
++		t.Fatalf("result.chunks type = %T, want *eval.ListValue", rec.Fields["chunks"])
++	}
++	outcome, ok := rec.Fields["outcome"].(*eval.TaggedValue)
++	if !ok {
++		t.Fatalf("result.outcome type = %T, want *eval.TaggedValue", rec.Fields["outcome"])
++	}
++	return chunks.Elements, outcome
++}
++
++func contentDeltaText(t *testing.T, v eval.Value) (string, bool) {
++	t.Helper()
++	tv, ok := v.(*eval.TaggedValue)
++	if !ok || tv.CtorName != "ContentDelta" {
++		return "", false
++	}
++	return tv.Fields[0].(*eval.StringValue).Value, true
++}
++
++// TestAIStepWithStreamRecorded_ReturnsDeliveredChunksOnSuccess is property 1
++// and property 3: the callback fired, and the identical sequence came back.
++func TestAIStepWithStreamRecorded_ReturnsDeliveredChunksOnSuccess(t *testing.T) {
++	h := &fakeStepHandler{
++		stepResp: &ai.Response{
++			Text: "hello world", InputTokens: 42, OutputTokens: 7, FinishReason: "stop",
++		},
++	}
++	var captured []eval.Value
++	ctx := &EffContext{
++		AI:       NewAIContext(h),
++		FnCaller: captureFnCaller(&captured),
++		Caps:     map[string]Capability{"AI": NewCapability("AI")},
++	}
++
++	out, err := aiStepWithStreamRecorded(ctx, recordedArgs())
++	if err != nil {
++		t.Fatalf("aiStepWithStreamRecorded returned Go error: %v", err)
++	}
++	returned, outcome := splitRecorded(t, out)
++
++	// Delivery still happened, and capture did not replace it.
++	if len(captured) != 2 {
++		t.Fatalf("callback invocations = %d, want 2", len(captured))
++	}
++	// No duplicate delivery: projected count == returned count.
++	if len(returned) != len(captured) {
++		t.Fatalf("returned chunk count = %d, want %d (same as delivered)", len(returned), len(captured))
++	}
++	// Identity, in order: the returned values are the delivered values.
++	for i := range captured {
++		if captured[i] != returned[i] {
++			t.Errorf("chunk %d: returned value is not the delivered value", i)
++		}
++	}
++	if outcome.CtorName != "Ok" {
++		t.Fatalf("outcome.CtorName = %q, want Ok", outcome.CtorName)
++	}
++}
++
++// TestAIStepWithStreamRecorded_ReturnsChunksOnErrorPath is property 2, and the
++// reason the return is a record rather than Result[{result, chunks}, AIError]:
++// that shape has nowhere to put chunks when the stream fails.
++func TestAIStepWithStreamRecorded_ReturnsChunksOnErrorPath(t *testing.T) {
++	h := &partialThenFailHandler{
++		chunks: []string{"partial-1", "partial-2"},
++		err:    errors.New("connection reset by peer"),
++	}
++	var captured []eval.Value
++	ctx := &EffContext{
++		AI:       NewAIContext(h),
++		FnCaller: captureFnCaller(&captured),
++		Caps:     map[string]Capability{"AI": NewCapability("AI")},
++	}
++
++	out, err := aiStepWithStreamRecorded(ctx, recordedArgs())
++	if err != nil {
++		t.Fatalf("aiStepWithStreamRecorded returned Go error: %v", err)
++	}
++	returned, outcome := splitRecorded(t, out)
++
++	if outcome.CtorName != "Err" {
++		t.Fatalf("outcome.CtorName = %q, want Err", outcome.CtorName)
++	}
++	// Both pre-failure chunks survive.
++	if len(returned) != 2 {
++		t.Fatalf("returned chunk count on error path = %d, want 2", len(returned))
++	}
++	want := []string{"partial-1", "partial-2"}
++	for i, w := range want {
++		got, ok := contentDeltaText(t, returned[i])
++		if !ok {
++			t.Fatalf("returned[%d] is not a ContentDelta", i)
++		}
++		if got != w {
++			t.Errorf("returned[%d] = %q, want %q", i, got, w)
++		}
++	}
++	if len(captured) != 2 {
++		t.Errorf("callback invocations on error path = %d, want 2", len(captured))
++	}
++}
++
++// TestAIStepWithStreamRecorded_ContentDeltaConcatEqualsMessageContent holds the
++// documented StreamChunk invariant across the new surface.
++func TestAIStepWithStreamRecorded_ContentDeltaConcatEqualsMessageContent(t *testing.T) {
++	h := &fakeStepHandler{
++		stepResp: &ai.Response{Text: "hello world", FinishReason: "stop"},
++	}
++	var captured []eval.Value
++	ctx := &EffContext{
++		AI:       NewAIContext(h),
++		FnCaller: captureFnCaller(&captured),
++		Caps:     map[string]Capability{"AI": NewCapability("AI")},
++	}
++
++	out, err := aiStepWithStreamRecorded(ctx, recordedArgs())
++	if err != nil {
++		t.Fatalf("aiStepWithStreamRecorded returned Go error: %v", err)
++	}
++	returned, outcome := splitRecorded(t, out)
++
++	concat := ""
++	for _, c := range returned {
++		if text, ok := contentDeltaText(t, c); ok {
++			concat += text
++		}
++	}
++	stepResult := outcome.Fields[0].(*eval.RecordValue)
++	msg := stepResult.Fields["message"].(*eval.RecordValue)
++	content := msg.Fields["content"].(*eval.StringValue).Value
++	if concat != content {
++		t.Errorf("concat(ContentDelta) = %q, want message.content %q", concat, content)
++	}
++}
++
++// TestAIStepWithStream_UnchangedByRecordedVariant pins the additive claim: the
++// existing entry point still returns Result[StepResult, AIError] directly, not
++// a record, so no current caller is affected.
++func TestAIStepWithStream_UnchangedByRecordedVariant(t *testing.T) {
++	h := &fakeStepHandler{
++		stepResp: &ai.Response{Text: "hello world", FinishReason: "stop"},
++	}
++	var captured []eval.Value
++	ctx := &EffContext{
++		AI:       NewAIContext(h),
++		FnCaller: captureFnCaller(&captured),
++		Caps:     map[string]Capability{"AI": NewCapability("AI")},
++	}
++
++	out, err := aiStepWithStream(ctx, recordedArgs())
++	if err != nil {
++		t.Fatalf("aiStepWithStream returned Go error: %v", err)
++	}
++	tagged, ok := out.(*eval.TaggedValue)
++	if !ok {
++		t.Fatalf("stepWithStream result type = %T, want *eval.TaggedValue (unchanged)", out)
++	}
++	if tagged.CtorName != "Ok" {
++		t.Fatalf("stepWithStream outcome = %q, want Ok", tagged.CtorName)
++	}
++	if len(captured) != 2 {
++		t.Errorf("stepWithStream callback invocations = %d, want 2", len(captured))
++	}
++}
+-- 
+2.43.0
+

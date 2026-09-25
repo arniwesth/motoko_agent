@@ -1,0 +1,1186 @@
+-- src/eval/journal/stopping.ail
+--
+-- ADR-004 D1, PLAN-004 §3 P1.3 (graph id P1.3-v2): reader III — the stopping
+-- contract, the cutoff table, the expected end and the journal world.
+--
+--   read_journal_world(journal_lines, log_lines, selector, recorded_env)
+--     -> Result[JournalWorld, WorldRefusal]
+--
+-- It builds on P1.2b (`association.ail`'s `read_run`, imported, not copied)
+-- and P1.2a (`reader.ail`'s `read_source`), and on `configuration.ail`.
+--
+-- THE SIX SHAPES (v5 D1), over the recorded call's shape, in this order —
+-- the loop's own branch order (session.ail:4020: `finish_reason ==
+-- "tool_calls" || n_calls > 0`, then hybrid extraction, then
+-- `classify_candidate`'s `trim(candidate) == ""`, :3267):
+--   1. continuation  — >= 1 call, every call answered, no `hybrid-step-` result
+--   2. incomplete    — >= 1 call, some call unanswered   -> IncompleteToolBatch
+--   3. call-free, finish `tool_calls`                     -> CallFreeToolCallsFinish
+--   4. call-free, blank content                           -> BlankStop
+--   5. call-free, non-blank: a STOP CALL                  -> EndFinalize(model_stop)
+--   6. a `hybrid-step-` result                            -> HybridExtraction
+-- Every call before N is a continuation; call N is a continuation
+-- (`EndSuspended(N)`) or a stop call (`EndFinalize("model_stop")`). The
+-- segment is cut at the first call that does not fit.
+--
+-- THE CUTOFF TABLE. A cutoff ends the segment before an entry, or before the
+-- whole turn it names:
+--   at the entry:  run_finished -> Completed(finish_reason); suspended ->
+--     Suspended; resumed -> Resumed; settings -> SettingsChange; run_started ->
+--     RunStarted; exit -> Exit; history_replaced -> HistoryReplaced; an in-run
+--     append that is neither assistant nor tool -> UserMessage(role) (role
+--     alone cannot tell operator input from runtime feedback); a `wake` with
+--     no park before it in the segment -> Parked (unreachable: the fold
+--     refuses a stray wake and a wake-opened run is ContinuationStart).
+--   before a turn: IncompleteToolBatch, HybridExtraction, RuntimeStatusCall
+--     (a call named `MotokoRuntimeStatus`, session.ail:3677), in that
+--     precedence within one turn; CallFreeToolCallsFinish, BlankStop;
+--     ReplacesPrevious (before the turn whose response was replaced — the
+--     most recent assistant; the history carries the replacement, not what
+--     the call returned); Parked (before the last assistant preceding the
+--     `park`: the call-free stop-class call k the live run classified
+--     `await_wake`, so the segment ends at k−1, EndSuspended(k−1), and the
+--     wake child and the injected wake message are inside the cut; v5 C1).
+--   from the association: ProviderRetry (P1.2b reports it, before call k).
+--   post-turn, the one: StopBeforeEnd — a stop call k that the source
+--     continued past (another assistant follows inside the segment before any
+--     other cutoff): the segment KEEPS call k and its turn, the selector
+--     becomes `EndAt(<call k>)`, N = k, `EndFinalize(model_stop)`.
+--   none of these: SelectorEnd (the selector's own end holds), or
+--     EofWithoutRunFinished when the kept segment reaches the end of the path.
+-- A `Cutoff` carries the kind and the position of the entry (or excerpt
+-- line) that caused it; the resulting selector names what is kept.
+--
+-- GENUINE OR SYNTHETIC. The expected end is GENUINE when the source itself
+-- ended there: `EndSuspended(N)` and the next path entry is the run's
+-- `suspended`; `EndFinalize` and the next is the run's `run_finished` with
+-- finish reason `stop`. Otherwise it is synthetic (the replay's budget
+-- suspension or finalisation has no source counterpart at that point).
+--
+-- THE ORDER, and the three questions P1.2a/P1.2b left open, decided here:
+--   0. SOURCE (P1.2a): refusals of the whole path come first, whatever the cut
+--      (the fold validates the path to the leaf). They are reported through
+--      `read_run`, so P1.2b's pairing remap applies.
+--   1. JOURNAL-ONLY CUTOFFS are found over P1.2a's typed segment BEFORE
+--      attribution (P1.2b step 3): a refusal located past a cutoff is outside
+--      the segment and is not reported. Of these and the first call-free
+--      assistant F (whose place depends on its finish reason), the earlier
+--      wins; at the same assistant the cutoff wins (a park after F, a
+--      replacement of F).
+--   2. `read_run` over the pass-1 selector: start (ContinuationStart before
+--      any cutoff, so a cut never hides it), attribution, excerpt,
+--      association. When F was chosen the pass-1 selector keeps F WITHOUT its
+--      turn tail, so its finish reason is known before its results are
+--      attributed. A cut at `start` is `EmptySegment(entry:<start>, <kind>)`
+--      only after this read (P1.2b's own EmptySegment precedent).
+--   3. REPLACEMENTS AND RETRIES, reported by P1.2b and not cut there, are cut
+--      here by position: a replacement is journal-only (step 1); a retry
+--      comes from the association and is necessarily earlier than F or the
+--      step-1 cut, since the association only covers the pass-1 selector.
+--   4. F classified: CallFreeToolCallsFinish / BlankStop (cut before F), or a
+--      stop call: StopBeforeEnd if the source continued past it, else the
+--      step-1 cutoff after its turn (or the selector's end).
+--   5. `read_run` again when the selector changed: attribution now covers the
+--      kept turn of a stop call, so a stale tool result after it is
+--      `UnexpectedToolResult` — while the same result after a cut call-free
+--      call is outside the segment. EndAt's tail is P1.2a's: the tool results
+--      and `state_delta`s directly following the assistant.
+--   6. The logical model: every associated `provider_call_prepared.model`
+--      equals it, else `Association(event:<i>, provider_call_prepared.model)`.
+--   7. HybridPredicate: when the end is a stop call and `hybrid_tools` is
+--      recorded true, `session_emitted_native_tool_call` (the pinned copy)
+--      over the seed plus the assistant appends before the stop call must be
+--      true, else `HybridPredicate(entry:<stop call>)`. The predicate is
+--      monotone, so this is its one assertion; with no stop call it is
+--      recorded over the seed and every kept assistant.
+--
+-- THE WORLD. `expected.decisions` is 2N + 1 for `EndSuspended(N)` and 2N for
+-- a stop at N (one DecisionRecord per `decide`: two per continuation call and
+-- the terminal decision; ADR-004 D3). `expected.chain` is the kept appends'
+-- `digest_after`; `tool_invocations` the calls in the assistants' call order
+-- (the order the loop invokes them; the tool QUEUE keeps journal order, P1.5).
+-- `unreproduced` holds the seed's cumulative counts, the per-call cache usage
+-- and the recorded context-limit source; `omissions` T0's cumulative list
+-- (ADR-004 D7) plus `max_cost_millicents_served_zero` when the recorded cap is
+-- not zero.
+--
+-- Privacy (PLAN-004 §0.6): positions, counts, digests and identities only.
+-- Nothing here imports `src/core`.
+
+module src/eval/journal/stopping
+
+import std/ai (Message, ToolCall)
+import std/json (Json, get, getString, getInt)
+import std/list as List (length, map, foldl)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/string (startsWith, trim)
+import src/eval/journal/digests (eval_arguments_digest_json)
+import src/eval/journal/reader (read_source, parse_lines, RunSelector, SegmentEnd, EndAt, CutoffBefore, ReaderSource, AtEntry, SegmentEntry, SegAppended, SegReplaced, SegStateDelta, SegRunStarted, SegRunFinished, SegSettings, SegSuspended, SegResumed, SegExit, SegPark, SegWake, segment_entry_seq, EvBootInputs, EvRuntimeStatusCounts)
+import src/eval/journal/association (read_run, RunRead, RunRefusal, RunPosition, InJournal, InExcerpt, SourceRefused, Association, EmptySegment, AssociatedCall, run_refusal_family, run_refusal_position, run_refusal_field, run_position_label)
+import src/eval/journal/excerpt (Prepared)
+import src/eval/journal/configuration (RecordedEnv, EnvPair, ContextLimitEncoding, T0Settings, eval_provider_api_model, context_encoding, context_limit_source, t0_settings, encoding_id, encoding_detail, profile_config_content, env_value)
+import src/eval/journal/testdata/world_fixtures (WorldFixture, fxw_all, fxw_m3_selector_end, fxw_m3_suspended, fxw_m3_completed, fxw_m3_resumed, fxw_m3_settings_change, fxw_m3_run_started, fxw_m3_exit, fxw_m3_eof_without_run_finished, fxw_m3_parked, fxw_m3_provider_retry, fxw_m3_user_message, fxw_m3_history_replaced, fxw_m3_replaces_previous, fxw_m3_incomplete_tool_batch, fxw_m3_call_free_tool_calls_finish, fxw_m3_blank_stop, fxw_m3_hybrid_extraction, fxw_m3_runtime_status_call, fxw_m3_stop_before_end, fxw_m3_stop_then_user_message, fxw_m3_stop_then_runtime_status, fxw_m3_empty_after_cut, fxw_m3_continuation_before_cut, fxw_m3_stale_result_after_stop, fxw_m3_stale_result_after_cut, fxw_m4_stop_call_last, fxw_m4_hybrid_predicate_false, fxw_m4_hybrid_predicate_off, fxw_m4_hybrid_predicate_seed, fxw_m5_config_window, fxw_m5_config_disabled, fxw_m5_config_catalogue, fxw_m5_config_missed_unknown, fxw_m5_config_missed_non_positive, fxw_m5_config_missed_no_event, fxw_m5_model_mismatch)
+
+-- ============================================================================
+-- Copies.
+-- ============================================================================
+
+-- SOURCE src/core/session.ail L2126-2131 B103977-104161 sha256:e2b8b93d8cc2ac9694a4a5fb855417029fac4ca63f0ac71bab83fa8521255d3a symbol=any_native_call
+pure func ev_any_native_call(calls: [ToolCall]) -> bool {
+  match calls {
+    [] => false,
+    c :: rest => if startsWith(c.id, "hybrid-step-") then ev_any_native_call(rest) else true
+  }
+}
+
+-- SOURCE src/core/session.ail L2134-2141 B104222-104471 sha256:1ed8396de41e55c1c746bdb68fb11dc872cb869679ba86092f01c672753042f3 symbol=session_emitted_native_tool_call
+pure func ev_session_emitted_native_tool_call(msgs: [Message]) -> bool {
+  match msgs {
+    [] => false,
+    m :: rest =>
+      if m.role == "assistant" && ev_any_native_call(m.tool_calls) then true
+      else ev_session_emitted_native_tool_call(rest)
+  }
+}
+
+export pure func eval_session_emitted_native_tool_call(msgs: [Message]) -> bool {
+  ev_session_emitted_native_tool_call(msgs)
+}
+
+-- ============================================================================
+-- Output and refusals.
+-- ============================================================================
+
+export type CutoffKind
+  = CutCompleted(string)
+  | CutSuspended
+  | CutResumed
+  | CutSettingsChange
+  | CutRunStarted
+  | CutExit
+  | CutEofWithoutRunFinished
+  | CutParked
+  | CutProviderRetry
+  | CutUserMessage(string)
+  | CutHistoryReplaced
+  | CutReplacesPrevious
+  | CutIncompleteToolBatch
+  | CutCallFreeToolCallsFinish
+  | CutBlankStop
+  | CutHybridExtraction
+  | CutRuntimeStatusCall
+  | CutStopBeforeEnd
+  | CutSelectorEnd
+
+export pure func cutoff_id(k: CutoffKind) -> string {
+  match k {
+    CutCompleted(_) => "Completed", CutSuspended => "Suspended", CutResumed => "Resumed",
+    CutSettingsChange => "SettingsChange", CutRunStarted => "RunStarted", CutExit => "Exit",
+    CutEofWithoutRunFinished => "EofWithoutRunFinished", CutParked => "Parked",
+    CutProviderRetry => "ProviderRetry", CutUserMessage(_) => "UserMessage",
+    CutHistoryReplaced => "HistoryReplaced", CutReplacesPrevious => "ReplacesPrevious",
+    CutIncompleteToolBatch => "IncompleteToolBatch",
+    CutCallFreeToolCallsFinish => "CallFreeToolCallsFinish", CutBlankStop => "BlankStop",
+    CutHybridExtraction => "HybridExtraction", CutRuntimeStatusCall => "RuntimeStatusCall",
+    CutStopBeforeEnd => "StopBeforeEnd", CutSelectorEnd => "SelectorEnd"
+  }
+}
+
+-- Completed's finish reason, UserMessage's role, else "".
+export pure func cutoff_detail(k: CutoffKind) -> string {
+  match k { CutCompleted(r) => r, CutUserMessage(r) => r, _ => "" }
+}
+
+-- `position`: `entry:<seq>`, `event:<line>`, `eof` or `selector`.
+export type Cutoff = { kind: CutoffKind, position: string }
+
+export type ExpectedEnd = EndSuspended(int) | EndFinalize(string)
+
+export pure func end_id(e: ExpectedEnd) -> string {
+  match e { EndSuspended(_) => "EndSuspended", EndFinalize(_) => "EndFinalize" }
+}
+
+export pure func end_value(e: ExpectedEnd) -> string {
+  match e { EndSuspended(n) => show(n), EndFinalize(r) => r }
+}
+
+export type WorldEnd = { selector: RunSelector, cutoff: Cutoff, expected: ExpectedEnd, genuine: bool }
+
+export type Usage = { input: int, output: int, cache_read: int, cache_creation: int }
+
+-- D1's `RecordedTool`: exit status is not recorded.
+export type WorldTool = { seq: int, call_id: string, name: string, arguments: Json, content: string }
+
+export type RecordedCall = {
+  k: int,
+  assistant_seq: int,
+  step: int,
+  assistant: Message,
+  finish_reason: string,
+  usage: Usage,
+  tools: [WorldTool],
+  prepared: Prepared,
+  thinking_event: int
+}
+
+export type ToolKey = { call_id: string, name: string, arguments_digest: string }
+
+export type Expected = {
+  chain: [string],
+  payload: [string],
+  system_prefix: [string],
+  logical_models: [string],
+  api_models: [string],
+  msg_counts: [int],
+  tool_invocations: [ToolKey],
+  decisions: int
+}
+
+export type CacheUsage = { read: int, creation: int }
+
+export type Unreproduced = {
+  prior_counts: EvRuntimeStatusCounts,
+  cache_usage: [CacheUsage],
+  context_limit_source: string
+}
+
+export type RecordedConfig = {
+  session_id: string,
+  workdir: string,
+  profile: string,
+  ext_set_digest: string,
+  system_prefix_digest: string,
+  header_model: string,
+  logical_model: string,
+  api_model: string,
+  boot: EvBootInputs,
+  env: RecordedEnv,
+  context_limit: ContextLimitEncoding,
+  context_limit_source: string,
+  spawn_profile: string,
+  loaded_extensions: [string]
+}
+
+export type JournalWorld = {
+  seed: [Message],
+  seed_digest: string,
+  config: RecordedConfig,
+  settings: T0Settings,
+  calls: [RecordedCall],
+  end: WorldEnd,
+  expected: Expected,
+  unreproduced: Unreproduced,
+  omissions: [string],
+  run: RunRead
+}
+
+export type WorldRefusal = RunRefused(RunRefusal) | HybridPredicate(RunPosition, string)
+
+export pure func world_refusal_family(r: WorldRefusal) -> string {
+  match r { RunRefused(x) => run_refusal_family(x), HybridPredicate(_, _) => "HybridPredicate" }
+}
+
+export pure func world_refusal_position(r: WorldRefusal) -> string {
+  match r { RunRefused(x) => run_refusal_position(x), HybridPredicate(p, _) => run_position_label(p) }
+}
+
+export pure func world_refusal_field(r: WorldRefusal) -> string {
+  match r { RunRefused(x) => run_refusal_field(x), HybridPredicate(_, f) => f }
+}
+
+export pure func t0_omissions() -> [string] {
+  ["streaming", "conversation_loop", "extensions_and_compaction",
+   "model_parameters_tool_schemas_encoding", "real_tools_and_exit_status",
+   "cache_usage", "prior_counts", "runtime_status_tool", "context_limit_source",
+   "live_gc_timing"]
+}
+
+-- ============================================================================
+-- The reader.
+-- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- The journal lines, by seq and id; the path's next entry.
+-- ----------------------------------------------------------------------------
+
+pure func st_line_int(j: Json, key: string) -> int {
+  match getInt(j, key) { Some(n) => n, None => -1 }
+}
+
+pure func st_line_string(j: Json, key: string) -> string {
+  match getString(j, key) { Some(s) => s, None => "" }
+}
+
+pure func st_line_by_seq(lines: [Json], seq: int) -> Option[Json] {
+  List.foldl(\acc j. match acc { Some(_) => acc, None => if st_line_int(j, "seq") == seq then Some(j) else None }, None, lines)
+}
+
+pure func st_line_by_id(lines: [Json], id: string) -> Option[Json] {
+  List.foldl(\acc j. match acc { Some(_) => acc, None => if st_line_string(j, "id") == id then Some(j) else None }, None, lines)
+}
+
+pure func st_id_of_seq(lines: [Json], seq: int) -> string {
+  match st_line_by_seq(lines, seq) { Some(j) => st_line_string(j, "id"), None => "" }
+}
+
+-- The entry after `id` on the path to `leaf`: climb from the leaf to the entry
+-- whose parent is `id`. `read_source` validated the path, so the climb ends.
+pure func st_climb_to_child(lines: [Json], cur: Json, id: string) -> Option[Json] {
+  if st_line_string(cur, "id") == id then None
+  else if st_line_string(cur, "parent_id") == id then Some(cur)
+  else if st_line_string(cur, "parent_id") == "" then None
+  else match st_line_by_id(lines, st_line_string(cur, "parent_id")) {
+    None => None,
+    Some(p) => st_climb_to_child(lines, p, id)
+  }
+}
+
+pure func st_next_on_path(lines: [Json], leaf: string, id: string) -> Option[Json] {
+  match st_line_by_id(lines, leaf) {
+    None => None,
+    Some(l) => st_climb_to_child(lines, l, id)
+  }
+}
+
+pure func st_with_end(sel: RunSelector, end: SegmentEnd) -> RunSelector {
+  { sel | end: end }
+}
+
+pure func st_same_selector(a: RunSelector, b: RunSelector) -> bool {
+  st_end_kind_of(a) == st_end_kind_of(b) && st_end_id_of(a) == st_end_id_of(b)
+}
+
+pure func st_end_kind_of(s: RunSelector) -> string {
+  match s.end { EndAt(_) => "EndAt", CutoffBefore(_) => "CutoffBefore" }
+}
+
+pure func st_end_id_of(s: RunSelector) -> string {
+  match s.end { EndAt(i) => i, CutoffBefore(i) => i }
+}
+
+-- The selector ending just after `id` (its turn tail excluded): the entry
+-- that follows it, or `EndAt(id)` at the end of the path.
+pure func st_just_after(lines: [Json], sel: RunSelector, id: string) -> RunSelector {
+  match st_next_on_path(lines, sel.leaf, id) {
+    Some(n) => st_with_end(sel, CutoffBefore(st_line_string(n, "id"))),
+    None => st_with_end(sel, EndAt(id))
+  }
+}
+
+pure func st_nth_entry(seg: [SegmentEntry], i: int) -> Option[SegmentEntry] {
+  let acc = List.foldl(\a x. if a.i == i then { i: a.i + 1, hit: Some(x) } else { a | i: a.i + 1 }, { i: 0, hit: None }, seg);
+  acc.hit
+}
+
+pure func st_seq_at(seg: [SegmentEntry], i: int) -> int {
+  match st_nth_entry(seg, i) { Some(x) => segment_entry_seq(x), None => -1 }
+}
+
+pure func st_is_assistant_at(seg: [SegmentEntry], i: int) -> bool {
+  match st_nth_entry(seg, i) {
+    Some(x) => (match x { SegAppended(_, e) => e.message.role == "assistant", _ => false }),
+    None => false
+  }
+}
+
+pure func st_content_at(seg: [SegmentEntry], i: int) -> string {
+  match st_nth_entry(seg, i) {
+    Some(x) => (match x { SegAppended(_, e) => e.message.content, _ => "" }),
+    None => ""
+  }
+}
+
+-- ----------------------------------------------------------------------------
+-- Pass 1: the journal-only cutoffs.
+-- ----------------------------------------------------------------------------
+
+type Cut1 = { index: int, kind: CutoffKind, seq: int }
+
+type OpenTurn = { index: int, seq: int, calls: [ToolCall], results: [string] }
+
+type ScanAcc = {
+  i: int,
+  done: bool,
+  cut: Option[Cut1],
+  open_turn: Option[OpenTurn],
+  first_cf: int,
+  last_asst: int,
+  assistants: [int]
+}
+
+pure func st_has_str(xs: [string], x: string) -> bool {
+  List.foldl(\acc y. acc || y == x, false, xs)
+}
+
+pure func st_turn_cut(t: OpenTurn) -> Option[Cut1] {
+  let unanswered = List.foldl(\acc c. acc || not st_has_str(t.results, c.id), false, t.calls);
+  let hybrid = List.foldl(\acc r. acc || startsWith(r, "hybrid-step-"), false, t.results);
+  let status = List.foldl(\acc c. acc || c.name == "MotokoRuntimeStatus", false, t.calls);
+  if List.length(t.calls) > 0 && unanswered then Some({ index: t.index, kind: CutIncompleteToolBatch, seq: t.seq })
+  else if hybrid then Some({ index: t.index, kind: CutHybridExtraction, seq: t.seq })
+  else if status then Some({ index: t.index, kind: CutRuntimeStatusCall, seq: t.seq })
+  else None
+}
+
+pure func st_close_turn(a: ScanAcc) -> ScanAcc {
+  match a.open_turn {
+    None => a,
+    Some(t) => match st_turn_cut(t) {
+      Some(c) => { a | done: true, cut: Some(c), open_turn: None },
+      None => {
+        a | open_turn: None,
+            last_asst: t.index,
+            assistants: a.assistants ++ [t.index],
+            first_cf: if a.first_cf < 0 && List.length(t.calls) == 0 then t.index else a.first_cf
+      }
+    }
+  }
+}
+
+pure func st_stop_at(a: ScanAcc, index: int, kind: CutoffKind, seq: int) -> ScanAcc {
+  { a | done: true, cut: Some({ index: index, kind: kind, seq: seq }) }
+}
+
+pure func st_scan_boundary(c: ScanAcc, i: int, x: SegmentEntry) -> ScanAcc {
+  match x {
+    SegPark(seq, _) => st_stop_at(c, c.last_asst, CutParked, seq),
+    SegWake(seq, _) => st_stop_at(c, i, CutParked, seq),
+    SegRunFinished(seq, f) => st_stop_at(c, i, CutCompleted(f.finish_reason), seq),
+    SegSuspended(seq, _) => st_stop_at(c, i, CutSuspended, seq),
+    SegResumed(seq, _) => st_stop_at(c, i, CutResumed, seq),
+    SegSettings(seq, _) => st_stop_at(c, i, CutSettingsChange, seq),
+    SegRunStarted(seq, _) => st_stop_at(c, i, CutRunStarted, seq),
+    SegExit(seq, _) => st_stop_at(c, i, CutExit, seq),
+    SegReplaced(seq, _) => st_stop_at(c, i, CutHistoryReplaced, seq),
+    _ => c
+  }
+}
+
+pure func st_scan_step(a: ScanAcc, x: SegmentEntry) -> ScanAcc {
+  let i = a.i;
+  let b = { a | i: i + 1 };
+  if a.done then b
+  else match x {
+    SegStateDelta(_, _) => b,
+    SegAppended(seq, e) =>
+      if e.message.role == "tool" then (match b.open_turn {
+        None => b,
+        Some(t) => { b | open_turn: Some({ t | results: t.results ++ [e.message.tool_call_id] }) }
+      })
+      else {
+        let c = st_close_turn(b);
+        if c.done then c
+        else if e.message.role != "assistant" then st_stop_at(c, i, CutUserMessage(e.message.role), seq)
+        else if e.replaces_previous then st_stop_at(c, c.last_asst, CutReplacesPrevious, seq)
+        else { c | open_turn: Some({ index: i, seq: seq, calls: e.message.tool_calls, results: [] }) }
+      },
+    _ => {
+      let c = st_close_turn(b);
+      if c.done then c else st_scan_boundary(c, i, x)
+    }
+  }
+}
+
+pure func st_scan(seg: [SegmentEntry]) -> ScanAcc {
+  let acc = List.foldl(st_scan_step, { i: 0, done: false, cut: None, open_turn: None, first_cf: -1, last_asst: -1, assistants: [] }, seg);
+  if acc.done then acc else st_close_turn(acc)
+}
+
+-- ----------------------------------------------------------------------------
+-- Pass 2: the association's cut, the call-free call, the end.
+-- ----------------------------------------------------------------------------
+
+-- What pass 1 read: the selector, a cut at `start`, whether F was chosen.
+type Plan = { sel1: RunSelector, empty: Option[CutoffKind], via_cf: bool }
+
+pure func st_plan_of(lines: [Json], sel: RunSelector, seg: [SegmentEntry], sc: ScanAcc) -> Plan {
+  let start_only = st_just_after(lines, sel, st_id_of_seq(lines, st_seq_at(seg, 0)));
+  match sc.cut {
+    Some(c) =>
+      if sc.first_cf < 0 || c.index <= sc.first_cf then (
+        if c.index <= 0 then { sel1: start_only, empty: Some(c.kind), via_cf: false }
+        else { sel1: st_with_end(sel, CutoffBefore(st_id_of_seq(lines, st_seq_at(seg, c.index)))), empty: None, via_cf: false }
+      )
+      else { sel1: st_just_after(lines, sel, st_id_of_seq(lines, st_seq_at(seg, sc.first_cf))), empty: None, via_cf: true },
+    None =>
+      if sc.first_cf >= 0 then { sel1: st_just_after(lines, sel, st_id_of_seq(lines, st_seq_at(seg, sc.first_cf))), empty: None, via_cf: true }
+      else { sel1: sel, empty: None, via_cf: false }
+  }
+}
+
+-- The final selector and cutoff (None: the selector's end or EOF), and
+-- whether the last kept call is a stop call.
+type Decision = { sel2: RunSelector, cut: Option[Cutoff], stop: bool }
+
+pure func st_counted_seqs(seg: [SegmentEntry]) -> [int] {
+  List.foldl(\acc x. match x {
+    SegAppended(s, e) => if e.message.role == "assistant" && not e.replaces_previous then acc ++ [s] else acc,
+    _ => acc
+  }, [], seg)
+}
+
+pure func st_nth_int(xs: [int], k: int) -> int {
+  let acc = List.foldl(\a x. if a.i == k then { i: a.i + 1, v: x } else { a | i: a.i + 1 }, { i: 1, v: -1 }, xs);
+  acc.v
+}
+
+pure func st_last_call(calls: [AssociatedCall]) -> Option[AssociatedCall] {
+  List.foldl(\acc c. Some(c), None, calls)
+}
+
+pure func st_entry_pos(seq: int) -> string { "entry:${show(seq)}" }
+
+pure func st_empty_at(seq: int, kind: CutoffKind) -> WorldRefusal {
+  RunRefused(EmptySegment(InJournal(AtEntry(seq)), cutoff_id(kind)))
+}
+
+pure func st_decide_cf(lines: [Json], sel: RunSelector, seg: [SegmentEntry], sc: ScanAcc, rr1: RunRead) -> Result[Decision, WorldRefusal] {
+  let f = sc.first_cf;
+  let fseq = st_seq_at(seg, f);
+  let fid = st_id_of_seq(lines, fseq);
+  let finish = match st_last_call(rr1.calls) { Some(c) => c.thinking.finish_reason, None => "" };
+  let cut_kind =
+    if finish == "tool_calls" then Some(CutCallFreeToolCallsFinish)
+    else if trim(st_content_at(seg, f)) == "" then Some(CutBlankStop)
+    else None;
+  match cut_kind {
+    Some(k) =>
+      if f == 0 then Err(st_empty_at(fseq, k))
+      else Ok({ sel2: st_with_end(sel, CutoffBefore(fid)), cut: Some({ kind: k, position: st_entry_pos(fseq) }), stop: false }),
+    None => {
+      let limit = match sc.cut { Some(c) => c.index, None => List.length(seg) };
+      let later = List.foldl(\acc i. acc || (i > f && i < limit), false, sc.assistants);
+      let cut_at_assistant = match sc.cut { Some(c) => c.index > f && st_is_assistant_at(seg, c.index), None => false };
+      if later || cut_at_assistant then
+        Ok({ sel2: st_with_end(sel, EndAt(fid)), cut: Some({ kind: CutStopBeforeEnd, position: st_entry_pos(fseq) }), stop: true })
+      else match sc.cut {
+        Some(c) => Ok({ sel2: st_with_end(sel, CutoffBefore(st_id_of_seq(lines, st_seq_at(seg, c.index)))), cut: Some({ kind: c.kind, position: st_entry_pos(c.seq) }), stop: true }),
+        None => Ok({ sel2: sel, cut: None, stop: true })
+      }
+    }
+  }
+}
+
+pure func st_decide(lines: [Json], sel: RunSelector, seg: [SegmentEntry], sc: ScanAcc, plan: Plan, rr1: RunRead) -> Result[Decision, WorldRefusal] {
+  match rr1.cut {
+    Some(r) => {
+      let aseq = st_nth_int(st_counted_seqs(rr1.source.segment), r.call);
+      Ok({ sel2: st_with_end(sel, CutoffBefore(st_id_of_seq(lines, aseq))), cut: Some({ kind: CutProviderRetry, position: "event:${show(r.event)}" }), stop: false })
+    },
+    None =>
+      if plan.via_cf then st_decide_cf(lines, sel, seg, sc, rr1)
+      else match sc.cut {
+        Some(c) => Ok({ sel2: plan.sel1, cut: Some({ kind: c.kind, position: st_entry_pos(c.seq) }), stop: false }),
+        None => Ok({ sel2: sel, cut: None, stop: false })
+      }
+  }
+}
+
+-- ----------------------------------------------------------------------------
+-- The world.
+-- ----------------------------------------------------------------------------
+
+pure func st_model_refusal(calls: [AssociatedCall], logical: string) -> Option[WorldRefusal] {
+  List.foldl(\acc c. match acc {
+    Some(_) => acc,
+    None => if c.prepared.model != logical then Some(RunRefused(Association(InExcerpt(c.prepared.index), "provider_call_prepared.model"))) else None
+  }, None, calls)
+}
+
+pure func st_all_but_last(xs: [Message]) -> [Message] {
+  match xs {
+    [] => [],
+    x :: rest => match rest { [] => [], _ => x :: st_all_but_last(rest) }
+  }
+}
+
+pure func st_last_seq(seg: [SegmentEntry]) -> int {
+  List.foldl(\acc x. segment_entry_seq(x), -1, seg)
+}
+
+pure func st_genuine_end(next: Option[Json], run_id: string, stop: bool) -> bool {
+  match next {
+    None => false,
+    Some(j) =>
+      st_line_string(j, "run_id") == run_id && (
+        if stop then st_line_string(j, "type") == "run_finished" && st_line_string(j, "finish_reason") == "stop"
+        else st_line_string(j, "type") == "suspended"
+      )
+  }
+}
+
+pure func st_recorded_call(c: AssociatedCall) -> RecordedCall {
+  {
+    k: c.k,
+    assistant_seq: c.assistant_seq,
+    step: c.step,
+    assistant: c.assistant,
+    finish_reason: c.thinking.finish_reason,
+    usage: {
+      input: c.thinking.input_tokens,
+      output: c.thinking.output_tokens,
+      cache_read: c.thinking.cache_read,
+      cache_creation: c.thinking.cache_creation
+    },
+    tools: List.map(\t. { seq: t.seq, call_id: t.call_id, name: t.name, arguments: t.arguments, content: t.content }, c.tools),
+    prepared: c.prepared,
+    thinking_event: c.thinking.index
+  }
+}
+
+pure func st_chain_of(seg: [SegmentEntry]) -> [string] {
+  List.foldl(\acc x. match x { SegAppended(_, e) => acc ++ [e.digest_after], _ => acc }, [], seg)
+}
+
+pure func st_tool_keys(calls: [AssociatedCall]) -> [ToolKey] {
+  List.foldl(\acc c. acc ++ List.map(\a. { call_id: a.call_id, name: a.name, arguments_digest: eval_arguments_digest_json(a.arguments) }, c.calls), [], calls)
+}
+
+pure func st_build_world(lines: [Json], sel: RunSelector, env: RecordedEnv, d: Decision, rr: RunRead) -> Result[JournalWorld, WorldRefusal] {
+  let src = rr.source;
+  let header = src.header;
+  let boot = header.boot;
+  let logical = src.seed_state.model;
+  let calls = rr.calls;
+  let n = List.length(calls);
+  let assistants = List.map(\c. c.assistant, calls);
+  let before = if d.stop then st_all_but_last(assistants) else assistants;
+  let predicate = ev_session_emitted_native_tool_call(src.seed ++ before);
+  let next = st_next_on_path(lines, sel.leaf, st_id_of_seq(lines, st_last_seq(src.segment)));
+  let cutoff = match d.cut {
+    Some(c) => c,
+    None => match next {
+      Some(_) => { kind: CutSelectorEnd, position: "selector" },
+      None => { kind: CutEofWithoutRunFinished, position: "eof" }
+    }
+  };
+  let expected_end = if d.stop then EndFinalize("model_stop") else EndSuspended(n);
+  match st_model_refusal(calls, logical) {
+    Some(r) => Err(r),
+    None =>
+      if d.stop && boot.hybrid_tools && not predicate then
+        Err(HybridPredicate(InJournal(AtEntry(match st_last_call(calls) { Some(c) => c.assistant_seq, None => -1 })), "session_emitted_native_tool_call"))
+      else {
+        let enc = context_encoding(rr.context_limits, sel.run_id);
+        let api = eval_provider_api_model(logical, env.openai_base_url);
+        let config: RecordedConfig = {
+          session_id: header.session_id,
+          workdir: header.workdir,
+          profile: src.seed_state.profile,
+          ext_set_digest: header.ext_set_digest,
+          system_prefix_digest: header.system_prefix_digest,
+          header_model: header.model,
+          logical_model: logical,
+          api_model: api,
+          boot: boot,
+          env: env,
+          context_limit: enc,
+          context_limit_source: context_limit_source(rr.context_limits, sel.run_id),
+          spawn_profile: match rr.profile { Some(p) => p.config_profile, None => "" },
+          loaded_extensions: match rr.profile { Some(p) => p.loaded_extensions, None => [] }
+        };
+        Ok({
+          seed: src.seed,
+          seed_digest: src.seed_digest,
+          config: config,
+          settings: t0_settings(header.session_id, boot.ohmy_pi, boot.hybrid_tools, env, enc, predicate),
+          calls: List.map(st_recorded_call, calls),
+          end: { selector: d.sel2, cutoff: cutoff, expected: expected_end, genuine: st_genuine_end(next, sel.run_id, d.stop) },
+          expected: {
+            chain: st_chain_of(src.segment),
+            payload: List.map(\c. c.prepared.payload_digest, calls),
+            system_prefix: List.map(\c. c.prepared.system_prefix_digest, calls),
+            logical_models: List.map(\c. c.prepared.model, calls),
+            api_models: List.map(\c. eval_provider_api_model(c.prepared.model, env.openai_base_url), calls),
+            msg_counts: List.map(\c. c.prepared.msg_count, calls),
+            tool_invocations: st_tool_keys(calls),
+            decisions: if d.stop then 2 * n else 2 * n + 1
+          },
+          unreproduced: {
+            prior_counts: src.seed_state.cumulative,
+            cache_usage: List.map(\c. { read: c.thinking.cache_read, creation: c.thinking.cache_creation }, calls),
+            context_limit_source: config.context_limit_source
+          },
+          omissions: if boot.max_cost_millicents != 0 then t0_omissions() ++ ["max_cost_millicents_served_zero"] else t0_omissions(),
+          run: rr
+        })
+      }
+  }
+}
+
+pure func st_world_from(lines: [Json], log: [string], sel: RunSelector, env: RecordedEnv, src: ReaderSource) -> Result[JournalWorld, WorldRefusal] {
+  let seg = src.segment;
+  let sc = st_scan(seg);
+  let plan = st_plan_of(lines, sel, seg, sc);
+  match read_run(lines, log, plan.sel1) {
+    Err(r) => Err(RunRefused(r)),
+    Ok(rr1) => match plan.empty {
+      Some(k) => Err(st_empty_at(src.start_seq, k)),
+      None => match st_decide(lines, sel, seg, sc, plan, rr1) {
+        Err(r) => Err(r),
+        Ok(d) =>
+          if st_same_selector(d.sel2, plan.sel1) then st_build_world(lines, sel, env, d, rr1)
+          else match read_run(lines, log, d.sel2) {
+            Err(r) => Err(RunRefused(r)),
+            Ok(rr2) => st_build_world(lines, sel, env, d, rr2)
+          }
+      }
+    }
+  }
+}
+
+export pure func read_journal_world(lines: [Json], log: [string], sel: RunSelector, env: RecordedEnv) -> Result[JournalWorld, WorldRefusal] {
+  match read_source(lines, sel) {
+    Err(sr) => match read_run(lines, log, sel) {
+      Err(r) => Err(RunRefused(r)),
+      Ok(_) => Err(RunRefused(SourceRefused(sr)))
+    },
+    Ok(src) => st_world_from(lines, log, sel, env, src)
+  }
+}
+
+-- ============================================================================
+-- Tests (M3, M4, M5).
+--
+-- Every journal and log is synthetic and generated (`testdata/gen_fixtures.py`);
+-- each expectation is asserted literally in its test and, field for field,
+-- against the generator's independent stopping contract.
+-- ============================================================================
+
+pure func st_strs_eq(a: [string], b: [string]) -> bool {
+  match a {
+    [] => (match b { [] => true, _ => false }),
+    x :: xs => match b { [] => false, y :: ys => x == y && st_strs_eq(xs, ys) }
+  }
+}
+
+pure func st_ints_eq(a: [int], b: [int]) -> bool {
+  match a {
+    [] => (match b { [] => true, _ => false }),
+    x :: xs => match b { [] => false, y :: ys => x == y && st_ints_eq(xs, ys) }
+  }
+}
+
+pure func st_concat_strs(xss: [[string]]) -> [string] { List.foldl(\acc xs. acc ++ xs, [], xss) }
+
+pure func st_fw_selector(f: WorldFixture) -> RunSelector {
+  let end = if f.end_kind == "EndAt" then EndAt(f.end_id) else CutoffBefore(f.end_id);
+  { leaf: f.leaf, run_id: f.run_id, start: f.start, end: end }
+}
+
+pure func st_fw_env(f: WorldFixture) -> RecordedEnv {
+  {
+    headless: f.env_headless,
+    openai_base_url: f.env_base_url,
+    retry_stream_error: f.env_retry,
+    tool_timeout_ms: if f.env_has_timeout then Some(f.env_timeout) else None
+  }
+}
+
+pure func st_fw_lines(f: WorldFixture) -> [Json] {
+  match parse_lines(f.journal) { Ok(ls) => ls, Err(_) => [] }
+}
+
+pure func st_fx_world(f: WorldFixture) -> Result[JournalWorld, WorldRefusal] {
+  read_journal_world(st_fw_lines(f), f.log, st_fw_selector(f), st_fw_env(f))
+}
+
+pure func st_tool_key_label(k: ToolKey) -> string { "${k.call_id}|${k.name}|${k.arguments_digest}" }
+
+pure func st_env_label(p: EnvPair) -> string { "${p.key}=${p.value}" }
+
+pure func st_profile_file_content(w: JournalWorld) -> string {
+  List.foldl(\acc f. f.content, "", w.settings.files)
+}
+
+pure func st_all_equal(xs: [string], x: string) -> bool {
+  List.foldl(\acc y. acc && y == x, true, xs)
+}
+
+-- The reader against the generator, field for field.
+pure func st_world_agrees(f: WorldFixture) -> bool {
+  List.length(st_fw_lines(f)) == List.length(f.journal) && (match st_fx_world(f) {
+    Err(r) =>
+      not f.ok
+        && world_refusal_family(r) == f.family
+        && world_refusal_position(r) == f.position
+        && world_refusal_field(r) == f.field,
+    Ok(w) =>
+      f.ok
+        && st_end_kind_of(w.end.selector) == f.sel_end_kind
+        && st_end_id_of(w.end.selector) == f.sel_end_id
+        && cutoff_id(w.end.cutoff.kind) == f.cut_kind
+        && cutoff_detail(w.end.cutoff.kind) == f.cut_detail
+        && w.end.cutoff.position == f.cut_position
+        && List.length(w.calls) == f.n
+        && end_id(w.end.expected) == f.end_kind_out
+        && end_value(w.end.expected) == f.end_value
+        && w.end.genuine == f.genuine
+        && w.expected.decisions == f.decisions
+        && st_ints_eq(List.map(\c. c.assistant_seq, w.calls), f.call_seqs)
+        && st_strs_eq(List.map(\c. c.finish_reason, w.calls), f.finish_reasons)
+        && st_strs_eq(w.expected.chain, f.chain)
+        && st_strs_eq(w.expected.payload, f.payload)
+        && w.config.logical_model == f.logical_model
+        && st_all_equal(w.expected.logical_models, f.logical_model)
+        && w.config.api_model == f.api_model
+        && st_all_equal(w.expected.api_models, f.api_model)
+        && st_strs_eq(List.map(st_tool_key_label, w.expected.tool_invocations), f.tool_keys)
+        && st_strs_eq(st_concat_strs(List.map(\c. List.map(\t. t.call_id, c.tools), w.calls)), f.tool_ids)
+        && w.config.boot.hybrid_tools == f.hybrid_tools
+        && w.settings.hybrid_predicate == f.hybrid_predicate
+        && encoding_id(w.settings.context_limit) == f.encoding
+        && encoding_detail(w.settings.context_limit) == f.encoding_detail
+        && st_profile_file_content(w) == f.profile_config
+        && w.unreproduced.context_limit_source == f.limit_source
+        && st_strs_eq(List.map(st_env_label, w.settings.env), f.served_env)
+        && st_strs_eq(w.omissions, f.omissions)
+        && w.seed_digest == f.seed_payload
+  })
+}
+
+pure func st_refused_as(f: WorldFixture, family: string, position: string, field: string) -> bool {
+  st_world_agrees(f) && (match st_fx_world(f) {
+    Ok(_) => false,
+    Err(r) => world_refusal_family(r) == family && world_refusal_position(r) == position && world_refusal_field(r) == field
+  })
+}
+
+-- selector end, cutoff, its position, N, the expected end, genuine or not.
+pure func st_ends_as(f: WorldFixture, sel_kind: string, sel_id: string, cut: string, position: string, n: int, end: string, value: string, genuine: bool) -> bool {
+  st_world_agrees(f) && (match st_fx_world(f) {
+    Err(_) => false,
+    Ok(w) =>
+      st_end_kind_of(w.end.selector) == sel_kind && st_end_id_of(w.end.selector) == sel_id
+        && cutoff_id(w.end.cutoff.kind) == cut && w.end.cutoff.position == position
+        && List.length(w.calls) == n
+        && end_id(w.end.expected) == end && end_value(w.end.expected) == value
+        && w.end.genuine == genuine
+        && w.expected.decisions == (if end == "EndSuspended" then 2 * n + 1 else 2 * n)
+        && List.length(w.expected.payload) == n
+  })
+}
+
+pure func test_world_equals_generator() -> bool
+  tests [((), true)]
+  {
+    List.length(fxw_all()) == 36 && List.foldl(\acc f. acc && st_world_agrees(f), true, fxw_all())
+  }
+
+-- ---- M3: the cutoff table --------------------------------------------------
+
+-- The selector's own end holds: three continuation calls, the source suspends
+-- right after the third's turn — a genuine EndSuspended(3), 7 decisions.
+pure func test_m3_selector_end() -> bool
+  tests [((), true)]
+  { st_ends_as(fxw_m3_selector_end(), "EndAt", "e20", "SelectorEnd", "selector", 3, "EndSuspended", "3", true) }
+
+pure func test_m3_suspended() -> bool
+  tests [((), true)]
+  { st_ends_as(fxw_m3_suspended(), "CutoffBefore", "e23", "Suspended", "entry:23", 3, "EndSuspended", "3", true) }
+
+-- A stop call at call 4 and the run's `run_finished` (stop): the genuine end.
+pure func test_m3_completed() -> bool
+  tests [((), true)]
+  {
+    st_ends_as(fxw_m3_completed(), "CutoffBefore", "e25", "Completed", "entry:25", 4, "EndFinalize", "model_stop", true)
+      && (match st_fx_world(fxw_m3_completed()) { Err(_) => false, Ok(w) => cutoff_detail(w.end.cutoff.kind) == "stop" })
+  }
+
+pure func test_m3_resumed() -> bool
+  tests [((), true)]
+  { st_ends_as(fxw_m3_resumed(), "CutoffBefore", "e17", "Resumed", "entry:17", 1, "EndSuspended", "1", false) }
+
+pure func test_m3_settings_change() -> bool
+  tests [((), true)]
+  { st_ends_as(fxw_m3_settings_change(), "CutoffBefore", "e17", "SettingsChange", "entry:17", 1, "EndSuspended", "1", false) }
+
+pure func test_m3_run_started() -> bool
+  tests [((), true)]
+  { st_ends_as(fxw_m3_run_started(), "CutoffBefore", "e17", "RunStarted", "entry:17", 1, "EndSuspended", "1", false) }
+
+pure func test_m3_exit() -> bool
+  tests [((), true)]
+  { st_ends_as(fxw_m3_exit(), "CutoffBefore", "e17", "Exit", "entry:17", 1, "EndSuspended", "1", false) }
+
+-- The path ends inside the run with no `run_finished`: a synthetic end.
+pure func test_m3_eof_without_run_finished() -> bool
+  tests [((), true)]
+  { st_ends_as(fxw_m3_eof_without_run_finished(), "EndAt", "e20", "EofWithoutRunFinished", "eof", 3, "EndSuspended", "3", false) }
+
+-- A park at e22 after the call-free stop-class call 3 (e20): cut before call
+-- 3, EndSuspended(2); the wake (e23), the injected wake message (e24) and the
+-- next call (e25) are inside the cut.
+pure func test_m3_parked() -> bool
+  tests [((), true)]
+  { st_ends_as(fxw_m3_parked(), "CutoffBefore", "e20", "Parked", "entry:22", 2, "EndSuspended", "2", false) }
+
+pure func test_m3_provider_retry() -> bool
+  tests [((), true)]
+  { st_ends_as(fxw_m3_provider_retry(), "CutoffBefore", "e17", "ProviderRetry", "event:23", 1, "EndSuspended", "1", false) }
+
+pure func test_m3_user_message() -> bool
+  tests [((), true)]
+  {
+    st_ends_as(fxw_m3_user_message(), "CutoffBefore", "e17", "UserMessage", "entry:17", 1, "EndSuspended", "1", false)
+      && (match st_fx_world(fxw_m3_user_message()) { Err(_) => false, Ok(w) => cutoff_detail(w.end.cutoff.kind) == "user" })
+  }
+
+pure func test_m3_history_replaced() -> bool
+  tests [((), true)]
+  { st_ends_as(fxw_m3_history_replaced(), "CutoffBefore", "e23", "HistoryReplaced", "entry:23", 3, "EndSuspended", "3", false) }
+
+-- The replacement (e18) of call 2's response (e17): cut before call 2.
+pure func test_m3_replaces_previous() -> bool
+  tests [((), true)]
+  { st_ends_as(fxw_m3_replaces_previous(), "CutoffBefore", "e17", "ReplacesPrevious", "entry:18", 1, "EndSuspended", "1", false) }
+
+-- r2.1's shape: the last turn's call has no result at the leaf.
+pure func test_m3_incomplete_tool_batch() -> bool
+  tests [((), true)]
+  { st_ends_as(fxw_m3_incomplete_tool_batch(), "CutoffBefore", "e20", "IncompleteToolBatch", "entry:20", 2, "EndSuspended", "2", false) }
+
+pure func test_m3_call_free_tool_calls_finish() -> bool
+  tests [((), true)]
+  { st_ends_as(fxw_m3_call_free_tool_calls_finish(), "CutoffBefore", "e20", "CallFreeToolCallsFinish", "entry:20", 2, "EndSuspended", "2", false) }
+
+pure func test_m3_blank_stop() -> bool
+  tests [((), true)]
+  { st_ends_as(fxw_m3_blank_stop(), "CutoffBefore", "e20", "BlankStop", "entry:20", 2, "EndSuspended", "2", false) }
+
+pure func test_m3_hybrid_extraction() -> bool
+  tests [((), true)]
+  { st_ends_as(fxw_m3_hybrid_extraction(), "CutoffBefore", "e20", "HybridExtraction", "entry:20", 2, "EndSuspended", "2", false) }
+
+pure func test_m3_runtime_status_call() -> bool
+  tests [((), true)]
+  { st_ends_as(fxw_m3_runtime_status_call(), "CutoffBefore", "e20", "RuntimeStatusCall", "entry:20", 2, "EndSuspended", "2", false) }
+
+-- The post-turn cutoff: the stop call 3 (e20) is KEPT, the selector becomes
+-- EndAt(e20), N = 3, EndFinalize(model_stop); call 4 (e22) is dropped.
+pure func test_m3_stop_before_end() -> bool
+  tests [((), true)]
+  { st_ends_as(fxw_m3_stop_before_end(), "EndAt", "e20", "StopBeforeEnd", "entry:20", 3, "EndFinalize", "model_stop", false) }
+
+-- A stop call followed by a user message is the last call; the cutoff is the
+-- user message, not StopBeforeEnd.
+pure func test_m3_stop_then_user_message() -> bool
+  tests [((), true)]
+  { st_ends_as(fxw_m3_stop_then_user_message(), "CutoffBefore", "e22", "UserMessage", "entry:22", 3, "EndFinalize", "model_stop", false) }
+
+-- A stop call followed by a turn that is itself cut before (a runtime-status
+-- call at e22): the source continued past the stop call — StopBeforeEnd.
+pure func test_m3_stop_then_cut_turn() -> bool
+  tests [((), true)]
+  { st_ends_as(fxw_m3_stop_then_runtime_status(), "EndAt", "e20", "StopBeforeEnd", "entry:20", 3, "EndFinalize", "model_stop", false) }
+
+-- A cut at `start` leaves no call: EmptySegment, after the cutoff, named by it.
+pure func test_m3_empty_after_cut() -> bool
+  tests [((), true)]
+  { st_refused_as(fxw_m3_empty_after_cut(), "EmptySegment", "entry:13", "BlankStop") }
+
+-- A cutoff never hides a start refusal.
+pure func test_m3_continuation_start_before_cut() -> bool
+  tests [((), true)]
+  { st_refused_as(fxw_m3_continuation_before_cut(), "ContinuationStart", "entry:9", "suspended") }
+
+-- The open question: a stale result after a call-free call. After a STOP
+-- call it is inside the kept turn (refused); after a call-free call whose
+-- finish is `tool_calls` it is past the cut (admitted, N = 2).
+pure func test_m3_stale_result_after_stop_is_refused() -> bool
+  tests [((), true)]
+  { st_refused_as(fxw_m3_stale_result_after_stop(), "UnexpectedToolResult", "entry:21", "tool_call_id") }
+
+pure func test_m3_stale_result_after_cut_is_outside() -> bool
+  tests [((), true)]
+  { st_ends_as(fxw_m3_stale_result_after_cut(), "CutoffBefore", "e20", "CallFreeToolCallsFinish", "entry:20", 2, "EndSuspended", "2", false) }
+
+-- ---- M4: the six shapes --------------------------------------------------------
+
+-- Shape 1: every call before N and call N are continuations.
+pure func test_m4_continuation() -> bool
+  tests [((), true)]
+  {
+    st_world_agrees(fxw_m3_selector_end()) && (match st_fx_world(fxw_m3_selector_end()) {
+      Err(_) => false,
+      Ok(w) =>
+        List.foldl(\acc c. acc && List.length(c.assistant.tool_calls) > 0 && List.length(c.tools) == List.length(c.assistant.tool_calls), true, w.calls)
+          && st_ints_eq(List.map(\c. List.length(c.tools), w.calls), [2, 1, 1])
+          && st_strs_eq(List.map(\c. c.finish_reason, w.calls), ["tool_calls", "tool_calls", "tool_calls"])
+          && List.length(w.expected.tool_invocations) == 4
+    })
+  }
+
+-- Shapes 2, 3, 4, 6 are cuts (their M3 cases); shape 5 at N is the stop end.
+pure func test_m4_cut_shapes() -> bool
+  tests [((), true)]
+  {
+    test_m3_incomplete_tool_batch() && test_m3_call_free_tool_calls_finish()
+      && test_m3_blank_stop() && test_m3_hybrid_extraction()
+  }
+
+pure func test_m4_stop_call_is_the_end() -> bool
+  tests [((), true)]
+  {
+    st_ends_as(fxw_m4_stop_call_last(), "EndAt", "e20", "SelectorEnd", "selector", 3, "EndFinalize", "model_stop", false)
+      && (match st_fx_world(fxw_m4_stop_call_last()) {
+            Err(_) => false,
+            Ok(w) => st_strs_eq(List.map(\c. c.finish_reason, w.calls), ["tool_calls", "tool_calls", "stop"])
+                       && w.settings.hybrid_predicate
+          })
+  }
+
+-- The predicate, asserted once: hybrid_tools recorded true and no native call
+-- in the seed before a first-call stop -> refused.
+pure func test_m4_hybrid_predicate_false_is_refused() -> bool
+  tests [((), true)]
+  { st_refused_as(fxw_m4_hybrid_predicate_false(), "HybridPredicate", "entry:9", "session_emitted_native_tool_call") }
+
+-- The same journal with hybrid_tools recorded false admits, predicate false.
+pure func test_m4_hybrid_predicate_off_admits() -> bool
+  tests [((), true)]
+  {
+    st_ends_as(fxw_m4_hybrid_predicate_off(), "CutoffBefore", "e11", "SelectorEnd", "selector", 1, "EndFinalize", "model_stop", true)
+      && (match st_fx_world(fxw_m4_hybrid_predicate_off()) {
+            Err(_) => false,
+            Ok(w) => not w.settings.hybrid_predicate && not w.settings.hybrid_tools
+          })
+  }
+
+-- True admits: the seed's native call satisfies it for a first-call stop.
+pure func test_m4_hybrid_predicate_true_admits() -> bool
+  tests [((), true)]
+  {
+    st_ends_as(fxw_m4_hybrid_predicate_seed(), "CutoffBefore", "e15", "SelectorEnd", "selector", 1, "EndFinalize", "model_stop", true)
+      && (match st_fx_world(fxw_m4_hybrid_predicate_seed()) {
+            Err(_) => false,
+            Ok(w) => w.settings.hybrid_predicate && w.settings.hybrid_tools
+                       && eval_session_emitted_native_tool_call(w.seed)
+          })
+  }
+
+pure func test_m4_predicate_ignores_hybrid_calls() -> bool
+  tests [((), true)]
+  {
+    let hyb: Message = { role: "assistant", content: "", tool_calls: [{ id: "hybrid-step-1", name: "BashExec", arguments: "{}" }], tool_call_id: "", images: [] };
+    let nat: Message = { hyb | tool_calls: [{ id: "hybrid-step-2", name: "BashExec", arguments: "{}" }, { id: "call_1", name: "BashExec", arguments: "{}" }] };
+    let usr: Message = { hyb | role: "user", tool_calls: [{ id: "call_2", name: "BashExec", arguments: "{}" }] };
+    not eval_session_emitted_native_tool_call([hyb, usr])
+      && eval_session_emitted_native_tool_call([hyb, nat])
+      && not eval_session_emitted_native_tool_call([])
+  }
+
+-- ---- M5: configuration, at the world ------------------------------------------
+
+pure func st_served(w: JournalWorld, k: string) -> string {
+  match env_value(w.settings.env, k) { Some(v) => v, None => "<unserved>" }
+}
+
+-- Every served value; the logical model from `settings` (not the header), the
+-- API model through the pinned copy (not idempotent); a recorded non-zero cost
+-- cap served as 0 and named.
+pure func test_m5_served_configuration() -> bool
+  tests [((), true)]
+  {
+    st_world_agrees(fxw_m5_config_window()) && (match st_fx_world(fxw_m5_config_window()) {
+      Err(_) => false,
+      Ok(w) =>
+        st_served(w, "MOTOKO_PERSIST_RETRIES") == "0"
+          && st_served(w, "MOTOKO_RETRY_STREAM_ERROR") == "0"
+          && st_served(w, "OPENAI_BASE_URL") == "http://127.0.0.1:8000/v1"
+          && st_served(w, "MOTOKO_HEADLESS") == ""
+          && st_served(w, "MOTOKO_PROFILE_DIR") == ".motoko/eval-profile"
+          && st_served(w, "MOTOKO_SESSION_ID") == "sess_fx"
+          && st_served(w, "MOTOKO_TOOL_TIMEOUT_MS") == "30000"
+          && st_served(w, "MOTOKO_EXIT_MANIFEST") == ""
+          && st_served(w, "MOTOKO_CAPTURE_FAILED_PAYLOAD") == ""
+          && st_served(w, "MOTOKO_CONFIG") == "<unserved>"
+          && st_served(w, "MOTOKO_REPO") == "<unserved>"
+          && st_served(w, "MOTOKO_MODELS_FILE") == "<unserved>"
+          && List.foldl(\acc f. acc && f.path == ".motoko/eval-profile/config.json", true, w.settings.files)
+          && List.length(w.settings.files) == 1
+          && st_profile_file_content(w) == "{\"agent\":{\"context_limit\":4096}}"
+          && w.settings.verification_enabled == false
+          && w.settings.checkpoint_enabled == false
+          && w.settings.max_cost_millicents == 0
+          && w.config.boot.max_cost_millicents == 500
+          && List.foldl(\acc o. acc || o == "max_cost_millicents_served_zero", false, w.omissions)
+          && w.settings.ohmy_pi == false
+          && w.config.header_model == "fx/model-a"
+          && w.config.logical_model == "openrouter/openai/fx-model"
+          && w.config.api_model == "openai/fx-model"
+          && eval_provider_api_model(w.config.api_model, "") == "fx-model"
+          && st_all_equal(w.expected.logical_models, "openrouter/openai/fx-model")
+          && st_all_equal(w.expected.api_models, "openai/fx-model")
+    })
+  }
+
+-- The T0 fixture (the M3 twin) serves the defaults: no timeout recorded -> "0".
+pure func test_m5_served_defaults() -> bool
+  tests [((), true)]
+  {
+    match st_fx_world(fxw_m3_selector_end()) {
+      Err(_) => false,
+      Ok(w) =>
+        st_served(w, "MOTOKO_TOOL_TIMEOUT_MS") == "0" && st_served(w, "MOTOKO_HEADLESS") == "1"
+          && st_served(w, "MOTOKO_RETRY_STREAM_ERROR") == "1" && st_served(w, "OPENAI_BASE_URL") == ""
+          && w.config.logical_model == "fx/model-b" && w.config.api_model == "fx/model-b"
+          && not List.foldl(\acc o. acc || o == "max_cost_millicents_served_zero", false, w.omissions)
+          && st_strs_eq(w.omissions, t0_omissions())
+    }
+  }
+
+pure func st_encodes_as(f: WorldFixture, id: string, detail: string, content: string, source: string) -> bool {
+  st_world_agrees(f) && (match st_fx_world(f) {
+    Err(_) => false,
+    Ok(w) =>
+      encoding_id(w.settings.context_limit) == id && encoding_detail(w.settings.context_limit) == detail
+        && st_profile_file_content(w) == content
+        && encoding_id(w.config.context_limit) == id
+        && w.unreproduced.context_limit_source == source
+  })
+}
+
+pure func test_m5_context_limit_window() -> bool
+  tests [((), true)]
+  { st_encodes_as(fxw_m5_config_window(), "EncWindow", "4096", "{\"agent\":{\"context_limit\":4096}}", "bounded:profile") }
+
+-- A catalogue-resolved window is served as a profile override (declared); the
+-- recorded source is kept as unreproduced.
+pure func test_m5_context_limit_catalogue_declared() -> bool
+  tests [((), true)]
+  { st_encodes_as(fxw_m5_config_catalogue(), "EncWindow", "200000", "{\"agent\":{\"context_limit\":200000}}", "bounded:catalogue") }
+
+pure func test_m5_context_limit_disabled() -> bool
+  tests [((), true)]
+  { st_encodes_as(fxw_m5_config_disabled(), "EncDisabled", "", "{\"agent\":{\"context_limit\":\"disabled\"}}", "disabled:") }
+
+-- ProfileMissed is ENCODED and admitted here; its refusal is the witness's
+-- (M11, P1.7b-v2).
+pure func test_m5_context_limit_missed_is_encoded() -> bool
+  tests [((), true)]
+  {
+    st_encodes_as(fxw_m5_config_missed_unknown(), "EncMissed", "unknown", "{\"agent\":{}}", "unknown:")
+      && st_encodes_as(fxw_m5_config_missed_non_positive(), "EncMissed", "non_positive", "{\"agent\":{}}", "bounded:profile")
+      && st_encodes_as(fxw_m5_config_missed_no_event(), "EncMissed", "no_event", "{\"agent\":{}}", "")
+  }
+
+-- The excerpt's logical model must equal the recorded one.
+pure func test_m5_logical_model_mismatch_is_refused() -> bool
+  tests [((), true)]
+  { st_refused_as(fxw_m5_model_mismatch(), "Association", "event:21", "provider_call_prepared.model") }
+
+-- The unreproduced record: the seed's cumulative counts and per-call cache use.
+pure func test_m5_unreproduced() -> bool
+  tests [((), true)]
+  {
+    match st_fx_world(fxw_m3_selector_end()) {
+      Err(_) => false,
+      Ok(w) =>
+        w.unreproduced.prior_counts.provider_calls_started == 2
+          && st_ints_eq(List.map(\c. c.read, w.unreproduced.cache_usage), [4, 0, 0])
+          && st_ints_eq(List.map(\c. c.creation, w.unreproduced.cache_usage), [0, 3, 0])
+          && st_ints_eq(List.map(\c. c.usage.input, w.calls), [100, 200, 300])
+    }
+  }

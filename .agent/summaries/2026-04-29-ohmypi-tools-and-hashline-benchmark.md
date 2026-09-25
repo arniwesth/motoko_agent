@@ -73,7 +73,7 @@ Updated scripts/docs/build paths to Bun-based execution:
   - `benchmark_hashline` in `Makefile`
 - Defaults now target local Gemma endpoint by default:
   - `MODEL=openai/google/gemma-4-26B-A4B-it`
-  - `OPENAI_BASE_URL=http://100.79.48.75:8000/v1`
+  - `OPENAI_BASE_URL=http://<dgx-host>:8000/v1`
 
 ## Benchmark / Analysis Fixes During Session
 

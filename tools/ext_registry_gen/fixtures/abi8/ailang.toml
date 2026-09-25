@@ -1,0 +1,20 @@
+# 031 PLAN-001 P0.5: the registry generator's fixture tree on ABI 8.0 (README.md).
+[package]
+name = "local/registry_fixture"
+version = "0.1.0"
+edition = "1"
+ailang = ">=0.33.0"
+
+[dependencies]
+"sunholo/motoko_ext_abi" = { path = "../../../../packages/motoko-ext-abi" }
+"fixture/motoko_ext_alpha" = { path = "exts/motoko-ext-alpha" }
+"fixture/motoko_ext_beta" = { path = "exts/motoko-ext-beta" }
+
+[extensions]
+packages = ["fixture/motoko_ext_alpha@0.1.0", "fixture/motoko_ext_beta@0.1.0"]
+config_import = "registry/config.RuntimeConfig"
+hooks_import = "pkg/sunholo/motoko_ext_abi/types.ExtensionHooks"
+normalize_import = "registry/normalize"
+registry_import = "pkg/sunholo/motoko_ext_abi/types.ExtRegistry"
+output = "registry/registry_generated.ail"
+effects = ["IO"]

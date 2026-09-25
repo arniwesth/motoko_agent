@@ -1,0 +1,1099 @@
+{
+  "source_revision": "6d668fdda1292bd1c4105cc383fe7be47de2d154",
+  "scan_roots": [
+    "src",
+    "packages"
+  ],
+  "ext_ports_fields": [
+    "ai_step",
+    "tool_handle",
+    "file_read",
+    "file_write",
+    "file_remove",
+    "path_stat",
+    "dir_list",
+    "dir_make",
+    "clock_now",
+    "env_get"
+  ],
+  "membership": {
+    "ai_step": {
+      "state": "returns-it",
+      "seam": "model_step",
+      "seam_threads": true,
+      "ext_can_return": true,
+      "why": "fronts Ports.model_step and ExtPorts.ai_step's AiStepOutcome carries next_state -- nothing dropped"
+    },
+    "tool_handle": {
+      "state": "returns-it",
+      "seam": "ext_effect_exec",
+      "seam_threads": true,
+      "ext_can_return": true,
+      "why": "fronts Ports.ext_effect_exec and ExtPorts.tool_handle's ExtProcOutcome carries next_state -- nothing dropped"
+    },
+    "file_read": {
+      "state": "returns-it",
+      "seam": "file_read",
+      "seam_threads": true,
+      "ext_can_return": true,
+      "why": "fronts Ports.file_read and ExtPorts.file_read's ExtFileRead carries next_state -- nothing dropped"
+    },
+    "file_write": {
+      "state": "returns-it",
+      "seam": "file_write",
+      "seam_threads": true,
+      "ext_can_return": true,
+      "why": "fronts Ports.file_write and ExtPorts.file_write's ExtFileMutation carries next_state -- nothing dropped"
+    },
+    "file_remove": {
+      "state": "returns-it",
+      "seam": "file_remove",
+      "seam_threads": true,
+      "ext_can_return": true,
+      "why": "fronts Ports.file_remove and ExtPorts.file_remove's ExtFileMutation carries next_state -- nothing dropped"
+    },
+    "path_stat": {
+      "state": "returns-it",
+      "seam": "path_stat",
+      "seam_threads": true,
+      "ext_can_return": true,
+      "why": "fronts Ports.path_stat and ExtPorts.path_stat's ExtPathStat carries next_state -- nothing dropped"
+    },
+    "dir_list": {
+      "state": "returns-it",
+      "seam": "dir_list",
+      "seam_threads": true,
+      "ext_can_return": true,
+      "why": "fronts Ports.dir_list and ExtPorts.dir_list's ExtDirListing carries next_state -- nothing dropped"
+    },
+    "dir_make": {
+      "state": "returns-it",
+      "seam": "dir_make",
+      "seam_threads": true,
+      "ext_can_return": true,
+      "why": "fronts Ports.dir_make and ExtPorts.dir_make's ExtFileMutation carries next_state -- nothing dropped"
+    },
+    "clock_now": {
+      "state": "returns-it",
+      "seam": "clock_now",
+      "seam_threads": true,
+      "ext_can_return": true,
+      "why": "fronts Ports.clock_now and ExtPorts.clock_now's ExtClockReading carries next_state -- nothing dropped"
+    },
+    "env_get": {
+      "state": "member",
+      "seam": "env_get",
+      "seam_threads": true,
+      "ext_can_return": false,
+      "why": "fronts Ports.env_get, whose EnvRead threads next_state; ExtPorts.env_get returns string and cannot carry it"
+    }
+  },
+  "classifier_2_set": [
+    "env_get"
+  ],
+  "unrouted_fields": [],
+  "member_call_sites": [],
+  "non_member_call_sites": [
+    {
+      "file": "packages/motoko-ext-agentcli/agentcli.ail",
+      "line": 216,
+      "receiver": "ports",
+      "field": "file_write",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let taken = if prov.needs_lock then ports.file_write(w, cfg.lock_path, prov.id).next_state else w;"
+    },
+    {
+      "file": "packages/motoko-ext-agentcli/agentcli.ail",
+      "line": 223,
+      "receiver": "ports",
+      "field": "file_remove",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let released = if prov.needs_lock then ports.file_remove(taken, cfg.lock_path).next_state else taken;"
+    },
+    {
+      "file": "packages/motoko-ext-compose/author_tools.ail",
+      "line": 131,
+      "receiver": "p",
+      "field": "clock_now",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let reading = p.clock_now(w);"
+    },
+    {
+      "file": "packages/motoko-ext-compose/author_tools.ail",
+      "line": 185,
+      "receiver": "p",
+      "field": "path_stat",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let stat = p.path_stat(w, path);"
+    },
+    {
+      "file": "packages/motoko-ext-compose/author_tools.ail",
+      "line": 219,
+      "receiver": "p",
+      "field": "path_stat",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let stat = p.path_stat(w, path);"
+    },
+    {
+      "file": "packages/motoko-ext-compose/author_tools.ail",
+      "line": 224,
+      "receiver": "p",
+      "field": "file_read",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let read = p.file_read(stat.next_state, path);"
+    },
+    {
+      "file": "packages/motoko-ext-compose/author_tools.ail",
+      "line": 264,
+      "receiver": "p",
+      "field": "path_stat",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let stat = p.path_stat(w, path);"
+    },
+    {
+      "file": "packages/motoko-ext-compose/author_tools.ail",
+      "line": 269,
+      "receiver": "p",
+      "field": "dir_list",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let listing = p.dir_list(stat.next_state, path);"
+    },
+    {
+      "file": "packages/motoko-ext-compose/author_tools.ail",
+      "line": 332,
+      "receiver": "p",
+      "field": "file_read",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let read = p.file_read(typed.next_state, path);"
+    },
+    {
+      "file": "packages/motoko-ext-compose/author_tools.ail",
+      "line": 362,
+      "receiver": "p",
+      "field": "path_stat",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let stat = p.path_stat(w, path);"
+    },
+    {
+      "file": "packages/motoko-ext-compose/author_tools.ail",
+      "line": 367,
+      "receiver": "p",
+      "field": "file_read",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let read = p.file_read(stat.next_state, path);"
+    },
+    {
+      "file": "packages/motoko-ext-compose/author_tools.ail",
+      "line": 481,
+      "receiver": "p",
+      "field": "tool_handle",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let out = p.tool_handle(w, bash_exec_tool(), bash_exec_args(\"rg\", [\"-n\", \"--no-heading\", \"-F\", pattern, path_glob]));"
+    },
+    {
+      "file": "packages/motoko-ext-compose/compose.ail",
+      "line": 341,
+      "receiver": "p",
+      "field": "tool_handle",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let out = p.tool_handle(w, bash_exec_tool(), bash_exec_args(\"ailang\", [\"check\", snippet_path]));"
+    },
+    {
+      "file": "packages/motoko-ext-compose/compose.ail",
+      "line": 359,
+      "receiver": "p",
+      "field": "tool_handle",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let out = p.tool_handle(w, bash_exec_tool(), bash_exec_args(\"ailang\", [\"run\", \"--caps\", caps, \"--entry\", \"main\", snippet_path]));"
+    },
+    {
+      "file": "packages/motoko-ext-compose/compose.ail",
+      "line": 455,
+      "receiver": "p",
+      "field": "clock_now",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let reading = p.clock_now(w);"
+    },
+    {
+      "file": "packages/motoko-ext-compose/compose.ail",
+      "line": 627,
+      "receiver": "p",
+      "field": "dir_make",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let made = p.dir_make(w1, \"tmp\");"
+    },
+    {
+      "file": "packages/motoko-ext-compose/compose.ail",
+      "line": 628,
+      "receiver": "p",
+      "field": "clock_now",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let reading = p.clock_now(made.next_state);"
+    },
+    {
+      "file": "packages/motoko-ext-compose/compose.ail",
+      "line": 633,
+      "receiver": "p",
+      "field": "file_write",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let written = p.file_write(reading.next_state, snippet_path, full_source);"
+    },
+    {
+      "file": "packages/motoko-ext-compose/compose.ail",
+      "line": 721,
+      "receiver": "p",
+      "field": "clock_now",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let done = p.clock_now(stored.next_state);"
+    },
+    {
+      "file": "packages/motoko-ext-compose/compose.ail",
+      "line": 950,
+      "receiver": "p",
+      "field": "path_stat",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let stat = p.path_stat(w, path);"
+    },
+    {
+      "file": "packages/motoko-ext-compose/compose.ail",
+      "line": 952,
+      "receiver": "p",
+      "field": "file_remove",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "ExtPathFile    => p.file_remove(stat.next_state, path),"
+    },
+    {
+      "file": "packages/motoko-ext-compose/compose.ail",
+      "line": 1053,
+      "receiver": "p",
+      "field": "clock_now",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let reading = p.clock_now(ctx.world);"
+    },
+    {
+      "file": "packages/motoko-ext-compose/compose.ail",
+      "line": 1081,
+      "receiver": "p",
+      "field": "dir_make",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let made = p.dir_make(reading.next_state, \"tmp\");"
+    },
+    {
+      "file": "packages/motoko-ext-compose/compose.ail",
+      "line": 1083,
+      "receiver": "p",
+      "field": "file_write",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let written = p.file_write(made.next_state, path, \"${compose_module_header(name)}\\n\\n${clean}\");"
+    },
+    {
+      "file": "packages/motoko-ext-compose/store.ail",
+      "line": 33,
+      "receiver": "p",
+      "field": "dir_make",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let made = p.dir_make(w, compose_store_dir);"
+    },
+    {
+      "file": "packages/motoko-ext-compose/store.ail",
+      "line": 35,
+      "receiver": "p",
+      "field": "file_write",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let written = p.file_write(made.next_state, raw_path, stdout);"
+    },
+    {
+      "file": "packages/motoko-ext-compose/store.ail",
+      "line": 61,
+      "receiver": "p",
+      "field": "dir_make",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let made = p.dir_make(w, snippets_dir);"
+    },
+    {
+      "file": "packages/motoko-ext-compose/store.ail",
+      "line": 64,
+      "receiver": "p",
+      "field": "file_write",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let written = p.file_write(made.next_state, path, snippet_full_source);"
+    },
+    {
+      "file": "packages/motoko-ext-compose/store.ail",
+      "line": 70,
+      "receiver": "p",
+      "field": "dir_make",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let made = p.dir_make(w, snippets_dir);"
+    },
+    {
+      "file": "packages/motoko-ext-compose/store.ail",
+      "line": 79,
+      "receiver": "p",
+      "field": "file_write",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let wrote_ail = p.file_write(made.next_state, ail_path, snippet_full_source);"
+    },
+    {
+      "file": "packages/motoko-ext-compose/store.ail",
+      "line": 80,
+      "receiver": "p",
+      "field": "file_write",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let wrote_meta = p.file_write(wrote_ail.next_state, meta_path, \"${meta_json}\\n\");"
+    },
+    {
+      "file": "packages/motoko-ext-compose/authoring/dispatcher.ail",
+      "line": 263,
+      "receiver": "p",
+      "field": "dir_make",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let made = p.dir_make(w, \".motoko-store/tmp\");"
+    },
+    {
+      "file": "packages/motoko-ext-compose/authoring/dispatcher.ail",
+      "line": 264,
+      "receiver": "p",
+      "field": "clock_now",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let reading = p.clock_now(made.next_state);"
+    },
+    {
+      "file": "packages/motoko-ext-compose/authoring/dispatcher.ail",
+      "line": 267,
+      "receiver": "p",
+      "field": "file_write",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let written = p.file_write(reading.next_state, path, snippet);"
+    },
+    {
+      "file": "packages/motoko-ext-compose/authoring/dispatcher.ail",
+      "line": 268,
+      "receiver": "p",
+      "field": "tool_handle",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let checked = p.tool_handle(written.next_state, bash_exec_tool(), bash_exec_args(\"ailang\", [\"check\", path]));"
+    },
+    {
+      "file": "packages/motoko-ext-compose/authoring/dispatcher.ail",
+      "line": 275,
+      "receiver": "p",
+      "field": "file_remove",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let removed = p.file_remove(checked.next_state, path);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 396,
+      "receiver": "p",
+      "field": "tool_handle",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let r = p.tool_handle(w, bash_exec_tool(), bash_exec_args(cmd, argv));"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 551,
+      "receiver": "p",
+      "field": "dir_make",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let dir = p.dir_make(w, cfg.dagr_dir);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 552,
+      "receiver": "p",
+      "field": "file_write",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let wrote = p.file_write(dir.next_state, tmp, render(doc));"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 571,
+      "receiver": "p",
+      "field": "file_remove",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let cleaned = p.file_remove(vet.next_state, tmp);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 580,
+      "receiver": "p",
+      "field": "file_remove",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let cleaned = p.file_remove(mv.next_state, tmp);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 596,
+      "receiver": "p",
+      "field": "file_write",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "then p.file_write(mv.next_state, cand, render(settled))"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 624,
+      "receiver": "p",
+      "field": "file_read",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let m = p.file_read(w, plan_marker(cfg.dagr_dir, cfg.own_pane, cfg.session_ms));"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 672,
+      "receiver": "p",
+      "field": "dir_make",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let dir = p.dir_make(w, cfg.dagr_dir);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 675,
+      "receiver": "p",
+      "field": "file_write",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let m = p.file_write(dir.next_state, plan_marker(cfg.dagr_dir, cfg.own_pane, cfg.session_ms), abs);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 696,
+      "receiver": "p",
+      "field": "file_read",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let refused = p.file_read(w, marker);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 699,
+      "receiver": "p",
+      "field": "file_read",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let cur = p.file_read(refused.next_state, live);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 704,
+      "receiver": "p",
+      "field": "dir_make",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let dir = p.dir_make(cur.next_state, cfg.dagr_dir);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 705,
+      "receiver": "p",
+      "field": "file_write",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let m = p.file_write(dir.next_state, marker, live);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 720,
+      "receiver": "p",
+      "field": "file_read",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "else p.file_read(eff.next_state, eff.path);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 988,
+      "receiver": "p",
+      "field": "file_read",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let seen = p.file_read(w, operator_pane_marker(cfg.dagr_dir));"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 1007,
+      "receiver": "p",
+      "field": "file_read",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let seen = p.file_read(w, marker);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 1035,
+      "receiver": "p",
+      "field": "dir_make",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let dir = p.dir_make(operator.next_state, cfg.dagr_dir);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 1036,
+      "receiver": "p",
+      "field": "file_write",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let mark = p.file_write(dir.next_state, marker, \"\");"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 1053,
+      "receiver": "p",
+      "field": "file_write",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let rec = p.file_write(op.next_state, marker, pane);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 1106,
+      "receiver": "p",
+      "field": "file_remove",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let next = if path_is_safe(path) then p.file_remove(w, path).next_state else w;"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 1117,
+      "receiver": "p",
+      "field": "file_write",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let wrote = p.file_write(w, tmp, render(doc));"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 1121,
+      "receiver": "p",
+      "field": "file_remove",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "if mv.code != 0 then p.file_remove(mv.next_state, tmp).next_state"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 1136,
+      "receiver": "p",
+      "field": "file_read",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let rd = p.file_read(w, path);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 1179,
+      "receiver": "p",
+      "field": "dir_list",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let dl = p.dir_list(w, cfg.dagr_dir);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 1223,
+      "receiver": "p",
+      "field": "file_read",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let seen = p.file_read(ctx.world, sentinel);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 1226,
+      "receiver": "p",
+      "field": "dir_make",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let dir = p.dir_make(seen.next_state, cfg.work_dir);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 1227,
+      "receiver": "p",
+      "field": "file_write",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let mark = p.file_write(dir.next_state, sentinel, cfg.session_ms);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 1248,
+      "receiver": "p",
+      "field": "clock_now",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let t = p.clock_now(panes.next_state);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 1346,
+      "receiver": "p",
+      "field": "clock_now",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let clock = p.clock_now(plan.next_state);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 1359,
+      "receiver": "p",
+      "field": "dir_make",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let dir = p.dir_make(clock.next_state, cfg.work_dir);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 1362,
+      "receiver": "p",
+      "field": "file_write",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let wrote = p.file_write(dir.next_state, task, prompt);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 1393,
+      "receiver": "p",
+      "field": "clock_now",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let tf = p.clock_now(cleaned.next_state);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 1411,
+      "receiver": "p",
+      "field": "clock_now",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let tf = p.clock_now(cleaned.next_state);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 1426,
+      "receiver": "p",
+      "field": "clock_now",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let t = p.clock_now(tag.next_state);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 1452,
+      "receiver": "p",
+      "field": "clock_now",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let tf = p.clock_now(cleaned.next_state);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 1469,
+      "receiver": "p",
+      "field": "clock_now",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let tf = p.clock_now(cleaned.next_state);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 1493,
+      "receiver": "p",
+      "field": "clock_now",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let tf = p.clock_now(cleaned.next_state);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 1508,
+      "receiver": "p",
+      "field": "clock_now",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let t = p.clock_now(tag.next_state);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 1574,
+      "receiver": "p",
+      "field": "clock_now",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let t0 = p.clock_now(ctx.world);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 1578,
+      "receiver": "p",
+      "field": "file_read",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let early = p.file_read(t0.next_state, answer);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 1604,
+      "receiver": "p",
+      "field": "file_read",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let again = p.file_read(g.next_state, answer);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 1632,
+      "receiver": "p",
+      "field": "clock_now",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let t1 = p.clock_now(w.next_state);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 1634,
+      "receiver": "p",
+      "field": "file_read",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let rd = p.file_read(t1.next_state, answer);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 1703,
+      "receiver": "p",
+      "field": "clock_now",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let t_early = p.clock_now(ctx.world);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 1705,
+      "receiver": "p",
+      "field": "file_read",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let early = p.file_read(t_early.next_state, answer0);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 1738,
+      "receiver": "p",
+      "field": "clock_now",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let t0 = p.clock_now(ctx.world);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 1740,
+      "receiver": "p",
+      "field": "clock_now",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let t1 = p.clock_now(w.next_state);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 1780,
+      "receiver": "p",
+      "field": "file_read",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let rd = p.file_read(g.next_state, answer);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 2022,
+      "receiver": "ctx.ports",
+      "field": "file_read",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let read = ctx.ports.file_read(ctx.world, path);"
+    },
+    {
+      "file": "packages/motoko-ext-herdr/herdr.ail",
+      "line": 2076,
+      "receiver": "ctx.ports",
+      "field": "file_read",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let read = ctx.ports.file_read(ctx.world, path);"
+    },
+    {
+      "file": "packages/motoko_ext_conformance/fixtures/reject_fixtures.ail",
+      "line": 113,
+      "receiver": "ctx.ports",
+      "field": "ai_step",
+      "kind": "call",
+      "why": "receiver is ExtPorts-typed",
+      "source": "let step = ctx.ports.ai_step(ctx.world, ctx.model, msgs);"
+    }
+  ],
+  "unresolved": [
+    {
+      "file": "packages/motoko-ext-abi/types.ail",
+      "line": 1240,
+      "receiver": "p",
+      "field": "file_read",
+      "kind": "unresolved",
+      "why": "ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible",
+      "source": "file_read: p.file_read,"
+    },
+    {
+      "file": "packages/motoko-ext-abi/types.ail",
+      "line": 1241,
+      "receiver": "p",
+      "field": "file_write",
+      "kind": "unresolved",
+      "why": "ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible",
+      "source": "file_write: p.file_write,"
+    },
+    {
+      "file": "packages/motoko-ext-abi/types.ail",
+      "line": 1242,
+      "receiver": "p",
+      "field": "file_remove",
+      "kind": "unresolved",
+      "why": "ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible",
+      "source": "file_remove: p.file_remove,"
+    },
+    {
+      "file": "packages/motoko-ext-abi/types.ail",
+      "line": 1243,
+      "receiver": "p",
+      "field": "path_stat",
+      "kind": "unresolved",
+      "why": "ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible",
+      "source": "path_stat: p.path_stat,"
+    },
+    {
+      "file": "packages/motoko-ext-abi/types.ail",
+      "line": 1244,
+      "receiver": "p",
+      "field": "dir_list",
+      "kind": "unresolved",
+      "why": "ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible",
+      "source": "dir_list: p.dir_list,"
+    },
+    {
+      "file": "packages/motoko-ext-abi/types.ail",
+      "line": 1245,
+      "receiver": "p",
+      "field": "dir_make",
+      "kind": "unresolved",
+      "why": "ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible",
+      "source": "dir_make: p.dir_make"
+    },
+    {
+      "file": "packages/motoko-ext-abi/types.ail",
+      "line": 1249,
+      "receiver": "p",
+      "field": "ai_step",
+      "kind": "unresolved",
+      "why": "ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible",
+      "source": "export pure func ai_ports(p: ExtPorts) -> AiPorts { { ai_step: p.ai_step } }"
+    },
+    {
+      "file": "packages/motoko-ext-abi/types.ail",
+      "line": 1253,
+      "receiver": "p",
+      "field": "tool_handle",
+      "kind": "unresolved",
+      "why": "ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible",
+      "source": "tool_handle: p.tool_handle,"
+    },
+    {
+      "file": "packages/motoko-ext-abi/types.ail",
+      "line": 1254,
+      "receiver": "p",
+      "field": "file_read",
+      "kind": "unresolved",
+      "why": "ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible",
+      "source": "file_read: p.file_read,"
+    },
+    {
+      "file": "packages/motoko-ext-abi/types.ail",
+      "line": 1255,
+      "receiver": "p",
+      "field": "file_write",
+      "kind": "unresolved",
+      "why": "ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible",
+      "source": "file_write: p.file_write,"
+    },
+    {
+      "file": "packages/motoko-ext-abi/types.ail",
+      "line": 1256,
+      "receiver": "p",
+      "field": "file_remove",
+      "kind": "unresolved",
+      "why": "ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible",
+      "source": "file_remove: p.file_remove,"
+    },
+    {
+      "file": "packages/motoko-ext-abi/types.ail",
+      "line": 1257,
+      "receiver": "p",
+      "field": "path_stat",
+      "kind": "unresolved",
+      "why": "ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible",
+      "source": "path_stat: p.path_stat,"
+    },
+    {
+      "file": "packages/motoko-ext-abi/types.ail",
+      "line": 1258,
+      "receiver": "p",
+      "field": "dir_list",
+      "kind": "unresolved",
+      "why": "ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible",
+      "source": "dir_list: p.dir_list,"
+    },
+    {
+      "file": "packages/motoko-ext-abi/types.ail",
+      "line": 1259,
+      "receiver": "p",
+      "field": "dir_make",
+      "kind": "unresolved",
+      "why": "ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible",
+      "source": "dir_make: p.dir_make,"
+    },
+    {
+      "file": "packages/motoko-ext-abi/types.ail",
+      "line": 1260,
+      "receiver": "p",
+      "field": "clock_now",
+      "kind": "unresolved",
+      "why": "ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible",
+      "source": "clock_now: p.clock_now"
+    },
+    {
+      "file": "packages/motoko-ext-agentcli/agentcli.ail",
+      "line": 164,
+      "receiver": "p",
+      "field": "path_stat",
+      "kind": "unresolved",
+      "why": "receiver `p` resolves to `Provider`, not an ABI port type",
+      "source": "let st = p.path_stat(w, path);"
+    },
+    {
+      "file": "packages/motoko-ext-compose/compose.ail",
+      "line": 332,
+      "receiver": "p",
+      "field": "tool_handle",
+      "kind": "unresolved",
+      "why": "ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible",
+      "source": "pure func exec_ports(p: ExtPorts) -> SnippetExecPorts { { tool_handle: p.tool_handle } }"
+    },
+    {
+      "file": "packages/motoko-ext-compose/compose.ail",
+      "line": 334,
+      "receiver": "p",
+      "field": "tool_handle",
+      "kind": "unresolved",
+      "why": "ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible",
+      "source": "pure func exec_ports_i(p: InterceptPorts) -> SnippetExecPorts { { tool_handle: p.tool_handle } }"
+    },
+    {
+      "file": "packages/motoko-ext-compose/compose.ail",
+      "line": 336,
+      "receiver": "p",
+      "field": "file_remove",
+      "kind": "unresolved",
+      "why": "ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible",
+      "source": "pure func remove_ports(p: ExtPorts) -> RemovePorts { { path_stat: p.path_stat, file_remove: p.file_remove } }"
+    },
+    {
+      "file": "packages/motoko-ext-compose/compose.ail",
+      "line": 336,
+      "receiver": "p",
+      "field": "path_stat",
+      "kind": "unresolved",
+      "why": "ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible",
+      "source": "pure func remove_ports(p: ExtPorts) -> RemovePorts { { path_stat: p.path_stat, file_remove: p.file_remove } }"
+    },
+    {
+      "file": "packages/motoko-ext-compose/compose.ail",
+      "line": 338,
+      "receiver": "p",
+      "field": "file_remove",
+      "kind": "unresolved",
+      "why": "ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible",
+      "source": "pure func remove_ports_i(p: InterceptPorts) -> RemovePorts { { path_stat: p.path_stat, file_remove: p.file_remove } }"
+    },
+    {
+      "file": "packages/motoko-ext-compose/compose.ail",
+      "line": 338,
+      "receiver": "p",
+      "field": "path_stat",
+      "kind": "unresolved",
+      "why": "ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible",
+      "source": "pure func remove_ports_i(p: InterceptPorts) -> RemovePorts { { path_stat: p.path_stat, file_remove: p.file_remove } }"
+    },
+    {
+      "file": "packages/motoko-ext-compose/compose.ail",
+      "line": 784,
+      "receiver": "ctx.ports",
+      "field": "clock_now",
+      "kind": "unresolved",
+      "why": "receiver `ctx.ports` resolves to `None`, not an ABI port type",
+      "source": "let exhausted = ctx.ports.clock_now(w);"
+    },
+    {
+      "file": "packages/motoko-ext-compose/compose.ail",
+      "line": 824,
+      "receiver": "ctx.ports",
+      "field": "clock_now",
+      "kind": "unresolved",
+      "why": "receiver `ctx.ports` resolves to `None`, not an ABI port type",
+      "source": "let started = ctx.ports.clock_now(w);"
+    }
+  ]
+}

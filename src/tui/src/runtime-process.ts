@@ -4,6 +4,16 @@ import * as path from "path";
 import * as readline from "readline";
 import { createOhMyPiSession } from "./ohMyPi/session-adapter.js";
 import { dispatchOhMyPiTool } from "./ohMyPi/dispatcher.js";
+import { sessionStartMs, sessionIdentity, sessionResumeCount } from "./session-identity.js";
+import { exitManifestPath, rememberExitManifestPath } from "./exit-actions.js";
+import {
+  defaultWakeWaiterFactory,
+  type WaitDescriptor,
+  type WakeReply,
+  type WakeRequest,
+  type WakeWaiterFactory,
+  type WakeWaiterHandle,
+} from "./wake-waiter.js";
 
 export interface DelegatedExecReq {
   cmd: string;
@@ -91,6 +101,31 @@ export type AgentEvent =
       exit_code: number;
     }
   | { type: "done"; step: number; output: string }
+  // ADR-003 v6.1 D2. A run that reached its step budget now reports this
+  // INSTEAD OF `error` (except under MOTOKO_HEADLESS, where the child still
+  // emits both until P3 switches the plain and JSON loggers). It arrives
+  // immediately before `run_summary`. The consumers — ui.ts, index.ts,
+  // session-logger.ts, herdr-agent-state.ts — are PLAN-003 P1 Part 6's; this
+  // part lands the wire type so the event is not an unknown one.
+  | { type: "run_suspended"; session_id: string; run_id: string; reason: string; step: number }
+  // ADR-003 v6.1 D1's JOURNAL-CLASS EVENTS, on the wire since P3 Part 3 (`phase_vocab.ail`'s
+  // `to_schema_v1_kvs`). They are typed HERE, in P3 Part 4, because this is the part that routes
+  // them: `SessionLogger.log` sends them to the journal and writes a digest to the JSONL log, and
+  // a router that read them through `as never` would be deciding the file format off untyped
+  // field names. `messages` / `message` are `unknown` on purpose — the [Message] codec is
+  // `journal.ail`'s and the host copies the payload through without a second definition of it.
+  | { type: "history_seeded"; run_id: string; messages: unknown[]; digest: string }
+  | { type: "history_appended"; run_id: string; step: number; message: unknown; replaces_previous: boolean; digest_after: string }
+  | { type: "history_replaced"; run_id: string; step: number; reason: string; first_kept?: number; messages: unknown[]; digest_after: string }
+  | { type: "state_delta"; run_id: string; step: number; cumulative: Record<string, number>; telemetry: Record<string, number>; ext_artifacts_digest: string; ext_artifacts?: unknown }
+  | { type: "session_resumed"; resume_count: number; from_id: string; from_ordinal: number; profile_from: string; profile_to: string; prompt_digest_from: string; prompt_digest_to: string; forced: boolean }
+  // PLAN-003 P3 Part 5, both from a `--resume` child and NEITHER journal-class. `session_resume_view`
+  // is the marker line the TUI prints under the resume seed's history (`journal.resume_view_json`):
+  // it carries no messages, so the JSONL log gains no second copy of the conversation.
+  // `session_resume_refused` is the child saying which compatibility or fold rule refused the
+  // journal, immediately before it exits 3.
+  | { type: "session_resume_view"; resume_count: number; from_id: string; boundary: string; boundary_detail: string; suspended: boolean; profile_from: string; profile_to: string; head_replaced: boolean; forced: boolean; dangling: string[]; ext_artifacts_digest: string; ext_artifacts_empty: boolean; messages: number; provider_calls_started: number; provider_calls_completed: number }
+  | { type: "session_resume_refused"; journal: string; refusal: string; message: string }
   | { type: "error"; message: string }
   | { type: "warning"; message: string }
   | { type: "tool_calls"; request_id: string; tool_calls: DelegatedCall[] }
@@ -98,7 +133,13 @@ export type AgentEvent =
   | { type: "native_tool_calls"; request_id: string; tool_calls: DelegatedCall[] }
   | { type: "native_tool_results"; request_id: string; results: NativeToolResult[] }
   | { type: "v2_tool_dispatch_start"; step: number; stream_id: string; tool: string; id: string }
-  | { type: "v2_tool_dispatch_complete"; step: number; stream_id: string; id: string };
+  | { type: "v2_tool_dispatch_complete"; step: number; stream_id: string; id: string }
+  // ADR-002 D2 / PLAN-002 W4 Part 5. `wake_request` is the core asking the host which of its open
+  // waits is ready (a protocol line, not a ledger event); `park_entered` and `wake_received` are the
+  // ledger events either side of it. `wake_received` also means the request is resolved.
+  | { type: "wake_request"; request_id: string; step: number; attempt: number; waits: WaitDescriptor[] }
+  | { type: "park_entered"; request_id: string; step: number; waits: WaitDescriptor[] }
+  | { type: "wake_received"; request_id: string; wait_id: string; outcome: string; detail: string };
 
 export function parseAgentEventLine(line: string): AgentEvent | null {
   const trimmed = line.trim();
@@ -112,6 +153,69 @@ export function parseAgentEventLine(line: string): AgentEvent | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * What to tell the operator when the runtime child exits WITHOUT a terminal event before it, or
+ * null when the exit is clean. `.agent/issues/a-killed-motoko-process-exits-silently.md`: the
+ * container's OOM killer SIGKILLs the child mid tool-phase (2026-09-08, 2026-09-12), the child can
+ * say nothing, and an exit callback that ignores `(code, signal)` turns that death into a finish.
+ */
+export function describeUnexplainedExit(code: number | null, signal: NodeJS.Signals | null): string | null {
+  const unsaid = "before it reported done or an error";
+  if (signal === "SIGKILL") {
+    return `The AILANG runtime was killed (SIGKILL) ${unsaid}. This is usually the out-of-memory killer: ` +
+      "a rise in oom_kill in /sys/fs/cgroup/memory.events confirms it.";
+  }
+  if (signal) return `The AILANG runtime was killed by ${signal} ${unsaid}.`;
+  if (code !== null && code !== 0) return `The AILANG runtime exited with code ${code} ${unsaid}.`;
+  return null;
+}
+
+/** Events after which the child's exit is already explained on the wire (refusal: `rpc.ail` exits 3). */
+const EXIT_EXPLAINING_EVENTS = new Set(["done", "error", "session_resume_refused"]);
+
+/**
+ * Events that end an outstanding park without a matching `wake_received`: the run ended (`done`,
+ * `error`, a suspend on the step budget — the `Park` arm's own guard) or the session suspended for a
+ * restart. `run_suspended` is not in PLAN-002's list; it is here because a re-issue that exhausts
+ * the step budget suspends the run with no wake, and the park would otherwise stay open for ever.
+ */
+const PARK_ENDING_EVENTS = new Set(["done", "error", "session_suspend", "run_suspended"]);
+
+/**
+ * What ESC does to the runtime: abort a parked run over stdin (W4 Part 5); cancel a suspended-child's
+ * park in the journal (PLAN-003 P4 Part 6, the ESC row); kill anything else.
+ *
+ * The suspended-child row comes FIRST because it is the only one with no live child: the owner
+ * holds the park after the child's exit, so ESC writes the `wake(aborted)` the live child would have
+ * emitted (`wait_id "abort"`, W4 Part 5's table) and respawns NOTHING — the TUI goes back to awaiting
+ * a task, and the next prompt resumes the session through `onInitialTask` (`--resume`), where the
+ * child folds `Open("wake:aborted")` and reads that prompt as its next turn. `"wake_aborted"` says the
+ * wake is on disk; `"none"` that the park was already answered or closed, so nothing was written.
+ */
+export function interruptRuntime(
+  rp: Pick<RuntimeProcess, "isParked" | "abort" | "kill"> | undefined,
+  suspended: { owner: SuspendedChild; journal: WakeJournal } | null = null,
+): "abort" | "kill" | "none" | "wake_aborted" {
+  if (suspended !== null) {
+    return abortSuspendedChild(suspended.owner, suspended.journal, "abort") ? "wake_aborted" : "none";
+  }
+  if (!rp) return "none";
+  if (rp.isParked) {
+    rp.abort();
+    return "abort";
+  }
+  rp.kill();
+  return "kill";
+}
+
+/** The journal `exit` entry's reason for a TTY runtime exit (index.ts's exit handler). */
+export function journalExitReason(
+  pendingRestart: string | boolean | undefined,
+  interrupted: boolean,
+): "restart" | "abort" | "child_exit" {
+  return pendingRestart ? "restart" : interrupted ? "abort" : "child_exit";
 }
 
 export function providerSelectionModel(model: string, openaiBaseUrl: string): string {
@@ -314,6 +418,448 @@ function mirrorAbsoluteProfile(workdir: string, profile: string): string {
   return basename;
 }
 
+/**
+ * Name this session's exit manifest, create its directory, and remember it for the exit handler.
+ *
+ * The directory has to exist before the first publish: the runtime writes through
+ * `writeFileResult`, which does not create parents, and a manifest that silently fails to be
+ * written looks exactly like an install where no extension declared an exit intent.
+ */
+function exitManifestPathFor(workdir: string): string {
+  const p = exitManifestPath(workdir);
+  try {
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+  } catch {
+    // A manifest that cannot be written costs the exit-time courtesy, never the run.
+  }
+  rememberExitManifestPath(p);
+  return p;
+}
+
+export function buildChildEnv(
+  workdir: string,
+  profile: string,
+  openaiBaseUrl: string,
+  aiOptionsJson: string,
+): NodeJS.ProcessEnv {
+  const childEnv: NodeJS.ProcessEnv = {
+    PATH: process.env.PATH,
+    HOME: process.env.HOME,
+    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
+    GOOGLE_API_KEY: process.env.GOOGLE_API_KEY,
+    EXA_API_KEY: process.env.EXA_API_KEY,
+    CLICKSTACK_INGESTION_KEY: process.env.CLICKSTACK_INGESTION_KEY,
+    AILANG_FS_SANDBOX: workdir,
+    AILANG_NO_VERSION_WARNINGS: process.env.AILANG_NO_VERSION_WARNINGS ?? "1",
+    MOTOKO_STREAM_EVENTS: process.env.MOTOKO_STREAM_EVENTS ?? "1",
+    MOTOKO_HEADLESS:
+      process.env.MOTOKO_HEADLESS ??
+      (process.stdin.isTTY ? "" : "1"),
+    MOTOKO_PERSIST_RETRIES: process.env.MOTOKO_PERSIST_RETRIES ?? "",
+    MOTOKO_REPO: process.env.MOTOKO_REPO ?? "",
+    MOTOKO_CAPTURE_FAILED_PAYLOAD: process.env.MOTOKO_CAPTURE_FAILED_PAYLOAD ?? "",
+    MOTOKO_PROFILE_DIR: path.resolve(workdir, ".motoko", "config", profile),
+    // THE RUN IDENTITY FOR F-5 OWNERSHIP, minted here and nowhere else.
+    //
+    // `motoko-ext-herdr` tags every delegate pane it spawns with `<pane>:<session ms>` so that an
+    // orphan can be recognised as THIS session's without falling back to a name prefix that two
+    // concurrent Motokos would both match. The clock cannot live in the extension: the runtime is
+    // spawned per task, so it would mint a new identity for every task and nothing keyed by it
+    // would survive to the next one. This process outlives every runtime it spawns, so
+    // `sessionStartMs()` memoizes one value for the whole session. The token FORMAT is the
+    // extension's and has one definition (`packages/motoko-ext-herdr/types.ail`); this side
+    // supplies only the clock. Reasoning: `session-identity.ts`.
+    MOTOKO_SESSION_MS: String(sessionStartMs()),
+    // ONE SESSION ID, ADR-003 v6.1 D5, and the repair of the issue's two ids.
+    //
+    // `derive_session_id` (`session.ail:1677-1684`) returns this value when it is non-empty and
+    // otherwise mints its own from a clock read — so before this line the host named the JSONL log
+    // one thing and the child called the session another, and every wire event of a follow-up turn
+    // carried the child's. The journal cannot live with that: its directory, its header and its
+    // `run_id`s are all keyed by the session, and a resume looks the session up by name.
+    //
+    // `sessionIdentity()` honours an inherited MOTOKO_SESSION_ID, which is what the eval-harness
+    // adapter sets and what a `--resume` of an existing session needs.
+    MOTOKO_SESSION_ID: sessionIdentity(),
+    // THE RESUME COUNT, D5 again: `0` on a fresh spawn, incremented on every `--resume` spawn. The
+    // child reads it AMBIENTLY in `rpc.run_with_config` (`rpc.ail:217`) rather than through a
+    // `ports.env_get`, because five DST fixtures pin the exact key set the policy init reads and a
+    // sixth key would make all five red (PLAN-003 §0.8). It is the middle field of
+    // `run_id = <session_id>.r<resume_count>.<run_ordinal>`.
+    MOTOKO_RESUME_COUNT: String(sessionResumeCount()),
+    // THE WORKDIR THE HEADER RECORDS, D5's canonical-workdir row (PLAN-003 P3 Part 5). The header
+    // is written from this exact string (`index.ts`), while `--workdir` reaches the child in
+    // `supervisorWorkdirArg`'s relative form — "." for the common case — so a child comparing its
+    // flag with the header would refuse every ordinary resume. Forwarding the same string makes
+    // the row compare like with like; the child reads it ambiently (`rpc.invoked_workdir`).
+    //
+    // NOT `MOTOKO_WORKDIR`, which is what this first shipped as (845239c) and what broke every
+    // `Delegate`. Five extensions already read MOTOKO_WORKDIR with "." as the default (herdr,
+    // omnigraph, exa-search, context-mode, ailang-docs); herdr derives its delegate and dagr
+    // directories from it and checks them with `path_within(ctx.workdir, …)`, where `ctx.workdir`
+    // is the relative `--workdir`. An absolute directory is never lexically under ".", so every
+    // delegation was refused as "outside Motoko's filesystem sandbox" (measured live 2026-09-12).
+    // A name of its own keeps D5's row and leaves the extensions where they were.
+    MOTOKO_JOURNAL_WORKDIR: workdir,
+    // WHERE THIS TURN'S EXIT ACTIONS GET PUBLISHED (ABI 7.0).
+    //
+    // The host names the file and the runtime reads the name — never the other way round, and
+    // never both. A path derived on both sides of the language boundary is the MOT-118 shape this
+    // project has already paid for twice; here the parent owns the session clock the name is keyed
+    // by, so it owns the name.
+    //
+    // `rememberExitManifestPath` is what lets the exit handler find it: this process reads at exit
+    // what its children wrote at every turn end.
+    MOTOKO_EXIT_MANIFEST: exitManifestPathFor(workdir),
+    AILANG_OLLAMA_MAX_TOKENS: process.env.AILANG_OLLAMA_MAX_TOKENS ?? "",
+    AILANG_OLLAMA_HTTP_TIMEOUT_SEC: process.env.AILANG_OLLAMA_HTTP_TIMEOUT_SEC ?? "",
+    MOTOKO_COST_INPUT_PER_1M_MILLICENTS:
+      process.env.MOTOKO_COST_INPUT_PER_1M_MILLICENTS ?? "",
+    MOTOKO_COST_OUTPUT_PER_1M_MILLICENTS:
+      process.env.MOTOKO_COST_OUTPUT_PER_1M_MILLICENTS ?? "",
+  };
+  // Egress proxy environment, forwarded only when actually present.
+  //
+  // The agent container sits on an `internal: true` docker network with no
+  // NAT and no external DNS — a squid sidecar is the single exit, addressed
+  // through HTTP_PROXY/HTTPS_PROXY/NO_PROXY. `buildChildEnv` is an explicit
+  // allowlist, so without these lines the AILANG runtime child never sees the
+  // proxy, dials the provider host directly, and every step dies on
+  // `lookup openrouter.ai on 127.0.0.11:53: server misbehaving`. Measured
+  // 2026-08-23: 134 consecutive stream_error_retry, zero bytes on the wire.
+  for (const key of [
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+    "http_proxy", "https_proxy", "no_proxy",
+  ]) {
+    const value = process.env[key];
+    if (value && value.trim() !== "") {
+      childEnv[key] = value;
+    }
+  }
+  // The herdr pane environment, forwarded only when it is actually present.
+  //
+  // WHY THIS IS NEEDED AT ALL, because the obvious reading of 021 §4.4 is
+  // wrong: `motoko-ext-herdr` gates itself on HERDR_ENV / HERDR_BIN_PATH /
+  // HERDR_PANE_ID read through `std/env` inside `register_with_config`. But
+  // that runs in the AILANG runtime, which is a GRANDCHILD of the pane — the
+  // pane starts this TUI, and this function decides what the TUI's own child
+  // sees. `buildChildEnv` is an explicit allowlist, so without these three
+  // lines the variables are dropped, the gate correctly closes, and the
+  // extension silently advertises no tools INSIDE a herdr pane. Measured
+  // 2026-08-23: the extension loaded and offered nothing, and the model
+  // reported that Delegate did not exist.
+  //
+  // THE WHOLE HERDR_ PREFIX, not a named list — corrected 2026-08-23 after
+  // enumerating bit twice. The first version forwarded exactly HERDR_ENV,
+  // HERDR_BIN_PATH and HERDR_PANE_ID, which made the gate work and silently
+  // left every one of the extension's operator knobs unreachable:
+  // HERDR_ALLOWED_KINDS, HERDR_DELEGATE_KIND, HERDR_DELEGATE_DIR,
+  // HERDR_START_TIMEOUT_MS, HERDR_CHECK_WAIT_MS, HERDR_MAX_OUTPUT_CHARS. The
+  // operator could set them and nothing happened — measured, with
+  // HERDR_ALLOWED_KINDS=claude,codex still refusing codex.
+  //
+  // A prefix is still bounded: herdr injects HERDR_* into the pane and the
+  // extension reads HERDR_*, so the family is the unit. Enumerating members of
+  // a family that grows is the fragility, not the allowlist itself.
+  for (const [key, value] of Object.entries(process.env)) {
+    if (key.startsWith("HERDR_") && value) {
+      childEnv[key] = value;
+    }
+  }
+  if (process.env.AILANG_STDLIB_PATH) {
+    childEnv.AILANG_STDLIB_PATH = process.env.AILANG_STDLIB_PATH;
+  }
+  if (process.env.MOTOKO_OTEL && process.env.MOTOKO_OTEL.trim() !== "") {
+    childEnv.MOTOKO_OTEL = process.env.MOTOKO_OTEL;
+    childEnv.OTEL_EXPORTER_OTLP_ENDPOINT =
+      process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? "http://clickstack:4318";
+    childEnv.OTEL_EXPORTER_OTLP_PROTOCOL =
+      process.env.OTEL_EXPORTER_OTLP_PROTOCOL ?? "http/protobuf";
+    childEnv.OTEL_SERVICE_NAME =
+      process.env.OTEL_SERVICE_NAME ?? "motoko-agent";
+    childEnv.AILANG_TRACE = process.env.AILANG_TRACE ?? "standard";
+    childEnv.AILANG_TRACE_MAX_SPANS =
+      process.env.AILANG_TRACE_MAX_SPANS ?? "100";
+    if (process.env.OTEL_EXPORTER_OTLP_HEADERS) {
+      childEnv.OTEL_EXPORTER_OTLP_HEADERS =
+        process.env.OTEL_EXPORTER_OTLP_HEADERS;
+    }
+    if (process.env.OTEL_RESOURCE_ATTRIBUTES) {
+      childEnv.OTEL_RESOURCE_ATTRIBUTES =
+        process.env.OTEL_RESOURCE_ATTRIBUTES;
+    }
+    for (const key of [
+      "OTEL_TRACES_EXPORTER",
+      "OTEL_METRICS_EXPORTER",
+      "OTEL_EXPORTER_OTLP_TIMEOUT",
+      "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+      "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+      "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT",
+      "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+      "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
+      "OTEL_EXPORTER_OTLP_METRICS_TIMEOUT",
+    ]) {
+      const value = process.env[key];
+      if (value && value.trim() !== "") {
+        childEnv[key] = value;
+      }
+    }
+  }
+  if (openaiBaseUrl.trim() !== "") childEnv.OPENAI_BASE_URL = openaiBaseUrl;
+  if (aiOptionsJson.trim() !== "") childEnv.MOTOKO_AI_OPTIONS_JSON = aiOptionsJson;
+  return childEnv;
+}
+
+/**
+ * ADR-003 v6.1 D6's `--resume` (PLAN-003 P3 Part 5): the journal a respawned child folds, and
+ * `--resume-force`, which overrides the extension-set and prompt compatibility rows and neither
+ * the workdir nor the lease.
+ */
+export interface ResumeSpawn {
+  journalPath: string;
+  force?: boolean;
+}
+
+export function buildSupervisorArgs(
+  resolvedProfile: string,
+  model: string,
+  workdir: string,
+  port: number,
+  systemPrompt: string,
+  task: string,
+  resume?: ResumeSpawn,
+): string[] {
+  const supervisorArgs = [
+    "--profile",
+    resolvedProfile,
+    "--model",
+    model,
+    "--workdir",
+    supervisorWorkdirArg(workdir),
+    "--port",
+    String(port),
+  ];
+  if (systemPrompt.trim() !== "") {
+    supervisorArgs.push("--system-prompt", systemPrompt);
+  }
+  // BEFORE the task, which stays last: `config.parse_cli_args` reads the final positional as the
+  // task, and `--resume-force` is a BARE flag there precisely so it cannot eat it.
+  if (resume && resume.journalPath.trim() !== "") {
+    supervisorArgs.push("--resume", resume.journalPath);
+    if (resume.force) supervisorArgs.push("--resume-force");
+  }
+  supervisorArgs.push(task);
+  return supervisorArgs;
+}
+
+/**
+ * PLAN-003 P4 Part 4 (ADR-003 D7): the host-lifetime owner of a park whose child has exited.
+ *
+ * Under `--park-exits` the child is ended on its first `wake_request`, once the `park` entry is on
+ * disk (P4-Q3). The park outlives the child: the exit handler hands the outstanding request and the
+ * RUNNING waiter here instead of cancelling them, and the TTY exit callback writes no `exit` entry,
+ * so the journal's leaf stays the `park` — which is what lets the `wake` be written as its child
+ * (row 6: `parent_id` is the leaf, and no operation moves it).
+ *
+ * The owner outlives the `RuntimeProcess` that made it. It holds ONE reply, by `request_id` —
+ * `sendWakeReply`'s late-and-duplicate rule, moved here with the request — and hands it to the
+ * consumer Part 5 installs (the `wake` entry, the `--resume` respawn). Until then the reply is
+ * held, not lost.
+ */
+export class SuspendedChild {
+  private held: WakeReply | null = null;
+  private consumer: ((reply: WakeReply) => void) | null = null;
+  private closed = false;
+
+  constructor(
+    /** The request whose `park` entry is the journal's leaf. */
+    readonly request: WakeRequest,
+    /** The waiter, still running: its reply is one of the things that wakes the session. */
+    readonly waiter: WakeWaiterHandle,
+  ) {}
+
+  /** The reply accepted so far, or null. */
+  get reply(): WakeReply | null {
+    return this.held;
+  }
+
+  /**
+   * Accept one reply for this request. A reply for another request, or a second one, is dropped —
+   * and so is any reply after `close()`: the park was cancelled from the host's side.
+   */
+  deliver(reply: WakeReply): boolean {
+    if (this.closed || this.held !== null || reply.request_id !== this.request.request_id) return false;
+    this.held = reply;
+    this.consumer?.(reply);
+    return true;
+  }
+
+  /** True once `close()` cancelled the park: no reply is accepted after it. */
+  get isClosed(): boolean {
+    return this.closed;
+  }
+
+  /**
+   * PLAN-003 P4 Part 6: END THE PARK FROM THE HOST'S SIDE — the ESC, `restart`, quit and host-death
+   * rows. Stops the waiter (the delegates are no longer observed for this request; a resumed run
+   * parks on them again with a waiter of its own) and refuses every later reply. Returns false, and
+   * does nothing, when the owner already accepted a reply — the park is answered, and Part 5's
+   * consumer owns what follows — or was already closed. Cancelling a waiter twice is harmless
+   * (`startWakeWaiter`'s cancel is idempotent), so the returned value is about the PARK, not the waiter.
+   */
+  close(): boolean {
+    if (this.closed || this.held !== null) return false;
+    this.closed = true;
+    this.waiter.cancel();
+    return true;
+  }
+
+  /** Install the consumer (Part 5). A reply held before it was installed is handed over at once. */
+  onReply(consumer: (reply: WakeReply) => void): void {
+    this.consumer = consumer;
+    if (this.held !== null) consumer(this.held);
+  }
+}
+
+/**
+ * What the suspended-child wake writes through: `SessionJournal.record`, narrowed to its shape.
+ * `record` routes a `wake_received` to Part 1's `wake` entry and returns the number of entries it
+ * appended — one, or zero when the append failed and `onError` has already said so.
+ */
+export interface WakeJournal {
+  record(event: Record<string, unknown>): number;
+}
+
+/** PLAN-003 P4 Part 5: what the consumer of a suspended-child's reply needs from the host. */
+export interface SuspendedWakeDeps {
+  /**
+   * True while the owner is still the session's suspended-child. A later spawn ends that (index.ts
+   * clears `suspendedChild` on every spawn), and a reply that arrives after it is LATE: a `wake`
+   * written then would follow the new child's entries — a wake answering no open park, which the
+   * fold refuses at `request_id` — so nothing is written and nothing respawned.
+   */
+  stillCurrent: () => boolean;
+  journal: WakeJournal;
+  /**
+   * index.ts's `respawnForRestart` (PLAN-003 P3 Part 5): it checks `canResume`, bumps the resume
+   * count, and spawns with `--resume <journal>`. Called AFTER the `wake` is on disk, so the child
+   * folds `Parked(p, Some(w))` and the resumer (Part 3) consumes the wake as `<R'>.p0`.
+   */
+  respawn: () => void;
+  /** Told the reply and whether its `wake` entry was written, before the respawn. */
+  notify?: (reply: WakeReply, written: boolean) => void;
+}
+
+/**
+ * PLAN-003 P4 Part 5 (ADR-003 D7, row 6): THE WAKE ENTRY AS THE PARK'S CHILD, AND THE RESPAWN.
+ *
+ * Installs the owner's consumer (the attachment point Part 4 left, `SuspendedChild.onReply`). On
+ * the one reply the owner accepts — the waiter's outcome, or the operator's line from the parked
+ * input route — the host:
+ *
+ *   1. records `{ type: "wake_received", request_id, wait_id, outcome, detail }`. Part 1's routing
+ *      appends a `wake` whose `parent_id` is the journal's leaf, and the leaf IS the `park`: the
+ *      suspended-child branch wrote no `exit` after it (row 6), and no operation moves the leaf;
+ *   2. respawns through `respawnForRestart`, which passes `--resume <journal>`.
+ *
+ * Late and duplicate replies are dropped by `request_id`. That is `sendWakeReply`'s rule, and it
+ * moved with the request to the owner: `SuspendedChild.deliver` accepts one reply for its request
+ * and no other, so this consumer runs at most once. A reply held before the consumer was installed
+ * is handed over at install, and consumed the same way.
+ *
+ * The waiter is stopped on consumption, as `sendWakeReply` stops it on a live child: the park is
+ * answered, and the resumed run parks on its delegates again — `.p1` onward — with a waiter of its
+ * own. Cancel is idempotent on a waiter that has already delivered (`startWakeWaiter`'s `flush`
+ * cancels before `onReady`).
+ *
+ * A `wake` the journal could not append (`record` returned 0; `onError` reported it) still
+ * respawns: the resumed child then folds `Parked(p, None)` and re-observes the park (row 5) — the
+ * reply is lost, the session is not.
+ */
+export function installSuspendedWake(owner: SuspendedChild, deps: SuspendedWakeDeps): void {
+  owner.onReply((reply) => {
+    if (!deps.stillCurrent()) return;
+    owner.waiter.cancel();
+    const written =
+      deps.journal.record({
+        type: "wake_received",
+        request_id: reply.request_id,
+        wait_id: reply.wait_id,
+        outcome: reply.outcome,
+        detail: reply.detail,
+      }) === 1;
+    deps.notify?.(reply, written);
+    deps.respawn();
+  });
+}
+
+/**
+ * PLAN-003 P4 Part 6 (ADR-003 D7, row 4): THE NAMED STATES OF A DURABLE PARK, AND THEIR EXITS.
+ *
+ * v4.1's D7 named these states and is not in the tree; this table is transcribed from its reviews
+ * (REVIEW-adr003-verdicts-fable.md §8, REVIEW-adr003-v3-verdicts-fable.md:94–96) and from W4 Part 5's
+ * command table (PLAN-002 §8.7), and signed off as P4-Q5. The TUI shows the same three names in its
+ * footer (`RunState`: `parked`, `suspended_child`, `resuming`; ui.ts) and reports them to herdr.
+ *
+ * | state             | entered on                                        | left on                                                            | journal            | then       |
+ * |-------------------|---------------------------------------------------|--------------------------------------------------------------------|--------------------|------------|
+ * | `parked`          | `wake_request` while the child is alive           | `wake_received`; a park-ending event (`PARK_ENDING_EVENTS`); exit  | the child's events | —          |
+ * | `suspended-child` | the exit handler's first branch (Part 4)          | a waiter reply; operator input; ESC; `restart`; quit; host death   | nothing on entry   | per row    |
+ * | `resuming`        | a `wake` entry is written (Part 5)                | the resumed child's `session_resumed`                              | `wake`             | `--resume` |
+ *
+ * While `suspended-child` (P4-Q5, the dead-child column of W4 Part 5's table):
+ *
+ * | command                                                  | wake written                          | then                                                                                    |
+ * |----------------------------------------------------------|---------------------------------------|-----------------------------------------------------------------------------------------|
+ * | the waiter replies `settled`/`lost`/`timed_out`/`host_error` | that outcome (`installSuspendedWake`) | respawn with `--resume` (Part 5)                                                    |
+ * | operator input, the parked input route                   | `operator_input(content)`             | respawn (Part 5)                                                                        |
+ * | ESC (`interruptRuntime`)                                 | `aborted`, `wait_id "abort"`          | NO respawn; the TUI awaits a task; the next prompt resumes through `onInitialTask` into `Open("wake:aborted")` |
+ * | `restart` (profile p)                                    | `aborted`, `wait_id "restart:<p>"`    | respawn with the new profile (`--resume`); the child opens no run and idles on stdin    |
+ * | quit (Ctrl+C)                                            | NONE                                  | the lease hook writes `exit(host_exit)`; the exit actions run; a later resume re-observes the park, and wakes `lost` if the delegates were reaped |
+ * | host death (SIGINT / SIGTERM)                            | NONE                                  | the lease hook writes `exit(abort)` / `exit(host_exit)`; as quit                       |
+ *
+ * The two typed-input rows differ by entry condition alone: a line at the parked prompt answers the
+ * park (`operator_input`, then respawn); ESC cancels it (`aborted`, no respawn). And the dead-child
+ * quit differs from the live-child one: `exit` sent to a LIVE parked child is an `Aborted` cancel
+ * (W4 Part 5), while quitting during suspended-child writes no wake at all — the park stays open in
+ * the journal for the resume to re-observe (row 5), which is what lets a delegate that answered
+ * meanwhile still be collected.
+ */
+export type SuspendedChildAbort = "abort" | `restart:${string}`;
+
+/**
+ * The suspended-child's CANCELLING exits — the ESC row (`wait_id "abort"`) and the `restart` row
+ * (`wait_id "restart:<p>"`). Sent to a LIVE parked child these commands come back on the wire as
+ * `WakeReceived(Aborted)` with the command in the wake's free `wait_id`; here the child is gone, so
+ * the host writes that same wake itself, as the park's child (row 6: the leaf is still the `park`).
+ * The fold closes the park on it — `park, wake(aborted)` → `Open("wake:aborted")` (P4-Q4) — and the
+ * resumed child opens no run: it is idle, between turns, reading stdin.
+ *
+ * Nothing is respawned HERE. The ESC row leaves the session for the operator's next prompt, which
+ * `onInitialTask` turns into a `--resume` respawn; the `restart` row's caller respawns on the new
+ * profile at once. Both first END the owner (`close()`: the waiter stopped, later replies refused),
+ * and the caller clears its `suspendedChild` so Part 5's consumer is no longer current.
+ *
+ * Returns whether the `wake(aborted)` is on disk: false when the owner had already accepted a
+ * reply or was already closed (nothing written), or when the append failed (`onError` said so).
+ * Quit and host death take neither of these rows: they write NO wake (P4-Q5) — the lease hook
+ * writes the `exit`, and the park is re-observed on the next resume (row 5).
+ */
+export function abortSuspendedChild(owner: SuspendedChild, journal: WakeJournal, waitId: SuspendedChildAbort): boolean {
+  if (!owner.close()) return false;
+  return (
+    journal.record({
+      type: "wake_received",
+      request_id: owner.request.request_id,
+      wait_id: waitId,
+      outcome: "aborted",
+      detail: "",
+    }) === 1
+  );
+}
+
 export class RuntimeProcess {
   private proc: ChildProcess;
   private dead = false;
@@ -331,141 +877,20 @@ export class RuntimeProcess {
     openaiBaseUrl: string,
     aiOptionsJson: string,
     onEvent: (e: AgentEvent) => void,
-    onExit: () => void
+    onExit: () => void,
+    resume?: ResumeSpawn,
+    wakeWaiterFactory: WakeWaiterFactory = defaultWakeWaiterFactory,
+    parkExits = false,
   ) {
     this.workdir = workdir;
     this.onEvent = onEvent;
+    this.wakeWaiterFactory = wakeWaiterFactory;
+    this.parkExits = parkExits;
     const aiModelArg = providerSelectionModel(model, openaiBaseUrl);
     const ailangBin = (process.env.AILANG_BIN && process.env.AILANG_BIN.trim() !== "")
       ? process.env.AILANG_BIN
       : "ailang";
-    const childEnv: NodeJS.ProcessEnv = {
-      PATH: process.env.PATH,
-      HOME: process.env.HOME,
-      ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
-      OPENAI_API_KEY: process.env.OPENAI_API_KEY,
-      OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
-      GOOGLE_API_KEY: process.env.GOOGLE_API_KEY,
-      EXA_API_KEY: process.env.EXA_API_KEY,
-      CLICKSTACK_INGESTION_KEY: process.env.CLICKSTACK_INGESTION_KEY,
-      AILANG_FS_SANDBOX: workdir,
-      AILANG_NO_VERSION_WARNINGS: process.env.AILANG_NO_VERSION_WARNINGS ?? "1",
-      MOTOKO_STREAM_EVENTS: process.env.MOTOKO_STREAM_EVENTS ?? "1",
-      // M-MOTOKO-HEADLESS (2026-05-08): when stdin is not a TTY, set
-      // MOTOKO_HEADLESS=1 so the AILANG runtime's conversation_loop_v2
-      // skips its readLine() drain (which blocks indefinitely on non-TTY
-      // stdin instead of returning EOF) and exits cleanly after the first
-      // task completes. Manual override: set MOTOKO_HEADLESS in the parent
-      // env to force either mode regardless of TTY state.
-      // See agent_loop_v2.ail conversation_loop_v2 for the AILANG-side gate.
-      MOTOKO_HEADLESS:
-        process.env.MOTOKO_HEADLESS ??
-        (process.stdin.isTTY ? "" : "1"),
-      // M-MOTOKO-PERSIST-NUDGE: forward the loop-persistence retry budget so
-      // agent_loop_v2.ail's NoDecision branch can read it. Without this the
-      // explicit env allowlist scrubs it and the feature is silently off —
-      // same gotcha as MOTOKO_REPO / the pricing vars below. Empty = off.
-      MOTOKO_PERSIST_RETRIES: process.env.MOTOKO_PERSIST_RETRIES ?? "",
-      // M-MOTOKO-EVAL-HARNESS-HARDENING gap #6 (2026-05-08): forward
-      // MOTOKO_REPO so the AILANG runtime can fall back to the fork's
-      // bundled profile (.motoko/config/<profile>) when WORKDIR is a
-      // per-task scratch dir without its own .motoko/config. Without
-      // this, eval-harness runs see extensions.order=[] and other
-      // profile defaults silently mask user-configured behavior.
-      MOTOKO_REPO: process.env.MOTOKO_REPO ?? "",
-      // MOTOKO_PROFILE_DIR — absolute path to the active profile's config
-      // directory. Standalone AILANG extension packages (motoko-ext-*) read
-      // their own JSON config here (e.g. motoko-ext-compaction-ai reads
-      // ${MOTOKO_PROFILE_DIR}/compaction_ai.json). Without this var, the
-      // packages fall back to "." which resolves to the AILANG runtime's
-      // CWD (motoko_agent root) → "no such file or directory" panics on
-      // first turn. The original src/core/config.ail path-built the same
-      // location internally; the env-var split happened when extensions
-      // moved out into separate packages without a corresponding launcher
-      // wiring.
-      MOTOKO_PROFILE_DIR: path.resolve(workdir, ".motoko", "config", profile),
-      // M-OLLAMA-PER-MODEL-MAX-TOKENS: forward the per-model output budget so the
-      // AILANG runtime's ollama /v1 path (resolveOllamaMaxTokens) uses the model's
-      // declared max_output_tokens instead of the 4096 std/ai default. Qwen3.6
-      // reasons thousands of tokens before the tool call and truncates
-      // (finish_reason=length) at 4096 → 0 tool calls (disengagement). Without this
-      // allowlist entry the explicit childEnv whitelist drops it — same gotcha as
-      // MOTOKO_REPO / the pricing vars. Empty = the AILANG-side 16384 floor applies.
-      AILANG_OLLAMA_MAX_TOKENS: process.env.AILANG_OLLAMA_MAX_TOKENS ?? "",
-      // Forward the ollama /v1 HTTP timeout (AILANG default 300s). Large-context tasks
-      // accumulate a big prompt; a single qwen request can exceed 5 min on a local GPU and
-      // the AILANG runtime aborts with `context deadline exceeded`, killing the run mid-task.
-      // Without this allowlist entry the var set by the launcher is dropped — same gotcha as
-      // AILANG_OLLAMA_MAX_TOKENS above.
-      AILANG_OLLAMA_HTTP_TIMEOUT_SEC: process.env.AILANG_OLLAMA_HTTP_TIMEOUT_SEC ?? "",
-      // M-MOTOKO-EVAL-HARNESS-HARDENING M5 follow-up (2026-05-08): forward
-      // pricing env vars set by the AILANG adapter from Task.Budget. Without
-      // this, the AILANG-side fix (load_cost_rates reads these env vars) is
-      // a no-op because the explicit whitelist drops them — same gotcha as
-      // MOTOKO_REPO above (gap #6). Empty string falls through to motoko's
-      // profile config fallback inside load_cost_rates.
-      MOTOKO_COST_INPUT_PER_1M_MILLICENTS:
-        process.env.MOTOKO_COST_INPUT_PER_1M_MILLICENTS ?? "",
-      MOTOKO_COST_OUTPUT_PER_1M_MILLICENTS:
-        process.env.MOTOKO_COST_OUTPUT_PER_1M_MILLICENTS ?? "",
-    };
-    // AILANG v0.15.x migration: forward AILANG_STDLIB_PATH if set in the
-    // parent env so callers can point the runtime at an upstream stdlib
-    // checkout (e.g. /Users/mark/dev/sunholo/ailang/std). Without this,
-    // the agent fails with "stdlib module not found: std/ai/streaming"
-    // because it falls back to system paths that don't have the new modules.
-    if (process.env.AILANG_STDLIB_PATH) {
-      childEnv.AILANG_STDLIB_PATH = process.env.AILANG_STDLIB_PATH;
-    }
-    // ClickStack/OTLP handoff: the launcher uses an explicit env whitelist,
-    // so tracing variables must be copied deliberately. Keep export gated so
-    // default dev runs do not attempt OTLP delivery when the opt-in sidecar is
-    // down.
-    if (process.env.MOTOKO_OTEL && process.env.MOTOKO_OTEL.trim() !== "") {
-      childEnv.MOTOKO_OTEL = process.env.MOTOKO_OTEL;
-      childEnv.OTEL_EXPORTER_OTLP_ENDPOINT =
-        process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? "http://clickstack:4318";
-      childEnv.OTEL_EXPORTER_OTLP_PROTOCOL =
-        process.env.OTEL_EXPORTER_OTLP_PROTOCOL ?? "http/protobuf";
-      childEnv.OTEL_SERVICE_NAME =
-        process.env.OTEL_SERVICE_NAME ?? "motoko-agent";
-      childEnv.AILANG_TRACE = process.env.AILANG_TRACE ?? "standard";
-      childEnv.AILANG_TRACE_MAX_SPANS =
-        process.env.AILANG_TRACE_MAX_SPANS ?? "100";
-      if (process.env.OTEL_EXPORTER_OTLP_HEADERS) {
-        childEnv.OTEL_EXPORTER_OTLP_HEADERS =
-          process.env.OTEL_EXPORTER_OTLP_HEADERS;
-      }
-      if (process.env.OTEL_RESOURCE_ATTRIBUTES) {
-        childEnv.OTEL_RESOURCE_ATTRIBUTES =
-          process.env.OTEL_RESOURCE_ATTRIBUTES;
-      }
-      for (const key of [
-        "OTEL_TRACES_EXPORTER",
-        "OTEL_METRICS_EXPORTER",
-        "OTEL_EXPORTER_OTLP_TIMEOUT",
-        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
-        "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
-        "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT",
-        "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
-        "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
-        "OTEL_EXPORTER_OTLP_METRICS_TIMEOUT",
-      ]) {
-        const value = process.env[key];
-        if (value && value.trim() !== "") {
-          childEnv[key] = value;
-        }
-      }
-    }
-    // M-MOTOKO-RPC-LOOP-FULL-MIGRATION M10 cutover (2026-05-06): the
-    // upstream std/ai.step() typed-tool-use loop is now the default and
-    // only loop. The MOTOKO_AGENT_V2 env var is no longer consulted by
-    // the runtime — forwarding has been removed. All 6 legacy decision
-    // points (extension intercept, tool gating, tool-handle routing,
-    // ohmy_pi backend split, hybrid mode, multi-turn conversation_loop)
-    // are migrated and validated by the M9 25/25 provider matrix.
-    if (openaiBaseUrl.trim() !== "") childEnv.OPENAI_BASE_URL = openaiBaseUrl;
-    if (aiOptionsJson.trim() !== "") childEnv.MOTOKO_AI_OPTIONS_JSON = aiOptionsJson;
+    const childEnv = buildChildEnv(workdir, profile, openaiBaseUrl, aiOptionsJson);
 
     // M-MOTOKO-EVAL-HARNESS-HARDENING gap #6 (2026-05-08): mirror the
      // requested profile dir from MOTOKO_REPO into <workdir>/.motoko/config
@@ -494,20 +919,7 @@ export class RuntimeProcess {
       );
     }
 
-    const supervisorArgs = [
-      "--profile",
-      resolvedProfile,
-      "--model",
-      model,
-      "--workdir",
-      supervisorWorkdirArg(workdir),
-      "--port",
-      String(port),
-    ];
-    if (systemPrompt.trim() !== "") {
-      supervisorArgs.push("--system-prompt", systemPrompt);
-    }
-    supervisorArgs.push(task);
+    const supervisorArgs = buildSupervisorArgs(resolvedProfile, model, workdir, port, systemPrompt, task, resume);
 
     this.proc = spawn(
       ailangBin,
@@ -541,7 +953,19 @@ export class RuntimeProcess {
     rl.on("line", (line) => {
       const event = parseAgentEventLine(line);
       if (!event) return;
+      // The LAST event, not any: a TTY runtime says `done` and then serves the next turn, and the
+      // 2026-09-12 OOM kill landed 650 steps into such a session.
+      this.exitExplained = EXIT_EXPLAINING_EVENTS.has(event.type);
+      if (event.type === "wake_request") {
+        this.onWakeRequest(event as WakeRequest);
+        return;
+      }
+      const resolved =
+        (event.type === "wake_received" && this.parkRequestId !== null && event.request_id === this.parkRequestId) ||
+        (PARK_ENDING_EVENTS.has(event.type) && this.parkRequestId !== null);
+      if (resolved) this.resolvePark();
       this.onEvent(event);
+      if (resolved) this.flushDeferredModel();
       if (event.type === "tool_calls") {
         setImmediate(() => {
           void this.handleToolCalls(event);
@@ -559,9 +983,35 @@ export class RuntimeProcess {
       this.onEvent({ type: "warning", message });
     });
 
-    this.proc.on("exit", () => {
+    this.proc.on("exit", (code, signal) => {
       this.dead = true;
       stderrRl.close();
+      if (this.suspending !== null && this.waiter !== null) {
+        // PLAN-003 P4 Part 4 (ADR-003 D7): SUSPENDED-CHILD, the branch BEFORE `restartPending`. The
+        // child was ended by `onWakeRequest` under `--park-exits`; its `park` entry is the journal's
+        // leaf, and the park did NOT die with it. The request and the waiter — still running, not
+        // cancelled — move to the host-lifetime owner the TTY exit callback takes (`suspendedChild`)
+        // and on which it writes no `exit` (row 6: the `wake` must be the `park`'s child). What the
+        // owner receives from here on is Part 5's.
+        this._suspendedChild = new SuspendedChild(this.suspending, this.waiter);
+        this.suspending = null;
+        this.waiter = null;
+        this.outstandingWake = null;
+        this.parkRequestId = null;
+      } else {
+        // The runtime is gone: its park with it. Losing waiters are cancelled and a queued model
+        // change is dropped (there is no child to send it to).
+        this.resolvePark();
+      }
+      this.deferredModel = null;
+      // A killed child cannot say it was killed, so the host says it — as an `error`, which is what
+      // makes the TTY recover into awaiting a task and the headless loggers exit 1, where a silent
+      // `onExit()` would have exited 0 as if the run had finished. A mid-park cancel (R3) ends with
+      // neither `done` nor `error` on the wire, and is an exit the host asked for.
+      const unexplained = this.exitExplained || this.killRequested || this.cancelRequested
+        ? null
+        : describeUnexplainedExit(code, signal);
+      if (unexplained) this.onEvent({ type: "error", message: unexplained });
       onExit();
     });
   }
@@ -691,16 +1141,188 @@ export class RuntimeProcess {
     this.proc.stdin?.write(JSON.stringify(cmd) + "\n");
   }
 
+  /**
+   * True once the child has exited. The TUI pre-spawns a runtime at boot to warm
+   * the AILANG module graph; the first-prompt path reads this to decide between
+   * writing to that process and spawning a replacement.
+   */
+  get isDead(): boolean {
+    return this.dead;
+  }
+
+  /** The AILANG child's pid while it is alive — the footer samples its memory (`process-memory.ts`). */
+  get pid(): number | undefined {
+    return this.dead ? undefined : this.proc.pid;
+  }
+
   abort(): void {
+    this.cancelPark();
     this.send({ type: "abort" });
   }
 
+  /**
+   * Quit a parked session over stdin (W4 Part 5): the core turns `exit` into `Aborted` and ends the
+   * run with neither `done` nor `error`, then the child exits.
+   */
+  exit(): void {
+    if (this.dead) return;
+    this.cancelPark();
+    this.send({ type: "exit" });
+  }
+
+  /** True while the last wire event (`done`, `error`, a resume refusal) already accounts for an exit. */
+  private exitExplained = false;
+  /** Set by `kill()`: a death the host asked for (quit, ESC) is not reported as one. */
+  private killRequested = false;
+  /**
+   * Set by `abort()`, `exit()` and `restart()` while a park is open (PLAN-002 W4 Part 5, R3). A
+   * cancelled park ends the run with no `done` and no `error`, so without this the child's exit
+   * would be unexplained and a non-zero code would synthesize an `error` the host itself caused.
+   */
+  private cancelRequested = false;
+
   kill(): void {
     if (this.dead) return;
+    this.killRequested = true;
     this.proc.kill("SIGTERM");
   }
 
   setModel(model: string): void {
+    // The core drops `model_change` while parked (with a warning), so it waits for the park to resolve.
+    if (this.parkRequestId !== null) {
+      this.deferredModel = model;
+      return;
+    }
+    this.send({ type: "model_change", model });
+  }
+
+  // ------------------------------------------------------------------------------------------------
+  // Park and wake (ADR-002 D2, PLAN-002 W4 Part 5)
+  // ------------------------------------------------------------------------------------------------
+
+  private readonly wakeWaiterFactory: WakeWaiterFactory;
+  /** The request awaiting a host reply; null once a reply is sent or the park ends. */
+  private outstandingWake: WakeRequest | null = null;
+  /** The park not yet resolved by the core (`wake_received`, a run end, or the child's exit). */
+  private parkRequestId: string | null = null;
+  private waiter: WakeWaiterHandle | null = null;
+  private deferredModel: string | null = null;
+  /**
+   * PLAN-003 P4 Part 4: `--park-exits`. Off by default; on, a FIRST issue of a `wake_request` ends
+   * the child (P4-Q3: `kill()` once the `park` entry is on disk; every first-issue park; TTY only —
+   * the non-TTY spawn never passes it). With it off nothing in this part runs.
+   */
+  private readonly parkExits: boolean;
+  /**
+   * The request the child is dying on: set by `onWakeRequest` between its `kill()` and the exit.
+   * A reply in that window is DROPPED (R5): it writes no `wake` and starts no respawn — the request
+   * died with the child, and the park is re-observed on the next resume (row 5).
+   */
+  private suspending: WakeRequest | null = null;
+  private _suspendedChild: SuspendedChild | null = null;
+
+  /**
+   * What the exit handler handed over, or null. The TTY exit callback reads this FIRST, above
+   * `restartPending`: on it the callback writes no `exit` entry and keeps the session open.
+   */
+  get suspendedChild(): SuspendedChild | null {
+    return this._suspendedChild;
+  }
+
+  /** The outstanding `wake_request`, or null. The TUI's parked input route reads this. */
+  get wakeRequest(): WakeRequest | null {
+    return this.outstandingWake;
+  }
+
+  /** True while a `wake_request` awaits a reply from the host. */
+  get isParked(): boolean {
+    return this.outstandingWake !== null;
+  }
+
+  private onWakeRequest(req: WakeRequest): void {
+    const reissue = this.parkRequestId === req.request_id;
+    this.parkRequestId = req.request_id;
+    if (reissue && this.outstandingWake !== null && this.waiter !== null && !this.waiter.finished) {
+      // Same park, next attempt, observers still running: keep them, track the attempt.
+      this.outstandingWake = req;
+    } else {
+      this.stopWaiter();
+      this.outstandingWake = req;
+      // Waiters report asynchronously, so none can reply before the event below is forwarded.
+      if (!this.dead) this.waiter = this.wakeWaiterFactory(req, (reply) => this.onWaiterReply(reply));
+    }
+    // Forwarded LAST: a consumer that aborts from inside onEvent must find the park already tracked.
+    this.onEvent(req);
+    // PLAN-003 P4 Part 4 (P4-Q3): a first issue under `--park-exits` ends the child. The `park`
+    // entry is already on disk — the child emits `park_entered` before `wake_request`
+    // (`session.ail:3530`, then `stub_step.ail:220`) and the host appended it synchronously from the
+    // line before this one. `kill()` sets `killRequested`, so the exit is not reported as an
+    // `error`. Guarded on the park still being tracked: a consumer that aborted from inside onEvent
+    // above has already cancelled it, and that exit is the ordinary one.
+    if (this.parkExits && !reissue && this.outstandingWake === req && this.waiter !== null && !this.dead) {
+      this.suspending = req;
+      this.kill();
+    }
+  }
+
+  /** The waiter's reply: down stdin while the child lives; to the owner after the exit; dropped between (R5). */
+  private onWaiterReply(reply: WakeReply): void {
+    if (this._suspendedChild !== null) {
+      this._suspendedChild.deliver(reply);
+      return;
+    }
+    if (this.suspending !== null) return;
+    this.sendWakeReply(reply);
+  }
+
+  /**
+   * Send one `wake_reply`. Dropped — never sent — when no request is outstanding or its `request_id`
+   * is not the outstanding one (a late reply). Returns whether it was sent.
+   */
+  sendWakeReply(reply: WakeReply): boolean {
+    if (this.dead) return false;
+    // P4 Part 4, R5: between `kill()` and the exit the request is dying with the child. Nothing is
+    // sent and nothing is written; the owner (`suspendedChild`) receives replies only after the exit.
+    if (this.suspending !== null) return false;
+    const req = this.outstandingWake;
+    if (req === null || reply.request_id !== req.request_id) return false;
+    this.outstandingWake = null;
+    this.stopWaiter();
+    this.send({
+      type: "wake_reply",
+      request_id: reply.request_id,
+      wait_id: reply.wait_id,
+      outcome: reply.outcome,
+      detail: reply.detail,
+    });
+    return true;
+  }
+
+  private stopWaiter(): void {
+    const w = this.waiter;
+    this.waiter = null;
+    w?.cancel();
+  }
+
+  /** The park ended on the wire or with the child. */
+  private resolvePark(): void {
+    this.outstandingWake = null;
+    this.parkRequestId = null;
+    this.stopWaiter();
+  }
+
+  /** A cancelling command is about to go down stdin. */
+  private cancelPark(): void {
+    if (this.parkRequestId === null && this.outstandingWake === null) return;
+    this.cancelRequested = true;
+    this.outstandingWake = null;
+    this.stopWaiter();
+  }
+
+  private flushDeferredModel(): void {
+    const model = this.deferredModel;
+    if (model === null || this.parkRequestId !== null) return;
+    this.deferredModel = null;
     this.send({ type: "model_change", model });
   }
 
@@ -715,6 +1337,7 @@ export class RuntimeProcess {
    */
   restart(newProfile?: string): void {
     if (this.dead) return;
+    this.cancelPark();
     this.send({ type: "restart", profile: newProfile });
     // Set a flag so the exit handler knows to respawn
     this._restartPending = newProfile ?? true;

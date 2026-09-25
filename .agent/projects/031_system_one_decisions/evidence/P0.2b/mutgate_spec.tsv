@@ -1,0 +1,20 @@
+# P0.2b mutgate spec — review 5 §A.3's named-arm attacks, reconstructed from shape.
+# Each row breaks THE BEHAVIOUR ITS ROW NAMES and must turn that row red.
+#
+# WHY THE TEST IS THE SECTION RUNNER AND NOT `make declared_vs_performed`. The
+# whole suite has been red since P0.4 (ABI 8.0) and aborts under set -e in
+# producer 2, before the P0.2 section runs (README.md here). run_adr001_section.sh
+# slices that section out of the COMMITTED run_declared_vs_performed.sh by its
+# marker comments and runs it, so these rows exercise the committed code.
+#
+# NO PIPES IN A test_cmd (mutgate.sh's `set -o pipefail` + `grep -q` = exit 141,
+# a baseline red). Each row writes a log and greps the FILE, as P0.2's spec does.
+# fix_id	target_file	sed_expr	test_cmd
+p02b_clean_drop	scripts/dst/fixtures/adr001_boundary/reconstructed/q_named_emptyrow.ail	s/let _ = println(ctx.name); //	bash .agent/projects/031_system_one_decisions/evidence/P0.2b/run_adr001_section.sh > /tmp/p02b_p02b_clean_drop.log 2>&1; grep -qF "✓ GROUP 1 RECONSTRUCTED (q_named_emptyrow)" /tmp/p02b_p02b_clean_drop.log
+p02b_app_to_eff	scripts/dst/fixtures/adr001_boundary/reconstructed/q_named_mutual.ail	s/-> int ! {IO} { if n > 1/-> int { if n > 1/	bash .agent/projects/031_system_one_decisions/evidence/P0.2b/run_adr001_section.sh > /tmp/p02b_p02b_app_to_eff.log 2>&1; grep -qF "✓ GROUP 1 RECONSTRUCTED (q_named_mutual)" /tmp/p02b_p02b_app_to_eff.log
+p02b_eff_to_app	scripts/dst/fixtures/adr001_boundary/reconstructed/q_named_collision.ail	s/func body(ctx: PureCtx) -> int {/func body(ctx: PureCtx) -> int ! {IO} {/	bash .agent/projects/031_system_one_decisions/evidence/P0.2b/run_adr001_section.sh > /tmp/p02b_p02b_eff_to_app.log 2>&1; grep -qF "✓ GROUP 1 RECONSTRUCTED (q_named_collision)" /tmp/p02b_p02b_eff_to_app.log
+p02b_app_other_site	scripts/dst/fixtures/adr001_boundary/reconstructed/q_named_generic.ail	s|^func body.*|func body(ctx: PureCtx) -> int { apply(ctx, { f: func(c: PureCtx) -> int ! {} { let _ = println(c.name); 1 } }) }|; s|^\(import scripts/dst/fixtures/adr001_boundary/types .*\)$|\1\nimport scripts/dst/fixtures/adr001_boundary/helpers (W, apply)|	bash .agent/projects/031_system_one_decisions/evidence/P0.2b/run_adr001_section.sh > /tmp/p02b_p02b_app_other_site.log 2>&1; grep -qF "✓ GROUP 1 RECONSTRUCTED (q_named_generic)" /tmp/p02b_p02b_app_other_site.log
+p02b_letann_to_app	scripts/dst/fixtures/adr001_boundary/reconstructed/q_named_recfield_xmod.ail	s|^import scripts/dst/fixtures/adr001_boundary/reconstructed/rec_types (R)$|type R = { f: (string) -> () ! {} }|	bash .agent/projects/031_system_one_decisions/evidence/P0.2b/run_adr001_section.sh > /tmp/p02b_p02b_letann_to_app.log 2>&1; grep -qF "✓ GROUP 1 RECONSTRUCTED (q_named_recfield_xmod)" /tmp/p02b_p02b_letann_to_app.log
+p02b_control	scripts/dst/fixtures/adr001_boundary/reconstructed/q_dec_prepare_named_ok.ail	s/{ Query(1) }/{ Query(2) }/	bash .agent/projects/031_system_one_decisions/evidence/P0.2b/run_adr001_section.sh > /tmp/p02b_p02b_control.log 2>&1; grep -qF "✓ GROUP 2 (reconstructed/q_dec_prepare_named_ok)" /tmp/p02b_p02b_control.log
+p02b_header_verbatim	scripts/dst/fixtures/adr001_boundary/reconstructed/q_named_mutual.ail	s/effect in `helper` |/effect in helper |/	bash .agent/projects/031_system_one_decisions/evidence/P0.2b/run_adr001_section.sh > /tmp/p02b_p02b_header_verbatim.log 2>&1; grep -qF "✓ RECONSTRUCTED PROVENANCE:" /tmp/p02b_p02b_header_verbatim.log
+p02b_unscored	scripts/dst/run_declared_vs_performed.sh	s/^  g1_n=\$((g1_n+1)); rc_n=\$((rc_n+1))$/  g1_n=$((g1_n+1))/	bash .agent/projects/031_system_one_decisions/evidence/P0.2b/run_adr001_section.sh > /tmp/p02b_p02b_unscored.log 2>&1; grep -qF "✓ EVERY RECONSTRUCTION IS SCORED" /tmp/p02b_p02b_unscored.log

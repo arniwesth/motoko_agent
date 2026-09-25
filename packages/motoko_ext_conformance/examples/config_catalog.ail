@@ -1,0 +1,56 @@
+-- 031 PLAN-001 P0.6 -- the `DescribeTools` consumer on ABI 8.0 (ADR-001 N49,
+-- freeze evidence 2(c)): a catalog that comes from `ext_config`.
+--
+-- Grown from the seventh review's `v7_describe_config` probe
+-- (scripts/dst/fixtures/adr001_boundary/). At 7.4 `DescribeTools` took `()`,
+-- so a catalog that depended on configuration had to capture it; at 8.0 it
+-- takes the extension's `config`, which the host keeps on `ExtEntry.config`
+-- and passes where the pure catalog calls the payload. So this registration
+-- DISCLOSES its tool set as data, and `describe_tools` -- a named top-level
+-- function that captures nothing -- advertises exactly what that data names:
+-- configured, one tool; empty, none.
+--
+-- The operator's tool set arrives as the REGISTRATION INPUT -- this example's
+-- settings object, typed `Json` because the kit does not depend on core:
+-- `{"tools": [<name>, ...]}`, absent meaning none. Registration discloses the
+-- resolved list as `config`, and it crosses into the callback ONLY through
+-- that. No environment is read: the registration has no row. Everything here
+-- is synthetic.
+module sunholo/motoko_ext_conformance/examples/config_catalog
+
+import std/json (Json, jo, ja, kv, js, getStringArrayOrEmpty)
+import pkg/sunholo/motoko_ext_abi/types (ExtRegistration, DescribeTools, ToolSchema)
+
+export func catalog_config(cfg: Json) -> Json {
+  jo([kv("tools", ja(strings_json(getStringArrayOrEmpty(cfg, "tools"))))])
+}
+
+export func register_with_config(cfg: Json) -> ExtRegistration {
+  {
+    config: catalog_config(cfg),
+    caps: [DescribeTools(describe_tools)]
+  }
+}
+
+func describe_tools(cfg: Json) -> [ToolSchema] {
+  schemas_for(getStringArrayOrEmpty(cfg, "tools"))
+}
+
+pure func strings_json(xs: [string]) -> [Json] {
+  match xs { [] => [], x :: rest => js(x) :: strings_json(rest) }
+}
+
+pure func schemas_for(names: [string]) -> [ToolSchema] {
+  match names {
+    [] => [],
+    n :: rest => schema_for(n) :: schemas_for(rest)
+  }
+}
+
+pure func schema_for(n: string) -> ToolSchema {
+  {
+    name: n,
+    description: "Synthetic example tool '${n}', advertised because the extension's config names it.",
+    parameters: "{\"type\":\"object\",\"properties\":{}}"
+  }
+}

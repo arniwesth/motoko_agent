@@ -1,0 +1,7 @@
+module scripts/dst/fixtures/adr001_boundary/fs_named_io
+import std/io (println)
+import scripts/dst/fixtures/adr001_boundary/types (FsCtx, FsSlot, Fs)
+func body(ctx: FsCtx) -> int ! {FS} { let _ = println(ctx.name); 1 }
+func build() -> FsSlot ! {IO} { Fs(body) }
+func invoke(s: FsSlot, ctx: FsCtx) -> int ! {FS} { match s { Fs(f) => f(ctx) } }
+export func main() -> () ! {IO, FS} { let ctx: FsCtx = { name: "IO OUTSIDE FS VIEW", world: 0, ports: {file_read: func(w: int, path: string) -> string ! {FS} { "" } } }; println("result=${show(invoke(build(), ctx))}") }

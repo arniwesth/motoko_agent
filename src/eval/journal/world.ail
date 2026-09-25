@@ -1,0 +1,257 @@
+-- src/eval/journal/world.ail
+--
+-- ADR-004 v5 D2 "The world", PLAN-004 §3 P1.5: `JournalWorld` -> `WorldState`.
+--
+--   journal_world_state(jw, epoch)                        -> WorldState
+--   read_journal_world_state(lines, log, sel, env, epoch) -> Result[WorldState, WorldRefusal]
+--
+-- The shape `base_world` builds (`strict_replay_dst.ail:257`), over
+-- `empty_world_state()`:
+--
+--   script     per recorded call: prose = the assistant's content, its tool
+--              calls as recorded, input/output tokens and the finish reason
+--              from the call's `thinking` event (the excerpt), chunks [],
+--              no error, advance_ms 0
+--   tools      per recorded result, in JOURNAL order (entry seq): the call id,
+--              the content, exit_code -1 (the "not executed; status not
+--              recorded" convention, ports.ail:586–615), duration_ms 0, no
+--              fault. The loop invokes in the assistant's call order; where
+--              the two orders differ the scripted arm's correlation guard
+--              answers `ToolCorrelationMismatch` (ports.ail:1775–1777), which
+--              is the intended finding, not something to repair here.
+--   env        the T0 settings' served values (`configuration.served_env`:
+--              the recorded values plus MOTOKO_EXIT_MANIFEST and
+--              MOTOKO_CAPTURE_FAILED_PAYLOAD present and empty)
+--   clock_ms   the declared epoch (the caller's; P1.6 declares it in the
+--              program's `clock_epoch`)
+--   files      the one `FsFile` at `.motoko/eval-profile/config.json` holding
+--              D1's context-limit config
+--   approvals [], wakes [], and every other field `empty_world_state()`'s.
+--
+-- Cache usage is served as zero (ScriptedStep has no cache fields); it is in
+-- `JournalWorld.unreproduced`.
+--
+-- Builds on P1.3's `read_journal_world` (imported). This module imports
+-- `src/core` for the world's types and constructor only; it copies nothing.
+-- Privacy (§0.6): the tests compare digests, counts and identities.
+
+module src/eval/journal/world
+
+import std/ai (Message, ToolCall)
+import std/crypto (sha256Hex)
+import std/json (Json)
+import std/list as List (length, map, foldl)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/string (join)
+import src/core/ports (WorldState, ScriptedStep, ScriptedTool, empty_world_state)
+import src/core/fs_node (FsNode, FsFile, FsDir)
+import src/eval/journal/reader (RunSelector, parse_lines, EndAt, CutoffBefore)
+import src/eval/journal/configuration (RecordedEnv, EnvPair, ServedFile, profile_config_content, eval_profile_config_path)
+import src/eval/journal/stopping (JournalWorld, RecordedCall, WorldTool, WorldRefusal, read_journal_world)
+import src/eval/journal/testdata/world_fixtures (WorldFixture, fxw_all, fxw_m3_selector_end, fxw_m4_stop_call_last, fxw_m5_config_disabled, fxw_m5_config_missed_no_event)
+
+-- ============================================================================
+-- The builder.
+-- ============================================================================
+
+export pure func journal_step(c: RecordedCall) -> ScriptedStep {
+  {
+    prose: c.assistant.content,
+    tool_calls: c.assistant.tool_calls,
+    input_tokens: c.usage.input,
+    output_tokens: c.usage.output,
+    finish_reason: c.finish_reason,
+    chunks: [],
+    error_code: "",
+    error_message: "",
+    advance_ms: 0
+  }
+}
+
+export pure func journal_script(jw: JournalWorld) -> [ScriptedStep] {
+  List.map(journal_step, jw.calls)
+}
+
+pure func jw_insert_by_seq(t: WorldTool, xs: [WorldTool]) -> [WorldTool] {
+  match xs {
+    [] => [t],
+    x :: rest => if t.seq < x.seq then t :: xs else x :: jw_insert_by_seq(t, rest)
+  }
+}
+
+-- Every recorded result of every kept call, ordered by entry seq.
+export pure func journal_results(jw: JournalWorld) -> [WorldTool] {
+  List.foldl(\acc c. List.foldl(\a t. jw_insert_by_seq(t, a), acc, c.tools), [], jw.calls)
+}
+
+export pure func journal_tool(t: WorldTool) -> ScriptedTool {
+  { tool_call_id: t.call_id, duration_ms: 0, code: "", message: "", content: t.content, exit_code: -1 }
+}
+
+export pure func journal_tools(jw: JournalWorld) -> [ScriptedTool] {
+  List.map(journal_tool, journal_results(jw))
+}
+
+export pure func journal_env(jw: JournalWorld) -> [{ key: string, value: string }] {
+  List.map(\p. { key: p.key, value: p.value }, jw.settings.env)
+}
+
+export pure func journal_files(jw: JournalWorld) -> [{ path: string, node: FsNode }] {
+  List.map(\f. { path: f.path, node: FsFile(f.content) }, jw.settings.files)
+}
+
+export pure func journal_world_state(jw: JournalWorld, epoch: int) -> WorldState {
+  { empty_world_state() |
+    script: journal_script(jw),
+    tools: journal_tools(jw),
+    env: journal_env(jw),
+    clock_ms: epoch,
+    files: journal_files(jw),
+    approvals: [],
+    wakes: [] }
+}
+
+export pure func read_journal_world_state(lines: [Json], log: [string], sel: RunSelector, env: RecordedEnv, epoch: int) -> Result[WorldState, WorldRefusal] {
+  match read_journal_world(lines, log, sel, env) {
+    Err(r) => Err(r),
+    Ok(jw) => Ok(journal_world_state(jw, epoch))
+  }
+}
+
+-- ============================================================================
+-- Labels (shared with `seams.ail`'s tests): the generator's formats.
+-- ============================================================================
+
+export pure func step_label(s: ScriptedStep) -> string {
+  "sha256:${sha256Hex(s.prose)}|${s.finish_reason}|${show(s.input_tokens)}|${show(s.output_tokens)}|${join(",", List.map(\c. c.id, s.tool_calls))}"
+}
+
+export pure func tool_label(t: ScriptedTool) -> string {
+  "${t.tool_call_id}|sha256:${sha256Hex(t.content)}"
+}
+
+-- ============================================================================
+-- Tests (M8's world half).
+-- ============================================================================
+
+pure func jw_strs_eq(a: [string], b: [string]) -> bool {
+  match a {
+    [] => (match b { [] => true, _ => false }),
+    x :: xs => match b { [] => false, y :: ys => x == y && jw_strs_eq(xs, ys) }
+  }
+}
+
+pure func jw_fx_selector(f: WorldFixture) -> RunSelector {
+  let end = if f.end_kind == "EndAt" then EndAt(f.end_id) else CutoffBefore(f.end_id);
+  { leaf: f.leaf, run_id: f.run_id, start: f.start, end: end }
+}
+
+pure func jw_fx_env(f: WorldFixture) -> RecordedEnv {
+  {
+    headless: f.env_headless,
+    openai_base_url: f.env_base_url,
+    retry_stream_error: f.env_retry,
+    tool_timeout_ms: if f.env_has_timeout then Some(f.env_timeout) else None
+  }
+}
+
+-- Test support (also `seams.ail`'s): a generated fixture's journal world.
+export pure func fixture_journal_world(f: WorldFixture) -> Result[JournalWorld, WorldRefusal] {
+  let lines = match parse_lines(f.journal) { Ok(ls) => ls, Err(_) => [] };
+  read_journal_world(lines, f.log, jw_fx_selector(f), jw_fx_env(f))
+}
+
+export pure func fixture_world_state(f: WorldFixture, epoch: int) -> Result[WorldState, WorldRefusal] {
+  let lines = match parse_lines(f.journal) { Ok(ls) => ls, Err(_) => [] };
+  read_journal_world_state(lines, f.log, jw_fx_selector(f), jw_fx_env(f), epoch)
+}
+
+pure func jw_ints_eq(a: [int], b: [int]) -> bool {
+  match a {
+    [] => (match b { [] => true, _ => false }),
+    x :: xs => match b { [] => false, y :: ys => x == y && jw_ints_eq(xs, ys) }
+  }
+}
+
+pure func jw_file_label(e: { path: string, node: FsNode }) -> string {
+  match e.node { FsFile(c) => "${e.path}=${c}", FsDir => "${e.path}/" }
+}
+
+pure func jw_step_is_plain(s: ScriptedStep) -> bool {
+  List.length(s.chunks) == 0 && s.error_code == "" && s.error_message == "" && s.advance_ms == 0
+}
+
+pure func jw_tool_is_plain(t: ScriptedTool) -> bool {
+  t.exit_code == -1 && t.duration_ms == 0 && t.code == "" && t.message == ""
+}
+
+-- The world against the generator's independent script and queue, field for
+-- field, on every admitted fixture; a refused fixture builds no world.
+pure func jw_agrees(f: WorldFixture) -> bool {
+  match fixture_world_state(f, 1789000000000) {
+    Err(_) => not f.ok,
+    Ok(w) =>
+      f.ok
+        && jw_strs_eq(List.map(step_label, w.script), f.script_steps)
+        && List.length(w.script) == f.n
+        && List.foldl(\acc s. acc && jw_step_is_plain(s), true, w.script)
+        && jw_strs_eq(List.map(tool_label, w.tools), f.tool_queue)
+        && List.foldl(\acc t. acc && jw_tool_is_plain(t), true, w.tools)
+        && jw_strs_eq(List.map(\p. "${p.key}=${p.value}", w.env), f.served_env)
+        && jw_strs_eq(List.map(jw_file_label, w.files), [".motoko/eval-profile/config.json=${f.profile_config}"])
+        && w.clock_ms == 1789000000000
+        && List.length(w.approvals) == 0
+        && List.length(w.wakes) == 0
+        && List.length(w.ext_effects) == 0
+        && List.length(w.log) == 0
+        && w.ordinal == 0
+        && List.length(w.pending) == 0
+  }
+}
+
+pure func test_world_equals_generator() -> bool
+  tests [((), true)]
+  {
+    List.length(fxw_all()) == 36 && List.foldl(\acc f. acc && jw_agrees(f), true, fxw_all())
+  }
+
+-- The clean M2 world, literally: three continuation calls, four results in
+-- journal order, both ambient keys present and empty, the window config.
+pure func test_world_m2_literal() -> bool
+  tests [((), true)]
+  {
+    match fixture_world_state(fxw_m3_selector_end(), 7) {
+      Err(_) => false,
+      Ok(w) =>
+        jw_strs_eq(List.map(\s. s.finish_reason, w.script), ["tool_calls", "tool_calls", "tool_calls"])
+          && jw_strs_eq(List.map(\s. join(",", List.map(\c. c.id, s.tool_calls)), w.script), ["c2a,c2b", "c3", "c4"])
+          && jw_ints_eq(List.map(\s. s.input_tokens, w.script), [100, 200, 300])
+          && jw_ints_eq(List.map(\s. s.output_tokens, w.script), [10, 20, 30])
+          && jw_strs_eq(List.map(\t. t.tool_call_id, w.tools), ["c2a", "c2b", "c3", "c4"])
+          && List.foldl(\acc p. acc || (p.key == "MOTOKO_EXIT_MANIFEST" && p.value == ""), false, w.env)
+          && List.foldl(\acc p. acc || (p.key == "MOTOKO_CAPTURE_FAILED_PAYLOAD" && p.value == ""), false, w.env)
+          && List.length(w.env) == 9
+          && w.clock_ms == 7
+    }
+  }
+
+-- A stop call at N is the script's last step; the context-limit encodings
+-- reach the one file.
+pure func test_world_stop_and_config_files() -> bool
+  tests [((), true)]
+  {
+    let stop_ok = match fixture_world_state(fxw_m4_stop_call_last(), 0) {
+      Err(_) => false,
+      Ok(w) => List.foldl(\acc s. s.finish_reason, "", w.script) == "stop"
+    };
+    let disabled = match fixture_world_state(fxw_m5_config_disabled(), 0) {
+      Err(_) => false,
+      Ok(w) => jw_strs_eq(List.map(jw_file_label, w.files), [".motoko/eval-profile/config.json={\"agent\":{\"context_limit\":\"disabled\"}}"])
+    };
+    let missed = match fixture_world_state(fxw_m5_config_missed_no_event(), 0) {
+      Err(_) => false,
+      Ok(w) => jw_strs_eq(List.map(jw_file_label, w.files), [".motoko/eval-profile/config.json={\"agent\":{}}"])
+    };
+    stop_ok && disabled && missed
+  }

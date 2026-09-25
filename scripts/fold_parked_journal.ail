@@ -1,0 +1,126 @@
+-- ============================================================================
+-- fold_parked_journal.ail — PLAN-003 P4 Part 5's FOLD GATE (P3 Part 4's shape).
+--
+-- "The file the host wrote on a suspended-child's wake folds to
+-- `Parked(p, Some(w))`." The host's writer is TypeScript and the fold is
+-- AILANG, so neither suite can make that claim by itself: the host test
+-- (`runtime-process.wake.test.ts`, "the wake entry and the respawn") asserts
+-- the SHAPE it wrote — `header, park, wake`, the wake's `parent_id` the park's
+-- `id` — and `journal.ail`'s tests assert what the fold accepts. The check
+-- that is neither is a real file, written by the real host, handed to the
+-- real fold — which is what the resumed child does with `--resume` (P4 Part 3
+-- reads `Parked(p, Some(w))` off `plan.last` and consumes the wake as
+-- `<R'>.p0`).
+--
+-- Reads the journal with the same ambient `readFile` the resume path uses
+-- (§0.8), folds it from its last entry, and prints the boundary it got: the
+-- park, and the wake that answered it, or which refusal it hit.
+--
+--   MOTOKO_P4_JOURNAL_OUT=/tmp/p4-part5.jsonl \
+--     bun node_modules/.bin/jest src/runtime-process.wake.test.ts   # in src/tui
+--   ailang run --caps IO,FS,Env --entry main scripts/fold_parked_journal.ail -- /tmp/p4-part5.jsonl
+--
+-- Any `.motoko/sessions/<id>/journal.jsonl` works too: a live session parked
+-- under `--park-exits` and woken is the same file.
+-- ============================================================================
+
+module scripts/fold_parked_journal
+
+import std/io (println)
+import std/fs (readFile, fileExists)
+import std/json (Json, decode)
+import std/list (length as list_length)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/string (trim)
+import std/env (getArgs)
+import src/core/journal (
+  fold_journal, journal_leaf, refusal_id, refusal_message,
+  boundary_id, BoundaryParked, SessionState
+)
+
+-- One JSON value per line; a blank line is skipped and an undecodable one is
+-- FATAL rather than skipped (fold_live_journal.ail's rule).
+func parse_lines(ls: [string], acc: [Json], bad: int) -> { entries: [Json], bad: int } {
+  match ls {
+    [] => { entries: acc, bad: bad },
+    l :: rest =>
+      if trim(l) == "" then parse_lines(rest, acc, bad)
+      else match decode(l) {
+        Err(_) => parse_lines(rest, acc, bad + 1),
+        Ok(j) => parse_lines(rest, acc ++ [j], bad)
+      }
+  }
+}
+
+func split_lines(s: string) -> [string] { split_at_newline(s, "", []) }
+
+func split_at_newline(s: string, cur: string, acc: [string]) -> [string] {
+  if _str_len(s) == 0 then acc ++ [cur]
+  else {
+    let c = _str_slice(s, 0, 1);
+    let rest = _str_slice(s, 1, _str_len(s));
+    if c == "\n" then split_at_newline(rest, "", acc ++ [cur])
+    else split_at_newline(rest, "${cur}${c}", acc)
+  }
+}
+
+-- D7's `last`. `Parked(p, None)` is a park the resumer re-observes (row 5);
+-- `Parked(p, Some(w))` is a wake received and not yet consumed by the run it
+-- opens — what Part 5's host writes, and what this gate is for.
+func describe(st: SessionState) -> () ! {IO} {
+  match st.last {
+    BoundaryParked(p, answered) => {
+      let _ = println("  last                 parked");
+      let _ = println("  park.request_id      ${p.request_id}");
+      let _ = println("  park.step            ${show(p.step)}");
+      let _ = println("  park.waits           ${show(list_length(p.waits))}");
+      match answered {
+        None => println("PARKED(p, None)      -- no wake: re-observed on resume"),
+        Some(w) => {
+          let _ = println("  wake.request_id      ${w.request_id}");
+          let _ = println("  wake.wait_id         ${w.wait_id}");
+          let _ = println("  wake.outcome         ${w.outcome}");
+          let _ = println("  wake.detail          ${w.detail}");
+          if w.request_id == p.request_id
+          then println("PARKED(p, Some(w))   -- the wake answers the park; the resumer consumes it as <R'>.p0")
+          else println("REFUSED  the wake names another request (the fold should have refused this)")
+        }
+      }
+    },
+    _ => println("NOT PARKED  last=${boundary_id(st.last)}")
+  }
+}
+
+func last_arg(xs: [string]) -> [string] {
+  match xs {
+    [] => [],
+    x :: [] => [x],
+    _ :: rest => last_arg(rest)
+  }
+}
+
+export func main() -> () ! {IO, FS, Env} {
+  let args = last_arg(getArgs());
+  match args {
+    [] => println("usage: ailang run --caps IO,FS,Env --entry main scripts/fold_parked_journal.ail -- <journal.jsonl>"),
+    p :: _ =>
+      if not fileExists(p) then println("REFUSED  no such journal: ${p}")
+      else {
+        let raw = readFile(p);
+        let parsed = parse_lines(split_lines(raw), [], 0);
+        let n = list_length(parsed.entries);
+        let _ = println("journal ${p}");
+        let _ = println("  ${show(n)} entr(ies), ${show(parsed.bad)} undecodable line(s)");
+        if parsed.bad > 0 then println("REFUSED  the file has lines that are not JSON")
+        else {
+          let leaf = journal_leaf(parsed.entries);
+          let _ = println("  leaf                 ${leaf}");
+          match fold_journal(parsed.entries, leaf) {
+            Err(r) => println("REFUSED  ${refusal_id(r)}: ${refusal_message(r)}"),
+            Ok(st) => describe(st)
+          }
+        }
+      }
+  }
+}

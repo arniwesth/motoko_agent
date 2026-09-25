@@ -1,0 +1,29 @@
+module smoke_async_exec_stderr_exit
+
+import std/bytes (toString)
+import std/io (println)
+import std/stream (asyncExecProcess, selectEvents)
+import std/array (empty, unsafeGet)
+
+pure func fail_probe() -> bool {
+  let xs: Array[int] = empty();
+  let _ = unsafeGet(xs, 0);
+  false
+}
+
+export func main() -> () ! {Stream, Process, IO} {
+  let proc = asyncExecProcess("sh", ["-c", "printf out; printf err >&2; exit 7"], "tool_call_probe", 10, 4096);
+  selectEvents([proc], \event. match event {
+    SourceBytes(name, data) => {
+      if name == "tool_call_probe" && toString(data) == "out" then true
+      else fail_probe()
+    },
+    Closed(code, reason) => {
+      let _ = reason;
+      if code == 7 then false else fail_probe()
+    },
+    StreamError(_) => fail_probe(),
+    _ => true
+  });
+  println("PASS_CLOSED_EXIT_7_OBSERVED_STDERR_NOT_DELIVERED_AS_SOURCE")
+}

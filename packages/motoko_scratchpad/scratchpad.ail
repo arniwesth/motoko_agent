@@ -1,11 +1,11 @@
 module sunholo/motoko_ext_scratchpad/scratchpad
 
 import std/option (Option, Some, None)
-import std/json (Json, jo, kv, js, get, asArray, asString)
+import std/json (Json, jo, kv, js, jint, get, getInt, asArray, asString)
 import std/string (contains)
 
-import pkg/sunholo/motoko_ext_abi/types (
-  ExtCtx, ExtensionHooks, ToolSchema,
+import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
+  PureCtx, ProviderCtx, Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, ToolSchema,
   BudgetPlan, BudgetPatch, PromptPatch,
   ToolCallEnvelope, ToolResultEnvelope,
   ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision, PreStepDecision,
@@ -15,14 +15,6 @@ import pkg/sunholo/motoko_ext_abi/types (
 import pkg/sunholo/motoko_ext_scratchpad/prompts (prompt_patch)
 import pkg/sunholo/motoko_ext_scratchpad/types (tool_name, schema_json)
 import src/core/env_client (exec_scratchpad_cell)
-
-func no_budget_patch() -> BudgetPatch {
-  { requested_total: None, requested_solver: None, requested_verifier: None }
-}
-
-func budget_hook(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
-  no_budget_patch()
-}
 
 func is_scratchpad_tool(name: string) -> bool {
   name == "scratchpad" || name == "Scratchpad"
@@ -42,7 +34,9 @@ export func provided_tools() -> [string] {
   [tool_name()]
 }
 
-export func on_describe_tools() -> [ToolSchema] {
+-- `DescribeTools` receives the extension's configuration (ABI 8.0); the
+-- schema is fixed, so it ignores it.
+export func on_describe_tools(_cfg: Json) -> [ToolSchema] {
   [{
     name: tool_name(),
     description: "Run persistent scratchpad cells: Python/JavaScript for scripting and plots, AILANG (language:\"ail\" — source-backed scratchpad gated by ailang check with optional Z3 contracts), or Lean 4 (language:\"lean\" — persistent theorem-proving scratchpad with honest proof metadata).",
@@ -65,7 +59,7 @@ func cells_have_lean_effect_hatch(cells: [Json]) -> bool {
   }
 }
 
-export func on_tool_policy(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolPolicyDecision {
+export func on_tool_policy(ctx: PureCtx, call: ToolCallEnvelope) -> ToolPolicyDecision {
   if not is_scratchpad_tool(call.tool) then NoOpinion
   else if ctx.mode == "restricted" || ctx.mode == "read_only" || ctx.mode == "readonly" then Deny("scratchpad is disabled in restricted/read-only mode")
   else if ctx.mode == "prove_only" || ctx.mode == "proof_only" then
@@ -87,29 +81,29 @@ func result_from_exec(call: ToolCallEnvelope, result: { stdout: string, stderr: 
   }
 }
 
-export func on_tool_handle(ctx: ExtCtx, call: ToolCallEnvelope, timeout_secs: int) -> ToolHandleDecision ! {Net} {
+-- THE CELL TIMEOUT CROSSES AS CONFIGURATION (ABI 8.0, 031 ADR-001 D2 and
+-- Amendment 3): `register` reads `MOTOKO_SCRATCHPAD_TIMEOUT_SECS` once and
+-- discloses `{"timeout_secs": n}`; the provider decodes it per call from
+-- `ctx.ext_config`. Absent reads as the default.
+export pure func default_timeout_secs() -> int { 30 }
+
+export pure func timeout_config(timeout_secs: int) -> Json {
+  jo([kv("timeout_secs", jint(timeout_secs))])
+}
+
+export pure func timeout_secs_of(cfg: Json) -> int {
+  match getInt(cfg, "timeout_secs") { Some(n) => n, None => default_timeout_secs() }
+}
+
+export func scratchpad_prompt(_ctx: PureCtx) -> PromptPatch {
+  prompt_patch()
+}
+
+export func on_tool_handle(ctx: ProviderCtx, call: ToolCallEnvelope, timeout_secs: int) -> ToolHandleOutcome ! {Net, Rand}  { { decision: {
   if not is_scratchpad_tool(call.tool) then Delegate
   else {
     let cells = cells_arg(call.arguments);
     let result = exec_scratchpad_cell(ctx.env_server_url, cells, ctx.state_key, timeout_secs);
     Handled(result_from_exec(call, result))
   }
-}
-
-export func make_hooks(timeout_secs: int) -> ExtensionHooks ! {Net} {
-  let handle: (ExtCtx, ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
-    on_tool_handle(ctx, call, timeout_secs)
-  };
-  {
-    id: "scratchpad",
-    provided_tools: provided_tools(),
-    on_describe_tools: \_ . on_describe_tools(),
-    on_build_system_prompt: \_ctx. prompt_patch(),
-    on_budget_plan: budget_hook,
-    on_pre_step: func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { PassThrough },
-    on_tool_policy: on_tool_policy,
-    on_tool_handle: handle,
-    on_response_intercept: func(_ctx: ExtCtx, _response_text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoIntercept },
-    on_solver_candidate: func(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoDecision }
-  }
-}
+}, next_state: ctx.world } }

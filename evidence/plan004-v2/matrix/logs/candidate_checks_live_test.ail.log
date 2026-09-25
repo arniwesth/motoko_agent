@@ -1,0 +1,729 @@
+→ Type checking...
+→ Effect checking...
+✓ Running src/eval/journal/candidate_checks_live_test.ail
+WORLD_RUN_BEGIN admission 0
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":1,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":2,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":3,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":4,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":5,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":6,"class":"file_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":7,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":8,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"history_seeded","run_id":"sess_fx.r0.0","messages":[{"role":"system","content":"You are a synthetic fixture.","tool_calls":[],"tool_call_id":"","images":[]},{"role":"user","content":"list the files","tool_calls":[],"tool_call_id":"","images":[]},{"role":"assistant","content":"","tool_calls":[{"id":"c1","name":"BashExec","arguments":"{\"command\":\"ls c1\"}"}],"tool_call_id":"","images":[]},{"role":"tool","content":"a.txt\nb.txt","tool_calls":[],"tool_call_id":"c1","images":[]},{"role":"assistant","content":"Two files.","tool_calls":[],"tool_call_id":"","images":[]},{"role":"user","content":"now count the lines","tool_calls":[],"tool_call_id":"","images":[]}],"digest":"sha256:32aa0dcf87c0c9805aa92bb34cd085603cb9942dd61c220cdb3e1a1e3ece22b5","digests":["sha256:2bf903094710366cefa09853c6c0c7b769466bc4c51fd02c3d0eebd487f38cb6","sha256:822a19a495d3eb6c2e9f93d33bd0df33bc8f5e239c5f498beaa278304e2c9030","sha256:fb203cf64788f47a32f5d56266fb391e12c5790052a95219a9b2d1ea743dcd69","sha256:aa082029b0fdacf0a6f56dabf2310771109e9deaaaf3353e9679bca99a3f5c45","sha256:df859cc66419beda4a9c9768a04d45130e3aad9cc7358fa93c41431e4ac2bb82","sha256:32aa0dcf87c0c9805aa92bb34cd085603cb9942dd61c220cdb3e1a1e3ece22b5"]}
+{"schema_version":"1","session_id":"sess_fx","type":"context_limit_resolved","run_id":"sess_fx.r0.0","context_limit":4096,"context_limit_source":{"arm":"bounded","origin":"profile_override","profile_miss":"","catalogue_miss":"","model":""}}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":0,"stream_id":"step-0","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":0,"msg_count":6,"estimated_input_tokens":21,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:5087568119e608da85a16b4681810abffa696562fd51e214cf764676a010c719","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":9,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":0,"stream_id":"step-0","status":"completed"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking","step":0,"text":"","finish_reason":"tool_calls","tool_calls":2,"input_tokens":100,"output_tokens":10,"cost_usd":0}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"assistant","content":"","tool_calls":[{"id":"c2a","name":"BashExec","arguments":"{\"command\":\"ls c2a\"}"},{"id":"c2b","name":"BashExec","arguments":"{\"command\":\"ls c2b\"}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:7985916b64b73153052ec3c22f655d274334e2997f357d623abec2d283927279"}
+{"schema_version":"1","session_id":"sess_fx","type":"state_delta","run_id":"sess_fx.r0.0","step":0,"cumulative":{"provider_calls_started":1,"provider_calls_completed":1,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":100,"last_output_tokens":10,"last_estimated_input_tokens":21},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_calls","request_id":"step-0","step":0,"stream_id":"step-0","tool_calls":[{"id":"c2a","tool":"BashExec","arguments":{"command":"ls c2a"}},{"id":"c2b","tool":"BashExec","arguments":{"command":"ls c2b"}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":0,"stream_id":"step-0","tool":"BashExec","id":"c2a"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":0,"stream_id":"step-0","id":"c2a"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":0,"stream_id":"step-0","tool":"BashExec","id":"c2b"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":0,"stream_id":"step-0","id":"c2b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":10,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":11,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":12,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":13,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":14,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":15,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_results","request_id":"step-0","step":0,"stream_id":"step-0","results":[{"tool_call_id":"c2a","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":2},{"tool_call_id":"c2b","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":5}]}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"tool","content":"2 a.txt","tool_calls":[],"tool_call_id":"c2a","images":[]},"replaces_previous":false,"digest_after":"sha256:b7319d5f65ea70e59ee4f96dbf429c44245aba20362148d07ed05fe0f2966a2c"}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"tool","content":"5 b.txt","tool_calls":[],"tool_call_id":"c2b","images":[]},"replaces_previous":false,"digest_after":"sha256:4879351157ddbd9be682168ff8ad295835d6d8ef7821122a374338f9d3d691cf"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":1,"stream_id":"step-1","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":1,"msg_count":9,"estimated_input_tokens":24,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:e6eca67d8e8d6cbac9641c1f68729caa1d0c992ba963fac064c175cd49853de5","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":16,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":1,"stream_id":"step-1","status":"completed"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking","step":1,"text":"","finish_reason":"tool_calls","tool_calls":1,"input_tokens":200,"output_tokens":20,"cost_usd":0}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":1,"message":{"role":"assistant","content":"","tool_calls":[{"id":"c3","name":"BashExec","arguments":"{\"command\":\"ls c3\"}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:e3e2057dab39a78ce0213f76aa97033e80eacbf73477712211ddef78d2a3a188"}
+{"schema_version":"1","session_id":"sess_fx","type":"state_delta","run_id":"sess_fx.r0.0","step":1,"cumulative":{"provider_calls_started":2,"provider_calls_completed":2,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":200,"last_output_tokens":20,"last_estimated_input_tokens":24},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_calls","request_id":"step-1","step":1,"stream_id":"step-1","tool_calls":[{"id":"c3","tool":"BashExec","arguments":{"command":"ls c3"}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":1,"stream_id":"step-1","tool":"BashExec","id":"c3"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":1,"stream_id":"step-1","id":"c3"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":17,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":18,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":19,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_results","request_id":"step-1","step":1,"stream_id":"step-1","results":[{"tool_call_id":"c3","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":7}]}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":1,"message":{"role":"tool","content":"7 total","tool_calls":[],"tool_call_id":"c3","images":[]},"replaces_previous":false,"digest_after":"sha256:f39a028fbada72fa011e5b75ace607981a23df958904bcb9668726896b3d5f95"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":2,"stream_id":"step-2","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":2,"msg_count":11,"estimated_input_tokens":26,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:37e4f852bfc43ed8dd665e120dc922262d78c81584b93dbf66071706b1ac3067","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":20,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":2,"stream_id":"step-2","status":"completed"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking","step":2,"text":"","finish_reason":"tool_calls","tool_calls":1,"input_tokens":300,"output_tokens":30,"cost_usd":0}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":2,"message":{"role":"assistant","content":"","tool_calls":[{"id":"c4","name":"BashExec","arguments":"{\"command\":\"ls c4\"}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:490d515df9fa186bcb4808fe2efc79ee887b964c84d2ada2866fafc898dbf31f"}
+{"schema_version":"1","session_id":"sess_fx","type":"state_delta","run_id":"sess_fx.r0.0","step":2,"cumulative":{"provider_calls_started":3,"provider_calls_completed":3,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":300,"last_output_tokens":30,"last_estimated_input_tokens":26},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_calls","request_id":"step-2","step":2,"stream_id":"step-2","tool_calls":[{"id":"c4","tool":"BashExec","arguments":{"command":"ls c4"}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":2,"stream_id":"step-2","tool":"BashExec","id":"c4"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":2,"stream_id":"step-2","id":"c4"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":21,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":22,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":23,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_results","request_id":"step-2","step":2,"stream_id":"step-2","results":[{"tool_call_id":"c4","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":{}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":2,"message":{"role":"tool","content":"done","tool_calls":[],"tool_call_id":"c4","images":[]},"replaces_previous":false,"digest_after":"sha256:b3a2d16a4a119a328e59b54abf5296a47b27fa2ff050fcadba7f1c6916ab7603"}
+{"schema_version":"1","session_id":"sess_fx","type":"run_suspended","session_id":"sess_fx","run_id":"sess_fx.r0.0","reason":"budget_exhausted","step":3}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":24,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"run_summary","model":"fx/model-b","motoko_commit":"dev","finish_reason":"max_steps","steps_executed":3,"usage":{"input_tokens":600,"output_tokens":60,"total_tokens":660},"total_cost_usd":0,"total_cost_millicents":0,"duration_ms":5,"error":"step budget exhausted","cumulative":{"provider_calls_started":3,"provider_calls_completed":3,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"world_ordinal":24}
+WORLD_RUN_END admission 24
+WORLD_RUN_BEGIN admission 0
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":1,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":2,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":3,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":4,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":5,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":6,"class":"file_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":7,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":8,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"history_seeded","run_id":"sess_fx.r0.0","messages":[{"role":"system","content":"You are a synthetic fixture.","tool_calls":[],"tool_call_id":"","images":[]},{"role":"user","content":"list the files","tool_calls":[],"tool_call_id":"","images":[]},{"role":"assistant","content":"","tool_calls":[{"id":"c1","name":"BashExec","arguments":"{\"command\":\"ls c1\"}"}],"tool_call_id":"","images":[]},{"role":"tool","content":"a.txt\nb.txt","tool_calls":[],"tool_call_id":"c1","images":[]},{"role":"assistant","content":"Two files.","tool_calls":[],"tool_call_id":"","images":[]},{"role":"user","content":"now count the lines","tool_calls":[],"tool_call_id":"","images":[]}],"digest":"sha256:32aa0dcf87c0c9805aa92bb34cd085603cb9942dd61c220cdb3e1a1e3ece22b5","digests":["sha256:2bf903094710366cefa09853c6c0c7b769466bc4c51fd02c3d0eebd487f38cb6","sha256:822a19a495d3eb6c2e9f93d33bd0df33bc8f5e239c5f498beaa278304e2c9030","sha256:fb203cf64788f47a32f5d56266fb391e12c5790052a95219a9b2d1ea743dcd69","sha256:aa082029b0fdacf0a6f56dabf2310771109e9deaaaf3353e9679bca99a3f5c45","sha256:df859cc66419beda4a9c9768a04d45130e3aad9cc7358fa93c41431e4ac2bb82","sha256:32aa0dcf87c0c9805aa92bb34cd085603cb9942dd61c220cdb3e1a1e3ece22b5"]}
+{"schema_version":"1","session_id":"sess_fx","type":"context_limit_resolved","run_id":"sess_fx.r0.0","context_limit":4096,"context_limit_source":{"arm":"bounded","origin":"profile_override","profile_miss":"","catalogue_miss":"","model":""}}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":0,"stream_id":"step-0","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":0,"msg_count":6,"estimated_input_tokens":21,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:5087568119e608da85a16b4681810abffa696562fd51e214cf764676a010c719","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":9,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":0,"stream_id":"step-0","status":"completed"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking","step":0,"text":"","finish_reason":"tool_calls","tool_calls":2,"input_tokens":100,"output_tokens":10,"cost_usd":0}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"assistant","content":"","tool_calls":[{"id":"c2a","name":"BashExec","arguments":"{\"command\":\"ls c2a\"}"},{"id":"c2b","name":"BashExec","arguments":"{\"command\":\"ls c2b\"}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:7985916b64b73153052ec3c22f655d274334e2997f357d623abec2d283927279"}
+{"schema_version":"1","session_id":"sess_fx","type":"state_delta","run_id":"sess_fx.r0.0","step":0,"cumulative":{"provider_calls_started":1,"provider_calls_completed":1,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":100,"last_output_tokens":10,"last_estimated_input_tokens":21},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_calls","request_id":"step-0","step":0,"stream_id":"step-0","tool_calls":[{"id":"c2a","tool":"BashExec","arguments":{"command":"ls c2a"}},{"id":"c2b","tool":"BashExec","arguments":{"command":"ls c2b"}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":0,"stream_id":"step-0","tool":"BashExec","id":"c2a"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":0,"stream_id":"step-0","id":"c2a"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":0,"stream_id":"step-0","tool":"BashExec","id":"c2b"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":0,"stream_id":"step-0","id":"c2b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":10,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":11,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":12,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":13,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":14,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":15,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_results","request_id":"step-0","step":0,"stream_id":"step-0","results":[{"tool_call_id":"c2a","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":2},{"tool_call_id":"c2b","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":5}]}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"tool","content":"2 a.txt","tool_calls":[],"tool_call_id":"c2a","images":[]},"replaces_previous":false,"digest_after":"sha256:b7319d5f65ea70e59ee4f96dbf429c44245aba20362148d07ed05fe0f2966a2c"}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"tool","content":"5 b.txt","tool_calls":[],"tool_call_id":"c2b","images":[]},"replaces_previous":false,"digest_after":"sha256:4879351157ddbd9be682168ff8ad295835d6d8ef7821122a374338f9d3d691cf"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":1,"stream_id":"step-1","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":1,"msg_count":9,"estimated_input_tokens":24,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:e6eca67d8e8d6cbac9641c1f68729caa1d0c992ba963fac064c175cd49853de5","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":16,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":1,"stream_id":"step-1","status":"completed"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking","step":1,"text":"","finish_reason":"tool_calls","tool_calls":1,"input_tokens":200,"output_tokens":20,"cost_usd":0}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":1,"message":{"role":"assistant","content":"","tool_calls":[{"id":"c3","name":"BashExec","arguments":"{\"command\":\"ls c3\"}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:e3e2057dab39a78ce0213f76aa97033e80eacbf73477712211ddef78d2a3a188"}
+{"schema_version":"1","session_id":"sess_fx","type":"state_delta","run_id":"sess_fx.r0.0","step":1,"cumulative":{"provider_calls_started":2,"provider_calls_completed":2,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":200,"last_output_tokens":20,"last_estimated_input_tokens":24},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_calls","request_id":"step-1","step":1,"stream_id":"step-1","tool_calls":[{"id":"c3","tool":"BashExec","arguments":{"command":"ls c3"}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":1,"stream_id":"step-1","tool":"BashExec","id":"c3"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":1,"stream_id":"step-1","id":"c3"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":17,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":18,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":19,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_results","request_id":"step-1","step":1,"stream_id":"step-1","results":[{"tool_call_id":"c3","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":7}]}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":1,"message":{"role":"tool","content":"7 total","tool_calls":[],"tool_call_id":"c3","images":[]},"replaces_previous":false,"digest_after":"sha256:f39a028fbada72fa011e5b75ace607981a23df958904bcb9668726896b3d5f95"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":2,"stream_id":"step-2","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":2,"msg_count":11,"estimated_input_tokens":26,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:37e4f852bfc43ed8dd665e120dc922262d78c81584b93dbf66071706b1ac3067","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":20,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":2,"stream_id":"step-2","status":"completed"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking","step":2,"text":"Done: seven lines.","finish_reason":"stop","tool_calls":0,"input_tokens":300,"output_tokens":30,"cost_usd":0}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":2,"message":{"role":"assistant","content":"Done: seven lines.","tool_calls":[],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:3569d7976b301c94c35c051d09080911dc07ce36146743203de284142c94bce4"}
+{"schema_version":"1","session_id":"sess_fx","type":"state_delta","run_id":"sess_fx.r0.0","step":2,"cumulative":{"provider_calls_started":3,"provider_calls_completed":3,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":300,"last_output_tokens":30,"last_estimated_input_tokens":26},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":21,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":22,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"run_summary","model":"fx/model-b","motoko_commit":"dev","finish_reason":"stop","steps_executed":3,"usage":{"input_tokens":600,"output_tokens":60,"total_tokens":660},"total_cost_usd":0,"total_cost_millicents":0,"duration_ms":4,"error":"","cumulative":{"provider_calls_started":3,"provider_calls_completed":3,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"world_ordinal":22}
+{"schema_version":"1","session_id":"sess_fx","type":"done","step":2,"output":"Done: seven lines."}
+WORLD_RUN_END admission 22
+WORLD_RUN_BEGIN candidate 0
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":1,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":2,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":3,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":4,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":5,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":6,"class":"file_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":7,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":8,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"history_seeded","run_id":"sess_fx.r0.0","messages":[{"role":"system","content":"You are a synthetic fixture.","tool_calls":[],"tool_call_id":"","images":[]},{"role":"user","content":"list the files","tool_calls":[],"tool_call_id":"","images":[]},{"role":"assistant","content":"","tool_calls":[{"id":"c1","name":"BashExec","arguments":"{\"command\":\"ls c1\"}"}],"tool_call_id":"","images":[]},{"role":"tool","content":"a.txt\nb.txt","tool_calls":[],"tool_call_id":"c1","images":[]},{"role":"assistant","content":"Two files.","tool_calls":[],"tool_call_id":"","images":[]},{"role":"user","content":"now count the lines","tool_calls":[],"tool_call_id":"","images":[]}],"digest":"sha256:32aa0dcf87c0c9805aa92bb34cd085603cb9942dd61c220cdb3e1a1e3ece22b5","digests":["sha256:2bf903094710366cefa09853c6c0c7b769466bc4c51fd02c3d0eebd487f38cb6","sha256:822a19a495d3eb6c2e9f93d33bd0df33bc8f5e239c5f498beaa278304e2c9030","sha256:fb203cf64788f47a32f5d56266fb391e12c5790052a95219a9b2d1ea743dcd69","sha256:aa082029b0fdacf0a6f56dabf2310771109e9deaaaf3353e9679bca99a3f5c45","sha256:df859cc66419beda4a9c9768a04d45130e3aad9cc7358fa93c41431e4ac2bb82","sha256:32aa0dcf87c0c9805aa92bb34cd085603cb9942dd61c220cdb3e1a1e3ece22b5"]}
+{"schema_version":"1","session_id":"sess_fx","type":"context_limit_resolved","run_id":"sess_fx.r0.0","context_limit":4096,"context_limit_source":{"arm":"bounded","origin":"profile_override","profile_miss":"","catalogue_miss":"","model":""}}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":0,"stream_id":"step-0","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":0,"msg_count":6,"estimated_input_tokens":21,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:5087568119e608da85a16b4681810abffa696562fd51e214cf764676a010c719","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":9,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":0,"stream_id":"step-0","status":"completed"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking","step":0,"text":"","finish_reason":"tool_calls","tool_calls":2,"input_tokens":100,"output_tokens":10,"cost_usd":0}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"assistant","content":"","tool_calls":[{"id":"c2a","name":"BashExec","arguments":"{\"command\":\"ls c2a\"}"},{"id":"c2b","name":"BashExec","arguments":"{\"command\":\"ls c2b\"}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:7985916b64b73153052ec3c22f655d274334e2997f357d623abec2d283927279"}
+{"schema_version":"1","session_id":"sess_fx","type":"state_delta","run_id":"sess_fx.r0.0","step":0,"cumulative":{"provider_calls_started":1,"provider_calls_completed":1,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":100,"last_output_tokens":10,"last_estimated_input_tokens":21},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_calls","request_id":"step-0","step":0,"stream_id":"step-0","tool_calls":[{"id":"c2a","tool":"BashExec","arguments":{"command":"ls c2a"}},{"id":"c2b","tool":"BashExec","arguments":{"command":"ls c2b"}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":0,"stream_id":"step-0","tool":"BashExec","id":"c2a"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":0,"stream_id":"step-0","id":"c2a"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":0,"stream_id":"step-0","tool":"BashExec","id":"c2b"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":0,"stream_id":"step-0","id":"c2b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":10,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":11,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":12,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":13,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":14,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":15,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_results","request_id":"step-0","step":0,"stream_id":"step-0","results":[{"tool_call_id":"c2a","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":2},{"tool_call_id":"c2b","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":5}]}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"tool","content":"2 a.txt","tool_calls":[],"tool_call_id":"c2a","images":[]},"replaces_previous":false,"digest_after":"sha256:b7319d5f65ea70e59ee4f96dbf429c44245aba20362148d07ed05fe0f2966a2c"}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"tool","content":"5 b.txt","tool_calls":[],"tool_call_id":"c2b","images":[]},"replaces_previous":false,"digest_after":"sha256:4879351157ddbd9be682168ff8ad295835d6d8ef7821122a374338f9d3d691cf"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":1,"stream_id":"step-1","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":1,"msg_count":9,"estimated_input_tokens":24,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:e6eca67d8e8d6cbac9641c1f68729caa1d0c992ba963fac064c175cd49853de5","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":16,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":1,"stream_id":"step-1","status":"completed"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking","step":1,"text":"","finish_reason":"tool_calls","tool_calls":1,"input_tokens":200,"output_tokens":20,"cost_usd":0}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":1,"message":{"role":"assistant","content":"","tool_calls":[{"id":"c3","name":"BashExec","arguments":"{\"command\":\"ls c3\"}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:e3e2057dab39a78ce0213f76aa97033e80eacbf73477712211ddef78d2a3a188"}
+{"schema_version":"1","session_id":"sess_fx","type":"state_delta","run_id":"sess_fx.r0.0","step":1,"cumulative":{"provider_calls_started":2,"provider_calls_completed":2,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":200,"last_output_tokens":20,"last_estimated_input_tokens":24},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_calls","request_id":"step-1","step":1,"stream_id":"step-1","tool_calls":[{"id":"c3","tool":"BashExec","arguments":{"command":"ls c3"}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":1,"stream_id":"step-1","tool":"BashExec","id":"c3"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":1,"stream_id":"step-1","id":"c3"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":17,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":18,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":19,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_results","request_id":"step-1","step":1,"stream_id":"step-1","results":[{"tool_call_id":"c3","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":7}]}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":1,"message":{"role":"tool","content":"7 total","tool_calls":[],"tool_call_id":"c3","images":[]},"replaces_previous":false,"digest_after":"sha256:f39a028fbada72fa011e5b75ace607981a23df958904bcb9668726896b3d5f95"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":2,"stream_id":"step-2","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":2,"msg_count":11,"estimated_input_tokens":26,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:37e4f852bfc43ed8dd665e120dc922262d78c81584b93dbf66071706b1ac3067","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":20,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":2,"stream_id":"step-2","status":"completed"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking","step":2,"text":"","finish_reason":"tool_calls","tool_calls":1,"input_tokens":300,"output_tokens":30,"cost_usd":0}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":2,"message":{"role":"assistant","content":"","tool_calls":[{"id":"c4","name":"BashExec","arguments":"{\"command\":\"ls c4\"}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:490d515df9fa186bcb4808fe2efc79ee887b964c84d2ada2866fafc898dbf31f"}
+{"schema_version":"1","session_id":"sess_fx","type":"state_delta","run_id":"sess_fx.r0.0","step":2,"cumulative":{"provider_calls_started":3,"provider_calls_completed":3,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":300,"last_output_tokens":30,"last_estimated_input_tokens":26},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_calls","request_id":"step-2","step":2,"stream_id":"step-2","tool_calls":[{"id":"c4","tool":"BashExec","arguments":{"command":"ls c4"}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":2,"stream_id":"step-2","tool":"BashExec","id":"c4"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":2,"stream_id":"step-2","id":"c4"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":21,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":22,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":23,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_results","request_id":"step-2","step":2,"stream_id":"step-2","results":[{"tool_call_id":"c4","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":{}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":2,"message":{"role":"tool","content":"done","tool_calls":[],"tool_call_id":"c4","images":[]},"replaces_previous":false,"digest_after":"sha256:b3a2d16a4a119a328e59b54abf5296a47b27fa2ff050fcadba7f1c6916ab7603"}
+{"schema_version":"1","session_id":"sess_fx","type":"run_suspended","session_id":"sess_fx","run_id":"sess_fx.r0.0","reason":"budget_exhausted","step":3}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":24,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"run_summary","model":"fx/model-b","motoko_commit":"dev","finish_reason":"max_steps","steps_executed":3,"usage":{"input_tokens":600,"output_tokens":60,"total_tokens":660},"total_cost_usd":0,"total_cost_millicents":0,"duration_ms":5,"error":"step budget exhausted","cumulative":{"provider_calls_started":3,"provider_calls_completed":3,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"world_ordinal":24}
+WORLD_RUN_END candidate 24
+CANDIDATE Reproduced(calls=3,end=EndSuspended(3))
+ENVELOPE checked=K0,K1,K2,K3,K4,K5,K6,K7
+ENVELOPE pinned=recorded_config,t0_settings,registry:empty,execution_provenance
+ENVELOPE unreproduced=prior_counts,cumulative,cache_usage,tool_exit_status,context_limit_source
+ENVELOPE not_observed=model_parameters,tool_schemas,request_encoding,real_tool_execution,streaming,extensions,compaction,live_gc_timing,path_stat,dir_list
+ENVELOPE omissions=streaming,conversation_loop,extensions_and_compaction,model_parameters_tool_schemas_encoding,real_tools_and_exit_status,cache_usage,prior_counts,runtime_status_tool,context_limit_source,live_gc_timing
+ENVELOPE identity_evidence=execution-provenance record: synthetic:in-process (no assembly; K0 not run)
+ENVELOPE marker_check=not applicable: observation-preserving candidate (D5); the run's identity rests on the execution-provenance record
+ENVELOPE residual_gap=a module's selected path is the runner's re-derivation of the loader's rules, cross-checked against the compiler's compiled set, not the loader's own report (no id->path flag and no -trace-loader output at AILANG ae36986)
+ENVELOPE exhausted_markers=[]
+ENVELOPE findings=[]
+ENVELOPE score=permitted: Reproduced
+ENVELOPE evidence family evaluated terminal-summary true
+ENVELOPE evidence family evaluated emission-parity true
+ENVELOPE evidence family evaluated phase-transitions true
+ENVELOPE evidence family evaluated tool-pairing true
+ENVELOPE evidence family evaluated budget-accounting true
+ENVELOPE evidence family evaluated bounded-progress true
+ENVELOPE evidence family evaluated checkpoint-history true (vacuous: checkpoint_records=0)
+ENVELOPE evidence family evaluated outcome-agreement true
+ENVELOPE evidence family evaluated replay-consistency true
+ENVELOPE evidence family evaluated world-transitions true
+ENVELOPE evidence family evaluated virtual-time true
+ENVELOPE evidence family evaluated harness-hygiene true
+ENVELOPE evidence family evaluated journal-fold true
+ENVELOPE evidence family aggregate inputs terminal-summary 71
+ENVELOPE evidence family aggregate inputs emission-parity 71
+ENVELOPE evidence family aggregate inputs phase-transitions 71
+ENVELOPE evidence family aggregate inputs tool-pairing 23
+ENVELOPE evidence family aggregate inputs budget-accounting 71
+ENVELOPE evidence family aggregate inputs bounded-progress 23
+ENVELOPE evidence family aggregate inputs checkpoint-history 71
+ENVELOPE evidence family aggregate inputs outcome-agreement 71
+ENVELOPE evidence family aggregate inputs replay-consistency 23
+ENVELOPE evidence family aggregate inputs world-transitions 23
+ENVELOPE evidence family aggregate inputs virtual-time 23
+ENVELOPE evidence family aggregate inputs harness-hygiene 23
+ENVELOPE evidence family aggregate inputs journal-fold 71
+ENVELOPE evidence sub-obligation exercised checkpoint_decisions 0 (not exercised)
+ENVELOPE evidence sub-obligation exercised checkpoint_records 0 (not exercised)
+ENVELOPE evidence sub-obligation exercised stream_chunks 0 (not exercised)
+ENVELOPE evidence sub-obligation exercised approval_reads 0 (not exercised)
+ENVELOPE evidence sub-obligation exercised approvals_consumed 0 (not exercised)
+ENVELOPE evidence sub-obligation exercised waits_opened 0 (not exercised)
+ENVELOPE evidence sub-obligation exercised parks 0 (not exercised)
+ENVELOPE evidence sub-obligation exercised wakes 0 (not exercised)
+ENVELOPE evidence sub-obligation exercised extension_effects 0 (not exercised)
+ENVELOPE evidence sub-obligation exercised retries 0 (not exercised)
+ENVELOPE evidence sub-obligation exercised injected_messages 0 (not exercised)
+ENVELOPE evidence sub-obligation exercised hybrid_extractions 0 (not exercised)
+ENVELOPE evidence sub-obligation exercised file_writes 0 (not exercised)
+ENVELOPE evidence sub-obligation exercised file_removes 0 (not exercised)
+ENVELOPE evidence sub-obligation exercised dir_makes 0 (not exercised)
+ENVELOPE evidence sub-obligation exercised exit_manifest_reads 0 (not exercised)
+ENVELOPE evidence sub-obligation exercised exit_manifest_writes 0 (not exercised)
+ENVELOPE evidence sub-obligation exercised capture_reads 0 (not exercised)
+ENVELOPE evidence sub-obligation exercised decisions 7
+ENVELOPE evidence not observed path_stat
+ENVELOPE evidence not observed dir_list
+ENVELOPE evidence not observed live_extension_effects
+ENVELOPE evidence not observed streaming
+ENVELOPE evidence not observed compaction
+PASS m14_reproduced_suspended
+WORLD_RUN_BEGIN candidate 0
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":1,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":2,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":3,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":4,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":5,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":6,"class":"file_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":7,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":8,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"history_seeded","run_id":"sess_fx.r0.0","messages":[{"role":"system","content":"You are a synthetic fixture.","tool_calls":[],"tool_call_id":"","images":[]},{"role":"user","content":"list the files","tool_calls":[],"tool_call_id":"","images":[]},{"role":"assistant","content":"","tool_calls":[{"id":"c1","name":"BashExec","arguments":"{\"command\":\"ls c1\"}"}],"tool_call_id":"","images":[]},{"role":"tool","content":"a.txt\nb.txt","tool_calls":[],"tool_call_id":"c1","images":[]},{"role":"assistant","content":"Two files.","tool_calls":[],"tool_call_id":"","images":[]},{"role":"user","content":"now count the lines","tool_calls":[],"tool_call_id":"","images":[]}],"digest":"sha256:32aa0dcf87c0c9805aa92bb34cd085603cb9942dd61c220cdb3e1a1e3ece22b5","digests":["sha256:2bf903094710366cefa09853c6c0c7b769466bc4c51fd02c3d0eebd487f38cb6","sha256:822a19a495d3eb6c2e9f93d33bd0df33bc8f5e239c5f498beaa278304e2c9030","sha256:fb203cf64788f47a32f5d56266fb391e12c5790052a95219a9b2d1ea743dcd69","sha256:aa082029b0fdacf0a6f56dabf2310771109e9deaaaf3353e9679bca99a3f5c45","sha256:df859cc66419beda4a9c9768a04d45130e3aad9cc7358fa93c41431e4ac2bb82","sha256:32aa0dcf87c0c9805aa92bb34cd085603cb9942dd61c220cdb3e1a1e3ece22b5"]}
+{"schema_version":"1","session_id":"sess_fx","type":"context_limit_resolved","run_id":"sess_fx.r0.0","context_limit":4096,"context_limit_source":{"arm":"bounded","origin":"profile_override","profile_miss":"","catalogue_miss":"","model":""}}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":0,"stream_id":"step-0","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":0,"msg_count":6,"estimated_input_tokens":21,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:5087568119e608da85a16b4681810abffa696562fd51e214cf764676a010c719","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":9,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":0,"stream_id":"step-0","status":"completed"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking","step":0,"text":"","finish_reason":"tool_calls","tool_calls":2,"input_tokens":100,"output_tokens":10,"cost_usd":0}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"assistant","content":"","tool_calls":[{"id":"c2a","name":"BashExec","arguments":"{\"command\":\"ls c2a\"}"},{"id":"c2b","name":"BashExec","arguments":"{\"command\":\"ls c2b\"}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:7985916b64b73153052ec3c22f655d274334e2997f357d623abec2d283927279"}
+{"schema_version":"1","session_id":"sess_fx","type":"state_delta","run_id":"sess_fx.r0.0","step":0,"cumulative":{"provider_calls_started":1,"provider_calls_completed":1,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":100,"last_output_tokens":10,"last_estimated_input_tokens":21},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_calls","request_id":"step-0","step":0,"stream_id":"step-0","tool_calls":[{"id":"c2a","tool":"BashExec","arguments":{"command":"ls c2a"}},{"id":"c2b","tool":"BashExec","arguments":{"command":"ls c2b"}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":0,"stream_id":"step-0","tool":"BashExec","id":"c2a"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":0,"stream_id":"step-0","id":"c2a"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":0,"stream_id":"step-0","tool":"BashExec","id":"c2b"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":0,"stream_id":"step-0","id":"c2b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":10,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":11,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":12,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":13,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":14,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":15,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_results","request_id":"step-0","step":0,"stream_id":"step-0","results":[{"tool_call_id":"c2a","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":2},{"tool_call_id":"c2b","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":5}]}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"tool","content":"2 a.txt","tool_calls":[],"tool_call_id":"c2a","images":[]},"replaces_previous":false,"digest_after":"sha256:b7319d5f65ea70e59ee4f96dbf429c44245aba20362148d07ed05fe0f2966a2c"}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"tool","content":"5 b.txt","tool_calls":[],"tool_call_id":"c2b","images":[]},"replaces_previous":false,"digest_after":"sha256:4879351157ddbd9be682168ff8ad295835d6d8ef7821122a374338f9d3d691cf"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":1,"stream_id":"step-1","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":1,"msg_count":9,"estimated_input_tokens":24,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:e6eca67d8e8d6cbac9641c1f68729caa1d0c992ba963fac064c175cd49853de5","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":16,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":1,"stream_id":"step-1","status":"completed"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking","step":1,"text":"","finish_reason":"tool_calls","tool_calls":1,"input_tokens":200,"output_tokens":20,"cost_usd":0}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":1,"message":{"role":"assistant","content":"","tool_calls":[{"id":"c3","name":"BashExec","arguments":"{\"command\":\"ls c3\"}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:e3e2057dab39a78ce0213f76aa97033e80eacbf73477712211ddef78d2a3a188"}
+{"schema_version":"1","session_id":"sess_fx","type":"state_delta","run_id":"sess_fx.r0.0","step":1,"cumulative":{"provider_calls_started":2,"provider_calls_completed":2,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":200,"last_output_tokens":20,"last_estimated_input_tokens":24},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_calls","request_id":"step-1","step":1,"stream_id":"step-1","tool_calls":[{"id":"c3","tool":"BashExec","arguments":{"command":"ls c3"}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":1,"stream_id":"step-1","tool":"BashExec","id":"c3"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":1,"stream_id":"step-1","id":"c3"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":17,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":18,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":19,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_results","request_id":"step-1","step":1,"stream_id":"step-1","results":[{"tool_call_id":"c3","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":7}]}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":1,"message":{"role":"tool","content":"7 total","tool_calls":[],"tool_call_id":"c3","images":[]},"replaces_previous":false,"digest_after":"sha256:f39a028fbada72fa011e5b75ace607981a23df958904bcb9668726896b3d5f95"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":2,"stream_id":"step-2","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":2,"msg_count":11,"estimated_input_tokens":26,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:37e4f852bfc43ed8dd665e120dc922262d78c81584b93dbf66071706b1ac3067","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":20,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":2,"stream_id":"step-2","status":"completed"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking","step":2,"text":"Done: seven lines.","finish_reason":"stop","tool_calls":0,"input_tokens":300,"output_tokens":30,"cost_usd":0}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":2,"message":{"role":"assistant","content":"Done: seven lines.","tool_calls":[],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:3569d7976b301c94c35c051d09080911dc07ce36146743203de284142c94bce4"}
+{"schema_version":"1","session_id":"sess_fx","type":"state_delta","run_id":"sess_fx.r0.0","step":2,"cumulative":{"provider_calls_started":3,"provider_calls_completed":3,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":300,"last_output_tokens":30,"last_estimated_input_tokens":26},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":21,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":22,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"run_summary","model":"fx/model-b","motoko_commit":"dev","finish_reason":"stop","steps_executed":3,"usage":{"input_tokens":600,"output_tokens":60,"total_tokens":660},"total_cost_usd":0,"total_cost_millicents":0,"duration_ms":4,"error":"","cumulative":{"provider_calls_started":3,"provider_calls_completed":3,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"world_ordinal":22}
+{"schema_version":"1","session_id":"sess_fx","type":"done","step":2,"output":"Done: seven lines."}
+WORLD_RUN_END candidate 22
+CANDIDATE Reproduced(calls=3,end=EndFinalize(model_stop))
+ENVELOPE checked=K0,K1,K2,K3,K4,K5,K6,K7
+ENVELOPE pinned=recorded_config,t0_settings,registry:empty,execution_provenance
+ENVELOPE unreproduced=prior_counts,cumulative,cache_usage,tool_exit_status,context_limit_source
+ENVELOPE not_observed=model_parameters,tool_schemas,request_encoding,real_tool_execution,streaming,extensions,compaction,live_gc_timing,path_stat,dir_list
+ENVELOPE omissions=streaming,conversation_loop,extensions_and_compaction,model_parameters_tool_schemas_encoding,real_tools_and_exit_status,cache_usage,prior_counts,runtime_status_tool,context_limit_source,live_gc_timing
+ENVELOPE identity_evidence=execution-provenance record: synthetic:in-process (no assembly; K0 not run)
+ENVELOPE marker_check=not applicable: observation-preserving candidate (D5); the run's identity rests on the execution-provenance record
+ENVELOPE residual_gap=a module's selected path is the runner's re-derivation of the loader's rules, cross-checked against the compiler's compiled set, not the loader's own report (no id->path flag and no -trace-loader output at AILANG ae36986)
+ENVELOPE exhausted_markers=[]
+ENVELOPE findings=[]
+ENVELOPE score=permitted: Reproduced
+ENVELOPE evidence family evaluated terminal-summary true
+ENVELOPE evidence family evaluated emission-parity true
+ENVELOPE evidence family evaluated phase-transitions true
+ENVELOPE evidence family evaluated tool-pairing true
+ENVELOPE evidence family evaluated budget-accounting true
+ENVELOPE evidence family evaluated bounded-progress true
+ENVELOPE evidence family evaluated checkpoint-history true (vacuous: checkpoint_records=0)
+ENVELOPE evidence family evaluated outcome-agreement true
+ENVELOPE evidence family evaluated replay-consistency true
+ENVELOPE evidence family evaluated world-transitions true
+ENVELOPE evidence family evaluated virtual-time true
+ENVELOPE evidence family evaluated harness-hygiene true
+ENVELOPE evidence family evaluated journal-fold true
+ENVELOPE evidence family aggregate inputs terminal-summary 63
+ENVELOPE evidence family aggregate inputs emission-parity 63
+ENVELOPE evidence family aggregate inputs phase-transitions 63
+ENVELOPE evidence family aggregate inputs tool-pairing 21
+ENVELOPE evidence family aggregate inputs budget-accounting 63
+ENVELOPE evidence family aggregate inputs bounded-progress 21
+ENVELOPE evidence family aggregate inputs checkpoint-history 63
+ENVELOPE evidence family aggregate inputs outcome-agreement 63
+ENVELOPE evidence family aggregate inputs replay-consistency 21
+ENVELOPE evidence family aggregate inputs world-transitions 21
+ENVELOPE evidence family aggregate inputs virtual-time 21
+ENVELOPE evidence family aggregate inputs harness-hygiene 21
+ENVELOPE evidence family aggregate inputs journal-fold 63
+ENVELOPE evidence sub-obligation exercised checkpoint_decisions 0 (not exercised)
+ENVELOPE evidence sub-obligation exercised checkpoint_records 0 (not exercised)
+ENVELOPE evidence sub-obligation exercised stream_chunks 0 (not exercised)
+ENVELOPE evidence sub-obligation exercised approval_reads 0 (not exercised)
+ENVELOPE evidence sub-obligation exercised approvals_consumed 0 (not exercised)
+ENVELOPE evidence sub-obligation exercised waits_opened 0 (not exercised)
+ENVELOPE evidence sub-obligation exercised parks 0 (not exercised)
+ENVELOPE evidence sub-obligation exercised wakes 0 (not exercised)
+ENVELOPE evidence sub-obligation exercised extension_effects 0 (not exercised)
+ENVELOPE evidence sub-obligation exercised retries 0 (not exercised)
+ENVELOPE evidence sub-obligation exercised injected_messages 0 (not exercised)
+ENVELOPE evidence sub-obligation exercised hybrid_extractions 0 (not exercised)
+ENVELOPE evidence sub-obligation exercised file_writes 0 (not exercised)
+ENVELOPE evidence sub-obligation exercised file_removes 0 (not exercised)
+ENVELOPE evidence sub-obligation exercised dir_makes 0 (not exercised)
+ENVELOPE evidence sub-obligation exercised exit_manifest_reads 1
+ENVELOPE evidence sub-obligation exercised exit_manifest_writes 0 (not exercised)
+ENVELOPE evidence sub-obligation exercised capture_reads 0 (not exercised)
+ENVELOPE evidence sub-obligation exercised decisions 6
+ENVELOPE evidence not observed path_stat
+ENVELOPE evidence not observed dir_list
+ENVELOPE evidence not observed live_extension_effects
+ENVELOPE evidence not observed streaming
+ENVELOPE evidence not observed compaction
+PASS m14_reproduced_finalize
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":1,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":2,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":3,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":4,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":5,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":6,"class":"file_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":7,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":8,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"history_seeded","run_id":"sess_fx.r0.0","messages":[{"role":"system","content":"You are a synthetic fixture.","tool_calls":[],"tool_call_id":"","images":[]},{"role":"user","content":"list the files","tool_calls":[],"tool_call_id":"","images":[]},{"role":"assistant","content":"","tool_calls":[{"id":"c1","name":"BashExec","arguments":"{\"command\":\"ls c1\"}"}],"tool_call_id":"","images":[]},{"role":"tool","content":"a.txt\nb.txt","tool_calls":[],"tool_call_id":"c1","images":[]},{"role":"assistant","content":"Two files.","tool_calls":[],"tool_call_id":"","images":[]},{"role":"user","content":"now count the lines","tool_calls":[],"tool_call_id":"","images":[]}],"digest":"sha256:32aa0dcf87c0c9805aa92bb34cd085603cb9942dd61c220cdb3e1a1e3ece22b5","digests":["sha256:2bf903094710366cefa09853c6c0c7b769466bc4c51fd02c3d0eebd487f38cb6","sha256:822a19a495d3eb6c2e9f93d33bd0df33bc8f5e239c5f498beaa278304e2c9030","sha256:fb203cf64788f47a32f5d56266fb391e12c5790052a95219a9b2d1ea743dcd69","sha256:aa082029b0fdacf0a6f56dabf2310771109e9deaaaf3353e9679bca99a3f5c45","sha256:df859cc66419beda4a9c9768a04d45130e3aad9cc7358fa93c41431e4ac2bb82","sha256:32aa0dcf87c0c9805aa92bb34cd085603cb9942dd61c220cdb3e1a1e3ece22b5"]}
+{"schema_version":"1","session_id":"sess_fx","type":"context_limit_resolved","run_id":"sess_fx.r0.0","context_limit":4096,"context_limit_source":{"arm":"bounded","origin":"profile_override","profile_miss":"","catalogue_miss":"","model":""}}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":0,"stream_id":"step-0","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":0,"msg_count":6,"estimated_input_tokens":21,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:5087568119e608da85a16b4681810abffa696562fd51e214cf764676a010c719","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":9,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":0,"stream_id":"step-0","status":"completed"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking","step":0,"text":"","finish_reason":"tool_calls","tool_calls":2,"input_tokens":100,"output_tokens":10,"cost_usd":0}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"assistant","content":"","tool_calls":[{"id":"c2a","name":"BashExec","arguments":"{\"command\":\"ls c2a\"}"},{"id":"c2b","name":"BashExec","arguments":"{\"command\":\"ls c2b\"}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:7985916b64b73153052ec3c22f655d274334e2997f357d623abec2d283927279"}
+{"schema_version":"1","session_id":"sess_fx","type":"state_delta","run_id":"sess_fx.r0.0","step":0,"cumulative":{"provider_calls_started":1,"provider_calls_completed":1,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":100,"last_output_tokens":10,"last_estimated_input_tokens":21},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_calls","request_id":"step-0","step":0,"stream_id":"step-0","tool_calls":[{"id":"c2a","tool":"BashExec","arguments":{"command":"ls c2a"}},{"id":"c2b","tool":"BashExec","arguments":{"command":"ls c2b"}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":0,"stream_id":"step-0","tool":"BashExec","id":"c2a"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":0,"stream_id":"step-0","id":"c2a"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":0,"stream_id":"step-0","tool":"BashExec","id":"c2b"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":0,"stream_id":"step-0","id":"c2b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":10,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":11,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":12,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":13,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":14,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":15,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_results","request_id":"step-0","step":0,"stream_id":"step-0","results":[{"tool_call_id":"c2a","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":2},{"tool_call_id":"c2b","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":5}]}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"tool","content":"2 a.txt","tool_calls":[],"tool_call_id":"c2a","images":[]},"replaces_previous":false,"digest_after":"sha256:b7319d5f65ea70e59ee4f96dbf429c44245aba20362148d07ed05fe0f2966a2c"}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"tool","content":"5 b.txt","tool_calls":[],"tool_call_id":"c2b","images":[]},"replaces_previous":false,"digest_after":"sha256:4879351157ddbd9be682168ff8ad295835d6d8ef7821122a374338f9d3d691cf"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":1,"stream_id":"step-1","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":1,"msg_count":9,"estimated_input_tokens":24,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:e6eca67d8e8d6cbac9641c1f68729caa1d0c992ba963fac064c175cd49853de5","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":16,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":1,"stream_id":"step-1","status":"completed"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking","step":1,"text":"","finish_reason":"tool_calls","tool_calls":1,"input_tokens":200,"output_tokens":20,"cost_usd":0}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":1,"message":{"role":"assistant","content":"","tool_calls":[{"id":"c3","name":"BashExec","arguments":"{\"command\":\"ls c3\"}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:e3e2057dab39a78ce0213f76aa97033e80eacbf73477712211ddef78d2a3a188"}
+{"schema_version":"1","session_id":"sess_fx","type":"state_delta","run_id":"sess_fx.r0.0","step":1,"cumulative":{"provider_calls_started":2,"provider_calls_completed":2,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":200,"last_output_tokens":20,"last_estimated_input_tokens":24},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_calls","request_id":"step-1","step":1,"stream_id":"step-1","tool_calls":[{"id":"c3","tool":"BashExec","arguments":{"command":"ls c3"}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":1,"stream_id":"step-1","tool":"BashExec","id":"c3"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":1,"stream_id":"step-1","id":"c3"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":17,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":18,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":19,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_results","request_id":"step-1","step":1,"stream_id":"step-1","results":[{"tool_call_id":"c3","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":7}]}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":1,"message":{"role":"tool","content":"7 total","tool_calls":[],"tool_call_id":"c3","images":[]},"replaces_previous":false,"digest_after":"sha256:f39a028fbada72fa011e5b75ace607981a23df958904bcb9668726896b3d5f95"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":2,"stream_id":"step-2","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":2,"msg_count":11,"estimated_input_tokens":26,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:37e4f852bfc43ed8dd665e120dc922262d78c81584b93dbf66071706b1ac3067","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":20,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":2,"stream_id":"step-2","status":"completed"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking","step":2,"text":"","finish_reason":"tool_calls","tool_calls":1,"input_tokens":300,"output_tokens":30,"cost_usd":0}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":2,"message":{"role":"assistant","content":"","tool_calls":[{"id":"c4","name":"BashExec","arguments":"{\"command\":\"ls c4\"}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:490d515df9fa186bcb4808fe2efc79ee887b964c84d2ada2866fafc898dbf31f"}
+{"schema_version":"1","session_id":"sess_fx","type":"state_delta","run_id":"sess_fx.r0.0","step":2,"cumulative":{"provider_calls_started":3,"provider_calls_completed":3,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":300,"last_output_tokens":30,"last_estimated_input_tokens":26},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_calls","request_id":"step-2","step":2,"stream_id":"step-2","tool_calls":[{"id":"c4","tool":"BashExec","arguments":{"command":"ls c4"}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":2,"stream_id":"step-2","tool":"BashExec","id":"c4"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":2,"stream_id":"step-2","id":"c4"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":21,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":22,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":23,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_results","request_id":"step-2","step":2,"stream_id":"step-2","results":[{"tool_call_id":"c4","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":{}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":2,"message":{"role":"tool","content":"done","tool_calls":[],"tool_call_id":"c4","images":[]},"replaces_previous":false,"digest_after":"sha256:b3a2d16a4a119a328e59b54abf5296a47b27fa2ff050fcadba7f1c6916ab7603"}
+{"schema_version":"1","session_id":"sess_fx","type":"run_suspended","session_id":"sess_fx","run_id":"sess_fx.r0.0","reason":"budget_exhausted","step":3}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":24,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"run_summary","model":"fx/model-b","motoko_commit":"dev","finish_reason":"max_steps","steps_executed":3,"usage":{"input_tokens":600,"output_tokens":60,"total_tokens":660},"total_cost_usd":0,"total_cost_millicents":0,"duration_ms":5,"error":"step budget exhausted","cumulative":{"provider_calls_started":3,"provider_calls_completed":3,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"world_ordinal":24}
+m14_k2_wrong_kind: Diverged(K2:WrongKind[ReplayMismatch]@interaction:7) all=[K2:WrongKind@interaction:7;K3:UnderRecorded@aggregate:witness;K3:EnvReadOverRecorded@aggregate:witness;K4:replay-rule-violated(replay-wrong-kind)@interaction:7;K6:CallCountMismatch@call:2] markers=[]
+PASS m14_k2_wrong_kind
+m14_k2_wrong_origin: Diverged(K2:WrongOrigin[ReplayMismatch]@interaction:7) all=[K2:WrongOrigin@interaction:7;K4:replay-rule-violated(replay-wrong-origin)@interaction:7] markers=[]
+PASS m14_k2_wrong_origin
+m14_k2_unsafe_identity: Diverged(K2:UnsafeIdentity[ReplayMismatch]@interaction:10) all=[K2:UnsafeIdentity@interaction:10;K4:replay-rule-violated(replay-unsafe-identity-mismatch)@interaction:10] markers=[]
+PASS m14_k2_unsafe_identity
+m14_k2_projection_differs: Diverged(K2:ProjectionDiffers[ReplayMismatch]@interaction:14) all=[K2:ProjectionDiffers@interaction:14;K4:replay-rule-violated(replay-projection-differs)@interaction:14] markers=[]
+PASS m14_k2_projection_differs
+m14_k2_outcome_differs: Diverged(K2:OutcomeDiffers[ReplayMismatch]@interaction:17) all=[K2:OutcomeDiffers@interaction:17;K4:replay-rule-violated(replay-outcome-differs)@interaction:17] markers=[]
+PASS m14_k2_outcome_differs
+m14_k2_program_exhausted: Diverged(K2:ProgramExhausted[ReplayMismatch]@interaction:23) all=[K2:ProgramExhausted@interaction:23;K3:EnvReadOverRecorded@aggregate:witness;K4:replay-rule-violated(replay-program-exhausted)@interaction:23;K4:FamilyEvidenceDiffers@aggregate:family:tool-pairing;K4:FamilyEvidenceDiffers@aggregate:family:bounded-progress;K4:FamilyEvidenceDiffers@aggregate:family:replay-consistency;K4:FamilyEvidenceDiffers@aggregate:family:world-transitions;K4:FamilyEvidenceDiffers@aggregate:family:virtual-time;K4:FamilyEvidenceDiffers@aggregate:family:harness-hygiene] markers=[]
+PASS m14_k2_program_exhausted
+m14_k2_unused_interaction: Diverged(K2:UnusedInteraction[ReplayMismatch]@interaction:22) all=[K2:UnusedInteraction@interaction:22;K3:ClockUnaccounted@aggregate:witness;K4:replay-rule-violated(replay-unused-interaction)@interaction:22;K4:interactions-unconsumed@interaction:22;K4:clock-balance@aggregate:invariants:virtual-time;K4:FamilyEvidenceDiffers@aggregate:family:tool-pairing;K4:FamilyEvidenceDiffers@aggregate:family:bounded-progress;K4:FamilyEvidenceDiffers@aggregate:family:replay-consistency;K4:FamilyEvidenceDiffers@aggregate:family:world-transitions;K4:FamilyEvidenceDiffers@aggregate:family:virtual-time;K4:FamilyEvidenceDiffers@aggregate:family:harness-hygiene] markers=[]
+PASS m14_k2_unused_interaction
+k2: program 23 log 23
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":1,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":2,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":3,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":4,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":5,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":6,"class":"file_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":7,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":8,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"history_seeded","run_id":"sess_fx.r0.0","messages":[{"role":"system","content":"You are a synthetic fixture.","tool_calls":[],"tool_call_id":"","images":[]},{"role":"user","content":"list the files","tool_calls":[],"tool_call_id":"","images":[]},{"role":"assistant","content":"","tool_calls":[{"id":"c1","name":"BashExec","arguments":"{\"command\":\"ls c1\"}"}],"tool_call_id":"","images":[]},{"role":"tool","content":"a.txt\nb.txt","tool_calls":[],"tool_call_id":"c1","images":[]},{"role":"assistant","content":"Two files.","tool_calls":[],"tool_call_id":"","images":[]},{"role":"user","content":"now count the lines","tool_calls":[],"tool_call_id":"","images":[]}],"digest":"sha256:32aa0dcf87c0c9805aa92bb34cd085603cb9942dd61c220cdb3e1a1e3ece22b5","digests":["sha256:2bf903094710366cefa09853c6c0c7b769466bc4c51fd02c3d0eebd487f38cb6","sha256:822a19a495d3eb6c2e9f93d33bd0df33bc8f5e239c5f498beaa278304e2c9030","sha256:fb203cf64788f47a32f5d56266fb391e12c5790052a95219a9b2d1ea743dcd69","sha256:aa082029b0fdacf0a6f56dabf2310771109e9deaaaf3353e9679bca99a3f5c45","sha256:df859cc66419beda4a9c9768a04d45130e3aad9cc7358fa93c41431e4ac2bb82","sha256:32aa0dcf87c0c9805aa92bb34cd085603cb9942dd61c220cdb3e1a1e3ece22b5"]}
+{"schema_version":"1","session_id":"sess_fx","type":"context_limit_resolved","run_id":"sess_fx.r0.0","context_limit":4096,"context_limit_source":{"arm":"bounded","origin":"profile_override","profile_miss":"","catalogue_miss":"","model":""}}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":0,"stream_id":"step-0","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":0,"msg_count":6,"estimated_input_tokens":21,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:5087568119e608da85a16b4681810abffa696562fd51e214cf764676a010c719","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":9,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":0,"stream_id":"step-0","status":"completed"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking","step":0,"text":"","finish_reason":"tool_calls","tool_calls":2,"input_tokens":100,"output_tokens":10,"cost_usd":0}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"assistant","content":"","tool_calls":[{"id":"c2a","name":"BashExec","arguments":"{\"command\":\"ls c2a\"}"},{"id":"c2b","name":"BashExec","arguments":"{\"command\":\"ls c2b\"}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:7985916b64b73153052ec3c22f655d274334e2997f357d623abec2d283927279"}
+{"schema_version":"1","session_id":"sess_fx","type":"state_delta","run_id":"sess_fx.r0.0","step":0,"cumulative":{"provider_calls_started":1,"provider_calls_completed":1,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":100,"last_output_tokens":10,"last_estimated_input_tokens":21},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_calls","request_id":"step-0","step":0,"stream_id":"step-0","tool_calls":[{"id":"c2a","tool":"BashExec","arguments":{"command":"ls c2a"}},{"id":"c2b","tool":"BashExec","arguments":{"command":"ls c2b"}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":0,"stream_id":"step-0","tool":"BashExec","id":"c2a"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":0,"stream_id":"step-0","id":"c2a"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":0,"stream_id":"step-0","tool":"BashExec","id":"c2b"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":0,"stream_id":"step-0","id":"c2b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":10,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":11,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":12,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":13,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":14,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":15,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_results","request_id":"step-0","step":0,"stream_id":"step-0","results":[{"tool_call_id":"c2a","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":2},{"tool_call_id":"c2b","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":5}]}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"tool","content":"2 a.txt","tool_calls":[],"tool_call_id":"c2a","images":[]},"replaces_previous":false,"digest_after":"sha256:b7319d5f65ea70e59ee4f96dbf429c44245aba20362148d07ed05fe0f2966a2c"}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"tool","content":"5 b.txt","tool_calls":[],"tool_call_id":"c2b","images":[]},"replaces_previous":false,"digest_after":"sha256:4879351157ddbd9be682168ff8ad295835d6d8ef7821122a374338f9d3d691cf"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":1,"stream_id":"step-1","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":1,"msg_count":9,"estimated_input_tokens":24,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:e6eca67d8e8d6cbac9641c1f68729caa1d0c992ba963fac064c175cd49853de5","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":16,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":1,"stream_id":"step-1","status":"completed"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking","step":1,"text":"","finish_reason":"tool_calls","tool_calls":1,"input_tokens":200,"output_tokens":20,"cost_usd":0}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":1,"message":{"role":"assistant","content":"","tool_calls":[{"id":"c3","name":"BashExec","arguments":"{\"command\":\"ls c3\"}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:e3e2057dab39a78ce0213f76aa97033e80eacbf73477712211ddef78d2a3a188"}
+{"schema_version":"1","session_id":"sess_fx","type":"state_delta","run_id":"sess_fx.r0.0","step":1,"cumulative":{"provider_calls_started":2,"provider_calls_completed":2,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":200,"last_output_tokens":20,"last_estimated_input_tokens":24},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_calls","request_id":"step-1","step":1,"stream_id":"step-1","tool_calls":[{"id":"c3","tool":"BashExec","arguments":{"command":"ls c3"}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":1,"stream_id":"step-1","tool":"BashExec","id":"c3"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":1,"stream_id":"step-1","id":"c3"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":17,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":18,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":19,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_results","request_id":"step-1","step":1,"stream_id":"step-1","results":[{"tool_call_id":"c3","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":7}]}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":1,"message":{"role":"tool","content":"7 total","tool_calls":[],"tool_call_id":"c3","images":[]},"replaces_previous":false,"digest_after":"sha256:f39a028fbada72fa011e5b75ace607981a23df958904bcb9668726896b3d5f95"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":2,"stream_id":"step-2","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":2,"msg_count":11,"estimated_input_tokens":26,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:37e4f852bfc43ed8dd665e120dc922262d78c81584b93dbf66071706b1ac3067","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":20,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":2,"stream_id":"step-2","status":"errored"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":21,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":22,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"run_summary","model":"fx/model-b","motoko_commit":"dev","finish_reason":"error","steps_executed":2,"usage":{"input_tokens":300,"output_tokens":30,"total_tokens":330},"total_cost_usd":0,"total_cost_millicents":0,"duration_ms":4,"error":"replay exhausted: the program has no step for provider call 2","cumulative":{"provider_calls_started":2,"provider_calls_completed":2,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"world_ordinal":22}
+m14_exhausted_marker_past_end: Diverged(K2:ProgramExhausted[ReplayMismatch]@interaction:18) all=[K2:ProgramExhausted@interaction:18;K3:EnvReadOverRecorded@aggregate:witness;K3:EnvReadUnderRecorded@aggregate:witness;K3:RuntimeCountDiffers@aggregate:witness:tool_dispatches;K3:RuntimeCountDiffers@aggregate:witness:clock_delta_ms;K4:replay-rule-violated(replay-program-exhausted)@interaction:18;K4:FamilyEvidenceDiffers@aggregate:family:terminal-summary;K4:FamilyEvidenceDiffers@aggregate:family:emission-parity;K4:FamilyEvidenceDiffers@aggregate:family:phase-transitions;K4:FamilyEvidenceDiffers@aggregate:family:tool-pairing;K4:FamilyEvidenceDiffers@aggregate:family:budget-accounting;K4:FamilyEvidenceDiffers@aggregate:family:bounded-progress;K4:FamilyEvidenceDiffers@aggregate:family:checkpoint-history;K4:FamilyEvidenceDiffers@aggregate:family:outcome-agreement;K4:FamilyEvidenceDiffers@aggregate:family:replay-consistency;K4:FamilyEvidenceDiffers@aggregate:family:world-transitions;K4:FamilyEvidenceDiffers@aggregate:family:virtual-time;K4:FamilyEvidenceDiffers@aggregate:family:harness-hygiene;K4:FamilyEvidenceDiffers@aggregate:family:journal-fold;K4:CensusMismatch@aggregate:census:capture_reads;K4:CensusMismatch@aggregate:census:decisions;K6:EndMismatch@call:3;K6:ExhaustedMarker@call:3;K7:HistoryShort@snapshot:20;K7:AppendCountDiffers@snapshot:20] markers=[call:3]
+PASS m14_exhausted_marker_past_end
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":1,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":2,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":3,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":4,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":5,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":6,"class":"file_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":7,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":8,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"history_seeded","run_id":"sess_fx.r0.0","messages":[{"role":"system","content":"You are a synthetic fixture.","tool_calls":[],"tool_call_id":"","images":[]},{"role":"user","content":"list the files","tool_calls":[],"tool_call_id":"","images":[]},{"role":"assistant","content":"","tool_calls":[{"id":"c1","name":"BashExec","arguments":"{\"command\":\"ls c1\"}"}],"tool_call_id":"","images":[]},{"role":"tool","content":"a.txt\nb.txt","tool_calls":[],"tool_call_id":"c1","images":[]},{"role":"assistant","content":"Two files.","tool_calls":[],"tool_call_id":"","images":[]},{"role":"user","content":"now count the lines","tool_calls":[],"tool_call_id":"","images":[]}],"digest":"sha256:32aa0dcf87c0c9805aa92bb34cd085603cb9942dd61c220cdb3e1a1e3ece22b5","digests":["sha256:2bf903094710366cefa09853c6c0c7b769466bc4c51fd02c3d0eebd487f38cb6","sha256:822a19a495d3eb6c2e9f93d33bd0df33bc8f5e239c5f498beaa278304e2c9030","sha256:fb203cf64788f47a32f5d56266fb391e12c5790052a95219a9b2d1ea743dcd69","sha256:aa082029b0fdacf0a6f56dabf2310771109e9deaaaf3353e9679bca99a3f5c45","sha256:df859cc66419beda4a9c9768a04d45130e3aad9cc7358fa93c41431e4ac2bb82","sha256:32aa0dcf87c0c9805aa92bb34cd085603cb9942dd61c220cdb3e1a1e3ece22b5"]}
+{"schema_version":"1","session_id":"sess_fx","type":"context_limit_resolved","run_id":"sess_fx.r0.0","context_limit":4096,"context_limit_source":{"arm":"bounded","origin":"profile_override","profile_miss":"","catalogue_miss":"","model":""}}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":0,"stream_id":"step-0","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":0,"msg_count":6,"estimated_input_tokens":21,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:5087568119e608da85a16b4681810abffa696562fd51e214cf764676a010c719","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":9,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":0,"stream_id":"step-0","status":"completed"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking","step":0,"text":"","finish_reason":"tool_calls","tool_calls":2,"input_tokens":100,"output_tokens":10,"cost_usd":0}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"assistant","content":"","tool_calls":[{"id":"c2a","name":"BashExec","arguments":"{\"command\":\"ls c2a\"}"},{"id":"c2b","name":"BashExec","arguments":"{\"command\":\"ls c2b\"}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:7985916b64b73153052ec3c22f655d274334e2997f357d623abec2d283927279"}
+{"schema_version":"1","session_id":"sess_fx","type":"state_delta","run_id":"sess_fx.r0.0","step":0,"cumulative":{"provider_calls_started":1,"provider_calls_completed":1,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":100,"last_output_tokens":10,"last_estimated_input_tokens":21},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_calls","request_id":"step-0","step":0,"stream_id":"step-0","tool_calls":[{"id":"c2a","tool":"BashExec","arguments":{"command":"ls c2a"}},{"id":"c2b","tool":"BashExec","arguments":{"command":"ls c2b"}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":0,"stream_id":"step-0","tool":"BashExec","id":"c2a"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":0,"stream_id":"step-0","id":"c2a"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":0,"stream_id":"step-0","tool":"BashExec","id":"c2b"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":0,"stream_id":"step-0","id":"c2b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":10,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":11,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":12,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":13,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":14,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":15,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_results","request_id":"step-0","step":0,"stream_id":"step-0","results":[{"tool_call_id":"c2a","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":2},{"tool_call_id":"c2b","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":5}]}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"tool","content":"2 a.txt","tool_calls":[],"tool_call_id":"c2a","images":[]},"replaces_previous":false,"digest_after":"sha256:b7319d5f65ea70e59ee4f96dbf429c44245aba20362148d07ed05fe0f2966a2c"}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"tool","content":"5 b.txt","tool_calls":[],"tool_call_id":"c2b","images":[]},"replaces_previous":false,"digest_after":"sha256:4879351157ddbd9be682168ff8ad295835d6d8ef7821122a374338f9d3d691cf"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":1,"stream_id":"step-1","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":1,"msg_count":9,"estimated_input_tokens":24,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:e6eca67d8e8d6cbac9641c1f68729caa1d0c992ba963fac064c175cd49853de5","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":16,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":1,"stream_id":"step-1","status":"completed"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking","step":1,"text":"","finish_reason":"tool_calls","tool_calls":1,"input_tokens":200,"output_tokens":20,"cost_usd":0}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":1,"message":{"role":"assistant","content":"","tool_calls":[{"id":"c3","name":"BashExec","arguments":"{\"command\":\"ls c3\"}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:e3e2057dab39a78ce0213f76aa97033e80eacbf73477712211ddef78d2a3a188"}
+{"schema_version":"1","session_id":"sess_fx","type":"state_delta","run_id":"sess_fx.r0.0","step":1,"cumulative":{"provider_calls_started":2,"provider_calls_completed":2,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":200,"last_output_tokens":20,"last_estimated_input_tokens":24},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_calls","request_id":"step-1","step":1,"stream_id":"step-1","tool_calls":[{"id":"c3","tool":"BashExec","arguments":{"command":"ls c3"}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":1,"stream_id":"step-1","tool":"BashExec","id":"c3"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":1,"stream_id":"step-1","id":"c3"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":17,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":18,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":19,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_results","request_id":"step-1","step":1,"stream_id":"step-1","results":[{"tool_call_id":"c3","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":7}]}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":1,"message":{"role":"tool","content":"7 total","tool_calls":[],"tool_call_id":"c3","images":[]},"replaces_previous":false,"digest_after":"sha256:f39a028fbada72fa011e5b75ace607981a23df958904bcb9668726896b3d5f95"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":2,"stream_id":"step-2","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":2,"msg_count":11,"estimated_input_tokens":26,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:37e4f852bfc43ed8dd665e120dc922262d78c81584b93dbf66071706b1ac3067","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":20,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":2,"stream_id":"step-2","status":"errored"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":21,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":22,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"run_summary","model":"fx/model-b","motoko_commit":"dev","finish_reason":"error","steps_executed":2,"usage":{"input_tokens":300,"output_tokens":30,"total_tokens":330},"total_cost_usd":0,"total_cost_millicents":0,"duration_ms":4,"error":"replay exhausted: the program has no step for provider call 2","cumulative":{"provider_calls_started":2,"provider_calls_completed":2,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"world_ordinal":22}
+m14_exhausted_marker_at_position: Diverged(K2:ProjectionDiffers[ReplayMismatch]@interaction:18) all=[K2:ProjectionDiffers@interaction:18;K2:WrongKind@interaction:19;K2:WrongKind@interaction:20;K2:UnusedInteraction@interaction:21;K3:EnvReadOverRecorded@aggregate:witness;K3:EnvReadUnderRecorded@aggregate:witness;K3:RuntimeCountDiffers@aggregate:witness:tool_dispatches;K3:RuntimeCountDiffers@aggregate:witness:clock_delta_ms;K4:replay-rule-violated(replay-projection-differs)@interaction:18;K4:replay-rule-violated(replay-wrong-kind)@interaction:19;K4:replay-rule-violated(replay-wrong-kind)@interaction:20;K4:replay-rule-violated(replay-unused-interaction)@interaction:21;K4:interactions-unconsumed@interaction:21;K4:FamilyEvidenceDiffers@aggregate:family:terminal-summary;K4:FamilyEvidenceDiffers@aggregate:family:emission-parity;K4:FamilyEvidenceDiffers@aggregate:family:phase-transitions;K4:FamilyEvidenceDiffers@aggregate:family:tool-pairing;K4:FamilyEvidenceDiffers@aggregate:family:budget-accounting;K4:FamilyEvidenceDiffers@aggregate:family:bounded-progress;K4:FamilyEvidenceDiffers@aggregate:family:checkpoint-history;K4:FamilyEvidenceDiffers@aggregate:family:outcome-agreement;K4:FamilyEvidenceDiffers@aggregate:family:replay-consistency;K4:FamilyEvidenceDiffers@aggregate:family:world-transitions;K4:FamilyEvidenceDiffers@aggregate:family:virtual-time;K4:FamilyEvidenceDiffers@aggregate:family:harness-hygiene;K4:FamilyEvidenceDiffers@aggregate:family:journal-fold;K4:CensusMismatch@aggregate:census:capture_reads;K4:CensusMismatch@aggregate:census:decisions;K6:EndMismatch@call:3;K6:ExhaustedMarker@call:3;K7:HistoryShort@snapshot:20;K7:AppendCountDiffers@snapshot:20] markers=[call:3]
+PASS m14_exhausted_marker_at_position
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":1,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":2,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":3,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":4,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":5,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":6,"class":"file_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":7,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":8,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"history_seeded","run_id":"sess_fx.r0.0","messages":[{"role":"system","content":"You are a synthetic fixture.","tool_calls":[],"tool_call_id":"","images":[]},{"role":"user","content":"list the files","tool_calls":[],"tool_call_id":"","images":[]},{"role":"assistant","content":"","tool_calls":[{"id":"c1","name":"BashExec","arguments":"{\"command\":\"ls c1\"}"}],"tool_call_id":"","images":[]},{"role":"tool","content":"a.txt\nb.txt","tool_calls":[],"tool_call_id":"c1","images":[]},{"role":"assistant","content":"Two files.","tool_calls":[],"tool_call_id":"","images":[]},{"role":"user","content":"now count the lines","tool_calls":[],"tool_call_id":"","images":[]}],"digest":"sha256:32aa0dcf87c0c9805aa92bb34cd085603cb9942dd61c220cdb3e1a1e3ece22b5","digests":["sha256:2bf903094710366cefa09853c6c0c7b769466bc4c51fd02c3d0eebd487f38cb6","sha256:822a19a495d3eb6c2e9f93d33bd0df33bc8f5e239c5f498beaa278304e2c9030","sha256:fb203cf64788f47a32f5d56266fb391e12c5790052a95219a9b2d1ea743dcd69","sha256:aa082029b0fdacf0a6f56dabf2310771109e9deaaaf3353e9679bca99a3f5c45","sha256:df859cc66419beda4a9c9768a04d45130e3aad9cc7358fa93c41431e4ac2bb82","sha256:32aa0dcf87c0c9805aa92bb34cd085603cb9942dd61c220cdb3e1a1e3ece22b5"]}
+{"schema_version":"1","session_id":"sess_fx","type":"context_limit_resolved","run_id":"sess_fx.r0.0","context_limit":4096,"context_limit_source":{"arm":"bounded","origin":"profile_override","profile_miss":"","catalogue_miss":"","model":""}}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":0,"stream_id":"step-0","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":0,"msg_count":6,"estimated_input_tokens":21,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:5087568119e608da85a16b4681810abffa696562fd51e214cf764676a010c719","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":9,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":0,"stream_id":"step-0","status":"completed"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking","step":0,"text":"","finish_reason":"tool_calls","tool_calls":2,"input_tokens":100,"output_tokens":10,"cost_usd":0}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"assistant","content":"","tool_calls":[{"id":"c2a","name":"BashExec","arguments":"{\"command\":\"ls c2a\"}"},{"id":"c2b","name":"BashExec","arguments":"{\"command\":\"ls c2b\"}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:7985916b64b73153052ec3c22f655d274334e2997f357d623abec2d283927279"}
+{"schema_version":"1","session_id":"sess_fx","type":"state_delta","run_id":"sess_fx.r0.0","step":0,"cumulative":{"provider_calls_started":1,"provider_calls_completed":1,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":100,"last_output_tokens":10,"last_estimated_input_tokens":21},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_calls","request_id":"step-0","step":0,"stream_id":"step-0","tool_calls":[{"id":"c2a","tool":"BashExec","arguments":{"command":"ls c2a"}},{"id":"c2b","tool":"BashExec","arguments":{"command":"ls c2b"}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":0,"stream_id":"step-0","tool":"BashExec","id":"c2a"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":0,"stream_id":"step-0","id":"c2a"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":0,"stream_id":"step-0","tool":"BashExec","id":"c2b"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":0,"stream_id":"step-0","id":"c2b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":10,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":11,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":12,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":13,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":14,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":15,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_results","request_id":"step-0","step":0,"stream_id":"step-0","results":[{"tool_call_id":"c2a","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":2},{"tool_call_id":"c2b","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":5}]}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"tool","content":"2 a.txt","tool_calls":[],"tool_call_id":"c2a","images":[]},"replaces_previous":false,"digest_after":"sha256:b7319d5f65ea70e59ee4f96dbf429c44245aba20362148d07ed05fe0f2966a2c"}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"tool","content":"5 b.txt","tool_calls":[],"tool_call_id":"c2b","images":[]},"replaces_previous":false,"digest_after":"sha256:4879351157ddbd9be682168ff8ad295835d6d8ef7821122a374338f9d3d691cf"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":1,"stream_id":"step-1","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":1,"msg_count":9,"estimated_input_tokens":24,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:e6eca67d8e8d6cbac9641c1f68729caa1d0c992ba963fac064c175cd49853de5","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":16,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":1,"stream_id":"step-1","status":"completed"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking","step":1,"text":"","finish_reason":"tool_calls","tool_calls":1,"input_tokens":200,"output_tokens":20,"cost_usd":0}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":1,"message":{"role":"assistant","content":"","tool_calls":[{"id":"c3","name":"BashExec","arguments":"{\"command\":\"ls c3\"}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:e3e2057dab39a78ce0213f76aa97033e80eacbf73477712211ddef78d2a3a188"}
+{"schema_version":"1","session_id":"sess_fx","type":"state_delta","run_id":"sess_fx.r0.0","step":1,"cumulative":{"provider_calls_started":2,"provider_calls_completed":2,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":200,"last_output_tokens":20,"last_estimated_input_tokens":24},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_calls","request_id":"step-1","step":1,"stream_id":"step-1","tool_calls":[{"id":"c3","tool":"BashExec","arguments":{"command":"ls c3"}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":1,"stream_id":"step-1","tool":"BashExec","id":"c3"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":1,"stream_id":"step-1","id":"c3"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":17,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":18,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":19,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_results","request_id":"step-1","step":1,"stream_id":"step-1","results":[{"tool_call_id":"c3","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":7}]}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":1,"message":{"role":"tool","content":"7 total","tool_calls":[],"tool_call_id":"c3","images":[]},"replaces_previous":false,"digest_after":"sha256:f39a028fbada72fa011e5b75ace607981a23df958904bcb9668726896b3d5f95"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":2,"stream_id":"step-2","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":2,"msg_count":11,"estimated_input_tokens":26,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:37e4f852bfc43ed8dd665e120dc922262d78c81584b93dbf66071706b1ac3067","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":20,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":2,"stream_id":"step-2","status":"errored"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":21,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":22,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"run_summary","model":"fx/model-b","motoko_commit":"dev","finish_reason":"error","steps_executed":2,"usage":{"input_tokens":300,"output_tokens":30,"total_tokens":330},"total_cost_usd":0,"total_cost_millicents":0,"duration_ms":4,"error":"replay exhausted: the program has no step for provider call 2","cumulative":{"provider_calls_started":2,"provider_calls_completed":2,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"world_ordinal":22}
+m14_exhausted_marker_earlier_mismatch: Diverged(K2:ProjectionDiffers[ReplayMismatch]@interaction:14) all=[K2:ProjectionDiffers@interaction:14;K2:ProjectionDiffers@interaction:18;K2:WrongKind@interaction:19;K2:WrongKind@interaction:20;K2:UnusedInteraction@interaction:21;K3:EnvReadOverRecorded@aggregate:witness;K3:EnvReadUnderRecorded@aggregate:witness;K3:RuntimeCountDiffers@aggregate:witness:tool_dispatches;K3:RuntimeCountDiffers@aggregate:witness:clock_delta_ms;K4:replay-rule-violated(replay-projection-differs)@interaction:14;K4:replay-rule-violated(replay-projection-differs)@interaction:18;K4:replay-rule-violated(replay-wrong-kind)@interaction:19;K4:replay-rule-violated(replay-wrong-kind)@interaction:20;K4:replay-rule-violated(replay-unused-interaction)@interaction:21;K4:interactions-unconsumed@interaction:21;K4:FamilyEvidenceDiffers@aggregate:family:terminal-summary;K4:FamilyEvidenceDiffers@aggregate:family:emission-parity;K4:FamilyEvidenceDiffers@aggregate:family:phase-transitions;K4:FamilyEvidenceDiffers@aggregate:family:tool-pairing;K4:FamilyEvidenceDiffers@aggregate:family:budget-accounting;K4:FamilyEvidenceDiffers@aggregate:family:bounded-progress;K4:FamilyEvidenceDiffers@aggregate:family:checkpoint-history;K4:FamilyEvidenceDiffers@aggregate:family:outcome-agreement;K4:FamilyEvidenceDiffers@aggregate:family:replay-consistency;K4:FamilyEvidenceDiffers@aggregate:family:world-transitions;K4:FamilyEvidenceDiffers@aggregate:family:virtual-time;K4:FamilyEvidenceDiffers@aggregate:family:harness-hygiene;K4:FamilyEvidenceDiffers@aggregate:family:journal-fold;K4:CensusMismatch@aggregate:census:capture_reads;K4:CensusMismatch@aggregate:census:decisions;K6:EndMismatch@call:3;K6:ExhaustedMarker@call:3;K7:HistoryShort@snapshot:20;K7:AppendCountDiffers@snapshot:20] markers=[call:3]
+PASS m14_exhausted_marker_earlier_mismatch
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":1,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":2,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":3,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":4,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":5,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":6,"class":"file_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":7,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":8,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"history_seeded","run_id":"sess_fx.r0.0","messages":[{"role":"system","content":"You are a synthetic fixture.","tool_calls":[],"tool_call_id":"","images":[]},{"role":"user","content":"list the files","tool_calls":[],"tool_call_id":"","images":[]},{"role":"assistant","content":"","tool_calls":[{"id":"c1","name":"BashExec","arguments":"{\"command\":\"ls c1\"}"}],"tool_call_id":"","images":[]},{"role":"tool","content":"a.txt\nb.txt","tool_calls":[],"tool_call_id":"c1","images":[]},{"role":"assistant","content":"Two files.","tool_calls":[],"tool_call_id":"","images":[]},{"role":"user","content":"now count the lines","tool_calls":[],"tool_call_id":"","images":[]}],"digest":"sha256:32aa0dcf87c0c9805aa92bb34cd085603cb9942dd61c220cdb3e1a1e3ece22b5","digests":["sha256:2bf903094710366cefa09853c6c0c7b769466bc4c51fd02c3d0eebd487f38cb6","sha256:822a19a495d3eb6c2e9f93d33bd0df33bc8f5e239c5f498beaa278304e2c9030","sha256:fb203cf64788f47a32f5d56266fb391e12c5790052a95219a9b2d1ea743dcd69","sha256:aa082029b0fdacf0a6f56dabf2310771109e9deaaaf3353e9679bca99a3f5c45","sha256:df859cc66419beda4a9c9768a04d45130e3aad9cc7358fa93c41431e4ac2bb82","sha256:32aa0dcf87c0c9805aa92bb34cd085603cb9942dd61c220cdb3e1a1e3ece22b5"]}
+{"schema_version":"1","session_id":"sess_fx","type":"context_limit_resolved","run_id":"sess_fx.r0.0","context_limit":4096,"context_limit_source":{"arm":"bounded","origin":"profile_override","profile_miss":"","catalogue_miss":"","model":""}}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":0,"stream_id":"step-0","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":0,"msg_count":6,"estimated_input_tokens":21,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:5087568119e608da85a16b4681810abffa696562fd51e214cf764676a010c719","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":9,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":0,"stream_id":"step-0","status":"completed"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking","step":0,"text":"","finish_reason":"tool_calls","tool_calls":2,"input_tokens":100,"output_tokens":10,"cost_usd":0}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"assistant","content":"","tool_calls":[{"id":"c2a","name":"BashExec","arguments":"{\"command\":\"ls c2a\"}"},{"id":"c2b","name":"BashExec","arguments":"{\"command\":\"ls c2b\"}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:7985916b64b73153052ec3c22f655d274334e2997f357d623abec2d283927279"}
+{"schema_version":"1","session_id":"sess_fx","type":"state_delta","run_id":"sess_fx.r0.0","step":0,"cumulative":{"provider_calls_started":1,"provider_calls_completed":1,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":100,"last_output_tokens":10,"last_estimated_input_tokens":21},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_calls","request_id":"step-0","step":0,"stream_id":"step-0","tool_calls":[{"id":"c2a","tool":"BashExec","arguments":{"command":"ls c2a"}},{"id":"c2b","tool":"BashExec","arguments":{"command":"ls c2b"}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":0,"stream_id":"step-0","tool":"BashExec","id":"c2a"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":0,"stream_id":"step-0","id":"c2a"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":0,"stream_id":"step-0","tool":"BashExec","id":"c2b"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":0,"stream_id":"step-0","id":"c2b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":10,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":11,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":12,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":13,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":14,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":15,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_results","request_id":"step-0","step":0,"stream_id":"step-0","results":[{"tool_call_id":"c2a","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":2},{"tool_call_id":"c2b","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":5}]}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"tool","content":"2 a.txt","tool_calls":[],"tool_call_id":"c2a","images":[]},"replaces_previous":false,"digest_after":"sha256:b7319d5f65ea70e59ee4f96dbf429c44245aba20362148d07ed05fe0f2966a2c"}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":0,"message":{"role":"tool","content":"5 b.txt","tool_calls":[],"tool_call_id":"c2b","images":[]},"replaces_previous":false,"digest_after":"sha256:4879351157ddbd9be682168ff8ad295835d6d8ef7821122a374338f9d3d691cf"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":1,"stream_id":"step-1","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":1,"msg_count":9,"estimated_input_tokens":24,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:e6eca67d8e8d6cbac9641c1f68729caa1d0c992ba963fac064c175cd49853de5","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":16,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":1,"stream_id":"step-1","status":"completed"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking","step":1,"text":"","finish_reason":"tool_calls","tool_calls":1,"input_tokens":200,"output_tokens":20,"cost_usd":0}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":1,"message":{"role":"assistant","content":"","tool_calls":[{"id":"c3","name":"BashExec","arguments":"{\"command\":\"ls c3\"}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:e3e2057dab39a78ce0213f76aa97033e80eacbf73477712211ddef78d2a3a188"}
+{"schema_version":"1","session_id":"sess_fx","type":"state_delta","run_id":"sess_fx.r0.0","step":1,"cumulative":{"provider_calls_started":2,"provider_calls_completed":2,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":200,"last_output_tokens":20,"last_estimated_input_tokens":24},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_calls","request_id":"step-1","step":1,"stream_id":"step-1","tool_calls":[{"id":"c3","tool":"BashExec","arguments":{"command":"ls c3"}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":1,"stream_id":"step-1","tool":"BashExec","id":"c3"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":1,"stream_id":"step-1","id":"c3"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":17,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":18,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":19,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_results","request_id":"step-1","step":1,"stream_id":"step-1","results":[{"tool_call_id":"c3","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":7}]}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":1,"message":{"role":"tool","content":"7 total","tool_calls":[],"tool_call_id":"c3","images":[]},"replaces_previous":false,"digest_after":"sha256:f39a028fbada72fa011e5b75ace607981a23df958904bcb9668726896b3d5f95"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_start","step":2,"stream_id":"step-2","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"provider_call_prepared","step":2,"msg_count":11,"estimated_input_tokens":26,"system_prefix_count":1,"system_prefix_chars":28,"system_prefix_digest":"sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413","payload_digest":"sha256:37e4f852bfc43ed8dd665e120dc922262d78c81584b93dbf66071706b1ac3067","model":"fx/model-b"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":20,"class":"model_step"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking_stream_end","step":2,"stream_id":"step-2","status":"completed"}
+{"schema_version":"1","session_id":"sess_fx","type":"thinking","step":2,"text":"","finish_reason":"tool_calls","tool_calls":1,"input_tokens":300,"output_tokens":30,"cost_usd":0}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":2,"message":{"role":"assistant","content":"","tool_calls":[{"id":"c4","name":"BashExec","arguments":"{\"command\":\"ls c4\"}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:490d515df9fa186bcb4808fe2efc79ee887b964c84d2ada2866fafc898dbf31f"}
+{"schema_version":"1","session_id":"sess_fx","type":"state_delta","run_id":"sess_fx.r0.0","step":2,"cumulative":{"provider_calls_started":3,"provider_calls_completed":3,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":300,"last_output_tokens":30,"last_estimated_input_tokens":26},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_calls","request_id":"step-2","step":2,"stream_id":"step-2","tool_calls":[{"id":"c4","tool":"BashExec","arguments":{"command":"ls c4"}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_start","step":2,"stream_id":"step-2","tool":"BashExec","id":"c4"}
+{"schema_version":"1","session_id":"sess_fx","type":"v2_tool_dispatch_complete","step":2,"stream_id":"step-2","id":"c4"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":21,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":22,"class":"env_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":23,"class":"tool_exec"}
+{"schema_version":"1","session_id":"sess_fx","type":"native_tool_results","request_id":"step-2","step":2,"stream_id":"step-2","results":[{"tool_call_id":"c4","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":{}}]}
+{"schema_version":"1","session_id":"sess_fx","type":"history_appended","run_id":"sess_fx.r0.0","step":2,"message":{"role":"tool","content":"done","tool_calls":[],"tool_call_id":"c4","images":[]},"replaces_previous":false,"digest_after":"sha256:b3a2d16a4a119a328e59b54abf5296a47b27fa2ff050fcadba7f1c6916ab7603"}
+{"schema_version":"1","session_id":"sess_fx","type":"run_suspended","session_id":"sess_fx","run_id":"sess_fx.r0.0","reason":"budget_exhausted","step":3}
+{"schema_version":"1","session_id":"sess_fx","type":"world_request","ordinal":24,"class":"clock_read"}
+{"schema_version":"1","session_id":"sess_fx","type":"run_summary","model":"fx/model-b","motoko_commit":"dev","finish_reason":"max_steps","steps_executed":3,"usage":{"input_tokens":600,"output_tokens":60,"total_tokens":660},"total_cost_usd":0,"total_cost_millicents":0,"duration_ms":5,"error":"step budget exhausted","cumulative":{"provider_calls_started":3,"provider_calls_completed":3,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"world_ordinal":24}
+m14_k1_reconstitution: Diverged(K1:QueueOverfilled[ReconstitutionFinding]@aggregate:reconstitution:tools) all=[K1:QueueOverfilled@aggregate:reconstitution:tools] markers=[]
+PASS m14_k1_reconstitution
+m14_k1_unstartable: Refused(ProgramUndecodable:ProviderOutcomeUndecodable(7))
+PASS m14_k1_unstartable
+m14_k3_prepared_over_recorded: Diverged(K3:UnderRecorded[DiscoveryFinding]@aggregate:witness) all=[K3:UnderRecorded@aggregate:witness;K3:RuntimeCountDiffers@aggregate:witness:provider_calls;K4:record-after-terminal@aggregate:invariants:phase-transitions;K4:FamilyEvidenceDiffers@aggregate:family:terminal-summary;K4:FamilyEvidenceDiffers@aggregate:family:emission-parity;K4:FamilyEvidenceDiffers@aggregate:family:phase-transitions;K4:FamilyEvidenceDiffers@aggregate:family:budget-accounting;K4:FamilyEvidenceDiffers@aggregate:family:checkpoint-history;K4:FamilyEvidenceDiffers@aggregate:family:outcome-agreement;K4:FamilyEvidenceDiffers@aggregate:family:journal-fold] markers=[]
+PASS m14_k3_prepared_over_recorded
+m14_k3_prepared_over_recorded_stored_witness_agrees: Diverged(K3:UnderRecorded[DiscoveryFinding]@aggregate:witness) all=[K3:UnderRecorded@aggregate:witness;K4:record-after-terminal@aggregate:invariants:phase-transitions;K4:FamilyEvidenceDiffers@aggregate:family:terminal-summary;K4:FamilyEvidenceDiffers@aggregate:family:emission-parity;K4:FamilyEvidenceDiffers@aggregate:family:phase-transitions;K4:FamilyEvidenceDiffers@aggregate:family:budget-accounting;K4:FamilyEvidenceDiffers@aggregate:family:checkpoint-history;K4:FamilyEvidenceDiffers@aggregate:family:outcome-agreement;K4:FamilyEvidenceDiffers@aggregate:family:journal-fold] markers=[]
+PASS m14_k3_prepared_over_recorded_stored_witness_agrees
+m14_k3_prepared_under_recorded: Diverged(K3:OverRecorded[DiscoveryFinding]@aggregate:witness) all=[K3:OverRecorded@aggregate:witness;K3:RuntimeCountDiffers@aggregate:witness:provider_calls;K4:FamilyEvidenceDiffers@aggregate:family:terminal-summary;K4:FamilyEvidenceDiffers@aggregate:family:emission-parity;K4:FamilyEvidenceDiffers@aggregate:family:phase-transitions;K4:FamilyEvidenceDiffers@aggregate:family:budget-accounting;K4:FamilyEvidenceDiffers@aggregate:family:checkpoint-history;K4:FamilyEvidenceDiffers@aggregate:family:outcome-agreement;K4:FamilyEvidenceDiffers@aggregate:family:journal-fold] markers=[]
+PASS m14_k3_prepared_under_recorded
+m14_k3_runtime_count_clock: Diverged(K3:RuntimeCountDiffers[DiscoveryFinding]@aggregate:witness:clock_delta_ms) all=[K3:RuntimeCountDiffers@aggregate:witness:clock_delta_ms] markers=[]
+PASS m14_k3_runtime_count_clock
+m14_k3_runtime_count_tools: Diverged(K3:RuntimeCountDiffers[DiscoveryFinding]@aggregate:witness:tool_dispatches) all=[K3:RuntimeCountDiffers@aggregate:witness:tool_dispatches] markers=[]
+PASS m14_k3_runtime_count_tools
+k3: entry witness provider=3 tools=4 clock=6
+m14_k4_violation: Diverged(K4:decision-budget-exceeded[Violation]@aggregate:invariants:bounded-progress) all=[K4:decision-budget-exceeded@aggregate:invariants:bounded-progress] markers=[]
+PASS m14_k4_violation
+m14_k4_census_mismatch: Diverged(K4:CensusMismatch[CensusMismatch]@aggregate:census:decisions) all=[K4:CensusMismatch@aggregate:census:decisions] markers=[]
+PASS m14_k4_census_mismatch
+m14_k4_family_record: Diverged(K4:FamilyEvidenceDiffers[CensusMismatch]@aggregate:family:tool-pairing) all=[K4:FamilyEvidenceDiffers@aggregate:family:tool-pairing] markers=[]
+PASS m14_k4_family_record
+m14_k5_frame: Diverged(K5:FrameMalformed[FrameMismatch]@aggregate:frame) all=[K5:FrameMalformed@aggregate:frame] markers=[]
+PASS m14_k5_frame
+m14_k5_pending: Diverged(K5:PendingNotEmpty[FrameMismatch]@aggregate:frame) all=[K5:PendingNotEmpty@aggregate:frame] markers=[]
+PASS m14_k5_pending
+m14_k6_end: Diverged(K6:EndMismatch[EndMismatch]@call:3) all=[K6:EndMismatch@call:3] markers=[]
+PASS m14_k6_end
+m14_k6_marker_scan: Diverged(K6:ExhaustedMarker[EndMismatch]@call:3) all=[K6:ExhaustedMarker@call:3] markers=[]
+PASS m14_k6_marker_scan
+m14_k7_seed_chain: Diverged(K7:SeedDigestDiffers[ChainMismatch]@snapshot:12) all=[K7:SeedDigestDiffers@snapshot:12] markers=[]
+PASS m14_k7_seed_chain
+m14_k7_append_chain: Diverged(K7:ChainDiffers[ChainMismatch]@snapshot:14) all=[K7:ChainDiffers@snapshot:14] markers=[]
+PASS m14_k7_append_chain
+k7: seed at snapshot:12 second append snapshot:14
+diagnostic: regression replay: 0 fatal, 1 recorded difference(s)
+    - [replay-projection-differs] at interaction position 14 the program records request projection 'model_step model=fx/model-b msg_count=9 payload=sha256:e6eca67d8e8d6cbac9641c1f68729caa1d0c992ba963fac064c175cd49853de5 system=sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413 raw=sha256:4879351157ddbd9be682168ff8ad295835d6d8ef7821122a374338f9d3d691cf' and the driver produced 'model_step model=fx/model-b msg_count=9 payload=sha256:e6eca67d8e8d6cbac9641c1f68729caa1d0c992ba963fac064c175cd49853de5 system=sha256:eeff629c50c8f6631ef9b0fe35384a89cbc4482a3b4a6153c42b2277184c8413 raw=sha256:4879351157ddbd9be682168ff8ad295835d6d8ef7821122a374338f9d3d691cf fx=1'; strict replay requires the recorded projections to match, and the projection is what carries the arguments and message digests D2 says are recorded rather than silently discarded
+PASS m14_regression_diagnostic_only
+entry_records: witness=1009 census=3504 round_trip=reproduced broken_refused=true
+PASS m14_entry_records_round_trip
+candidate_checks_live_test: all checks passed
+Warning: dependency sunholo/motoko_core content changed (locked: sha256:fcc98136e2e8b3a2b..., current: sha256:655f83c48772ef126...)
+Run 'ailang lock' to update

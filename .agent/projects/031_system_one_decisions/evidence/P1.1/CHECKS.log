@@ -1,0 +1,26 @@
+# 031 P1.1 exit check 1 and 2: ailang check on every touched module, ailang test where a module has tests.
+# HEAD before: a6f03242c31efb990a09bebcfdda0c2cabece187; AILANG AILANG v0.33.0; 2026-09-21T14:15Z
+# Workspace helper: .agent/projects/031_system_one_decisions/evidence/P1.1/p11_core_check.sh (see its header for why in-place checks are unreachable until P1.2)
+
+## check
+p11: check src/core/ext/ctx_defaults.ail ok
+p11: check src/core/ext/registry_normalize.ail ok
+p11: check src/core/ext/registry_generated.ail ok
+p11: check src/core/ext/runtime.ail ok
+p11: check src/core/ext/exit_manifest.ail ok
+p11: check src/core/tool_catalog.ail ok
+p11: check src/core/test/ext_fixture.ail ok
+p11: check src/core/test/stub_step.ail ok
+p11: check src/core/tool_envelope_dispatch.ail ok
+p11: check src/core/dst_hook_guard.ail ok
+p11: check src/core/tool_phase.ail ok
+p11: check src/core/session.ail ok
+check exit=0
+
+## test
+p11: test src/core/ext/registry_normalize.ail ok -- 17 tests: 17 passed, 0 failed, 0 skipped (2.880479765s)
+p11: test src/core/ext/runtime.ail ok -- 24 tests: 24 passed, 0 failed, 0 skipped (34.904961676s)
+p11: test src/core/tool_catalog.ail ok -- 5 tests: 5 passed, 0 failed, 0 skipped (1.732154726s)
+test exit=0
+p11: test src/core/ext/exit_manifest.ail ok -- 4 tests: 2 passed, 0 failed, 2 skipped (13.379970179s)
+test (allow-skips, pre-existing generator-less properties) exit=0

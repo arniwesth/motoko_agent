@@ -1,0 +1,17 @@
+module sunholo/motoko_ext_a2a/types
+
+-- A2AAgent describes a remote A2A sub-agent that motoko can delegate to.
+--
+-- skill_id is the AILANG-side address of the function to invoke on the
+-- remote agent, formatted as "module.path.function" (e.g.
+-- "main.handle_typefix" or "api.math.add"). Required by the AILANG
+-- serve-api A2A handler — sent as params.metadata.skill_id in the
+-- JSON-RPC 2.0 tasks/send envelope.
+export type A2AAgent = {
+  name: string,
+  url: string,
+  description: string,
+  skill_id: string
+}
+
+export type A2AConfig = { agents: [A2AAgent] }

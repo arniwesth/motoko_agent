@@ -1,0 +1,14 @@
+-- Opacity probe (forging consumer): tries to import the constructor and
+-- build a History directly, bypassing the ops.
+-- QUESTION: does `ailang check` reject this?
+--   reject  => opacity is ENFORCED (D7 type story holds as written)
+--   accept  => opacity is advisory; D7 enforcement falls back to digest-chain
+module probe_opacity_forge
+
+import std/io (println)
+import hist_opaque (History, MkHistory, size)
+
+export func main() -> () ! {IO} {
+  let forged = MkHistory([1, 2, 3]);
+  println("forged size=${show(size(forged))}")
+}

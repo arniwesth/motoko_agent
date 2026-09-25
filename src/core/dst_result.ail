@@ -1,0 +1,185 @@
+-- D6's result contract: every DST run returns one of two disjoint classes.
+--
+-- WI-A9 builds the shapes, the setup-failure path (D6.7), and the distinction
+-- D6.6 draws between an in-runner typed failure and a raw capability bypass.
+-- It does NOT build mismatch detection or replay — WI-A13 owns discovery and
+-- replay and produces the mismatch fixture — nor the event vocabulary (WI-A8).
+--
+-- The central rule this module exists to hold (D6.6), because it is the thing a
+-- future edit is most likely to collapse:
+--
+--   A violation the RUNNER CAN OBSERVE — a profile-routing or exclusion
+--   violation detected while the driver is still running — returns a typed
+--   HarnessFailure carrying whatever partial evidence exists.
+--
+--   A RAW CAPABILITY BYPASS does not. A denied ambient effect terminates
+--   evaluation on the pinned substrate, so no typed result and no partial trace
+--   can be constructed; that case is an expected NON-ZERO RUN and nothing else.
+--
+-- There is deliberately no HarnessFailureKind variant for a capability denial.
+-- Adding one would require an effect-interposition mechanism that preserves the
+-- driver-owned partial trace, and none exists on the pin. If you find yourself
+-- writing a catch-all that turns a denied effect into a HarnessFailure, that is
+-- the conflation D6.6 forbids in both the contract and the probes that test it.
+
+module src/core/dst_result
+
+import src/core/phase_vocab (
+  LedgerTrace,
+  empty_ledger_trace,
+  has_exactly_one_final_run_summary
+)
+import std/result (Result, Ok, Err)
+import std/ai (Message, AIError)
+
+-- Replay metadata (D8). A9 defines the field so the two result classes have
+-- their D6-fixed shape; the generator-side fields (program schema version,
+-- generator id/family/version, seed, serialized program) arrive with WI-A13's
+-- discovery and replay work, which owns them. What A9 can fill honestly today
+-- is the interpretation context a trace is useless without.
+export type ReplayMetadata = {
+  source_revision: string,
+  toolchain_version: string,
+  profile_id: string,
+  profile_version: string,
+  event_vocabulary_version: string
+}
+
+export pure func unknown_replay_metadata() -> ReplayMetadata {
+  { source_revision: "",
+    toolchain_version: "",
+    profile_id: "",
+    profile_version: "",
+    event_vocabulary_version: "" }
+}
+
+-- The interaction log: what the world served the driver, in order. WI-A13's
+-- discovery work populates this from the program; A9 defines the shape and the
+-- empty value so SystemRun is constructible now.
+export type InteractionEntry = {
+  position: int,
+  kind: string,
+  projection: string
+}
+
+export type InteractionLog = { entries: [InteractionEntry] }
+
+export pure func empty_interaction_log() -> InteractionLog {
+  { entries: [] }
+}
+
+-- D6.6 / D6.7. Every kind here is observable by the runner while it is still
+-- running, or occurs before the world is established. See the module header for
+-- why a capability denial is absent.
+export type HarnessFailureKind
+  = ProgramMismatch        -- the driver asked for something the program did not anticipate
+  | InvalidProgram         -- the program could not be interpreted
+  | InteractionsExhausted  -- the driver asked for more interactions than the program holds
+  | RoutingViolation       -- dispatch reached an excluded hook (D5); WI-A10 wires the check
+  | SetupFailure           -- D6.7: failed before the world and profile were established
+
+export pure func harness_failure_kind_name(k: HarnessFailureKind) -> string {
+  match k {
+    ProgramMismatch => "program_mismatch",
+    InvalidProgram => "invalid_program",
+    InteractionsExhausted => "interactions_exhausted",
+    RoutingViolation => "routing_violation",
+    SetupFailure => "setup_failure"
+  }
+}
+
+-- An established run. Successful or failed, its ledger_trace carries exactly
+-- one RunSummary as the final record (D6.1).
+export type SystemRun = {
+  outcome: Result[[Message], AIError],
+  ledger_trace: LedgerTrace,
+  interaction_log: InteractionLog,
+  replay_metadata: ReplayMetadata
+}
+
+-- A run that could not produce a production result.
+--
+-- interaction_position is -1 when the failure predates any interaction, which
+-- is always the case for SetupFailure: D6.7's whole point is that a setup
+-- failure must not be dressed up as a successful empty trace, and it has no
+-- position because execution never began.
+export type HarnessFailure = {
+  kind: HarnessFailureKind,
+  interaction_position: int,
+  actual_request_projection: string,
+  partial_ledger_trace: LedgerTrace,
+  replay_metadata: ReplayMetadata
+}
+
+export type DstResult
+  = RunCompleted(SystemRun)
+  | RunFailed(HarnessFailure)
+
+-- D6.7. A setup failure before the deterministic world and profile are
+-- established is a typed HarnessFailure, never a successful empty trace.
+export pure func setup_failure(reason: string, meta: ReplayMetadata) -> DstResult {
+  RunFailed({
+    kind: SetupFailure,
+    interaction_position: -1,
+    actual_request_projection: reason,
+    partial_ledger_trace: empty_ledger_trace(),
+    replay_metadata: meta
+  })
+}
+
+export pure func completed_run(
+  outcome: Result[[Message], AIError],
+  trace: LedgerTrace,
+  log: InteractionLog,
+  meta: ReplayMetadata
+) -> DstResult {
+  RunCompleted({
+    outcome: outcome,
+    ledger_trace: trace,
+    interaction_log: log,
+    replay_metadata: meta
+  })
+}
+
+-- D6.1 over the result: only an established run carries the obligation. A
+-- HarnessFailure has a partial trace by construction and must NOT be required
+-- to carry a RunSummary — that is what makes the two classes disjoint rather
+-- than one class with a flag.
+export pure func satisfies_terminal_trace_contract(r: DstResult) -> bool {
+  match r {
+    RunCompleted(run) => has_exactly_one_final_run_summary(run.ledger_trace),
+    RunFailed(_) => true
+  }
+}
+
+export pure func is_harness_failure(r: DstResult) -> bool {
+  match r {
+    RunCompleted(_) => false,
+    RunFailed(_) => true
+  }
+}
+
+pure func test_setup_failure_is_not_an_empty_success() -> bool
+  tests [((), true)]
+  {
+    let r = setup_failure("profile load failed", unknown_replay_metadata());
+    is_harness_failure(r)
+      && match r {
+           RunFailed(f) => harness_failure_kind_name(f.kind) == "setup_failure"
+                             && f.interaction_position == -1,
+           RunCompleted(_) => false
+         }
+  }
+
+pure func test_harness_failure_carries_no_run_summary_obligation() -> bool
+  tests [((), true)]
+  {
+    satisfies_terminal_trace_contract(setup_failure("boom", unknown_replay_metadata()))
+  }
+
+pure func test_completed_run_with_empty_trace_violates_contract() -> bool
+  tests [((), true)]
+  {
+    let r = completed_run(Ok([]), empty_ledger_trace(), empty_interaction_log(), unknown_replay_metadata());
+    not satisfies_terminal_trace_contract(r)
+  }

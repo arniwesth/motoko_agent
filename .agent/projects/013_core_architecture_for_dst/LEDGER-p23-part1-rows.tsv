@@ -1,0 +1,35 @@
+row	status	X	artifact	sha256	note
+1.1	GREEN	X6	freeze.txt	1c8825128fe330071cef4a242d5dbb2346cfaf39201a1943270610faceb5e95c	freeze + stamp + ref/find baselines
+1.1	GREEN	X6	X.log	a57b7a30dad5dd840749d45d8ca424d703b44b0a9ecd4bf121804cd7942dcbdf	X6 commit
+1.1	GREEN	X6	Xtree.log	92727ba34cf927252690f48b05d08c84a39b6f84b567bb0f1123d1920d614db3	X6 tree
+1.2	GREEN	X6	collect-x6.log	346f4d0ac1f826a099a3cb03756217383a3a520bf91d393f4f856e593105d719	collect rc=0
+1.2	GREEN	X6	collect-x6e.log	e912e07ab0610799f4f94c84084903b57141a3b7a90d30f14dab60e6a1fa4231	pinned re-collect rc=0; main_packages_clean=True
+1.2	GREEN	X6	erecord-x6.json	952ddb151e7328037b4d6fecf72be9452d30d21ea8a2d22b38ce6b9a418f010a	E record, pins copied
+1.3	GREEN	X6	door1-x6.log	27571da765cc807a95113137fd0c297e4cbc74fda042bacbdb3e3fd2b6768b97	fixture door x36 with --entry-out; 36 FX lines
+1.4	GREEN	X6	door2-x6.log	72c62c6bb3ee3c1ec42560132f017296e9535e4ddcf57002fce47a70fdfddb22	entry door cmp=0; 37 EN lines; n=29 admitted=26 refused=3 failed=0
+1.5	GREEN	X6	door2-x6.log	72c62c6bb3ee3c1ec42560132f017296e9535e4ddcf57002fce47a70fdfddb22	completed entry pairs/0600/end; 27/27 PINNED (same log as 1.4)
+1.6	GREEN	X6	t16/run2.log	163a462dcdbccc123197ceb42a6c4f1dff1c7509cf440611f3acfa5d0060d5a2	pin->candidate; CANDIDATE reproduced K0-K7; rc=0
+1.7	RED	X6	tail/t17.log	00d1d7774c837ee0d9a75eaf5aa6b9475b08f419a0023dcf8a7d44f62894ec9e	0/7 reach the shell; helper bug, fixed at X7
+1.8	PARTIAL	X6	tail/t18.log	669ff241fe5a8fa7933628e3f9527de4dd522897f013044abe7beae594b09de5	shell-level 3/3 ScanRefusal wires; NOT via named pytest
+1.8	PARTIAL	X6	tail/t18b.log	3743f9198eb04ea5ea9cec0431eba5d46ba4725ca93a9654ef8895310e0ed301	excerpt attempt-2 UrlUserinfo
+1.9	GREEN	X6	tail/t19.log	daec6b2c73df7439c59296e4e5c256c6303876d4fda16eba7ed87c84751f44ad	0 EVAL_ENTRY / entry_config.py before refusal
+1.10	GREEN	X6	tail/t110.log	67cb01772d490d83a7ffe7391d58ed40db6f79c8f8e329ba9f3ebdeb3c96ae39	4-way R1; named test 1 passed
+1.10	GREEN	X6	tail/t110b.log	7147bdb70bcbdb3f780fae3fd3f68b9216c613140f77e08c76192cd96f97af5e	4/4 REAL-collect
+1.11	RUN	X6	tail/t111.log	2291e454de91bf1d242da1a57eb1fcfab9584130910f0776a184ee40c3bf73da	five mutations run; MUT-4 gate-arm analysis only on clean tree
+1.12	RED	X6	tail/t112-clone-nolive.log	825a7b12f198f06e7d77d56fc1619b1130ff51e90330c435d3cc967abd44e758	4 failed / 113 passed / 13 skipped; live-mode + A-side PENDING
+1.13	GREEN	X6	tail/t113.log	a2897b24a15c2ffb5ac3e361671ad9be7c1bb34a70eacf6df2a5fda42503e463	runner 4/4; admission 12/12; scan 8/9 (m12 flake)
+1.14	GREEN	X6	tail/t114.log	569812a94c5e56e85e6e0dc44abe5585ac3f56fef9ebbe32638a9f3696fa6b15	all targets rc=0; eval_protected_selftest 42/42
+1.15	RED	X6	tail/t115.log	d60148aaf00d921cbd61635c78db3a813a7a643909b50921fa4d0639a868dddd	4 known reds + m12 flake; a17 recorded it PENDING, file exists
+1.18	GREEN	X6	tail/ref-clone-1.log	492a0e7059db0aaa90f56ff29dfba1cdd0451167cacc4b2c59fac4786f354c69	clone-scope checkpoint
+1.18	GREEN	X6	tail/ref-main-1.log	1876628c210896065d84b1a9a387272dc616b9147ce73be02ce29a073a214284	main-scope checkpoint; ref digest 1876628c is INSIDE this file
+1.1	GREEN	X7	freeze-x7.txt	c13e8619362c1d6e5759613da3ad26256a65c0ad9c6366724902f61452ae64f9	X7 + X7tree + diff digest + blobs
+1.2	GREEN	X7	collect-x7.log	0f1902209987363a485b3839c1dad27c753cd01b99c9c914ba05c6b83077b6c1	collect rc=0 at X7
+1.2	GREEN	X7	erecord-x7.json	74d225f44f134a059cf52ffc1afda8b3d6dcc941b2b8b92f74ee41e692ee3c3f	E record re-derived at X7, pins copied
+X7	IDENTITY	X7	clone/HEAD	9ed0d3895d541738fb205e970dc1848b32a12a84	tree f75099f9af2137096ebef983f5f9b268d77d6086
+carry	EQUAL	X6->X7	scripts/eval/candidate.py	4cb6003189eb67d88d26f4fc4ba9824337609c63	evaluator byte-equality claim
+carry	EQUAL	X6->X7	scripts/eval/journal_replay.ail	4f5fd067255c023144e31bc7c4280e0f56741104	evaluator byte-equality claim
+carry	EQUAL	X6->X7	scripts/eval/journal_replay.sh	0b01cd032c28798068be11ca00a309ccc0ab79ff	evaluator byte-equality claim
+carry	EQUAL	X6->X7	scripts/eval/entry_config.py	627294e9c7dd8093dd03d1f4f626f5b622d3d5b5	evaluator byte-equality claim
+carry	EQUAL	X6->X7	scripts/eval/p23_collector.py	13954918f235ae9de509f8fbd2e3758c0a60484d	evaluator byte-equality claim
+carry	EQUAL	X6->X7	src/eval/journal/scan.ail	207008423d07b90e08f02a8bff644d15fda5563c	evaluator byte-equality claim
+carry	EQUAL	X6->X7	src/eval/journal/admission.ail	5908c3b6f3b1aa78d54224c8a18167db168c41fd	evaluator byte-equality claim

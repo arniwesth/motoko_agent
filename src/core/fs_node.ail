@@ -1,0 +1,173 @@
+-- What a path in a synthetic world HOLDS, and the one vocabulary both codecs
+-- that persist it must agree on.
+--
+-- WI-D22 MOVED THIS TYPE OUT OF `src/core/ports.ail`, and the move is a layering
+-- decision rather than a tidy-up. `execution-program/2` gives `InitialWorld` a
+-- `files` field, so `src/core/dst_program` — the PURE structural validator, whose
+-- header states it "can be read and mutated without a world in scope" — has to
+-- name the entry's type. Three arrangements were open and two were declined:
+--
+--   1. `dst_program` imports `ports`. Cheapest by line count and wrong by
+--      direction. `ports` is the effectful port layer; `dst_persistence` imports
+--      `dst_program`, so the whole port layer would enter the import graph of
+--      the module the Makefile's own guard (`program_persistence`, on
+--      `dst_secrets`) describes as the tier that must not import up. The
+--      persisted PROGRAM SCHEMA would depend on the runtime's world types.
+--
+--   2. Move it into `src/core/dst_interaction`, which `ports` and `dst_program`
+--      both already import. It is the cheapest move with no new file, and that
+--      module's header claims it holds THE INTERACTION VOCABULARY. An `FsNode`
+--      is not an interaction; putting it there buys one fewer file and makes a
+--      module header false, which is the trade this project has repeatedly
+--      declined in the other direction.
+--
+--   3. Give `InitialWorld` a structurally identical anonymous shape
+--      `[{ path, kind: string, content }]`. DECLINED, and this is the one worth
+--      stating: it reintroduces exactly what WI-D18's sum was chosen to prevent
+--      — `{ path, kind: "dir", content: "hello" }` is a directory carrying a
+--      file body — AT THE PERSISTENCE BOUNDARY, which is where hand-written and
+--      corrupted artifacts enter. The type would then have to be defended by a
+--      validator instead of by construction.
+--
+-- So the type moved DOWN into a module that imports std/option and nothing else,
+-- and `ports`, `dst_program` and `ext_world` all import it from here.
+--
+-- ===========================================================================
+-- THE SECOND REASON THIS MODULE EXISTS: TWO CODECS, ONE VOCABULARY
+-- ===========================================================================
+--
+-- `WorldState.files` is now serialised by TWO codecs in two formats:
+--
+--   `src/core/ext_world`      JSON, across the extension ABI's world token
+--   `src/core/dst_persistence` tab-separated lines, into a frozen artifact
+--
+-- They are DELIBERATELY SEPARATE and they must NOT be merged. The formats
+-- differ (`dst_persistence` chose line-oriented text over JSON for diffability;
+-- see its choice 1), the lifetimes differ (a token lives for one hook call, an
+-- artifact outlives the build that wrote it), and — the part that matters — the
+-- two make OPPOSITE and both-correct decisions about an entry they cannot read:
+--
+--   ext_world       a token from an older build carries no `kind` key, and every
+--                   entry such a build could have written WAS a file, so absence
+--                   falls back to `FsFile`. Falling back to `FsDir` would
+--                   silently turn a whole file table into directories.
+--   dst_persistence an artifact is REFUSED. There is no older artifact carrying
+--                   an unreadable kind — `world.file` arrived with
+--                   `execution-program/2` — so a kind this build does not know
+--                   is a newer schema or a corrupted file, and both are
+--                   refusals. A fallback here would be a decoder supplying a
+--                   default where the encoder wrote a value, which is the shape
+--                   `dst_persistence`'s whole refusal vocabulary exists to name.
+--
+-- What they share is the KIND VOCABULARY, and it lives here so that the sharing
+-- is structural rather than a convention two files happen to follow. Renaming
+-- `"dir"` in `fs_kind_id` moves both codecs at once; renaming it in one of them
+-- is no longer possible, because neither writes the literal.
+
+module src/core/fs_node
+
+import std/option (Option, Some, None)
+import std/list as List (length)
+
+-- What `WorldState.files` holds at a path. WI-D18, moved here by WI-D22.
+--
+-- It is a SUM and not a `kind` field beside `content` because of WI-D18's design
+-- note 1: a `{ path, kind: "dir", content: "hello" }` would be representable and
+-- would be a directory carrying a file body, so something would have to forbid
+-- what the type should never have allowed. Here the content lives inside the
+-- constructor that has one.
+--
+-- See `ports.WorldState.files` for the full representation argument and for the
+-- two designs this beat.
+export type FsNode = FsFile(string) | FsDir
+
+-- The wire name of a node's kind. BOTH codecs derive their `kind` token from
+-- this function and neither writes the literal.
+export pure func fs_kind_id(n: FsNode) -> string {
+  match n { FsFile(_) => "file", FsDir => "dir" }
+}
+
+-- The content a node carries on the wire. `FsDir` carries "" because a directory
+-- has no body — which is precisely why a persisted `dir` entry with a non-empty
+-- content field is a refusal and not a node: nothing could have written it.
+export pure func fs_content_of(n: FsNode) -> string {
+  match n { FsFile(c) => c, FsDir => "" }
+}
+
+-- The inverse, PARTIAL. `None` is "this kind is not one this build defines", and
+-- the two codecs answer it differently on purpose — see the module header.
+export pure func fs_node_of_kind(kind: string, content: string) -> Option[FsNode] {
+  if kind == "file" then Some(FsFile(content))
+  else if kind == "dir" then Some(FsDir)
+  else None
+}
+
+-- Every kind this build defines, in wire form. Hand-written, because AILANG has
+-- no constructor enumeration on the pin — and therefore ASSERTED below against
+-- `fs_kind_id` on a value of each constructor, which is the only thing that can
+-- see a third constructor added without a wire name.
+export pure func all_fs_kinds() -> [string] { ["file", "dir"] }
+
+export pure func fs_node_eq(a: FsNode, b: FsNode) -> bool {
+  match a {
+    FsFile(x) => match b { FsFile(y) => x == y, FsDir => false },
+    FsDir => match b { FsDir => true, FsFile(_) => false }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Inline tests
+-- ---------------------------------------------------------------------------
+
+-- The round trip, on both constructors, through the pair of functions the two
+-- codecs share. A codec that wrote a kind its own reader did not accept would be
+-- two files apart and invisible; here it is one row.
+pure func round_trips(n: FsNode) -> bool {
+  match fs_node_of_kind(fs_kind_id(n), fs_content_of(n)) {
+    None => false,
+    Some(m) => fs_node_eq(n, m)
+  }
+}
+
+pure func test_both_kinds_round_trip_through_the_shared_vocabulary() -> bool
+  tests [((), true)]
+  {
+    round_trips(FsFile("body")) && round_trips(FsFile("")) && round_trips(FsDir)
+  }
+
+-- The enumeration is tied to the constructors rather than to itself. A third
+-- constructor added without a wire name leaves `all_fs_kinds()` at 2 while
+-- `fs_kind_id` gains an arm, and this row is what says so.
+pure func kinds_eq(a: [string], b: [string]) -> bool {
+  match a {
+    [] => match b { [] => true, _ => false },
+    x :: xs => match b { [] => false, y :: ys => x == y && kinds_eq(xs, ys) }
+  }
+}
+
+pure func test_the_kind_enumeration_matches_the_constructors() -> bool
+  tests [((), true)]
+  {
+    let ks = all_fs_kinds();
+    let derived = [fs_kind_id(FsFile("")), fs_kind_id(FsDir)];
+    List.length(ks) == List.length(derived) && kinds_eq(ks, derived)
+  }
+
+-- An unknown kind is NOT a node. This is the half `dst_persistence` turns into a
+-- refusal and `ext_world` turns into its stated `FsFile` fallback; if this
+-- returned `Some` for anything, both of those decisions would be unreachable.
+pure func test_an_unknown_kind_is_not_a_node() -> bool
+  tests [((), true)]
+  {
+    (match fs_node_of_kind("symlink", "x") { None => true, Some(_) => false })
+      && (match fs_node_of_kind("", "x") { None => true, Some(_) => false })
+      && (match fs_node_of_kind("File", "x") { None => true, Some(_) => false })
+  }
+
+-- A directory's wire content is empty, which is what makes a `dir` line
+-- carrying a body a corrupted artifact rather than a node with a spare field.
+pure func test_a_directory_carries_no_content_on_the_wire() -> bool
+  tests [((), true)]
+  {
+    fs_content_of(FsDir) == "" && fs_content_of(FsFile("body")) == "body"
+  }

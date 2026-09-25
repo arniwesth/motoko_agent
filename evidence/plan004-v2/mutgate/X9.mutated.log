@@ -1,0 +1,49 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____________________ test_p23_r6_d1_classes_through_shell _____________________
+
+tmp_path = PosixPath('/workspaces/p23-sweep-r4/tmp/pytest-of-motoko/pytest-28/test_p23_r6_d1_classes_through0')
+work = PosixPath('/workspaces/p23-sweep-r4/tmp/pytest-of-motoko/pytest-28/cand0')
+
+    def test_p23_r6_d1_classes_through_shell(tmp_path, work):
+        # P2.3R R6 (round 4, half i): 7 typed rc1 cases through the SHELL admit
+        # path — the 5 reader-refused fixtures + unreadable dir + bad end — each
+        # refused with its generator family + position, ran=false, exit 1, and
+        # DISTINCT labels for unreadable (MalformedEntry@path) vs bad end
+        # (BadSelector@path). The test passes an E record (clean gate inputs).
+        import pathlib
+        sys.path.insert(0, os.path.join(REPO, "src", "eval", "journal", "testdata"))
+        import gen_fixtures as g
+        out = os.path.join(str(work), "p23-r6-collect")
+        shutil.rmtree(out, ignore_errors=True)
+        os.makedirs(out, mode=0o700, exist_ok=True)
+        r = subprocess.run(["bash", os.path.join(HERE, "journal_replay.sh"), "collect",
+                            "--fixture", FIXTURE, "--out", out],
+                           capture_output=True, text=True)
+        assert r.returncode == 0, r.stdout[-500:] + r.stderr[-500:]
+        erec_path = os.path.join(out, "erec.json")
+        _p23_erecord_for(out, erec_path)
+        clean_ids, clean_cmp = _p23_clean_inputs(out, erec_path)
+        # P2.3R X8: admit --at REPO (this checkout, gate-clean after the stray
+        # MATRIX.tsv removal), so the provenance gate passes and the typed
+        # refusal is exercised on the tree under test.
+        # 5 reader-refused fixtures (family + position from the generator).
+        refused = [(n, exp) for t in g.world_fixtures() for (n, exp) in [(t[0], t[4])] if exp]
+        assert len(refused) == 5, [n for n, _ in refused]
+        seen = set()
+        for name, (fam, pos, _field) in refused:
+            e = build_entry_from_fixture(work, name)
+            corpus = tmp_path / f"corpus-r6-{name}"
+            corpus.mkdir(exist_ok=True)
+            r = _p23_admit_entry(e, corpus, erec_path)
+            assert r.returncode == 1, (name, r.stdout[-800:] + r.stderr[-400:])
+            rows = [l.strip() for l in r.stdout.splitlines() if l.strip().startswith("AVERDICT ")]  # shell indents wire lines two spaces
+>           assert len(rows) == 1 and rows[0].split("\t")[0] == "AVERDICT refused", (name, rows)
+E           AssertionError: ('m3_empty_after_cut', [])
+E           assert (0 == 1)
+E            +  where 0 = len([])
+
+scripts/eval/test_candidate.py:1335: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/eval/test_candidate.py::test_p23_r6_d1_classes_through_shell
+1 failed in 37.31s

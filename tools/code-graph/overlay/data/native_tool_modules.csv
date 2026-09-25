@@ -1,0 +1,28 @@
+# Curated seed map: native tool name -> handler module slug (project 010, task 3.3).
+#
+# WHY THIS IS CURATED RATHER THAN DERIVED (plan Gap 5). `tool_catalog.tools()`
+# yields tool NAMES and JSON schemas; it does not name handler modules, and no
+# machine-readable source in the repo does. So this file is human-maintained and
+# validated by review against dispatch sites, which makes it the one place in P3
+# where a mapping can silently rot. The detector is `build_activity.py`'s
+# unknown-tool counter: a tool name that reaches attribution without a row here
+# is routed to `unattributed` AND counted, so growth is noticed rather than
+# swallowed.
+#
+# Verified against dispatch sites at HEAD (2026-08-08):
+#   src/core/tool_runtime.ail:167-178   the six file/process tools, dispatched by
+#                                       name in run_native_call
+#   src/core/session.ail:561            MotokoRuntimeStatus, answered in-session
+#                                       from live loop state (not a tool_runtime
+#                                       handler at all — the odd one out)
+#
+# `module` must be a slug present in the all-profile modules.csv; the build
+# refuses rows that are not (detector, not prose).
+tool,module,evidence
+ReadFile,src/core/tool_runtime,tool_runtime.ail:167 run_read_file
+WriteFile,src/core/tool_runtime,tool_runtime.ail:171 run_write_file
+EditFile,src/core/tool_runtime,tool_runtime.ail:173 run_edit_file
+Search,src/core/tool_runtime,tool_runtime.ail:169 run_search
+BashExec,src/core/tool_runtime,tool_runtime.ail:176 run_process_result
+RunTests,src/core/tool_runtime,tool_runtime.ail:178 run_process_result
+MotokoRuntimeStatus,src/core/session,session.ail:561 answered from live loop state

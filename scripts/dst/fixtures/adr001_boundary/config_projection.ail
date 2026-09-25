@@ -1,0 +1,11 @@
+module scripts/dst/fixtures/adr001_boundary/config_projection
+import std/io (println)
+import std/json (Json, JString)
+type Ctx = { ext_config: Json }
+type State = { question_config: Json, interpretation_config: Json }
+func prepare(ctx: Ctx, _state: State) -> string { match ctx.ext_config { JString(s) => s, _ => "fallback" } }
+export func main() -> () ! {IO} {
+ let same: State = { question_config: JString("fixed"), interpretation_config: JString("fixed") };
+ println(prepare({ext_config: JString("question A")}, same));
+ println(prepare({ext_config: JString("question B")}, same))
+}

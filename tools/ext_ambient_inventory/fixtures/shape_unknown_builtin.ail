@@ -1,0 +1,11 @@
+-- SIXTH REJECTION, and it is not an import shape at all: compiler builtins need
+-- no import, so an import-only inventory never sees them.  `compaction_structural`
+-- -- the extension this instrument exists to clear -- calls `_list_length`
+-- directly at compaction_structural.ail:251.
+--
+-- No std export's body calls this name, so its effects are unknown -> rejection.
+module fixtures/shape_unknown_builtin
+
+export func emit(n: int) -> int {
+  _no_such_builtin_for_fixture(n)
+}

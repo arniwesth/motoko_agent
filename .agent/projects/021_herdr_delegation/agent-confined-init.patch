@@ -1,0 +1,16 @@
+--- a/.devcontainer/agent_confined/docker-compose.yml
++++ b/.devcontainer/agent_confined/docker-compose.yml
+@@ -45,6 +45,13 @@
+     image: motoko_agent_confined/dev:1.0
+ 
+     command: sleep infinity
++    # init: true RUNS AN INIT (tini) AS PID 1, AND `sleep infinity` BECOMES ITS CHILD. Without it
++    # `sleep infinity` is PID 1 and reaps nothing, so every process whose parent chain is gone when it
++    # dies stays <defunct> for the container's lifetime: 200 of them on 2026-09-12. They cost PID slots
++    # against pids_limit below, and a zombie Motoko still answers signal 0, which made its session
++    # lease look held and refused every resume (fixed host-side too, in session-lease.ts). See
++    # .agent/projects/021_herdr_delegation/PATCH-agent-confined-init.md.
++    init: true
+     working_dir: /workspaces/motoko_agent
+     # Herdr Studio (herdr-gui) on the HOST's loopback. The dashboard runs INSIDE this container and
+     # defaults to container-loopback, which no published port can reach — Docker DNATs to the container's

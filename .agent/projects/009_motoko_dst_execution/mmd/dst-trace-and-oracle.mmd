@@ -1,0 +1,73 @@
+flowchart TB
+  %% Detail view 3 of 3. Overview: dst-execution-decisions.
+  %% D6, D7, D8, D11: the returned trace becomes the oracle, and what that costs.
+  %% Colour = role. Red = HEAD state that contradicts the contract. Dashed amber = new
+  %% construction the plan must schedule, not a thing partially present.
+  %% Grounded 2026-08-01 at 81b0a899c9338a63a6abfe08172ee6cb15d313ec.
+  %% The lifecycle in time - seed to program to replay - is drawn in
+  %% ../../007_dst_consolidation/mmd/dst-discovery-replay; this view is the result contract.
+
+  headstate["<b>HEAD · the starting count is zero on every terminal path, not one on some</b><br/>every terminal summary routes through emit_run_summary (session.ail:833, five<br/>call sites at 1325, 1554, 1704, 1711, 1762, of which 1325 is a shared<br/>error-return helper reached from several paths)<br/><br/>that function's only ledger operation is <b>ledger_emit</b> — an effectful<br/><i>projection</i>, () ! IO+Trace at session.ail:290, not an append · the pure<br/>function that builds the returned trace is <b>ledger_append</b> (phase_vocab.ail:557),<br/>and no terminal path calls it with a RunSummary<br/><br/>the returned LedgerTrace therefore contains <b>no RunSummary on any path</b> — the<br/>exact case contract item 4 warns about, true of the entire driver today rather<br/>than of a hypothetical future event<br/><i>the spike confirmed the requirement is reachable without restructuring the<br/>driver: routing all seven paths through one finalization point that emits the<br/>projection and appends the same record was sufficient</i>"]:::fault
+
+  subgraph RESULT["D6 · two disjoint result classes"]
+    direction LR
+    sysrun["<b>SystemRun</b><br/>outcome · ledger_trace<br/>interaction_log · replay_metadata"]:::out
+    hfail["<b>HarnessFailure</b><br/>kind · interaction_position<br/>actual_request_projection<br/>partial_ledger_trace · replay_metadata"]:::out
+  end
+
+  subgraph CONTRACT["the contract, whatever types realize it"]
+    direction TB
+    c1["<b>1 · exactly one canonical RunSummary</b> in ledger_trace, the final record<br/>for the established run — for every SystemRun, successful or failed"]:::gate
+    c2["<b>2 · a typed internal termination reason maps exhaustively to the wire<br/>finish_reason</b> · success, budget exhaustion, max steps, compaction<br/>exhaustion, provider failure, unrecovered tool failure, invalid history,<br/>and internal driver failure are distinguishable — derived from reachable<br/>terminal returns, not from the current integer-code helper or stale labels"]:::gate
+    c3["<b>3 · DoneEvent is not a second terminal record</b> · returned outcome,<br/>DoneEvent when present, and RunSummary must agree"]:::gate
+    c5["<b>5 · display-only fields</b> such as duration and session id use virtual<br/>time or normalization and cannot change invariant results"]:::gate
+    c7["<b>7 · setup failure</b> before the world and profile are established is<br/>also a typed HarnessFailure, never a successful empty trace"]:::gate
+    c8["<b>8 ·</b> captured console output is diagnostic only"]:::gate
+  end
+
+  c4["<b>4 · every logical LedgerEvent reaches the returned trace — the obligation is<br/>PARITY, not a shared transition</b><br/>where the substrate permits it, append and project in one transition: that is<br/>the strongest form and the default<br/><br/><b>stream emissions are the named exception</b> · the provider callback's closed<br/>effect row means projection happens <i>during</i> the call and the append happens<br/>after it returns, so one shared transition is impossible by construction (D1) ·<br/>for that class the obligation is discharged by an explicitly checked invariant<br/>instead — projected sequence and returned emission log must match exactly in<br/>order and content, no duplicate, no omission<br/><br/><i>an external ledger_emit call is not evidence the event is in LedgerTrace;<br/>the returned trace is authoritative</i>"]:::seam
+
+  c6["<b>6 · a mismatch, invalid program, exhausted stream, or forbidden effect is a<br/>HarnessFailure — but only where the runner can observe it</b><br/>a profile-routing or exclusion violation detected <i>inside</i> the runner can<br/>return a typed value, because the driver is still running<br/><br/>a <b>raw capability bypass cannot</b>: a denied ambient effect terminates<br/>evaluation, so no typed result and no partial trace exists to return · that case<br/>is an expected non-zero run, and the two must not be conflated in the contract<br/>or in the probes that test it<br/><i>requiring both to return the same typed value needs an effect-interposition<br/>mechanism that preserves the driver-owned partial trace, proven on the pinned<br/>substrate first — none exists today</i>"]:::rule
+
+  vocab["<b>the event vocabulary is a versioned artifact, and the fifth recorded axis</b><br/>one artifact binds, for every LedgerEvent variant: the variant · its wire name ·<br/>its payload schema · and its <b>classification as logical or display-only</b> — the<br/>distinction contract item 4 and D7's parity invariant both depend on, and which<br/><b>exists nowhere today</b><br/><br/>at HEAD the vocabulary has <b>34 variants</b> whose wire names live in trailing<br/>source comments rather than in a type, and whose consumer is a switch in a<br/>separate TypeScript process — a mapping that can drift silently, and once the<br/>returned trace is the oracle it must not"]:::blocked
+
+  vocabnew["<b>this is new construction; nothing in the repo is a partial implementation</b><br/>the one naming function that exists — phase_vocab.ail:561 ledger_record_name —<br/>names <b>3 of the 34</b> variants and collapses the other 31 to the literal string<br/>'wire' · it is not a seed that can be grown into the artifact, it is a different<br/>thing that happens to share a subject<br/>the vertical spike found this the hard way: its check that RunSummary is the<br/>final record could not be written against it and needed a bespoke matcher<br/><br/>validated at load, <b>fails closed on an unclassified variant</b> · the preferred<br/>form derives the wire name from the type, making drift a compile error and the<br/>inventory regenerable · a change to any variant, wire name, payload schema, or<br/>classification is a version change, under D8's rule for old programs: preserve<br/>decoding or pin a runner, never silently reinterpret<br/><br/><b>the plan must not schedule any D7 parity invariant or acceptance row that<br/>depends on the classification before the artifact exists</b> — those checks are<br/>undecidable until it does"]:::blocked
+
+  central["<b>centralize 'append to returned trace + emit projection'</b><br/>so a new invariant-bearing event cannot silently update one channel<br/>without the other"]:::rule
+
+  d7["<b>D7 · invariants over the whole execution</b><br/>exactly one final RunSummary, and none synthesized for a harness failure ·<br/>parity between all logical emissions and returned records · legal phase and state<br/>transitions · valid tool-call/result pairing including denial and failure paths ·<br/>monotonically valid budget and cost accounting · bounded retry and progress under<br/>the modeled fault catalogue · checkpoint and compaction history invariants ·<br/>outcome/summary agreement · strict-replay request equality, safe regression<br/>compatibility, and complete interaction consumption · valid logical-world<br/>transitions including declared commit/no-commit under faults · monotonic virtual<br/>time and deadline derivation · zero generator failures, matcher mismatches,<br/>forbidden effects, and ambient RNG reads<br/><br/><b>the discovery contract is itself an invariant</b>: under the same manifest and<br/>profile, schema, generator id/version, seed, and initial_world run twice must<br/>produce the same resolved program, interaction log, outcome, and normalized trace<br/><br/><i>liveness claims must be bounded and operational — 'terminates or reaches a<br/>named retry bound within N decisions' — not an unbounded run</i>"]:::oracle
+
+  d8["<b>D8 · what a generated failure preserves</b><br/>program schema version · stable generator id/family · generator version · seed ·<br/><b>the exact serialized program</b> · source revision and toolchain version · the<br/>named profile plus its exact execution manifest · <b>the event-vocabulary version</b>,<br/>without which the trace's wire names and classifications cannot be interpreted<br/>later · normalized run configuration and policy/model-registry inputs · the first<br/>failed invariant · the terminal outcome · the normalized trace or its location<br/><br/>programs contain synthetic values only, and must reject or redact secret-shaped<br/>or live credentials before persistence · large payloads may live in a CI artifact<br/>addressed by digest, but <b>a digest without retained bytes is not replay</b>"]:::artifact
+
+  promise["<b>the reproducibility promise, stated precisely</b><br/>discovery under the recorded manifest, profile, and seed reproduces the same<br/>resolved program · the exact program reproduces the same normalized interaction<br/>log, outcome, and trace · under a <i>newer</i> revision the program remains the same<br/>regression input, and a changed outcome may be the intended evidence a bug was<br/>fixed — replay does not promise identical output across code changes ·<br/>a schema migration preserves old-program decoding or provides a pinned runner<br/><br/>any PRNG, draw-order, range, boundary-strategy, or default-initial-world change<br/>that can remap a seed requires a <b>generator-version bump, enforced by a pinned<br/>canary per stable generator id</b><br/>shrinking operates on <b>programs</b>, preserving causality and revalidating after<br/>every reduction · it may land after the first gate if the deferral is recorded,<br/>but replay of the unshrunk failing program is not optional"]:::artifact
+
+  d11["<b>D11 · the two corpora and their counters</b><br/>a blocking PR corpus of fixed seeds and exact promoted regression programs, plus<br/>a scheduled rotating corpus whose seed window changes deterministically<br/>each declares an operator-accepted minimum the gate asserts <i>exactly</i> — zero,<br/>silently truncated, or below-minimum fails<br/><br/><b>class-reached and branch-reached are separate counters</b> read from D3's<br/>catalogue: reaching a fault class is not evidence the production branch it<br/>targets executed, and only the second is the coverage the acceptance test asks<br/>for · every waived class is reported with the condition that waived it<br/><br/>a scheduled failure is promoted <b>together with the execution manifest it ran<br/>under</b>, and the two travel as one artifact · D8's promise is conditioned on that<br/>manifest, so a program promoted without one is a program nobody can state the<br/>meaning of · a stale or unresolvable manifest is never silently reinterpreted:<br/>strict replay fails closed, regression replay proceeds only with the difference<br/>recorded"]:::artifact
+
+  axes["<b>five versioned axes travel together</b><br/>program schema · generator version · profile version ·<br/>execution manifest · event vocabulary<br/><i>007, now accepted, delegated the fifth here rather than to a decision<br/>that does not mention it</i>"]:::note
+
+  headstate --> RESULT
+  RESULT --> CONTRACT
+  RESULT --> c4
+  RESULT --> c6
+  c4 --> vocab
+  vocab --> vocabnew
+  c4 -.-> central
+  CONTRACT --> d7
+  c4 --> d7
+  c6 --> d7
+  vocabnew -. "parity is undecidable until this exists" .-> d7
+  d7 --> d8
+  d8 --> promise
+  promise --> d11
+  d8 -.-> axes
+  vocabnew -.-> axes
+
+  classDef out fill:#24262f,stroke:#6e7681,color:#d6dbe2;
+  classDef gate fill:#16294d,stroke:#7aa2f7,color:#cdd9f5,stroke-width:2px;
+  classDef seam fill:#3a2f12,stroke:#e0af68,color:#f2e2c2,stroke-width:2.5px;
+  classDef rule fill:#262a30,stroke:#9aa4b0,color:#d6dbe2;
+  classDef fault fill:#3a1620,stroke:#f7768e,color:#f7c6cf;
+  classDef blocked fill:#3a3018,stroke:#d29922,color:#f2e0b8,stroke-dasharray:6 4;
+  classDef oracle fill:#16294d,stroke:#7aa2f7,color:#cdd9f5,stroke-width:2px;
+  classDef artifact fill:#2f2145,stroke:#bb9af7,color:#e5d5fb;
+  classDef note fill:#123038,stroke:#2ac3de,color:#bdeef5;

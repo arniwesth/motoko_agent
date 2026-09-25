@@ -1,0 +1,20 @@
+finalize (completion_guard, DecisionSolverJudge):
+  ok   host context decision_state: None
+  ok   dispatched alone, merged vote: NoDecision
+  ok   successor world is the input world: {"trace":"e2e;","holder_ext_id":""}
+  ok   with a legacy Accept behind it, merged vote: Accept
+  ok   state handed to the atom: Some(completion_guard#0/finalize/example.completion_guard) question_config=same interpretation_config=same limit=own ledger=zero mode=enforcing
+  ok   its own prepare, dispatched: JudgeQuery(completion-judge)
+  ok   its own interpret on Answered(1500 bp), default threshold: ContinueWithFeedback
+  ok     feedback names the threshold from interpretation_config: 6000
+  ok   a registration with min_complete_bp 1000, same answer: NoDecision
+tool_policy (repeat_failure_policy, DecisionToolPolicy):
+  ok   dispatched alone, merged vote: NoOpinion
+  ok   with a legacy Pending behind it, merged vote: Pending(next atom ran)
+  ok   state handed to the atom: Some(repeat_failure_policy#0/tool_policy/example.repeat_failure_policy) question_config=same interpretation_config=same limit=own ledger=zero mode=enforcing
+  ok   its own prepare, dispatched: ToolQuery(repeat-failure-judge)
+  ok   its own interpret on Answered(9000 bp), default threshold: Deny
+  ok   a registration with deny_min_bp 9500, same answer: NoOpinion
+END_TO_END finalize=PASS tool_policy=PASS
+p14r: e2e ok
+exit=0

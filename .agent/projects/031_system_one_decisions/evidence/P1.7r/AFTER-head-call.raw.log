@@ -1,0 +1,26 @@
+  ok  control_resolved.ail             control: typed path, must resolve  (0 unresolved, 1 resolved)
+  ok  control_scoped_binder.ail        8.0 control: binders read from THEIR function (first `p`/`ctx` in the file are not ports)  (0 unresolved, 2 resolved)
+  ok  control_view_projection.ail      8.0 control: same-named projection into a (local) view, then a call through it  (0 unresolved, 1 resolved, 1 projection(s))
+  ok  control_view_receiver.ail        8.0 control: calls through AiPorts / FsPorts views resolve  (0 unresolved, 2 resolved)
+  ok  form_alias.ail                   RE-PINNED 8.0 (P1.7r): alias of a DECLARED-typed path resolves in scope, no inference  (0 unresolved, 1 resolved)
+  ok  form_alias_untyped.ail           form 1 as it survives: alias of an UNDECLARED source stays unresolved  (1 unresolved, 0 resolved)
+  ok  form_computed.ail                computed receiver (shares form 2's detector on this pin)  (1 unresolved, 0 resolved)
+  ok  form_projection_not_a_view.ail   form 3 still: forwarded under another name / into a non-view record  (2 unresolved, 0 resolved)
+  ok  form_reexport.ail                re-export (receiver is an accessor result)  (1 unresolved, 0 resolved)
+  ok  form_wrapper.ail                 wrapper (field escapes as a value, call site elsewhere)  (1 unresolved, 0 resolved)
+  ok  membership ai_step      returns-it  seam=Ports.model_step
+  ok  membership tool_handle  returns-it  seam=Ports.ext_effect_exec
+  ok  membership file_read    returns-it  seam=Ports.file_read
+  ok  membership file_write   returns-it  seam=Ports.file_write
+  ok  membership file_remove  returns-it  seam=Ports.file_remove
+  ok  membership path_stat    returns-it  seam=Ports.path_stat
+  ok  membership dir_list     returns-it  seam=Ports.dir_list
+  ok  membership dir_make     returns-it  seam=Ports.dir_make
+  ok  membership env_get      member      seam=Ports.env_get
+  ok  membership clock_now    returns-it  seam=Ports.clock_now
+  ok  reachability      10 ExtPorts field(s) derived, 10 pinned, sets identical
+  ok  view AiPorts          1 field(s): ai_step
+  ok  view FsPorts          6 field(s): dir_list, dir_make, file_read, file_remove, file_write, path_stat
+  ok  view InterceptPorts   8 field(s): clock_now, dir_list, dir_make, file_read, file_remove, file_write, path_stat, tool_handle
+
+self-test: 0 failure(s)

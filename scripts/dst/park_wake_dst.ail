@@ -1,0 +1,753 @@
+-- scripts/dst/park_wake_dst.ail
+--
+-- PLAN-002 W4 Part 6 (ADR-002 D2/D3): the park-and-wake fixtures, exactly the
+-- ADR's list, plus Part 7's metric. Every run drives the TRACED entry with a
+-- scripted (or recording) world whose `wakes` queue holds observations, never
+-- worlds (§1 row 8), and an extension that serves `Delegate` with a `wait` and
+-- `DelegateCheck` with `settled`, the W1b producer's shapes.
+--
+-- Fixtures (each prints its own ✓/✗ rows):
+--   success (Settled) · Lost · OperatorInput leaving the delegate pending ·
+--   two delegates with one wake · HostError leaving the wait open, then a second
+--   park succeeding · TimedOut removing only the timer · re-delegation ("both
+--   are open") · mid-park abort and restart
+-- Controls:
+--   wrong handle (the re-issue bound, §8.3/R1/R2) · duplicate or late wake ·
+--   missing wake (HostError at the exhaustion point, directly) · stale world ·
+--   empty stop with open waits · the DP7-rejected candidate with open waits
+-- Plus: two runs from one script (determinism) and the saved-program replay
+-- through `recording_wake`; Part 7's metric on each channel separately.
+--
+-- `TimerWait` HAS NO PRODUCER in this plan (review change 18). The `TimedOut`
+-- fixture constructs it directly, as the fixture extension's own `wait`
+-- metadata; no production code path emits one.
+--
+-- What the in-process run cannot see is on stdout, and `run_park_wake.sh` reads
+-- it: the dropped-reply `warning` count per frame (R2: nothing is appended), the
+-- conversation loop's `session_suspend` for a mid-park `restart`, and the
+-- byte-identity of the two determinism frames. Frames are
+-- `PARK_RUN_BEGIN <label>` / `PARK_RUN_END <label>`.
+
+module scripts/dst/park_wake_dst
+
+import std/io (println, exit)
+import std/json (Json, jo, kv, js, jnum, jb, get, asString)
+import std/list as List (length, map)
+import std/string (contains, startsWith)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/ai (Message, ToolCall)
+import src/core/config (CostRates)
+import pkg/sunholo/motoko_ext_abi/types (
+  BudgetPlan, ExtRuntime, PureCtx, AiCtx, ProviderCtx, InterceptCtx, ProcessCtx, VerificationConfig,
+  ToolCallEnvelope, ToolPolicyDecision, Allow,
+  ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, PreStepOutcome,
+  PromptPatch, BudgetPatch, Msg, Delegate, Handled, NoIntercept, NoDecision, PassThrough
+)
+import src/core/test/ext_fixture (fixture_hooks)
+import src/core/session (TracedSessionResult)
+import src/core/session as Session
+import src/core/test/stub_step (ScriptedWorld, RecordingWorld, prose_step, tool_step)
+import src/core/ports (ScriptedStep, WorldState, empty_world_state, WakeObservation, WakeOutcome, Settled, Lost, OperatorInput, TimedOut, HostError, Aborted)
+import src/core/phase_vocab (LedgerRecord, WireRecord, DecisionRecord, ParkEntered, WakeReceived, WorldRequest, DoneEvent, wait_id)
+import src/core/dst_event_vocabulary (event_variant_id)
+import src/core/dst_interaction (Interaction, identity_kind)
+import src/core/dst_invariants (park_payload_findings)
+import src/core/dst_program (ExecutionProgram, program_schema_version)
+import src/core/dst_replay (world_state_of, reconstitution_balance, strict_replay_findings)
+import src/core/dst_persistence (encode_artifact, decode_artifact, Encoded, EncodeRefused, ProgramDecoded, ProgramDecodeRefused)
+import src/core/dst_driver_only (driver_only_manifest, driver_only_version)
+import src/core/dst_profile (ExecutionManifest)
+import src/core/dst_fault_catalogue (required_class_ids)
+
+-- ---------------------------------------------------------------------------
+-- Reporting and trace readers
+-- ---------------------------------------------------------------------------
+
+func report(label: string, ok: bool, detail: string) -> bool ! {IO} {
+  let _ = if ok then println("  ✓ ${label}") else println("  ✗ ${label}\n      ${detail}");
+  ok
+}
+
+pure func all_true(xs: [bool]) -> bool {
+  match xs {
+    [] => true,
+    x :: rest => x && all_true(rest)
+  }
+}
+
+pure func count_of(t: string, xs: [string]) -> int {
+  match xs {
+    [] => 0,
+    x :: rest => (if x == t then 1 else 0) + count_of(t, rest)
+  }
+}
+
+pure func join(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: [] => x,
+    x :: rest => "${x}, ${join(rest)}"
+  }
+}
+
+pure func pipe(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: rest => "${x}|${pipe(rest)}"
+  }
+}
+
+pure func index_of(t: string, xs: [string], i: int) -> int {
+  match xs {
+    [] => -1,
+    x :: rest => if x == t then i else index_of(t, rest, i + 1)
+  }
+}
+
+pure func variants(rs: [LedgerRecord]) -> [string] {
+  match rs {
+    [] => [],
+    r :: rest => match r {
+      WireRecord(e) => event_variant_id(e) :: variants(rest),
+      _ => variants(rest)
+    }
+  }
+}
+
+pure func decisions(rs: [LedgerRecord]) -> [string] {
+  match rs {
+    [] => [],
+    r :: rest => match r {
+      DecisionRecord(d) => d.decision :: decisions(rest),
+      _ => decisions(rest)
+    }
+  }
+}
+
+pure func last_of(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: [] => x,
+    _ :: rest => last_of(rest)
+  }
+}
+
+type ParkRow = { request_id: string, step: int, ids: string }
+type WakeRow = { request_id: string, wait_id: string, outcome: string, detail: string }
+
+pure func park_rows(rs: [LedgerRecord]) -> [ParkRow] {
+  match rs {
+    [] => [],
+    r :: rest => match r {
+      WireRecord(ParkEntered(i)) => {
+        let row: ParkRow = { request_id: i.request_id, step: i.step, ids: join(List.map(\w. wait_id(w), i.waits)) };
+        row :: park_rows(rest)
+      },
+      _ => park_rows(rest)
+    }
+  }
+}
+
+pure func wake_rows(rs: [LedgerRecord]) -> [WakeRow] {
+  match rs {
+    [] => [],
+    r :: rest => match r {
+      WireRecord(WakeReceived(i)) => {
+        let row: WakeRow = { request_id: i.request_id, wait_id: i.wait_id, outcome: i.outcome, detail: i.detail };
+        row :: wake_rows(rest)
+      },
+      _ => wake_rows(rest)
+    }
+  }
+}
+
+pure func park_at(ps: [ParkRow], n: int) -> ParkRow {
+  match ps {
+    [] => { request_id: "<none>", step: -1, ids: "<none>" },
+    p :: rest => if n == 0 then p else park_at(rest, n - 1)
+  }
+}
+
+pure func wake_at(ws: [WakeRow], n: int) -> WakeRow {
+  match ws {
+    [] => { request_id: "<none>", wait_id: "<none>", outcome: "<none>", detail: "<none>" },
+    w :: rest => if n == 0 then w else wake_at(rest, n - 1)
+  }
+}
+
+pure func parks_str(ps: [ParkRow]) -> string {
+  join(List.map(\p. "${p.request_id}@${show(p.step)}[${p.ids}]", ps))
+}
+
+pure func wakes_str(ws: [WakeRow]) -> string {
+  join(List.map(\w. "${w.request_id}/${w.wait_id}/${w.outcome}/${w.detail}", ws))
+}
+
+-- Part 7's trace-channel rule: no provider call is PREPARED while parked.
+pure func calls_inside_park(rs: [LedgerRecord], inside: bool) -> int {
+  match rs {
+    [] => 0,
+    r :: rest => match r {
+      WireRecord(e) => {
+        let v = event_variant_id(e);
+        if v == "ParkEntered" then calls_inside_park(rest, true)
+        else if v == "WakeReceived" then calls_inside_park(rest, false)
+        else (if inside && v == "ProviderCallPrepared" then 1 else 0) + calls_inside_park(rest, inside)
+      },
+      _ => calls_inside_park(rest, inside)
+    }
+  }
+}
+
+pure func wake_read_witnesses(rs: [LedgerRecord]) -> int {
+  match rs {
+    [] => 0,
+    r :: rest => (match r { WireRecord(WorldRequest(i)) => if i.request_class == "wake_read" then 1 else 0, _ => 0 }) + wake_read_witnesses(rest)
+  }
+}
+
+pure func world_ordinals(rs: [LedgerRecord]) -> [int] {
+  match rs {
+    [] => [],
+    r :: rest => match r {
+      WireRecord(WorldRequest(i)) => i.ordinal :: world_ordinals(rest),
+      _ => world_ordinals(rest)
+    }
+  }
+}
+
+pure func strictly_plus_one(xs: [int], prev: int) -> bool {
+  match xs {
+    [] => true,
+    x :: rest => x == prev + 1 && strictly_plus_one(rest, x)
+  }
+}
+
+pure func done_output(rs: [LedgerRecord]) -> string {
+  match rs {
+    [] => "",
+    r :: rest => match r {
+      WireRecord(DoneEvent(i)) => i.output,
+      _ => done_output(rest)
+    }
+  }
+}
+
+pure func any_content(ms: [Message], needle: string) -> bool {
+  match ms {
+    [] => false,
+    m :: rest => contains(m.content, needle) || any_content(rest, needle)
+  }
+}
+
+pure func tool_msg_content(ms: [Message], call_id: string) -> string {
+  match ms {
+    [] => "",
+    m :: rest => if m.role == "tool" && m.tool_call_id == call_id then m.content else tool_msg_content(rest, call_id)
+  }
+}
+
+pure func result_ok(t: TracedSessionResult) -> bool {
+  match t.result { Ok(_) => true, Err(_) => false }
+}
+
+pure func result_code(t: TracedSessionResult) -> string {
+  match t.result { Ok(_) => "ok", Err(e) => e.code }
+}
+
+pure func result_message(t: TracedSessionResult) -> string {
+  match t.result { Ok(_) => "", Err(e) => e.message }
+}
+
+pure func is_suspended(t: TracedSessionResult) -> bool {
+  match t.suspended { Some(_) => true, None => false }
+}
+
+pure func kinds(log: [Interaction]) -> [string] {
+  List.map(\i. identity_kind(i.identity.body), log)
+}
+
+pure func providers_before_first_wake(ks: [string], n: int) -> int {
+  match ks {
+    [] => -1,
+    k :: rest => if k == "expect_wake" then n else providers_before_first_wake(rest, if k == "expect_provider" then n + 1 else n)
+  }
+}
+
+pure func wake_projections(log: [Interaction]) -> [string] {
+  match log {
+    [] => [],
+    i :: rest => if identity_kind(i.identity.body) == "expect_wake" then i.request_projection :: wake_projections(rest) else wake_projections(rest)
+  }
+}
+
+pure func attempts_ordered(ps: [string], n: int, head: string) -> bool {
+  match ps {
+    [] => true,
+    p :: rest => contains(p, "attempt=${show(n)} ") && startsWith(p, head) && attempts_ordered(rest, n + 1, head)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- The fixture extension: `Delegate` opens a wait, `DelegateCheck` settles it
+-- ---------------------------------------------------------------------------
+
+pure func arg_str(args: Json, key: string) -> string {
+  match get(args, key) {
+    Some(v) => match asString(v) { Some(s) => s, None => "" },
+    None => ""
+  }
+}
+
+-- The W1b producer's `wait` shapes. `kind: "timer"` is the fixture-only
+-- `TimerWait` (no producer in this plan).
+pure func wait_json(args: Json) -> Json {
+  let id = arg_str(args, "id");
+  if arg_str(args, "kind") == "timer" then jo([kv("id", js(id)), kv("deadline_ms", jnum(60000.0))])
+  else jo([kv("id", js(id)), kv("delegate_kind", js("claude")), kv("locator", jo([kv("pane", js("pane-${id}"))])),
+           kv("answer_path", js("/tmp/w4-${id}.md")), kv("run_key", js("rk-${id}"))])
+}
+
+func w4_provide(ctx: ProviderCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  let id = arg_str(call.arguments, "id");
+  if call.tool == "Delegate" then
+    { decision: Handled({ tool_call_id: call.id, tool: call.tool, exit_code: 0, stdout: "delegated ${id}", stderr: "",
+                          metadata: jo([kv("wait", wait_json(call.arguments))]) }), next_state: ctx.world }
+  else if call.tool == "DelegateCheck" then
+    { decision: Handled({ tool_call_id: call.id, tool: call.tool, exit_code: 0, stdout: "answer from ${id}", stderr: "",
+                          metadata: jo([kv("delegate", js(id)), kv("settled", jb(true))]) }), next_state: ctx.world }
+  else if call.tool == "Verify" then
+    { decision: Handled({ tool_call_id: call.id, tool: call.tool, exit_code: 0, stdout: "verified", stderr: "", metadata: jo([]) }), next_state: ctx.world }
+  else { decision: Delegate, next_state: ctx.world }
+}
+
+func w4_rt(verify_cmd: string) -> ExtRuntime {
+  let hooks = fixture_hooks("w4_park", {
+    config: jo([]),
+    tools: ["Delegate", "DelegateCheck", "Verify"],
+    describe: \_ . [],
+    prompt: func(_ctx: PureCtx) -> PromptPatch { { prepend: [], append: [] } },
+    budget: func(_ctx: PureCtx, _plan: BudgetPlan) -> BudgetPatch {
+      { requested_total: None, requested_solver: None, requested_verifier: None }
+    },
+    compact: func(ctx: AiCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} {
+      { decision: PassThrough, next_state: ctx.world }
+    },
+    policy: \_ctx _call. Allow,
+    provide: w4_provide,
+    intercept: func(ctx: InterceptCtx, _text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
+      { decision: NoIntercept, next_state: ctx.world }
+    },
+    judge: func(ctx: ProcessCtx, _text: string) -> FinalizeOutcome ! {Process} {
+      { decision: NoDecision, next_state: ctx.world }
+    }
+  });
+  let v: VerificationConfig = { enabled: verify_cmd != "", command: verify_cmd };
+  { registry: { entries: [hooks] }, strict_mode: false, verification: v }
+}
+
+-- ---------------------------------------------------------------------------
+-- Worlds, scripts, runs
+-- ---------------------------------------------------------------------------
+
+pure func system_msg() -> Message {
+  { role: "system", content: "park and wake fixture system prefix", tool_calls: [], tool_call_id: "", images: [] }
+}
+
+pure func zero_rates() -> CostRates {
+  { input_per_1m_millicents: 0, output_per_1m_millicents: 0 }
+}
+
+pure func mk_budget() -> BudgetPlan {
+  { total: 10, solver: 10, verifier: 0 }
+}
+
+-- The session id is pinned through the world's environment, so every request id
+-- is `w4.r0.0.p<n>` (the traced entry's default identity, `<session>.r0.0`).
+pure func w4_world(script: [ScriptedStep], wakes: [WakeObservation]) -> WorldState {
+  { empty_world_state() | script: script, wakes: wakes, env: [{ key: "MOTOKO_SESSION_ID", value: "w4" }] }
+}
+
+pure func rid(n: int) -> string { "w4.r0.0.p${show(n)}" }
+
+pure func obs(n: int, wid: string, outcome: WakeOutcome) -> WakeObservation {
+  { request_id: rid(n), wait_id: wid, outcome: outcome }
+}
+
+pure func delegate_call(id: string) -> ToolCall { { id: "cd-${id}", name: "Delegate", arguments: "{\"id\":\"${id}\"}" } }
+pure func timer_call(id: string) -> ToolCall { { id: "cd-${id}", name: "Delegate", arguments: "{\"id\":\"${id}\",\"kind\":\"timer\"}" } }
+pure func check_call(id: string) -> ToolCall { { id: "cc-${id}", name: "DelegateCheck", arguments: "{\"id\":\"${id}\"}" } }
+
+pure func calls_step(calls: [ToolCall]) -> ScriptedStep {
+  { tool_step("Delegate", "{}", "unused") | tool_calls: calls }
+}
+
+pure func delegate_step(id: string) -> ScriptedStep { calls_step([delegate_call(id)]) }
+pure func check_step(id: string) -> ScriptedStep { calls_step([check_call(id)]) }
+pure func verify_step() -> ScriptedStep { calls_step([{ id: "cv-1", name: "Verify", arguments: "{}" }]) }
+
+func run_scripted(label: string, rt: ExtRuntime, w: WorldState, steps: int) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("PARK_RUN_BEGIN ${label}");
+  let t = Session.run_v2_session_traced(rt, "task", "", false, mk_budget(), "phase-c-model",
+    [system_msg()], "/tmp", steps, false, 0, zero_rates(), ScriptedWorld(w));
+  let _ = println("PARK_RUN_END ${label}");
+  t
+}
+
+func run_recorded(label: string, rt: ExtRuntime, w: WorldState, steps: int) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("PARK_RUN_BEGIN ${label}");
+  let t = Session.run_v2_session_traced(rt, "task", "", false, mk_budget(), "phase-c-model",
+    [system_msg()], "/tmp", steps, false, 0, zero_rates(), RecordingWorld(w));
+  let _ = println("PARK_RUN_END ${label}");
+  t
+}
+
+pure func success_script() -> [ScriptedStep] {
+  [delegate_step("h1"), prose_step("delegated h1; waiting"), check_step("h1"), prose_step("final answer")]
+}
+
+pure func success_wakes() -> [WakeObservation] {
+  [obs(0, "h1", Settled("the answer"))]
+}
+
+-- ---------------------------------------------------------------------------
+-- Fixtures
+-- ---------------------------------------------------------------------------
+
+func fixture_success() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("success (Settled) + Part 7 trace channel:");
+  let t = run_scripted("success", w4_rt(""), w4_world(success_script(), success_wakes()), 12);
+  let rs = t.trace.records;
+  let vs = variants(rs);
+  let ps = park_rows(rs);
+  let ws = wake_rows(rs);
+  let pcp = count_of("ProviderCallPrepared", vs);
+  let inside = calls_inside_park(rs, false);
+  let _ = println("METRIC trace provider_call_prepared=${show(pcp)} inside_park=${show(inside)}");
+  all_true([
+    report("success: the run ends Ok", result_ok(t), "result=${result_code(t)} ${result_message(t)}"),
+    report("success: one ParkEntered, `${rid(0)}` on [h1]", List.length(ps) == 1 && park_at(ps, 0).request_id == rid(0) && park_at(ps, 0).ids == "h1", "parks=${parks_str(ps)}"),
+    report("success: one WakeReceived, settled on h1", List.length(ws) == 1 && wake_at(ws, 0).outcome == "settled" && wake_at(ws, 0).wait_id == "h1", "wakes=${wakes_str(ws)}"),
+    report("success: the final answer is the DoneEvent's", done_output(rs) == "final answer", "done=${done_output(rs)}"),
+    report("success: the wake message told the model to call DelegateCheck once", any_content(t.final.history, "call `DelegateCheck` once"), "no loop-authored Settled message in the history"),
+    report("success: no park payload finding", List.length(park_payload_findings(t.trace)) == 0, "${show(List.length(park_payload_findings(t.trace)))} finding(s)"),
+    report("success: the wakes cursor is consumed", List.length(t.world.wakes) == 0, "wakes left=${show(List.length(t.world.wakes))}"),
+    report("metric (trace): exactly 4 ProviderCallPrepared", pcp == 4, "provider_call_prepared=${show(pcp)} order=${pipe(vs)}"),
+    report("metric (trace): zero ProviderCallPrepared between ParkEntered and WakeReceived", inside == 0, "inside=${show(inside)}")
+  ])
+}
+
+func fixture_metric_program() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("Part 7 program channel:");
+  let t = run_recorded("metric_program", w4_rt(""), w4_world(success_script(), success_wakes()), 12);
+  let ks = kinds(t.world.log);
+  let np = count_of("expect_provider", ks);
+  let nw = count_of("expect_wake", ks);
+  let before = providers_before_first_wake(ks, 0);
+  let _ = println("METRIC program provider_identity=${show(np)} wake_identity=${show(nw)} providers_before_wake=${show(before)}");
+  all_true([
+    report("metric (program): exactly 4 ProviderIdentity interactions", np == 4, "provider=${show(np)}"),
+    report("metric (program): exactly one WakeIdentity interaction", nw == 1, "wake=${show(nw)}"),
+    report("metric (program): the WakeIdentity sits between the 2nd and 3rd ProviderIdentity", before == 2 && np >= 3, "providers before the wake=${show(before)}")
+  ])
+}
+
+func fixture_metric_verified() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("Part 7 verified variant (reported separately):");
+  let script = [delegate_step("h1"), prose_step("delegated h1; waiting"), check_step("h1"), verify_step(), prose_step("verified final answer")];
+  let t = run_scripted("metric_verified", w4_rt(""), w4_world(script, success_wakes()), 12);
+  let r = run_recorded("metric_verified_program", w4_rt(""), w4_world(script, success_wakes()), 12);
+  let pcp = count_of("ProviderCallPrepared", variants(t.trace.records));
+  let np = count_of("expect_provider", kinds(r.world.log));
+  let _ = println("METRIC verified trace_provider_call_prepared=${show(pcp)} program_provider_identity=${show(np)}");
+  all_true([
+    report("metric verified (trace): at least 5 ProviderCallPrepared", pcp >= 5 && result_ok(t), "provider_call_prepared=${show(pcp)} result=${result_code(t)}"),
+    report("metric verified (program): at least 5 ProviderIdentity", np >= 5 && result_ok(r), "provider=${show(np)}")
+  ])
+}
+
+func fixture_lost() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("Lost:");
+  let t = run_scripted("lost", w4_rt(""), w4_world(success_script(), [obs(0, "h1", Lost("agent gone"))]), 12);
+  let ws = wake_rows(t.trace.records);
+  all_true([
+    report("lost: WakeReceived lost on h1", List.length(ws) == 1 && wake_at(ws, 0).outcome == "lost" && wake_at(ws, 0).wait_id == "h1" && wake_at(ws, 0).detail == "agent gone", "wakes=${wakes_str(ws)}"),
+    report("lost: the model is told the wait was lost", any_content(t.final.history, "was lost (agent gone)"), "no Lost message"),
+    report("lost: the run ends Ok after DelegateCheck", result_ok(t), "result=${result_code(t)}")
+  ])
+}
+
+func fixture_operator_input() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("OperatorInput leaves the delegate pending:");
+  let script = [delegate_step("h1"), prose_step("waiting"), prose_step("still waiting on h1"), check_step("h1"), prose_step("final answer")];
+  let t = run_scripted("operator_input", w4_rt(""), w4_world(script, [obs(0, "", OperatorInput("status please")), obs(1, "h1", Settled("ans"))]), 14);
+  let ps = park_rows(t.trace.records);
+  let ws = wake_rows(t.trace.records);
+  all_true([
+    report("operator_input: the first wake is the operator's", wake_at(ws, 0).outcome == "operator_input" && wake_at(ws, 0).detail == "status please", "wakes=${wakes_str(ws)}"),
+    report("operator_input: the second park still waits on h1", List.length(ps) == 2 && park_at(ps, 1).request_id == rid(1) && park_at(ps, 1).ids == "h1", "parks=${parks_str(ps)}"),
+    report("operator_input: the operator's text reached the model, loop-tagged", any_content(t.final.history, "The operator's message:\nstatus please"), "no operator wake message"),
+    report("operator_input: the run ends Ok", result_ok(t), "result=${result_code(t)}")
+  ])
+}
+
+func fixture_two_delegates() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("two delegates, one wake:");
+  let script = [calls_step([delegate_call("h1"), delegate_call("h2")]), prose_step("waiting on both"), check_step("h1"),
+                prose_step("waiting on h2"), check_step("h2"), prose_step("final answer")];
+  let t = run_scripted("two_delegates", w4_rt(""), w4_world(script, [obs(0, "h1", Settled("a1")), obs(1, "h2", Settled("a2"))]), 16);
+  let ps = park_rows(t.trace.records);
+  all_true([
+    report("two_delegates: the first park waits on both, in order", park_at(ps, 0).ids == "h1, h2", "parks=${parks_str(ps)}"),
+    report("two_delegates: one wake settles h1 and h2 stays open", List.length(ps) == 2 && park_at(ps, 1).ids == "h2", "parks=${parks_str(ps)}"),
+    report("two_delegates: the run ends Ok", result_ok(t), "result=${result_code(t)}")
+  ])
+}
+
+func fixture_host_error() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("HostError leaves the wait open, then a second park succeeds:");
+  let script = [delegate_step("h1"), prose_step("waiting"), prose_step("waiting again"), check_step("h1"), prose_step("final answer")];
+  let t = run_scripted("host_error", w4_rt(""), w4_world(script, [obs(0, "", HostError("herdr unreachable")), obs(1, "h1", Settled("ans"))]), 14);
+  let rs = t.trace.records;
+  let ps = park_rows(rs);
+  let ws = wake_rows(rs);
+  let ords = world_ordinals(rs);
+  all_true([
+    report("host_error: the first wake is HostError, not Lost", wake_at(ws, 0).outcome == "host_error", "wakes=${wakes_str(ws)}"),
+    report("host_error: the wait stays open into the second park", List.length(ps) == 2 && park_at(ps, 1).ids == "h1", "parks=${parks_str(ps)}"),
+    report("host_error: the second park succeeds", wake_at(ws, 1).outcome == "settled" && wake_at(ws, 1).request_id == rid(1), "wakes=${wakes_str(ws)}"),
+    report("host_error: the run ends Ok", result_ok(t), "result=${result_code(t)}"),
+    -- STALE WORLD control, on this two-park run: each wake read is witnessed
+    -- once, the ordinals are strictly +1 across the run, and the second park
+    -- does not re-read the first wake (a whole-record drop would re-serve it).
+    report("stale world: one wake_read witness per wake read (2)", wake_read_witnesses(rs) == 2, "wake_read witnesses=${show(wake_read_witnesses(rs))}"),
+    report("stale world: world ordinals strictly +1 across both parks", strictly_plus_one(ords, 0), "ordinals are not strictly +1 from 1"),
+    report("stale world: the second park does not re-read the consumed wake", wake_at(ws, 1).outcome != wake_at(ws, 0).outcome && List.length(t.world.wakes) == 0, "wakes=${wakes_str(ws)} left=${show(List.length(t.world.wakes))}")
+  ])
+}
+
+func fixture_timed_out() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("TimedOut removes only the timer (TimerWait constructed by the fixture; no producer):");
+  let script = [calls_step([delegate_call("h1"), timer_call("t1")]), prose_step("waiting"), prose_step("waiting on h1"), check_step("h1"), prose_step("final answer")];
+  let t = run_scripted("timed_out", w4_rt(""), w4_world(script, [obs(0, "t1", TimedOut), obs(1, "h1", Settled("ans"))]), 14);
+  let ps = park_rows(t.trace.records);
+  all_true([
+    report("timed_out: the first park waits on the delegate and the timer", park_at(ps, 0).ids == "h1, t1", "parks=${parks_str(ps)}"),
+    report("timed_out: only the timer is removed", List.length(ps) == 2 && park_at(ps, 1).ids == "h1", "parks=${parks_str(ps)}"),
+    report("timed_out: the run ends Ok", result_ok(t), "result=${result_code(t)}")
+  ])
+}
+
+func fixture_redelegation() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("re-delegation: the model is told both are open:");
+  let script = [delegate_step("h1"), delegate_step("h2"), prose_step("waiting on both"), check_step("h1"),
+                prose_step("waiting on h2"), check_step("h2"), prose_step("final answer")];
+  let t = run_scripted("redelegation", w4_rt(""), w4_world(script, [obs(0, "h1", Settled("a1")), obs(1, "h2", Settled("a2"))]), 16);
+  let second = tool_msg_content(t.final.history, "cd-h2");
+  let first = tool_msg_content(t.final.history, "cd-h1");
+  let _ = println("BOTH_OPEN ${second}");
+  all_true([
+    report("redelegation: the second Delegate's result names every open wait", contains(second, "2 waits are open: h1, h2"), "cd-h2 content=${second}"),
+    report("redelegation: the sentence is loop-authored", contains(second, "[motoko loop]"), "cd-h2 content=${second}"),
+    report("redelegation: the first Delegate's result, with one wait open, is untouched", not contains(first, "waits are open"), "cd-h1 content=${first}"),
+    report("redelegation: the run ends Ok", result_ok(t), "result=${result_code(t)}")
+  ])
+}
+
+func fixture_mid_park_commands() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("mid-park commands (§8.7): abort and restart:");
+  let script = [delegate_step("h1"), prose_step("waiting")];
+  let a = run_scripted("abort", w4_rt(""), w4_world(script, [obs(0, "abort", Aborted)]), 12);
+  let _ = println("PARK_RUN_BEGIN abort_exit");
+  let _ = Session.park_cancelled_exit("w4", result_message(a));
+  let _ = println("PARK_RUN_END abort_exit");
+  let r = run_scripted("restart", w4_rt(""), w4_world(script, [obs(0, "restart:dogfood", Aborted)]), 12);
+  let _ = println("PARK_RUN_BEGIN restart_exit");
+  let _ = Session.park_cancelled_exit("w4", result_message(r));
+  let _ = println("PARK_RUN_END restart_exit");
+  let avs = variants(a.trace.records);
+  let aws = wake_rows(a.trace.records);
+  let rws = wake_rows(r.trace.records);
+  all_true([
+    report("abort: the run ends Err(ParkCancelled) with message abort", result_code(a) == "ParkCancelled" && result_message(a) == "abort", "result=${result_code(a)} ${result_message(a)}"),
+    report("abort: WakeReceived(aborted) carries the command, recorded before the exit", wake_at(aws, 0).outcome == "aborted" && wake_at(aws, 0).wait_id == "abort", "wakes=${wakes_str(aws)}"),
+    report("abort: no DoneEvent and no ErrorEvent; RunSummary closes the trace", count_of("DoneEvent", avs) == 0 && count_of("ErrorEvent", avs) == 0 && last_of(avs) == "RunSummary", "order=${pipe(avs)}"),
+    report("abort: not a suspension", not is_suspended(a), "suspended"),
+    report("restart: the run ends Err(ParkCancelled) with message restart:dogfood", result_code(r) == "ParkCancelled" && result_message(r) == "restart:dogfood", "result=${result_code(r)} ${result_message(r)}"),
+    report("restart: WakeReceived(aborted) carries restart:dogfood", wake_at(rws, 0).outcome == "aborted" && wake_at(rws, 0).wait_id == "restart:dogfood", "wakes=${wakes_str(rws)}"),
+    report("mid-park: no park payload finding on either run", List.length(park_payload_findings(a.trace)) == 0 && List.length(park_payload_findings(r.trace)) == 0, "findings")
+  ])
+}
+
+func fixture_wrong_handle() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("control: wrong handle (the re-issue bound):");
+  let bad: WakeObservation = { request_id: "w4.r0.0.p9", wait_id: "h1", outcome: Settled("not yours") };
+  let script = [delegate_step("h1"), prose_step("waiting")];
+  let t = run_recorded("wrong_handle", w4_rt(""), w4_world(script, [bad, bad, bad, bad, bad, bad, bad, bad, bad, bad, bad, bad]), 6);
+  let rs = t.trace.records;
+  let ds = decisions(rs);
+  let vs = variants(rs);
+  let k = count_of("Park", ds);
+  let projections = wake_projections(t.world.log);
+  let head = "wake_read request_id=${rid(0)} step=${show(park_at(park_rows(rs), 0).step)} ";
+  let _ = println("PARK_DROPS wrong_handle ${show(k)}");
+  all_true([
+    report("wrong_handle: the run is suspended, not failed, and its last decision is Fail", is_suspended(t) && last_of(ds) == "Fail" && count_of("RunSuspended", vs) == 1, "suspended=${if is_suspended(t) then "yes" else "no"} decisions=${pipe(ds)}"),
+    report("wrong_handle: the bound held after at least two issues", k >= 2, "Park decisions=${show(k)}"),
+    report("wrong_handle: exactly one ParkEntered", count_of("ParkEntered", vs) == 1, "order=${pipe(vs)}"),
+    report("wrong_handle: no WakeReceived", count_of("WakeReceived", vs) == 0, "order=${pipe(vs)}"),
+    report("wrong_handle: attempt ordinals 0..${show(k - 1)} with request_id and step equal across them", List.length(projections) == k && attempts_ordered(projections, 0, head), "projections=${join(projections)}")
+  ])
+}
+
+func fixture_duplicate_wake() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("control: duplicate or late wake:");
+  let script = [delegate_step("h1"), prose_step("waiting"), check_step("h1"), delegate_step("h2"), prose_step("waiting on h2"), check_step("h2"), prose_step("final answer")];
+  let wakes = [obs(0, "h1", Settled("a1")), obs(0, "h1", Settled("a1 again")), obs(1, "h2", Settled("a2"))];
+  let t = run_scripted("duplicate_wake", w4_rt(""), w4_world(script, wakes), 16);
+  let rs = t.trace.records;
+  let ds = decisions(rs);
+  let ws = wake_rows(rs);
+  let _ = println("PARK_DROPS duplicate_wake ${show(count_of("Park", ds) - 2)}");
+  all_true([
+    report("duplicate_wake: the late p0 reply is dropped at p1 and re-issued once", count_of("Park", ds) == 3 && List.length(park_rows(rs)) == 2, "decisions=${pipe(ds)}"),
+    report("duplicate_wake: only the two matching wakes are applied", List.length(ws) == 2 && wake_at(ws, 1).request_id == rid(1) && wake_at(ws, 1).wait_id == "h2", "wakes=${wakes_str(ws)}"),
+    report("duplicate_wake: the run ends Ok", result_ok(t), "result=${result_code(t)}")
+  ])
+}
+
+func fixture_missing_wake() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("control: missing wake:");
+  let t = run_scripted("missing_wake", w4_rt(""), w4_world([delegate_step("h1"), prose_step("waiting")], []), 6);
+  let ws = wake_rows(t.trace.records);
+  all_true([
+    report("missing_wake: the FIRST wake is HostError(\"wake_read unbound\") on p0, at the exhaustion point", wake_at(ws, 0).request_id == rid(0) && wake_at(ws, 0).outcome == "host_error" && wake_at(ws, 0).detail == "wake_read unbound" && wake_at(ws, 0).wait_id == "", "wakes=${wakes_str(ws)}")
+  ])
+}
+
+func fixture_empty_stop() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("control: empty stop with open waits:");
+  let script = [delegate_step("h1"), prose_step(""), check_step("h1"), prose_step("final answer")];
+  let t = run_scripted("empty_stop", w4_rt(""), w4_world(script, success_wakes()), 12);
+  let rs = t.trace.records;
+  let vs = variants(rs);
+  let ds = decisions(rs);
+  all_true([
+    report("empty_stop: the blank candidate parks", index_of("Park", ds, 0) >= 0 && count_of("ParkEntered", vs) == 1, "decisions=${pipe(ds)}"),
+    report("empty_stop: no empty-stop finalize while the wait is open", index_of("EmptyStopFinalize", vs, 0) < 0 || index_of("EmptyStopFinalize", vs, 0) > index_of("WakeReceived", vs, 0), "order=${pipe(vs)}"),
+    report("empty_stop: the run ends Ok with the final answer", result_ok(t) && done_output(rs) == "final answer", "result=${result_code(t)} done=${done_output(rs)}")
+  ])
+}
+
+func fixture_dp7_rejected() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("control: the DP7-rejected candidate with open waits:");
+  let t = run_scripted("dp7_rejected", w4_rt("exit 3"), w4_world([delegate_step("h1"), prose_step("done, h1 is running")], success_wakes()), 5);
+  let rs = t.trace.records;
+  let vs = variants(rs);
+  let ds = decisions(rs);
+  let inject = index_of("InjectUserMessage", ds, 0);
+  let park = index_of("Park", ds, 0);
+  all_true([
+    report("dp7_rejected: the verifier rejected the candidate while h1 was open", count_of("Dp7VerifierRejected", vs) >= 1, "order=${pipe(vs)}"),
+    report("dp7_rejected: stage 2 wins over stage 3, the rejection injects before any park", inject >= 0 && (park < 0 || inject < park), "decisions=${pipe(ds)}"),
+    report("dp7_rejected: no ParkEntered precedes the first rejection", index_of("ParkEntered", vs, 0) < 0 || index_of("ParkEntered", vs, 0) > index_of("Dp7VerifierRejected", vs, 0), "order=${pipe(vs)}")
+  ])
+}
+
+func fixture_determinism() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("determinism: two runs from one script:");
+  let a = run_scripted("determinism_a", w4_rt(""), w4_world(success_script(), success_wakes()), 12);
+  let b = run_scripted("determinism_b", w4_rt(""), w4_world(success_script(), success_wakes()), 12);
+  all_true([
+    report("determinism: identical record order", pipe(variants(a.trace.records)) == pipe(variants(b.trace.records)) && pipe(decisions(a.trace.records)) == pipe(decisions(b.trace.records)), "a=${pipe(variants(a.trace.records))}"),
+    report("determinism: identical parks and wakes", parks_str(park_rows(a.trace.records)) == parks_str(park_rows(b.trace.records)) && wakes_str(wake_rows(a.trace.records)) == wakes_str(wake_rows(b.trace.records)), "parks/wakes differ"),
+    report("determinism: identical final world ordinal", a.world.ordinal == b.world.ordinal, "${show(a.world.ordinal)} vs ${show(b.world.ordinal)}")
+  ])
+}
+
+pure func w4_manifest() -> ExecutionManifest {
+  driver_only_manifest("HEAD", "ailang 0.33.0", "8.0", "{}", ["ai_step", "env_get", "tool_handle"], ["clock_now"], "HEAD")
+}
+
+pure func program_of(log: [Interaction], initial: WorldState) -> ExecutionProgram {
+  {
+    schema_version: program_schema_version(),
+    generator_id: "hand_authored_park_wake",
+    generator_version: "1",
+    seed: 0,
+    initial_world: {
+      messages_and_policy: "{\"messages\":[\"system\"],\"policy\":\"park_wake\"}",
+      synthetic_environment: initial.env,
+      files: [],
+      clock_epoch: initial.clock_ms,
+      extension_profile: "driver_only/${driver_only_version()}"
+    },
+    bounds: {
+      max_interactions: 256,
+      max_chunks_per_interaction: 16,
+      max_payload_bytes: 4096,
+      max_resource_size: 4096,
+      max_clock_advance_ms: 60000,
+      chunk_draw_hi: 3
+    },
+    manifest: w4_manifest(),
+    interactions: log
+  }
+}
+
+func fixture_saved_program_replay() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("saved-program replay through recording_wake:");
+  let initial = w4_world(success_script(), success_wakes());
+  let discovery = run_recorded("replay_discovery", w4_rt(""), initial, 12);
+  let program = program_of(discovery.world.log, initial);
+  let saved = match encode_artifact(program) { Encoded(s) => s, EncodeRefused(_) => "" };
+  match decode_artifact(saved) {
+    ProgramDecodeRefused(_) => report("replay: the saved program decodes", false, "encoded=${show(saved != "")} and the decode refused"),
+    ProgramDecoded(loaded) =>
+      match world_state_of(loaded, required_class_ids()) {
+        Err(_) => report("replay: the saved program reconstitutes a world", false, "world_state_of refused"),
+        Ok(replay_world) => {
+          let balance = reconstitution_balance(loaded, replay_world);
+          let replay = run_recorded("replay_replayed", w4_rt(""), replay_world, 12);
+          let ms = strict_replay_findings(loaded.interactions, replay.world.log);
+          let ws = wake_rows(replay.trace.records);
+          all_true([
+            report("replay: the saved program round-trips with its one wake interaction", count_of("expect_wake", kinds(loaded.interactions)) == 1, "kinds=${join(kinds(loaded.interactions))}"),
+            report("replay: the reconstituted world balances, wakes queue included", List.length(balance) == 0 && List.length(replay_world.wakes) == 1, "findings=${show(List.length(balance))} wakes=${show(List.length(replay_world.wakes))}"),
+            report("replay: the replay reproduces the program exactly", List.length(ms) == 0, "${show(List.length(ms))} mismatch(es)"),
+            report("replay: the replayed run applies the same wake and ends Ok", result_ok(replay) && wakes_str(ws) == wakes_str(wake_rows(discovery.trace.records)), "wakes=${wakes_str(ws)}")
+          ])
+        }
+      }
+  }
+}
+
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("=== park_wake_dst (PLAN-002 W4 Parts 6-7) ===");
+  let results = [
+    fixture_success(),
+    fixture_metric_program(),
+    fixture_metric_verified(),
+    fixture_lost(),
+    fixture_operator_input(),
+    fixture_two_delegates(),
+    fixture_host_error(),
+    fixture_timed_out(),
+    fixture_redelegation(),
+    fixture_mid_park_commands(),
+    fixture_wrong_handle(),
+    fixture_duplicate_wake(),
+    fixture_missing_wake(),
+    fixture_empty_stop(),
+    fixture_dp7_rejected(),
+    fixture_determinism(),
+    fixture_saved_program_replay()
+  ];
+  let _ = println("PARK_WAKE_FIXTURES ${show(List.length(results))}");
+  if all_true(results) then println("park_wake_dst PASS")
+  else {
+    let _ = println("park_wake_dst FAIL");
+    exit(1)
+  }
+}

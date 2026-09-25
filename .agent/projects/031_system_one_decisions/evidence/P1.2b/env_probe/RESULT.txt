@@ -1,0 +1,22 @@
+ABI at eebc4d13; AILANG v0.33.0
+a_policy_reads_env: ailang check exit 1
+✗ 1 files checked: 0 passed, 1 failed
+Errors:
+  • a_policy_reads_env.ail: effect checking failed in a_policy_reads_env: Effect checking failed for function 'policy'
+  Function uses effects not declared in signature
+  Missing effects: Env
+  Current signature: func policy(...) -> T
+a2_policy_declares_env: ailang check exit 1
+✗ 1 files checked: 0 passed, 1 failed
+Errors:
+  • a2_policy_declares_env.ail: type error in a2_policy_declares_env (decl 1): type unification failed at [function application at a2_policy_declares_env.ail:8:49]: failed to unify parameter 0: failed to unify effect rows: incompatible closed rows: r1 has extra labels [], r2 has extra labels [Env]
+b_judge_reads_env: ailang check exit 1
+✗ 1 files checked: 0 passed, 1 failed
+Errors:
+  • b_judge_reads_env.ail: effect checking failed in b_judge_reads_env: Effect checking failed for function 'finalize'
+  Function uses effects not declared in signature
+  Missing effects: Env
+  Current signature: func finalize(...) -> T ! {Process}
+c_policy_reads_config: ailang check exit 0
+  ✓ c_policy_reads_config.ail
+✓ 1 files checked, all passed!

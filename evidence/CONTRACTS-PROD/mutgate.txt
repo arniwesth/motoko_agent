@@ -1,0 +1,21 @@
+mutgate: baseline
+  ✓ verify_classify_check green (exit 0)
+  ✓ new_contract_policy: 83 of 109 unjustified (the held scaffolding; exit 2)
+  ✓ compare_bytes is NOT among them (its excuse is accepted)
+mutgate: M1 -- weaken capability_purity_basis's contract to `ensures { true }`
+  ✓ verify_classify_check RED (exit 2)
+  ✓ and it names capability_purity_basis
+mutgate: M2 -- delete compare_bytes's `-- contracts:` excuse line
+  ✓ new_contract_policy: 84 of 109 -- one more than baseline (exit 2)
+  ✓ and compare_bytes is now among them
+mutgate: baseline profile_coverage
+  ✓ profile_coverage green (exit 0)
+  ✓ and it reports the pinned skip set
+mutgate: M3 -- add a THIRD skipped property (a contract on capability_kind_id)
+  ✓ profile_coverage RED on a third skip (exit 2)
+  ✓ and it names the new skip in got:
+mutgate: M4 -- SAME count, DIFFERENT identity (move purity_name's contract)
+  ✓ the skip COUNT is still 2 (a count-based pin would pass)
+  ✓ profile_coverage RED anyway -- the pin is on IDENTITY (exit 2)
+  ✓ and it names the property that went quiet
+mutgate: 14 passed, 0 failed

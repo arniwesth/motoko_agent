@@ -1,0 +1,14 @@
+-- PLAN-001 (031) P0.2b. Reconstructed from shape, not quoted source.
+-- Review 5 (REVIEW-adr001-v0.5-verdicts-claude-fable-5-1.md) §A.3 table row, verbatim:
+-- | `q_dec_prepare_named_ok` | control: named `prepare` at the real arity, pure | 0 | 0 | `q=1` |
+module scripts/dst/fixtures/adr001_boundary/reconstructed/q_dec_prepare_named_ok
+import std/io (println)
+import scripts/dst/fixtures/adr001_boundary/types (PureCtx)
+import scripts/dst/fixtures/adr001_boundary/reconstructed/judge_types (Prep, Immediate, Query, Judge, DJ)
+func prepare(ctx: PureCtx, cand: string) -> Prep { Query(1) }
+func build() -> Judge { DJ(prepare) }
+func invoke(j: Judge, ctx: PureCtx, cand: string) -> Prep { match j { DJ(f) => f(ctx, cand) } }
+export func main() -> () ! {IO} {
+  let r = invoke(build(), {name: "pure-ctx"}, "secret candidate text");
+  match r { Immediate(n) => println("result=${show(n)}"), Query(n) => println("q=${show(n)}") }
+}

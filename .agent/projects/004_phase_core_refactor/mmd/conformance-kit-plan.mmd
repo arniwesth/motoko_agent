@@ -1,0 +1,87 @@
+flowchart TB
+  %% Plan 1 · Conformance kit (motoko_ext_conformance) — PLANNED implementation.
+  %% Grounded at HEAD 44a4c6e against PLAN-conformance-kit.md (2026-07-07).
+  %% Legend: green = artifact to BUILD; gray = frozen by Plan 2; purple = core file edited;
+  %% teal = scenario; red-dashed = reject fixture; blue = gate outcome; amber-dashed = decision.
+
+  subgraph DEC["Inherited decisions (operator sign-off)"]
+    dA["A · law moves to invariants.ail (ABI Msg)<br/>core imports it back"]:::decision
+    dB["B · decompose into 3 named predicates<br/>+ message-preserving wrapper"]:::decision
+    dC["C-i · reject fixtures in-kit, exported<br/>never in registry [extensions]"]:::decision
+    dD["D · hook-driving caps = IO (measured)"]:::decision
+  end
+
+  subgraph FROZEN["Frozen by Plan 2 — packages/ (do not touch)"]
+    abi["motoko-ext-abi @ 3.0<br/>Msg · ExtCtx ports/artifacts/telemetry<br/>Compacted(msgs, note, artifacts)"]:::frozen
+    ai["compaction_ai @ 0.3.0 — ACCEPT<br/>ports-native · artifact cache · pairing-safe"]:::frozen
+    struct["compaction_structural @ 1.1.0 — ACCEPT<br/>pure bundled default"]:::frozen
+  end
+
+  subgraph LAWMOVE["Decision A/B — the law's canonical home"]
+    pv["src/core/phase_vocab.ail<br/>validate_compactor_output REMOVED<br/>checkpoint/ledger vocab stays"]:::core
+    rt["src/core/ext/runtime.ail<br/>import repointed to invariants<br/>gate call at :170 unchanged"]:::core
+  end
+
+  subgraph KIT["packages/motoko_ext_conformance · ABI-ONLY package (new)"]
+    inv["invariants.ail — pure, zero-cap<br/>no_system_in_output · pairing_preserved<br/>ids_preserved · validate_compactor_output<br/>conformance_abi_version()"]:::new
+    harn["harness.ail — LIBRARY, no main<br/>run_conformance / run_scenario<br/>ctx builder · canned + poison fake ports"]:::new
+    fix["fixtures/reject_fixtures.ail (exported)<br/>reject_prefix · reject_pair · reject_nocache"]:::reject
+  end
+
+  subgraph SCN["Four scenarios — asserted over hook output"]
+    s1["system_prefix_preserved<br/>asserts no_system_in_output"]:::scn
+    s2["tool_pairing_preserved<br/>asserts pairing and ids preserved"]:::scn
+    s3["deterministic_replay<br/>two runs, same_msgs"]:::scn
+    s4["artifact_cache_effective<br/>run2 poison-fake equals run1"]:::scn
+  end
+
+  subgraph SCRIPTS["Root scripts (new) — resolve against root ailang.toml"]
+    self["scripts/conformance_selftest.ail<br/>main · fail-then-pass"]:::new
+    probe["scripts/conformance_registry_probe.ail<br/>parse_core_ext_order then run_conformance"]:::new
+  end
+
+  reg["src/core/ext/registry_generated.ail<br/>parse_core_ext_order (exported)"]:::file
+
+  subgraph GATES["Gate class: registry / conformance (hydration required)"]
+    gself["SELF-TEST GATE — caps IO,Env,FS<br/>reject_* FAIL by invariant name<br/>0.3.0 and structural PASS all 4 + live"]:::gate
+    gprobe["REGISTRY GATE — caps IO,Env,FS<br/>every registry_generated package<br/>non-compactors pass vacuously"]:::gate
+  end
+
+  %% decisions drive artifacts
+  dA --> inv
+  dB --> inv
+  dC --> fix
+  dD --> harn
+
+  %% law move + acyclic dep direction (core to invariants to ABI)
+  pv == "extract + retype on ABI Msg" ==> inv
+  inv -- "core imports back" --> rt
+  abi --> inv
+
+  %% package wiring
+  inv --> harn
+  harn --> s1
+  harn --> s2
+  harn --> s3
+  harn --> s4
+
+  %% self-test (fail-then-pass)
+  harn --> self
+  fix -- "must FAIL" --> self
+  ai -- "must PASS" --> self
+  struct -- "must PASS" --> self
+  self --> gself
+
+  %% registry probe
+  harn --> probe
+  reg --> probe
+  probe --> gprobe
+
+  classDef decision fill:#3a3018,stroke:#d29922,color:#f2e0b8,stroke-dasharray:6 4;
+  classDef frozen fill:#262a30,stroke:#9aa4b0,color:#d6dbe2;
+  classDef new fill:#143d24,stroke:#56d364,color:#c6f0cf,stroke-width:2.5px;
+  classDef core fill:#2f2145,stroke:#bb9af7,color:#e5d5fb;
+  classDef file fill:#1e2a4a,stroke:#7aa2f7,color:#c8d3f5;
+  classDef scn fill:#12323a,stroke:#39c5cf,color:#c5f6fb;
+  classDef reject fill:#322329,stroke:#f7768e,color:#ffd0d8,stroke-dasharray:5 5;
+  classDef gate fill:#16294d,stroke:#7aa2f7,color:#cdd9f5,stroke-width:2px;

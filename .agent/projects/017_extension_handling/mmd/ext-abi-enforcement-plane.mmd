@@ -1,0 +1,75 @@
+flowchart TB
+  %% ADR-001 (017) — the ENFORCEMENT PLANE: what the compiler enforces vs what the derivation
+  %% tooling enforces, and what 6.0 requires the tooling to learn. Answers Q3 (rows in
+  %% constructor-argument position: NOT enforced — measured), Q1 (coverage unit), Q4 (witness /
+  %% hook_scope parser gap). Colour = status: green checker rejects / tool works · red-dashed the
+  %% measured hole · blue measured fact · purple tooling that must be re-taught before 6.0 ·
+  %% amber where enforcement actually lives.
+  %% Grounded 2026-08-26 at 366193c (2026-08-24). Q3 matrix: delegate mot-dlg-1787599891172
+  %% (7 files, ailang run --caps IO,Env). Q1: dst_profile_coverage.ail:246-256 slot_accounting,
+  %% check_no_op_profile.py:197-224. Q4: hook_scope.py:70 IDENT, locate():508-537; types.ail:964-993.
+
+  subgraph Q3["Q3 · closed effect rows — where the compiler enforces and where it does not (measured, 7-file mutation matrix)"]
+    direction TB
+    named["named_violation.ail — positive control<br/>top-level func declared ! {IO} performing {IO, Env}<br/><b>REJECTED: Missing effects: Env</b>"]:::green
+    outer["ctor_violation_narrow_outer.ail<br/>REJECTED — but for the ENCLOSING function's row (build),<br/>never for the payload row"]:::green
+    ctor["ctor_violation.ail — lambda in constructor-argument position<br/>performs {IO, Env} against payload row ! {IO}<br/><b>checks GREEN — the hole</b>"]:::hole
+    recf["record_violation.ail — same lambda in record-field position<br/><b>checks GREEN — WI-B4 reproduced</b>"]:::hole
+    namedp["ctor_named_payload.ail / record_named_payload.ail<br/>named func DECLARED ! {IO, Env} handed to a ! {IO} slot<br/><b>both GREEN — function-type rows are never compared on flow into a slot</b>"]:::hole
+    run["runtime: ailang run --caps IO,Env --entry main<br/>prints the undeclared Env value through the {IO}-row slot<br/>for all three green violators"]:::fact
+    ctor --> run
+    recf --> run
+    namedp --> run
+  end
+
+  verdict["<b>Measured:</b> a closed row on a constructor payload (or record field) bounds NOTHING handed to it.<br/>The only compiler gate is the row of the enclosing registration function — which a rowless or wide<br/>register_with_config defeats via a separately-declared named function.<br/>§3.3's 'per-slot compiler enforcement is untouched' is FALSE as an enforcement claim."]:::fact
+  Q3 --> verdict
+
+  subgraph PLANE["Therefore the enforcement plane IS the body-reading derivation tooling"]
+    direction TB
+    c3["classifier 3 — transitive closure of PERFORMED<br/>effects per binding (ext_ambient_inventory)"]:::plane
+    dvp["make declared_vs_performed — ABI row vs<br/>runtime capability trap (two producers)"]:::plane
+    must["before 6.0 ships: walk INTO constructor arguments and<br/>resolve referenced named functions to their transitive effect set<br/>(hardens §4.3 from precondition into the enforcement plane itself)"]:::todo
+    c3 --> must
+    dvp --> must
+  end
+  verdict --> PLANE
+
+  subgraph Q1["Q1 · the coverage unit — 'slot' does not survive"]
+    direction TB
+    today["today: slot-indexed and closed<br/>slot_accounting iterates all_hook_slots(), demands<br/>count(covered) + count(excluded) == 1 per slot<br/>(dst_profile_coverage.ail:246-256)<br/>works only because the record guarantees one binding per slot"]:::fact
+    bar5["barrier count at HEAD = |{slots : unconditional ∧ rowed}| = 3<br/>on_pre_step · on_response_intercept · on_solver_candidate<br/>uniform across extensions"]:::fact
+    unit["6.0 unit = (extension, capability-atom)<br/>one element of the returned list, keyed by constructor + position<br/>barriers per extension, data-dependent:<br/>|{atoms returned by e : kind(atom) unconditional ∧ rowed}|<br/>no atom of a kind → zero barriers on that kind by construction"]:::todo
+    exh["exhaustion: 'all 8 slots accounted for' → 'all RETURNED atoms accounted for'<br/>the ABI only knows the kinds; the atom list must be derived from source<br/>per extension → new dependency on the redesigned hook_scope<br/>register_with_config returning [] is a legal vacuous case (D5 P4 must cover it)"]:::todo
+    today --> unit
+    bar5 --> unit
+    unit --> exh
+  end
+
+  subgraph WHO["Corrected premise: which tools actually read the hooks RECORD"]
+    direction TB
+    hs["hook_scope.py — the ONLY reader of ExtensionHooks bindings<br/>→ the one real redesign file"]:::todo
+    others["ext_call_inventory/derive.py keys on ExtPorts (ports called)<br/>ext_ambient_inventory/derive.py keys on register.ail's import closure<br/>declared_vs_performed keys on ABI row + runtime dispatch<br/>→ re-target mechanically"]:::green
+  end
+  exh --> hs
+
+  subgraph Q4["Q4 · no per-slot 'was overridden' witness — the record-update expression is the witness"]
+    direction TB
+    w1["barrier derivation (check_no_op_profile.py:197-224) reads only the<br/>classifier-3 closure verdict, ext_ports_calls and slot-level facts —<br/>never 'was this slot overridden'; a witness would not change its output"]:::green
+    w2["classifier 3 reads BODIES (transitive import closure), so a no-op default<br/>and an absent override are the same for effect provenance —<br/>the ambient closure measurement was already sufficient"]:::green
+    flag["a runtime flag / ABI field: REJECTED<br/>another lie surface, invisible to the one STATIC tool that needs it"]:::hole
+    pg["hook_scope.locate() PARSER gap (not a measurement gap):<br/>the { default_hooks(...) | ... } head does not match IDENT\s*: (hook_scope.py:279)<br/>→ extension rejected. Live: empty_stop_guard is HOOK-UNRESOLVED at binding scope<br/>while PORT-MEDIATED at closure scope — same tool, two scope layers"]:::hole
+    fix["fix: teach locate() the record-update head, bind missing<br/>fields to the default lambdas, keep the tiling assertion"]:::todo
+    pg --> fix
+  end
+  hs --> pg
+
+  reconcile[["Delegate tension, resolved: delegate 2's mutated override WAS rejected — because it was a named<br/>top-level function whose row the ENCLOSING construction enforces (the 'outer' mechanism above).<br/>Both delegates agree the payload row enforces nothing by itself; the Q4 answer is the union."]]:::note
+  verdict --- reconcile
+
+  classDef green fill:#16351f,stroke:#3fb950,color:#c6f0cf;
+  classDef hole fill:#3a1620,stroke:#f7768e,color:#f7c6cf,stroke-dasharray:5 5;
+  classDef fact fill:#16294d,stroke:#7aa2f7,color:#cdd9f5,stroke-width:2px;
+  classDef plane fill:#3a2f12,stroke:#e0af68,color:#f2e2c2;
+  classDef todo fill:#2f2145,stroke:#bb9af7,color:#e5d5fb;
+  classDef note fill:#24262f,stroke:#6e7681,color:#9aa4b2;

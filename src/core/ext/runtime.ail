@@ -2,12 +2,14 @@ module src/core/ext/runtime
 
 import std/clock (now)
 import std/io (println)
-import std/json (encode, jo, kv, js, jnum)
+import std/crypto (sha256Hex)
+import std/json (Json, encode, jo, kv, js, jnum, get, asString, ja)
 import std/option (Option, Some, None)
-import std/string (startsWith)
+import std/result (Ok, Err)
+import std/string (startsWith, length as string_length, charAt, charCode)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/config (RuntimeConfig, VerificationConfig)
-import pkg/sunholo/motoko_ext_abi/types (
+import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, FinalizeOutcome, 
   BudgetPlan,
   ExtCtx,
   PromptPatch,
@@ -18,13 +20,29 @@ import pkg/sunholo/motoko_ext_abi/types (
   ResponseInterceptDecision,
   FinalizeDecision,
   PreStepDecision,
-  ExtensionHooks,
-  ExtRuntime
+  DiagnosticField,
+  Capability, ExtEntry, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, ExitIntent, ExitAction, PublishFile, ExitIntentOutcome, WorkInFlight, WorkItem, WorkOutcome, DecisionSolverJudge, DecisionToolPolicy, -- B8: the 6.0 sum, same line so A5's anchor at :199 holds; 8.0 adds the two decision variants here for the same reason
+  ExtRuntime, ExtWorld, PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, PureCtx, ProcessCtx, FsCtx, AiCtx, InterceptCtx, ProviderCtx, ExtPorts, FsPorts, AiPorts, InterceptPorts, pure_ctx_of, process_ctx, fs_ctx, ai_ctx, intercept_ctx, provider_ctx, fs_ports, ai_ports, intercept_ports, NotReached, DecisionPolicyDescriptor, JudgePreparation, JudgeImmediate, DecisionRequest, DecisionObservation, JudgeQuery, ToolPreparation, ToolImmediate, ToolQuery, DecisionUsage, Answered, Unavailable, UnconfiguredBackend, BinaryAnswer, DecisionInvocationState, DecisionMode, EnforcingDecision, ShadowDecision, DisabledDecision, VerificationEvidence, ToolEvidenceWindow -- WI-B2b; on one line to hold A5's anchor at :190. 8.0 (031 ADR-001 D2): the six views, their ports records and the ABI's constructors, on this line for the :199 anchor; P1.3r's cursor names (D4) on it for the same reason
 )
 import src/core/types (Msg)
+-- WI-D24. The holder stamp: this fold is the ONE place in the tree that knows
+-- which extension is about to perform an effect, and `ExtPorts.tool_handle`'s ABI
+-- signature has nowhere to carry that. The id therefore rides in the world token
+-- the fold already re-seats per hook — see `WorldState.holder_ext_id` for the
+-- decision and `ports.recording_ext_effect` for the reader.
+--
+-- No cycle: `ext_world` reaches `ports` and `ports` does not reach this module.
+-- Both functions are `pure`, so no dispatcher's declared row moves.
+import src/core/ext_world (stamp_holder, clear_holder)
 import src/core/ext/registry_generated (parse_core_ext_order)
+import pkg/sunholo/motoko_ext_conformance/invariants (validate_compactor_output)
+import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry, empty_tool_evidence)
 
-export func init_runtime_with_config(cfg: RuntimeConfig) -> ExtRuntime ! {Env, FS, Net} {
+export type StageOutcome = StageApplied(string) | StageRejected(string) | StageObserved(string, [DiagnosticField]) | StagePassed
+export type PreStepStage = { ext_id: string, atom: int, outcome: StageOutcome } -- B6: atom identity is TYPED here (index within the Compactor kind, B8), never stamped into `ext_id`
+export type PreStepChainResult = { msgs: [Msg], stages: [PreStepStage], artifacts: Json, next_state: ExtWorld } -- WI-B2b: `next_state` is the chain's successor world, threaded stage to stage
+
+export func init_runtime_with_config(cfg: RuntimeConfig) -> ExtRuntime ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   {
     registry: parse_core_ext_order(join_order(cfg.extensions.order), cfg),
     strict_mode: cfg.extensions.strict,
@@ -34,7 +52,7 @@ export func init_runtime_with_config(cfg: RuntimeConfig) -> ExtRuntime ! {Env, F
 
 export func init_runtime() -> ExtRuntime ! {Env, FS} {
   let v: VerificationConfig = { enabled: false, command: "make check_core" };
-  { registry: { hooks: [] }, strict_mode: false, verification: v }
+  { registry: { entries: [] }, strict_mode: false, verification: v }
 }
 
 func join_order(xs: [string]) -> string {
@@ -45,10 +63,10 @@ func join_order(xs: [string]) -> string {
   }
 }
 
-func hook_names(hooks: [ExtensionHooks]) -> [string] {
-  match hooks {
+func hook_names(entries: [ExtEntry]) -> [string] {
+  match entries {
     [] => [],
-    h :: rest => hook_name(h.id) :: hook_names(rest)
+    e :: rest => hook_name(e.id) :: hook_names(rest)
   }
 }
 
@@ -61,9 +79,89 @@ func hook_name(id: string) -> string {
   if i < 0 then id else _str_slice(id, 0, i)
 }
 
-export func loaded_extension_names(rt: ExtRuntime) -> [string] {
-  hook_names(rt.registry.hooks)
+func cap_string(s: string, n: int) -> string {
+  if string_length(s) <= n then s else _str_slice(s, 0, n)
 }
+
+func ascii_sanitize_rec(s: string, i: int, out: string) -> string {
+  if i >= string_length(s) then out
+  else {
+    let c = charAt(s, i);
+    let code = charCode(c);
+    ascii_sanitize_rec(s, i + 1, if code >= 32 && code <= 126 then "${out}${c}" else out)
+  }
+}
+
+func ascii_sanitize(s: string, n: int) -> string {
+  cap_string(ascii_sanitize_rec(s, 0, ""), n)
+}
+
+func valid_code_rec(code: string, i: int, seen_dot: bool) -> bool {
+  if i >= string_length(code) then seen_dot && code != ""
+  else {
+    let c = charAt(code, i);
+    let n = charCode(c);
+    let allowed = (n >= 48 && n <= 57) || (n >= 65 && n <= 90) || (n >= 97 && n <= 122) || c == "." || c == "_" || c == "-";
+    allowed && valid_code_rec(code, i + 1, seen_dot || c == ".")
+  }
+}
+
+func has_key(key: string, fields: [DiagnosticField]) -> bool {
+  match fields {
+    [] => false,
+    f :: rest => f.key == key || has_key(key, rest)
+  }
+}
+
+func normalize_fields_rec(fields: [DiagnosticField], kept: [DiagnosticField]) -> [DiagnosticField] {
+  match fields {
+    [] => kept,
+    f :: rest => {
+      let key = ascii_sanitize(f.key, 64);
+      let value = ascii_sanitize(f.value, 256);
+      if key == "" || has_key(key, kept) then normalize_fields_rec(rest, kept)
+      else normalize_fields_rec(rest, kept ++ [{ key: key, value: value }])
+    }
+  }
+}
+
+func compare_fields(a: DiagnosticField, b: DiagnosticField) -> int {
+  compare_keys_rec(a.key, b.key, 0)
+}
+
+func compare_keys_rec(a: string, b: string, i: int) -> int {
+  if i >= string_length(a) then if i >= string_length(b) then 0 else -1
+  else if i >= string_length(b) then 1
+  else {
+    let ac = charCode(charAt(a, i));
+    let bc = charCode(charAt(b, i));
+    if ac < bc then -1 else if ac > bc then 1 else compare_keys_rec(a, b, i + 1)
+  }
+}
+
+func insert_field(field: DiagnosticField, sorted: [DiagnosticField]) -> [DiagnosticField] {
+  match sorted {
+    [] => [field],
+    x :: rest => if compare_fields(field, x) <= 0 then field :: sorted else x :: insert_field(field, rest)
+  }
+}
+
+func sort_fields(fields: [DiagnosticField]) -> [DiagnosticField] {
+  match fields { [] => [], x :: rest => insert_field(x, sort_fields(rest)) }
+}
+
+func take_fields(n: int, fields: [DiagnosticField]) -> [DiagnosticField] {
+  if n <= 0 then [] else match fields { [] => [], x :: rest => x :: take_fields(n - 1, rest) }
+}
+
+export pure func normalize_diagnostic(code: string, fields: [DiagnosticField]) -> { code: string, fields: [DiagnosticField] } {
+  let clean_code = ascii_sanitize(code, 96);
+  let normalized_code = if valid_code_rec(clean_code, 0, false) then clean_code else "extension.invalid_diagnostic";
+  { code: normalized_code, fields: take_fields(16, sort_fields(normalize_fields_rec(fields, []))) }
+}
+
+-- One line, not three: `ext_set_digest` below pays for its `std/crypto` import here.
+export func loaded_extension_names(rt: ExtRuntime) -> [string] = hook_names(rt.registry.entries)
 
 func join_lines(xs: [string]) -> string {
   match xs {
@@ -95,12 +193,12 @@ func apply_budget_patch(plan: BudgetPlan, patch: BudgetPatch) -> BudgetPlan {
   }
 }
 
-func emit_dummy_hook(hook: string, key: string, val: string) -> () ! {IO, Clock} {
+func emit_dummy_hook(hook: string, atom: int, key: string, val: string) -> () ! {IO, Clock} {
   let _ = println(encode(jo([
     kv("type", js("dummy_hook")),
     kv("ts", jnum(intToFloat(now()))),
     kv("hook", js(hook)),
-    kv(key, js(val))
+    kv(key, js(val)), kv("atom", jnum(intToFloat(atom))) -- B6: typed atom identity, beside the hook name
   ])));
   ()
 }
@@ -109,72 +207,369 @@ func is_test_dummy(hook_id: string) -> bool {
   hook_id == "test_dummy" || startsWith(hook_id, "test_dummy#")
 }
 
-func fold_prompt_hooks(hooks: [ExtensionHooks], ctx: ExtCtx, base: string) -> string ! {IO, Clock} {
-  match hooks {
+-- ============================================================================
+-- B8: THE PER-KIND FOLDS. Each dispatcher walks the registry's entries in
+-- install order and, inside an entry, that entry's atoms of ITS kind in list
+-- order (index-within-kind `i` is B6's typed atom identity). The merge
+-- semantics of every kind are the 5.x slot's, verbatim -- see the ABI's
+-- migration table. The holder stamp `stamp_holder(world, id)` stays per
+-- EXTENSION (A3) and is re-seated per atom exactly as it was per hook.
+-- Non-matching atoms are skipped by the `_ :: rest` arm; the exhaustive
+-- `match` over `Capability` is `registry_normalize.kind_name` (host-owned).
+-- ============================================================================
+
+-- ============================================================================
+-- 8.0 (031 ADR-001 D2): THE VIEWS ARE PROJECTED HERE, PER ENTRY. The host
+-- builds its full `ExtCtx` ONCE per turn (`session.mk_v2_ext_ctx`) and hands
+-- it to the dispatchers below unchanged; each fold projects every callback's
+-- view from it through the ABI's exported constructors. `entry_base` is the
+-- data half -- `pure_ctx_of` drops `ports` and `world` and stamps the entry's
+-- `config` as `ext_config` -- computed once per entry per dispatch; the
+-- world-threading folds wrap it per atom in the row's view (`ai_ctx`,
+-- `provider_ctx`, `intercept_ctx`, `fs_ctx`, `process_ctx`) around the
+-- holder-stamped world, which is exactly where the 7.4 folds re-seated
+-- `{ ctx | world: stamp_holder(world, id) }`. No callback receives `ExtCtx`;
+-- no helper here is typed `ExtPorts` or `ExtCtx` on a callback's behalf (no
+-- dummy ports); the ports records are the ABI's projections of `ctx.ports`.
+-- ============================================================================
+--
+-- 8.0 (D3), PLAN-001 P1.4r: `entry_base` is the ORDINARY view, so its
+-- `decision_state` is `None` whatever the host's context carries -- D3's
+-- "other hook sites receive `decision_state = None`" made structural here,
+-- not left to every host literal. A decision atom's view is built from it by
+-- `decision_view` below, in the cursor, and nowhere else.
+-- contracts: SKIPPED — "calls user function "pure_ctx_of" that is not SMT-encodable
+-- in this context". The property is the paragraph above made mechanical:
+-- `result.decision_state == None`, D3's "other hook sites receive
+-- `decision_state = None`" stated as a postcondition rather than trusted to every
+-- host literal. Tried in exactly that form and skipped on the same callee.
+pure func entry_base(ctx: ExtCtx, e: ExtEntry) -> PureCtx {
+  { pure_ctx_of(ctx, e.config) | decision_state: None }
+}
+
+-- ============================================================================
+-- 8.0 (031 ADR-001 D4): THE PER-ATOM TWO-PHASE DECISION CURSOR -- LINE R
+-- (PLAN-001 P1.3r), WITH THE STUB ADAPTER ARM.
+--
+-- A declared decision atom (`DecisionSolverJudge`, `DecisionToolPolicy`) runs
+-- in the same fold, in the same registry/atom order, as its family's legacy
+-- atom: `prepare` -> on `JudgeQuery`/`ToolQuery` the ANSWER ARM is handed the
+-- typed cursor (extension, atom index within the decision kind, site, the
+-- exact prepared request) -> `interpret` with that request and the
+-- observation -> the vote joins the family's list -> the next atom. There is
+-- no skip-on-first-feedback: every atom runs, and a `JudgeImmediate`/
+-- `ToolImmediate` vote enters the SAME list, so the existing merges
+-- (`merge_finalize_decisions`, `merge_tool_decisions`) apply to it unchanged.
+-- One vote per family per extension is `registry_normalize`'s (P1.1).
+--
+-- THE STUB ARM (line R) is `stub_decision_answer`, called BY NAME in the two
+-- folds' declared-atom arms: every query is answered
+-- `Unavailable(UnconfiguredBackend)` with zero usage. No provider was
+-- contacted, so the charge and the token counts are KNOWN to be zero -- this
+-- is not an adapter manufacturing a figure it lacks, which D3 forbids. The
+-- stub is `pure` and sees only the cursor; the folds hold only the view
+-- (`PureCtx`: no `ports`, no `world`), so no port is in scope to read and no
+-- ordinal to advance; the finalize fold hands the next atom exactly the
+-- `world` a declared atom was handed. The arms are inline, not helpers: on the
+-- pin a helper that calls a pattern-bound callback is charged its caller's
+-- row (why `decide_one_policy` carries `! {IO, Clock}`), and a declared atom's
+-- step would have to claim `{Process, IO, Clock}` it never performs.
+--
+-- WHY THE ARM IS NOT A FUNCTION PARAMETER. On the pin a function-typed
+-- parameter's effect row is OPEN: a `(DecisionCursor) -> DecisionObservation`
+-- parameter accepts an annotated `! {IO}` lambda and the checker charges its
+-- effect to the caller (measured while building this; `evidence/P1.3r/`). A
+-- "pure answerer" parameter would therefore be a promise the compiler does not
+-- keep. The live exchange is line X's (P1.3x), at the visible leaves in
+-- `session.ail`/`tool_phase.ail` D4 names, never inside this module.
+--
+-- NOT HERE UNDER R: D5's intervention skip and the admission ledger, and D6's
+-- records. The descriptor is READ for one thing only: the decision state the
+-- atom's two callbacks are handed (P1.4r, below).
+-- ============================================================================
+export type DecisionSite = FinalizeSite | ToolPolicySite
+
+export type DecisionCursor = { ext_id: string, atom: int, site: DecisionSite, request: DecisionRequest }
+
+-- The stub arm contacts no provider, so its usage is KNOWN ZERO -- `Some(0)` -- and
+-- never unknown. The contract pins that ONE term rather than the record: `None` would
+-- leave the run's cost accounting incomplete for a call that demonstrably cost
+-- nothing, and `Some(n > 0)` would bill for a provider never reached. Those are the
+-- two ways this stub could lie; the token counts are free, since a caller that
+-- summed them would be summing zeros either way.
+pure func stub_usage() -> DecisionUsage
+  ensures { result.cost_millicents == Some(0) }
+{
+  { input_tokens: Some(0), output_tokens: Some(0), cost_millicents: Some(0) }
+}
+
+-- contracts: SKIPPED — "calls "stub_usage" whose signature uses an unencodable type
+-- "()"". A nullary callee is unencodable however the CALLER is annotated, so
+-- `result.usage.cost_millicents == Some(0)` -- the unconfigured arm bills nothing and
+-- says so rather than reporting unknown -- skips here even though `stub_usage` proves
+-- it one declaration above.
+export pure func stub_decision_answer(_cursor: DecisionCursor) -> DecisionObservation {
+  { result: Unavailable(UnconfiguredBackend), usage: stub_usage() }
+}
+
+-- ============================================================================
+-- 8.0 (031 ADR-001 D3), PLAN-001 P1.4r: THE DECISION STATE, STAMPED AT THE
+-- CURSOR FROM THE ATOM'S OWN DESCRIPTOR -- LINE R.
+--
+-- D3: "Decision callbacks always receive `Some` with identity and limits, the
+-- descriptor's two configuration values handed back, and the ledger terms as
+-- of the last decision reply." Only this cursor sees each atom's descriptor,
+-- so it is stamped here, per atom, onto the ordinary view (`entry_base`,
+-- whose `decision_state` is `None`); both `prepare` and `interpret` of that
+-- atom get the same view, and the next atom -- declared or legacy -- gets the
+-- ordinary one back. What each field says under R, and why it is truthful:
+--
+--   invocation_id   the atom's D6 identity: registered owner (the entry id,
+--                   `name#idx`), site, local ID. Line X adds the occurrence.
+--   mode            `EnforcingDecision`: under R the cursor applies every vote
+--                   through the family's merge (no shadow substitution, no
+--                   disabled skip exists yet), which is exactly enforcing.
+--   interventions_used  0: no intervention counter exists before line X's
+--                   host state (D5), and none has been applied through one.
+--   intervention_limit  the descriptor's `max_interventions`: with no operator
+--                   limit on line R, the lower of the two IS the descriptor's.
+--   question_config, interpretation_config  the descriptor's, byte for byte.
+--   allowance, known_spend, outstanding, run_cost  0: no allowance was
+--                   granted, nothing was reserved or spent -- the stub arm
+--                   contacts no provider and reports zero usage.
+--   run_cap_millicents  `None`, the Option's zero: D5 makes `Some(cap)` only
+--                   for a metered run with `max_cost_millicents > 0`, so
+--                   `Some(0)` is not a value this term can take; no cap is
+--                   claimed.
+-- The mirror's real terms and the counter are line X's (P1.4x).
+-- ============================================================================
+-- The contract is about `invocation_id`, which is `ext/site/local` with this as its
+-- MIDDLE SEGMENT. An empty label would collapse that to `ext//local`, and a label
+-- shared by both sites would give one extension's finalize and tool-policy
+-- invocations the same id -- the ledger terms D5 keys on invocation would then merge
+-- two invocations into one. `result != ""` refuses the first; the equivalence refuses
+-- the second from the finalize side, which is the side an id collision has to pass
+-- through. Strictly weaker than the body: the tool-policy arm's spelling is left
+-- free, so it can be renamed without touching this.
+pure func site_label(site: DecisionSite) -> string
+  ensures { result != "" && ((site == FinalizeSite) == (result == "finalize")) }
+{
+  match site {
+    FinalizeSite => "finalize",
+    ToolPolicySite => "tool_policy"
+  }
+}
+
+-- contracts: SKIPPED — uses an unencodable builtin: show, from the `invocation_id`
+-- interpolation ("Z3 has no SMT-LIB encoding for show"). Tried as
+-- `result.interventions_used == 0 && result.run_cap_millicents == None` -- a state
+-- built at the cursor has spent no intervention and claims no cap, which is the
+-- `run_cap_millicents` paragraph above ("`Some(0)` is not a value this term can
+-- take") stated where a reader would look for it -- and it skips on the builtin
+-- before the solver sees the clause.
+export pure func decision_invocation_state(ext_id: string, site: DecisionSite, d: DecisionPolicyDescriptor) -> DecisionInvocationState {
+  {
+    invocation_id: "${ext_id}/${site_label(site)}/${d.local_id}",
+    mode: EnforcingDecision,
+    interventions_used: 0,
+    intervention_limit: d.max_interventions,
+    question_config: d.question_config,
+    interpretation_config: d.interpretation_config,
+    allowance_millicents: 0,
+    known_spend_millicents: 0,
+    outstanding_millicents: 0,
+    run_cost_millicents: 0,
+    run_cap_millicents: None
+  }
+}
+
+-- contracts: SKIPPED — "calls user function "decision_invocation_state" that is not
+-- SMT-encodable in this context". The mirror of `entry_base`'s property --
+-- `result.decision_state != None`, so that the cursor is the ONLY site that stamps
+-- one and `entry_base` the only one that clears it -- was tried and skips on that
+-- callee. The pair is what the P1.4r fixtures read.
+export pure func decision_view(base: PureCtx, ext_id: string, site: DecisionSite, d: DecisionPolicyDescriptor) -> PureCtx {
+  { base | decision_state: Some(decision_invocation_state(ext_id, site, d)) }
+}
+
+func fold_prompt_atoms(id: string, caps: [Capability], i: int, view: PureCtx, base: string) -> string ! {IO, Clock} {
+  match caps {
     [] => base,
-    h :: rest => {
-      let patch = (h.on_build_system_prompt)(ctx);
-      let _ = if is_test_dummy(h.id) then emit_dummy_hook("on_build_system_prompt", "appended", join_lines(patch.append)) else ();
-      fold_prompt_hooks(rest, ctx, apply_prompt_patch(base, patch))
-    }
+    PromptShaper(f) :: rest => {
+      let patch = f(view);
+      let _ = if is_test_dummy(id) then emit_dummy_hook("on_build_system_prompt", i, "appended", join_lines(patch.append)) else ();
+      fold_prompt_atoms(id, rest, i + 1, view, apply_prompt_patch(base, patch))
+    },
+    _ :: rest => fold_prompt_atoms(id, rest, i, view, base)
+  }
+}
+
+func fold_prompt_hooks(entries: [ExtEntry], ctx: ExtCtx, base: string) -> string ! {IO, Clock} {
+  match entries {
+    [] => base,
+    e :: rest => fold_prompt_hooks(rest, ctx, fold_prompt_atoms(e.id, e.caps, 0, entry_base(ctx, e), base))
   }
 }
 
 export func dispatch_build_system_prompt(rt: ExtRuntime, ctx: ExtCtx, base: string) -> string ! {IO, Clock} {
-  fold_prompt_hooks(rt.registry.hooks, ctx, base)
+  fold_prompt_hooks(rt.registry.entries, ctx, base)
 }
 
-func fold_budget_hooks(hooks: [ExtensionHooks], ctx: ExtCtx, plan: BudgetPlan) -> BudgetPlan ! {IO, Clock, Env, FS} {
-  match hooks {
+func fold_budget_atoms(id: string, caps: [Capability], i: int, view: PureCtx, plan: BudgetPlan) -> BudgetPlan ! {IO, Clock} {
+  match caps {
     [] => plan,
-    h :: rest => {
-      let patch = (h.on_budget_plan)(ctx, plan);
+    BudgetShaper(f) :: rest => {
+      let patch = f(view, plan);
       let val = match patch.requested_total { None => "", Some(n) => show(n) };
-      let _ = if is_test_dummy(h.id) then emit_dummy_hook("on_budget_plan", "requested_total", val) else ();
-      fold_budget_hooks(rest, ctx, apply_budget_patch(plan, patch))
-    }
+      let _ = if is_test_dummy(id) then emit_dummy_hook("on_budget_plan", i, "requested_total", val) else ();
+      fold_budget_atoms(id, rest, i + 1, view, apply_budget_patch(plan, patch))
+    },
+    _ :: rest => fold_budget_atoms(id, rest, i, view, plan)
   }
 }
 
-export func dispatch_budget_plan(rt: ExtRuntime, ctx: ExtCtx, plan: BudgetPlan) -> BudgetPlan ! {IO, Clock, Env, FS} {
-  fold_budget_hooks(rt.registry.hooks, ctx, plan)
+func fold_budget_hooks(entries: [ExtEntry], ctx: ExtCtx, plan: BudgetPlan) -> BudgetPlan ! {IO, Clock} {
+  match entries {
+    [] => plan,
+    e :: rest => fold_budget_hooks(rest, ctx, fold_budget_atoms(e.id, e.caps, 0, entry_base(ctx, e), plan))
+  }
 }
 
--- Collect pre-step decisions from all hooks; first Compacted wins.
-func first_compacted(hooks: [ExtensionHooks], ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
-  match hooks {
-    [] => PassThrough,
-    h :: rest => {
-      let decision = (h.on_pre_step)(ctx, msgs);
-      let _ = if is_test_dummy(h.id) then {
+export func dispatch_budget_plan(rt: ExtRuntime, ctx: ExtCtx, plan: BudgetPlan) -> BudgetPlan ! {IO, Clock} {
+  fold_budget_hooks(rt.registry.entries, ctx, plan)
+}
+
+-- Fold compaction atoms in registry order. Each stage receives the previous
+-- valid stage's messages; invalid output is recorded and skipped.
+-- WI-B2b threads the world token through this fold, and the threading is the
+-- whole point: stage N+1 must see stage N's successor, or the second compactor
+-- in a chain replays the first one's world and D1's single home has quietly
+-- become two. `{ ctx | world: world }` is what makes each stage see the current
+-- one — the ctx the caller built is otherwise a snapshot from before the chain.
+--
+-- Every arm below carries `next` through, INCLUDING the rejected-output arm:
+-- a stage whose compaction is thrown away may still have performed effects
+-- (it can call `ai_step` before deciding), so discarding its successor there
+-- would drop a real cursor. The decision is rejected, not the world.
+--
+-- B8: the chain is entries in install order, and within an entry its
+-- Compactor atoms in list order (D4 signed off: N>1 is chain order).
+func fold_pre_step_atoms(id: string, caps: [Capability], i: int, base: PureCtx, ports: AiPorts, msgs: [Msg], artifacts: Json, world: ExtWorld) -> PreStepChainResult ! {AI, Clock, IO, Trace} {
+  match caps {
+    [] => { msgs: msgs, stages: [], artifacts: artifacts, next_state: world },
+    Compactor(f) :: rest => {
+      -- WI-D24 STAMPS THE HOLDER HERE, on the re-seat that was already
+      -- happening. This is the canonical site of the four; the other three say
+      -- less and point back at this one.
+      --
+      -- WHY IT IS ON THE WORLD AND NOT ON `ctx`: an `ext_id` field on `ExtCtx`
+      -- would tell the HOOK who it is, and the hook already knows. What needs to
+      -- know is `ext_ports_of`'s `tool_handle` closure, which is built one per
+      -- step from a registry it cannot index and whose ABI signature
+      -- `(ExtWorld, string, string)` cannot gain a parameter below 6.0. The
+      -- world token is the only value that reaches it, and this fold is the only
+      -- place the caller's identity is known.
+      --
+      -- THIS SLOT CANNOT ACTUALLY REACH THE SEAM AND IS STAMPED ANYWAY, measured
+      -- rather than assumed: `on_pre_step`'s ABI row is `! {AI, IO, Trace}`,
+      -- which has no `Process`, so a hook here cannot call `tool_handle` at all.
+      --
+      -- CORRECTED AT WI-D25, two-part per S15 because the wrong count is the
+      -- reason the right one is stated as row algebra rather than as a fact
+      -- about which effects appear. WI-D24 wrote here: "Three of the seven
+      -- slots can — `on_tool_handle`, `on_response_intercept` and
+      -- `on_solver_candidate`". TWO can. `tool_handle` demands the whole row
+      -- `{IO, Process, FS}` and `on_solver_candidate` declares `! {Process}`
+      -- alone, so the call does not type — the slot CONTAINS the effect and
+      -- cannot reach the seam that needs it. "Can" was inferred from the
+      -- presence of `Process`, not from row INCLUSION, which is S33's shape.
+      -- The four compiler verdicts that settle both slots are in
+      -- `run_declared_vs_performed.sh`'s `port_accepts`/`port_rejects` rows.
+      --
+      -- The other three (`on_build_system_prompt`, `on_budget_plan`,
+      -- `on_tool_policy`) do not thread the world and are not stamped. Stamping
+      -- this one costs one call and means a future widening of the row cannot
+      -- silently start recording effects attributed to nobody.
+      -- (B8: the slot names above are the 5.x names of the kinds -- Compactor,
+      -- ToolProvider, ResponseInterceptor, SolverJudge; the row algebra is
+      -- unchanged because the payload rows are the slots' rows verbatim.)
+      -- 8.0: the view is built HERE, per atom, around the holder-stamped world.
+      -- `ai_ctx` is the ABI's constructor for the Compactor row (`ai_step`
+      -- only); the re-seat the 7.4 fold wrote as `{ ctx | world: ... }` is now
+      -- the constructor's `world` argument.
+      let outcome = f(ai_ctx(base, ports, stamp_holder(world, id)), msgs);
+      let decision = outcome.decision;
+      let world1 = outcome.next_state;
+      let _ = if is_test_dummy(id) then {
         let tag = match decision {
           PassThrough => "passthrough",
-          Compacted(_, note) => "compacted:${note}"
+          PassThroughObserved(code, _) => "observed:${code}",
+          Compacted(_, note, _) => "compacted:${note}"
         };
-        emit_dummy_hook("on_pre_step", "decision", tag)
+        emit_dummy_hook("on_pre_step", i, "decision", tag)
       } else ();
       match decision {
-        Compacted(_, _) => decision,
-        PassThrough => first_compacted(rest, ctx, msgs)
+        PassThrough => {
+          let next = fold_pre_step_atoms(id, rest, i + 1, base, ports, msgs, artifacts, world1);
+          { msgs: next.msgs, stages: { ext_id: id, atom: i, outcome: StagePassed } :: next.stages, artifacts: next.artifacts, next_state: next.next_state }
+        },
+        PassThroughObserved(code, fields) => {
+          let observation = normalize_diagnostic(code, fields);
+          let next = fold_pre_step_atoms(id, rest, i + 1, base, ports, msgs, artifacts, world1);
+          { msgs: next.msgs, stages: { ext_id: id, atom: i, outcome: StageObserved(observation.code, observation.fields) } :: next.stages, artifacts: next.artifacts, next_state: next.next_state }
+        },
+        Compacted(compacted_msgs, note, next_artifacts) => {
+          match validate_compactor_output(msgs, compacted_msgs) {
+            Ok(_) => {
+              let next = fold_pre_step_atoms(id, rest, i + 1, base, ports, compacted_msgs, next_artifacts, world1);
+              { msgs: next.msgs, stages: { ext_id: id, atom: i, outcome: StageApplied(note) } :: next.stages, artifacts: next.artifacts, next_state: next.next_state }
+            },
+            Err(reason) => {
+              -- `world1`, not `world`: see the header. The compaction is
+              -- rejected; the effects the stage already performed are not.
+              let next = fold_pre_step_atoms(id, rest, i + 1, base, ports, msgs, artifacts, world1);
+              { msgs: next.msgs, stages: { ext_id: id, atom: i, outcome: StageRejected(reason) } :: next.stages, artifacts: next.artifacts, next_state: next.next_state }
+            }
+          }
+        }
       }
+    },
+    _ :: rest => fold_pre_step_atoms(id, rest, i, base, ports, msgs, artifacts, world)
+  }
+}
+
+func fold_pre_step_chain_rec(entries: [ExtEntry], ctx: ExtCtx, ports: AiPorts, msgs: [Msg], artifacts: Json, world: ExtWorld) -> PreStepChainResult ! {AI, Clock, IO, Trace} {
+  match entries {
+    [] => { msgs: msgs, stages: [], artifacts: artifacts, next_state: world },
+    e :: rest => {
+      let here = fold_pre_step_atoms(e.id, e.caps, 0, entry_base(ctx, e), ports, msgs, artifacts, world);
+      let next = fold_pre_step_chain_rec(rest, ctx, ports, here.msgs, here.artifacts, here.next_state);
+      { msgs: next.msgs, stages: here.stages ++ next.stages, artifacts: next.artifacts, next_state: next.next_state }
     }
   }
 }
 
-export func dispatch_pre_step(rt: ExtRuntime, ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
-  first_compacted(rt.registry.hooks, ctx, msgs)
+-- WI-D24 CLEARS THE HOLDER ON THE WAY OUT, and all four world-threading
+-- dispatchers do. The stamp is a property of a call in flight; leaving it on the
+-- successor would hand the DRIVER a world that names an extension as its holder,
+-- which is a value that is present, wrong and read by nothing — the shape this
+-- project counts. Clearing costs one call and makes "the driver's world has no
+-- holder" true by construction rather than by nobody looking.
+export func dispatch_pre_step_chain(rt: ExtRuntime, ctx: ExtCtx, msgs: [Msg]) -> PreStepChainResult ! {AI, Clock, IO, Trace} {
+  let out = fold_pre_step_chain_rec(rt.registry.entries, ctx, ai_ports(ctx.ports), msgs, ctx.artifacts, ctx.world);
+  { msgs: out.msgs, stages: out.stages, artifacts: out.artifacts, next_state: clear_holder(out.next_state) }
 }
 
-func decide_one_policy(h: ExtensionHooks, ctx: ExtCtx, call: ToolCallEnvelope) -> ToolPolicyDecision ! {IO, Clock} {
-  let decision = (h.on_tool_policy)(ctx, call);
-  let _ = if is_test_dummy(h.id) then {
+func decide_one_policy(id: string, i: int, f: (PureCtx, ToolCallEnvelope) -> ToolPolicyDecision, view: PureCtx, call: ToolCallEnvelope) -> ToolPolicyDecision ! {IO, Clock} {
+  let decision = f(view, call);
+  let _ = if is_test_dummy(id) then {
     let tag = match decision {
       Allow => "allow",
       Deny(_) => "deny",
       NoOpinion => "noop",
       Pending(_, _) => "pending"
     };
-    emit_dummy_hook("on_tool_policy", "decision", tag)
+    emit_dummy_hook("on_tool_policy", i, "decision", tag)
   } else ();
   decision
 }
@@ -198,15 +593,34 @@ func merge_tool_decisions(xs: [ToolPolicyDecision], seen_allow: bool, seen_pendi
   }
 }
 
-func collect_tool_decisions(hooks: [ExtensionHooks], ctx: ExtCtx, call: ToolCallEnvelope) -> [ToolPolicyDecision] ! {IO, Clock} {
-  match hooks {
+-- `i` counts `ToolPolicy` atoms and `di` `DecisionToolPolicy` atoms: each is
+-- the atom's index within ITS kind (B6), and the declared atom's is the one
+-- its cursor carries. Both kinds vote into one list, in `caps` order.
+func collect_policy_atoms(id: string, caps: [Capability], i: int, di: int, view: PureCtx, call: ToolCallEnvelope) -> [ToolPolicyDecision] ! {IO, Clock} {
+  match caps {
     [] => [],
-    h :: rest => decide_one_policy(h, ctx, call) :: collect_tool_decisions(rest, ctx, call)
+    ToolPolicy(f) :: rest => decide_one_policy(id, i, f, view, call) :: collect_policy_atoms(id, rest, i + 1, di, view, call),
+    DecisionToolPolicy(descriptor, prepare, interpret) :: rest => {
+      let dview = decision_view(view, id, ToolPolicySite, descriptor);
+      let vote = match prepare(dview, call) {
+        ToolImmediate(v) => v,
+        ToolQuery(req) => interpret(dview, call, req, stub_decision_answer({ ext_id: id, atom: di, site: ToolPolicySite, request: req }))
+      };
+      vote :: collect_policy_atoms(id, rest, i, di + 1, view, call)
+    },
+    _ :: rest => collect_policy_atoms(id, rest, i, di, view, call)
+  }
+}
+
+func collect_tool_decisions(entries: [ExtEntry], ctx: ExtCtx, call: ToolCallEnvelope) -> [ToolPolicyDecision] ! {IO, Clock} {
+  match entries {
+    [] => [],
+    e :: rest => collect_policy_atoms(e.id, e.caps, 0, 0, entry_base(ctx, e), call) ++ collect_tool_decisions(rest, ctx, call)
   }
 }
 
 export func dispatch_tool_policy(rt: ExtRuntime, ctx: ExtCtx, call: ToolCallEnvelope) -> ToolPolicyDecision ! {IO, Clock} {
-  merge_tool_decisions(collect_tool_decisions(rt.registry.hooks, ctx, call), false, None)
+  merge_tool_decisions(collect_tool_decisions(rt.registry.entries, ctx, call), false, None)
 }
 
 func tool_name(call: ToolCallEnvelope) -> string {
@@ -220,64 +634,277 @@ func contains_tool(xs: [string], name: string) -> bool {
   }
 }
 
-func first_handle(hooks: [ExtensionHooks], ctx: ExtCtx, call: ToolCallEnvelope, name: string) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
-  match hooks {
-    [] => Delegate,
-    h :: rest => {
-      if contains_tool(h.provided_tools, name) then {
-        match (h.on_tool_handle)(ctx, call) {
-          Delegate => first_handle(rest, ctx, call, name),
-          Handled(r) => Handled(r)
+-- WI-B2b. A DELEGATING hook still threads its successor: it was invoked, so it
+-- may have performed effects before deciding it had nothing to offer, and the
+-- next hook must see that world. Only a hook that is never invoked — one whose
+-- advertised name list does not contain this tool — passes `world` through
+-- untouched, and that is correct because nothing ran.
+-- B8: `ToolProvider(names, handle)`; first match over entries, then over an
+-- entry's provider atoms in list order (names are disjoint within an
+-- extension by D3, so at most one atom per entry can match).
+func first_handle_atoms(id: string, caps: [Capability], base: PureCtx, ports: ExtPorts, call: ToolCallEnvelope, name: string, world: ExtWorld) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  match caps {
+    [] => { decision: Delegate, next_state: world },
+    ToolProvider(names, handle) :: rest => {
+      if contains_tool(names, name) then {
+        -- WI-D24. The holder stamp; see `fold_pre_step_atoms` for the
+        -- decision. This slot's row is the widest of the seven, so it is one of
+        -- the TWO that can actually reach `ExtPorts.tool_handle` — WI-D24 wrote
+        -- "the three" here and WI-D25's row algebra corrected it; see
+        -- `fold_pre_step_atoms`.
+        -- 8.0: `provider_ctx` carries all ten ports (the row gained `Trace`).
+        let outcome = handle(provider_ctx(base, ports, stamp_holder(world, id)), call);
+        match outcome.decision {
+          Delegate => first_handle_atoms(id, rest, base, ports, call, name, outcome.next_state),
+          Handled(r) => { decision: Handled(r), next_state: outcome.next_state }
         }
-      } else first_handle(rest, ctx, call, name)
+      } else first_handle_atoms(id, rest, base, ports, call, name, world)
+    },
+    _ :: rest => first_handle_atoms(id, rest, base, ports, call, name, world)
+  }
+}
+
+func first_handle(entries: [ExtEntry], ctx: ExtCtx, ports: ExtPorts, call: ToolCallEnvelope, name: string, world: ExtWorld) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  match entries {
+    [] => { decision: Delegate, next_state: world },
+    e :: rest => {
+      let outcome = first_handle_atoms(e.id, e.caps, entry_base(ctx, e), ports, call, name, world);
+      match outcome.decision {
+        Delegate => first_handle(rest, ctx, ports, call, name, outcome.next_state),
+        Handled(r) => { decision: Handled(r), next_state: outcome.next_state }
+      }
     }
   }
 }
 
-export func dispatch_tool_handle(rt: ExtRuntime, ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
-  first_handle(rt.registry.hooks, ctx, call, tool_name(call))
+export func dispatch_tool_handle(rt: ExtRuntime, ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  -- WI-D24 clears the holder; see `dispatch_pre_step_chain`.
+  let out = first_handle(rt.registry.entries, ctx, ctx.ports, call, tool_name(call), ctx.world);
+  { decision: out.decision, next_state: clear_holder(out.next_state) }
 }
 
-func first_intercept(hooks: [ExtensionHooks], ctx: ExtCtx, response_text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
-  match hooks {
-    [] => NoIntercept,
-    h :: rest =>
-      match (h.on_response_intercept)(ctx, response_text) {
-        InterceptHandled(r) => InterceptHandled(r),
-        NoIntercept => first_intercept(rest, ctx, response_text)
+-- Unlike `first_handle` above, EVERY interceptor here is invoked until one
+-- intercepts, so every one threads its successor — there is no "not invoked"
+-- case.
+func first_intercept_atoms(id: string, caps: [Capability], base: PureCtx, ports: InterceptPorts, response_text: string, world: ExtWorld) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
+  match caps {
+    [] => { decision: NoIntercept, next_state: world },
+    ResponseInterceptor(f) :: rest => {
+      -- WI-D24's holder stamp; `! {IO, Process, FS}`, so this slot reaches the
+      -- seam. See `fold_pre_step_atoms`.
+      -- 8.0: `intercept_ctx` -- the six FS ports, `tool_handle`, `clock_now`.
+      let outcome = f(intercept_ctx(base, ports, stamp_holder(world, id)), response_text);
+      match outcome.decision {
+        InterceptHandled(r) => { decision: InterceptHandled(r), next_state: outcome.next_state },
+        NoIntercept => first_intercept_atoms(id, rest, base, ports, response_text, outcome.next_state)
       }
+    },
+    _ :: rest => first_intercept_atoms(id, rest, base, ports, response_text, world)
   }
 }
 
-export func dispatch_response_intercept(rt: ExtRuntime, ctx: ExtCtx, response_text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
-  first_intercept(rt.registry.hooks, ctx, response_text)
+func first_intercept(entries: [ExtEntry], ctx: ExtCtx, ports: InterceptPorts, response_text: string, world: ExtWorld) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
+  match entries {
+    [] => { decision: NoIntercept, next_state: world },
+    e :: rest => {
+      let outcome = first_intercept_atoms(e.id, e.caps, entry_base(ctx, e), ports, response_text, world);
+      match outcome.decision {
+        InterceptHandled(r) => { decision: InterceptHandled(r), next_state: outcome.next_state },
+        NoIntercept => first_intercept(rest, ctx, ports, response_text, outcome.next_state)
+      }
+    }
+  }
 }
 
-func decide_one_finalize(h: ExtensionHooks, ctx: ExtCtx, candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
-  let decision = (h.on_solver_candidate)(ctx, candidate);
-  let _ = if is_test_dummy(h.id) then {
+export func dispatch_response_intercept(rt: ExtRuntime, ctx: ExtCtx, response_text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
+  -- WI-D24 clears the holder; see `dispatch_pre_step_chain`.
+  let out = first_intercept(rt.registry.entries, ctx, intercept_ports(ctx.ports), response_text, ctx.world);
+  { decision: out.decision, next_state: clear_holder(out.next_state) }
+}
+
+-- ============================================================================
+-- 7.0: the ExitIntent fold. UNCONDITIONAL, once per turn end, registry order.
+--
+-- Nothing here runs at exit. This renders each intent to DATA while the
+-- runtime is alive and hands the list to `ext/exit_manifest`, which publishes
+-- it for the TUI's exit handler to execute. The reason is architectural rather
+-- than stylistic: the exit handler lives in a different process, and an async
+-- spawn started inside a Node `exit` handler never runs because the event loop
+-- is already closed. See the ABI's `ExitIntent` header.
+--
+-- THE WORLD IS THREADED, atom to atom and extension to extension, exactly as
+-- `dispatch_pre_step_chain` threads it. The render reads FS-backed state
+-- through `ExtPorts.file_read`, so it has a successor, and dropping it here
+-- would be WI-D1's shape one dispatcher later. The holder is stamped on the
+-- re-seat, so an effect performed during a render is attributed to the
+-- extension that performed it, and cleared once at the end.
+-- ============================================================================
+export type RenderedIntent = { ext: string, label: string, enabled: bool, actions: [ExitAction] }
+export type ExitIntentRendering = { intents: [RenderedIntent], next_state: ExtWorld }
+
+func render_intent_atoms(id: string, caps: [Capability], base: PureCtx, ports: FsPorts, world: ExtWorld) -> ExitIntentRendering ! {FS} {
+  match caps {
+    [] => { intents: [], next_state: world },
+    ExitIntent(label, enabled, f) :: rest => {
+      -- A DISABLED INTENT IS NOT RENDERED. `enabled` is the operator opt-in
+      -- captured at registration, and skipping the call is what makes the
+      -- default rung free: an extension whose knob is off does no FS work per
+      -- turn. It is still DISCLOSED in the manifest, so "off" and "absent" stay
+      -- distinguishable to anyone reading it — which is why the entry is built
+      -- either way and only the CALL is skipped.
+      -- 8.0: `fs_ctx` -- the six FS ports and nothing else.
+      let out = if enabled
+        then f(fs_ctx(base, ports, stamp_holder(world, id)))
+        else { actions: [], next_state: world };
+      let tail = render_intent_atoms(id, rest, base, ports, out.next_state);
+      { intents: ({ ext: id, label: label, enabled: enabled, actions: out.actions }) :: tail.intents,
+        next_state: tail.next_state }
+    },
+    _ :: rest => render_intent_atoms(id, rest, base, ports, world)
+  }
+}
+
+func render_intent_entries(entries: [ExtEntry], ctx: ExtCtx, ports: FsPorts, world: ExtWorld) -> ExitIntentRendering ! {FS} {
+  match entries {
+    [] => { intents: [], next_state: world },
+    e :: rest => {
+      let head = render_intent_atoms(e.id, e.caps, entry_base(ctx, e), ports, world);
+      let tail = render_intent_entries(rest, ctx, ports, head.next_state);
+      { intents: head.intents ++ tail.intents, next_state: tail.next_state }
+    }
+  }
+}
+
+-- Registry order, then list order within an extension: the same order every
+-- other dispatcher reads, and the order the host executes the actions in.
+export func dispatch_exit_intents(rt: ExtRuntime, ctx: ExtCtx) -> ExitIntentRendering ! {FS} {
+  let out = render_intent_entries(rt.registry.entries, ctx, fs_ports(ctx.ports), ctx.world);
+  { intents: out.intents, next_state: clear_holder(out.next_state) }
+}
+
+-- 7.3: the WorkInFlight fold. UNCONDITIONAL, once per step, registry order.
+--
+-- CONCATENATION, like `DescribeTools` and unlike the vote kinds: several
+-- extensions may be waiting on several things at once and there is nothing to
+-- arbitrate. N>1 within one extension is admitted for the same reason.
+--
+-- THE BOOTSTRAP CONTEXT. Every declarer is called with `work_in_flight: []` —
+-- not with the partial aggregate built so far. Feeding an extension the
+-- half-finished list would make the answer depend on registry ORDER, and a
+-- declarer that read it could loop on its own contribution. What an extension
+-- reports must be a function of the world, not of who ran before it.
+--
+-- The world is threaded atom to atom and the holder stamped per re-seat,
+-- exactly as `render_intent_atoms` does, and for the same reason: the render
+-- reads FS-backed state through the ports and its successor must not be lost.
+export type WorkRendering = { items: [WorkItem], next_state: ExtWorld }
+
+func work_atoms(id: string, caps: [Capability], base: PureCtx, ports: FsPorts, world: ExtWorld) -> WorkRendering ! {FS} {
+  match caps {
+    [] => { items: [], next_state: world },
+    WorkInFlight(_label, f) :: rest => {
+      -- 8.0: the bootstrap context is the data half with `work_in_flight`
+      -- emptied, wrapped in `fs_ctx` around the holder-stamped world.
+      let out = f(fs_ctx({ base | work_in_flight: [] }, ports, stamp_holder(world, id)));
+      let tail = work_atoms(id, rest, base, ports, out.next_state);
+      { items: out.items ++ tail.items, next_state: tail.next_state }
+    },
+    _ :: rest => work_atoms(id, rest, base, ports, world)
+  }
+}
+
+func work_entries(entries: [ExtEntry], ctx: ExtCtx, ports: FsPorts, world: ExtWorld) -> WorkRendering ! {FS} {
+  match entries {
+    [] => { items: [], next_state: world },
+    e :: rest => {
+      let head = work_atoms(e.id, e.caps, entry_base(ctx, e), ports, world);
+      let tail = work_entries(rest, ctx, ports, head.next_state);
+      { items: head.items ++ tail.items, next_state: tail.next_state }
+    }
+  }
+}
+
+export func dispatch_work_in_flight(rt: ExtRuntime, ctx: ExtCtx) -> WorkRendering ! {FS} {
+  let out = work_entries(rt.registry.entries, ctx, fs_ports(ctx.ports), ctx.world);
+  { items: out.items, next_state: clear_holder(out.next_state) }
+}
+
+-- WI-D7 CASCADE. The `on_solver_candidate` SLOT narrowed to `! {Process}`;
+-- this dispatcher is wider, and the extra `{IO, Clock}` is the HOST's, not any
+-- extension's: `emit_dummy_hook` below prints a test-instrumentation record
+-- and reads the clock for its timestamp. Stated here because a reader
+-- comparing this row against the ABI's would otherwise read the difference as
+-- a stale row rather than as a host effect the slot never had.
+func decide_one_finalize(id: string, i: int, f: (ProcessCtx, string) -> FinalizeOutcome ! {Process}, base: PureCtx, candidate: string, world: ExtWorld) -> FinalizeOutcome ! {Process, IO, Clock} {
+  -- WI-D24's holder stamp. WI-D24 wrote "`! {Process}`, so this slot reaches
+  -- the seam too", and WI-D25 measured it FALSE: `! {Process}` admits no
+  -- `ExtPorts` field at all — `tool_handle` needs `{IO, Process, FS}` and every
+  -- other field needs `AI`, `FS`, `Clock` or `Env` — so the ONLY subprocess a
+  -- binding in this slot can run is AMBIENT `std/process.exec`, which is
+  -- precisely what `context_mode`'s binding does. The stamp is kept for
+  -- `fold_pre_step_atoms`'s reason: a future widening must not start
+  -- recording effects attributed to nobody.
+  -- 8.0: `process_ctx` -- no ports, keeps `world` for `next_state`.
+  let outcome = f(process_ctx(base, stamp_holder(world, id)), candidate);
+  let decision = outcome.decision;
+  let _ = if is_test_dummy(id) then {
     let tag = match decision {
-      Accept(_) => "accept",
+      Accept => "accept",
       ContinueWithFeedback(_) => "continue",
       NoDecision => "noop"
     };
-    emit_dummy_hook("on_solver_candidate", "decision", tag)
+    emit_dummy_hook("on_solver_candidate", i, "decision", tag)
   } else ();
-  decision
+  outcome
 }
 
-func collect_finalize_decisions(hooks: [ExtensionHooks], ctx: ExtCtx, candidate: string) -> [FinalizeDecision] ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
-  match hooks {
-    [] => [],
-    h :: rest => decide_one_finalize(h, ctx, candidate) :: collect_finalize_decisions(rest, ctx, candidate)
+-- `i` counts `SolverJudge` atoms, `di` `DecisionSolverJudge` atoms (see
+-- `collect_policy_atoms`). A declared atom is pure: it is handed `world` and the
+-- next atom gets exactly that `world` back -- no ordinal, no holder stamp.
+func collect_finalize_atoms(id: string, caps: [Capability], i: int, di: int, base: PureCtx, candidate: string, world: ExtWorld) -> { decisions: [FinalizeDecision], next_state: ExtWorld } ! {Process, IO, Clock} {
+  match caps {
+    [] => { decisions: [], next_state: world },
+    -- Sequenced with `let` rather than written as `decide_one(...) :: collect(...)`.
+    -- The original could be written as one expression because the calls were
+    -- independent; threading makes the second depend on the first's successor,
+    -- and leaving that to the evaluation order of `::` would be a silent
+    -- ordering assumption on a world cursor.
+    SolverJudge(f) :: rest => {
+      let outcome = decide_one_finalize(id, i, f, base, candidate, world);
+      let next = collect_finalize_atoms(id, rest, i + 1, di, base, candidate, outcome.next_state);
+      { decisions: outcome.decision :: next.decisions, next_state: next.next_state }
+    },
+    DecisionSolverJudge(descriptor, prepare, interpret) :: rest => {
+      let dview = decision_view(base, id, FinalizeSite, descriptor);
+      let vote = match prepare(dview, candidate) {
+        JudgeImmediate(v) => v,
+        JudgeQuery(req) => interpret(dview, candidate, req, stub_decision_answer({ ext_id: id, atom: di, site: FinalizeSite, request: req }))
+      };
+      let next = collect_finalize_atoms(id, rest, i, di + 1, base, candidate, world);
+      { decisions: vote :: next.decisions, next_state: next.next_state }
+    },
+    _ :: rest => collect_finalize_atoms(id, rest, i, di, base, candidate, world)
   }
 }
 
-func first_accept(xs: [FinalizeDecision]) -> Option[string] {
+func collect_finalize_decisions(entries: [ExtEntry], ctx: ExtCtx, candidate: string, world: ExtWorld) -> { decisions: [FinalizeDecision], next_state: ExtWorld } ! {Process, IO, Clock} {
+  match entries {
+    [] => { decisions: [], next_state: world },
+    e :: rest => {
+      let here = collect_finalize_atoms(e.id, e.caps, 0, 0, entry_base(ctx, e), candidate, world);
+      let next = collect_finalize_decisions(rest, ctx, candidate, here.next_state);
+      { decisions: here.decisions ++ next.decisions, next_state: next.next_state }
+    }
+  }
+}
+
+-- 8.0: `Accept` is NULLARY (ADR-001 (031) D2) -- the judged candidate is
+-- always the one finalized, so there is no output to carry, only the fact.
+func has_accept(xs: [FinalizeDecision]) -> bool {
   match xs {
-    [] => None,
-    Accept(out) :: _ => Some(out),
-    _ :: rest => first_accept(rest)
+    [] => false,
+    Accept :: _ => true,
+    _ :: rest => has_accept(rest)
   }
 }
 
@@ -289,19 +916,21 @@ func first_continue(xs: [FinalizeDecision]) -> Option[string] {
   }
 }
 
+-- Precedence, UNCHANGED at 8.0: ContinueWithFeedback > Accept > NoDecision.
 export func merge_finalize_decisions(xs: [FinalizeDecision]) -> FinalizeDecision {
   match first_continue(xs) {
     Some(msg) => ContinueWithFeedback(msg),
-    None =>
-      match first_accept(xs) {
-        Some(out) => Accept(out),
-        None => NoDecision
-      }
+    None => if has_accept(xs) then Accept else NoDecision
   }
 }
 
-export func dispatch_solver_candidate(rt: ExtRuntime, ctx: ExtCtx, candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
-  merge_finalize_decisions(collect_finalize_decisions(rt.registry.hooks, ctx, candidate))
+export func dispatch_solver_candidate(rt: ExtRuntime, ctx: ExtCtx, candidate: string) -> FinalizeOutcome ! {Process, IO, Clock} {
+  let collected = collect_finalize_decisions(rt.registry.entries, ctx, candidate, ctx.world);
+  -- The MERGE is unchanged and stays a pure function of the decision list. Only
+  -- the successor is new, and it is the LAST hook's, not the merged winner's:
+  -- every hook ran, so every hook's effects happened, whichever decision won.
+  -- WI-D24 clears the holder; see `dispatch_pre_step_chain`.
+  { decision: merge_finalize_decisions(collected.decisions), next_state: clear_holder(collected.next_state) }
 }
 
 func smoke_ctx() -> ExtCtx {
@@ -318,72 +947,214 @@ func smoke_ctx() -> ExtCtx {
     env_server_url: "",
     budget_remaining: 10,
     history_slice: [],
-    state_key: "k",
-    context_limit: 0
-  }
-}
+	    state_key: "k",
+	    finish_reason: "",
+	    work_in_flight: [],
+	    open_waits: ja([]),
+	    context_limit: 0,
+	    ports: noop_ext_ports(),
+	    artifacts: empty_ext_artifacts(),
+	    telemetry: zero_token_telemetry(),
+	    -- 8.0 (D3): truthful defaults, asserting no success.
+	    verification: NotReached,
+	    tool_evidence: empty_tool_evidence(),
+	    decision_state: None,
+	    world: empty_ext_world()
+	  }
+	}
 
-func smoke_hook_a() -> ExtensionHooks {
-  let handle = func(_ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+-- B8: the smoke registrations are 6.0 lists (one atom per kind, canonical order).
+func smoke_hook_a() -> ExtEntry {
+  let handle = func(ctx: ProviderCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace}  { { decision: {
     if call.tool == "Alpha" then Handled({ tool_call_id: call.id, tool: "Alpha", exit_code: 0, stdout: "alpha", stderr: "", metadata: jo([]) })
     else Delegate
-  };
-  let intercept = func(_ctx: ExtCtx, response_text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  }, next_state: ctx.world } };
+  let intercept = func(ctx: InterceptCtx, response_text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: {
     if response_text == "trip" then InterceptHandled({ tool_call_id: "ri", tool: "Intercept", exit_code: 0, stdout: "ok", stderr: "", metadata: jo([]) })
     else NoIntercept
-  };
-  let finalize = func(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  }, next_state: ctx.world } };
+  let finalize = func(ctx: ProcessCtx, _candidate: string) -> FinalizeOutcome ! {Process}  { { decision: {
     ContinueWithFeedback("needs-fix")
-  };
-  let budget = func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+  }, next_state: ctx.world } };
+  let budget = func(_ctx: PureCtx, _plan: BudgetPlan) -> BudgetPatch {
     { requested_total: Some(9), requested_solver: None, requested_verifier: None }
   };
   {
     id: "hook_a",
-    provided_tools: ["Alpha"],
-    on_describe_tools: \_ . [],
-    on_build_system_prompt: \_ctx. { prepend: [], append: ["A"] },
-    on_budget_plan: budget,
-    on_pre_step: \_ctx _msgs. PassThrough ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
-    on_tool_policy: \_ctx _call. Allow,
-    on_tool_handle: handle,
-    on_response_intercept: intercept,
-    on_solver_candidate: finalize
+    config: jo([]),
+    caps: [
+      DescribeTools(\_ . []),
+      PromptShaper(\_ctx. { prepend: [], append: ["A"] }),
+      BudgetShaper(budget),
+      Compactor(\ctx _msgs. { decision: PassThrough, next_state: ctx.world } ! {AI, IO, Trace}),
+      ToolPolicy(\_ctx _call. Allow),
+      ToolProvider(["Alpha"], handle),
+      ResponseInterceptor(intercept),
+      SolverJudge(finalize)
+    ]
   }
 }
 
-func smoke_hook_b() -> ExtensionHooks {
-  let handle = func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+func smoke_hook_b() -> ExtEntry {
+  let handle = func(ctx: ProviderCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace}  { { decision: {
     Delegate
-  };
-  let intercept = func(_ctx: ExtCtx, _response_text: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
+  }, next_state: ctx.world } };
+  let intercept = func(ctx: InterceptCtx, _response_text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: {
     NoIntercept
-  };
-  let finalize = func(_ctx: ExtCtx, _candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
-    Accept("accepted")
-  };
-  let budget = func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
+  }, next_state: ctx.world } };
+  let finalize = func(ctx: ProcessCtx, _candidate: string) -> FinalizeOutcome ! {Process}  { { decision: {
+    Accept
+  }, next_state: ctx.world } };
+  let budget = func(_ctx: PureCtx, _plan: BudgetPlan) -> BudgetPatch {
     { requested_total: None, requested_solver: Some(5), requested_verifier: None }
   };
   {
     id: "hook_b",
-    provided_tools: ["Beta"],
-    on_describe_tools: \_ . [],
-    on_build_system_prompt: \_ctx. { prepend: [], append: ["B"] },
-    on_budget_plan: budget,
-    on_pre_step: \_ctx _msgs. PassThrough ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
-    on_tool_policy: \_ctx _call. Deny("blocked"),
-    on_tool_handle: handle,
-    on_response_intercept: intercept,
-    on_solver_candidate: finalize
+    config: jo([]),
+    caps: [
+      DescribeTools(\_ . []),
+      PromptShaper(\_ctx. { prepend: [], append: ["B"] }),
+      BudgetShaper(budget),
+      Compactor(\ctx _msgs. { decision: PassThrough, next_state: ctx.world } ! {AI, IO, Trace}),
+      ToolPolicy(\_ctx _call. Deny("blocked")),
+      ToolProvider(["Beta"], handle),
+      ResponseInterceptor(intercept),
+      SolverJudge(finalize)
+    ]
   }
 }
 
-func dispatch_smoke_record_hooks() -> bool
+func chain_msg(role: string, content: string) -> Msg {
+  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+}
+
+func chain_call_msg(id: string) -> Msg {
+  { role: "assistant", content: "call", tool_calls: [{ id: id, name: "T", arguments: "{}" }], tool_call_id: "" }
+}
+
+func chain_tool_msg(id: string, content: string) -> Msg {
+  { role: "tool", content: content, tool_calls: [], tool_call_id: id }
+}
+
+-- B8: a chain fixture registers ONLY its Compactor -- the list shape has no
+-- other seven slots to fill, which is the whole point of 6.0.
+func chain_base_hook(id: string, pre: (AiCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace}) -> ExtEntry {
+  { id: id, config: jo([]), caps: [Compactor(pre)] }
+}
+
+func chain_hook_a() -> ExtEntry {
+  chain_base_hook("chain_A", func(ctx: AiCtx, msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
+    Compacted(msgs ++ [chain_msg("user", "chain-A")], "A", jo([]))
+  }, next_state: ctx.world } })
+}
+
+func chain_hook_b_bad() -> ExtEntry {
+  chain_base_hook("chain_B", func(ctx: AiCtx, msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
+    Compacted([chain_call_msg("tc-chain")], "B", jo([]))
+  }, next_state: ctx.world } })
+}
+
+func chain_hook_c() -> ExtEntry {
+  chain_base_hook("chain_C", func(ctx: AiCtx, msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
+    Compacted([chain_call_msg("tc-chain"), chain_tool_msg("tc-chain", "rewritten")] ++ msgs, "C", jo([]))
+  }, next_state: ctx.world } })
+}
+
+func chain_hook_observed() -> ExtEntry {
+  chain_base_hook("chain_observed", func(ctx: AiCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
+    PassThroughObserved("bad code", [
+      { key: "z", value: "last" },
+      { key: "a", value: "first" },
+      { key: "a", value: "duplicate" },
+      { key: "", value: "dropped" }
+    ])
+  }, next_state: ctx.world } })
+}
+
+func observed_stage_normalizes_and_preserves_flow_test() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace}
+  tests [((), true)]{
+    let artifacts = jo([kv("sentinel", js("unchanged"))]);
+    let ctx = { smoke_ctx() | artifacts: artifacts };
+    let input = [chain_msg("user", "unchanged")];
+    let v: VerificationConfig = { enabled: false, command: "make check_core" };
+    let rt = { registry: { entries: [chain_hook_observed()] }, strict_mode: false, verification: v };
+    let result = dispatch_pre_step_chain(rt, ctx, input);
+    match result.msgs { m :: [] => m.role == "user" && m.content == "unchanged", _ => false }
+      && match get(result.artifacts, "sentinel") { Some(v) => match asString(v) { Some(s) => s == "unchanged", None => false }, None => false }
+      && match result.stages {
+        s :: [] => match s.outcome {
+          StageObserved(code, fields) => code == "extension.invalid_diagnostic" && match fields {
+            a :: z :: [] => a.key == "a" && a.value == "first" && z.key == "z" && z.value == "last",
+            _ => false
+          },
+          _ => false
+        },
+        _ => false
+      }
+  }
+
+func many_fields(n: int) -> [DiagnosticField] {
+  if n <= 0 then [] else { key: "key_${show(n)}", value: "value" } :: many_fields(n - 1)
+}
+
+func field_count(fields: [DiagnosticField]) -> int {
+  match fields { [] => 0, _ :: rest => 1 + field_count(rest) }
+}
+
+func diagnostic_bounds_test() -> bool
   tests [((), true)]
   {
+    let n = normalize_diagnostic("extension.valid_code", many_fields(20));
+    field_count(n.fields) == 16
+      && match n.fields { first :: _ => first.key == "key_1", [] => false }
+      && normalize_diagnostic("invalid code", []).code == "extension.invalid_diagnostic"
+      && string_length(normalize_diagnostic("extension.${"x"}${"x"}${"x"}${"x"}", []).code) <= 96
+  }
+
+func stages_are_applied_rejected_applied(stages: [PreStepStage]) -> bool {
+  match stages {
+    a :: b :: c :: [] =>
+      a.ext_id == "chain_A"
+        && b.ext_id == "chain_B"
+        && c.ext_id == "chain_C"
+        && match a.outcome {
+          StageApplied(note_a) => note_a == "A",
+          _ => false
+        }
+        && match b.outcome {
+          StageRejected(reason) => reason != "",
+          _ => false
+        }
+        && match c.outcome {
+          StageApplied(note_c) => note_c == "C",
+          _ => false
+        },
+    _ => false
+  }
+}
+
+func dispatch_pre_step_chain_fold_test() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace}
+  tests [((), true)]{
+    let vchain: VerificationConfig = { enabled: false, command: "make check_core" };
+    let rt = { registry: { entries: [chain_hook_a(), chain_hook_b_bad(), chain_hook_c()] }, strict_mode: false, verification: vchain };
+    let result = dispatch_pre_step_chain(rt, smoke_ctx(), [chain_call_msg("tc-chain"), chain_tool_msg("tc-chain", "original")]);
+    match result.msgs {
+      call :: tool :: seed_call :: seed_tool :: marker :: [] =>
+        call.role == "assistant"
+          && tool.role == "tool"
+          && tool.content == "rewritten"
+          && seed_call.role == "assistant"
+          && seed_tool.role == "tool"
+          && marker.content == "chain-A"
+          && stages_are_applied_rejected_applied(result.stages),
+      _ => false
+    }
+  }
+
+func dispatch_smoke_record_hooks() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace}
+  tests [((), true)]{
     let vsmoke: VerificationConfig = { enabled: false, command: "make check_core" };
-    let rt = { registry: { hooks: [smoke_hook_a(), smoke_hook_b()] }, strict_mode: false, verification: vsmoke };
+    let rt = { registry: { entries: [smoke_hook_a(), smoke_hook_b()] }, strict_mode: false, verification: vsmoke };
     let ctx = smoke_ctx();
     let prompt_ok = dispatch_build_system_prompt(rt, ctx, "BASE") == "BASE\nA\nB";
     let budget = dispatch_budget_plan(rt, ctx, { total: 10, solver: 6, verifier: 4 });
@@ -396,17 +1167,17 @@ func dispatch_smoke_record_hooks() -> bool
         Pending(_, _) => false
       };
     let handle_ok =
-      match dispatch_tool_handle(rt, ctx, { id: "h", tool: "Alpha", arguments: jo([]) }) {
+      match dispatch_tool_handle(rt, ctx, { id: "h", tool: "Alpha", arguments: jo([]) }).decision {
         Handled(r) => r.exit_code == 0 && r.stdout == "alpha",
         Delegate => false
       };
     let intercept_ok =
-      match dispatch_response_intercept(rt, ctx, "trip") {
+      match dispatch_response_intercept(rt, ctx, "trip").decision {
         InterceptHandled(r) => r.tool_call_id == "ri",
         NoIntercept => false
       };
     let finalize_ok =
-      match dispatch_solver_candidate(rt, ctx, "candidate") {
+      match dispatch_solver_candidate(rt, ctx, "candidate").decision {
         ContinueWithFeedback(msg) => msg == "needs-fix",
         _ => false
       };
@@ -447,28 +1218,756 @@ func merge_deny_over_pending() -> bool
   }
 
 -- dispatch_tool_policy returns Pending when an extension hook returns it.
-func dispatch_pending_hook() -> bool
-  tests [((), true)]
-  {
-    let pending_hook: ExtensionHooks = {
+func dispatch_pending_hook() -> bool ! {Clock, IO}
+  tests [((), true)]{
+    -- B8: a policy-only registration; one atom is a whole registration at 6.0.
+    let pending_hook: ExtEntry = {
       id: "pending_hook",
-      provided_tools: [],
-      on_describe_tools: \_ . [],
-      on_build_system_prompt: \_ctx. { prepend: [], append: [] },
-      on_budget_plan: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
-        { requested_total: None, requested_solver: None, requested_verifier: None }
-      },
-      on_pre_step: func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { PassThrough },
-      on_tool_policy: \_ctx _call. Pending("write outside cwd", DenyAfterTimeout),
-      on_tool_handle: func(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { Delegate },
-      on_response_intercept: func(_ctx: ExtCtx, _r: string) -> ResponseInterceptDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoIntercept },
-      on_solver_candidate: func(_ctx: ExtCtx, _c: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { NoDecision }
+      config: jo([]),
+      caps: [ToolPolicy(\_ctx _call. Pending("write outside cwd", DenyAfterTimeout))]
     };
     let vpending: VerificationConfig = { enabled: false, command: "make check_core" };
-    let rt = { registry: { hooks: [pending_hook] }, strict_mode: false, verification: vpending };
+    let rt = { registry: { entries: [pending_hook] }, strict_mode: false, verification: vpending };
     let ctx = smoke_ctx();
     match dispatch_tool_policy(rt, ctx, { id: "p", tool: "WriteFile", arguments: jo([]) }) {
       Pending(reason, DenyAfterTimeout) => reason == "write outside cwd",
       _ => false
     }
+  }
+
+-- THE HOLDER-STAMP GRAMMAR, from the reader's side (ADR-001 Phase A, A3).
+-- `hook_name` is the first of five prefix readers of `"${name}#${idx}"` (the
+-- others: `is_test_dummy` above, `session.ail`'s `is_compaction_ai_ext_id`,
+-- `tool_phase.ail`'s `scratchpad_extension_active_rec`, and
+-- `dst_attribution_table.ail`'s `hook_id_matches`). It slices at the FIRST `#`
+-- and never looks past it, so a second `#` field would vanish into the index
+-- without a reader noticing — which is why atom identity is typed
+-- (`PreStepStage`, dummy-hook emission), never stamped. Kept at the END of the
+-- file: `tools/predicate-anchors/anchors.sh` pins line numbers above.
+func hook_name_reads_the_prefix_only_test() -> bool
+  tests [((), true)]
+  {
+    hook_name("scratchpad#5") == "scratchpad"
+      && hook_name("scratchpad") == "scratchpad"
+      && hook_name("empty_stop_guard#13") == "empty_stop_guard"
+      && hash_index("scratchpad") < 0
+      && hash_index("scratchpad#5") == 10
+      -- the negative: everything after the first `#` is index to this reader
+      && hook_name("scratchpad#5#2") == "scratchpad"
+  }
+
+-- B6: TYPED ATOM IDENTITY (ADR-001 Phase B; DSI I7, RK C3). Through 5.x the
+-- record bound one atom per kind, so every dispatcher reported atom 0
+-- (`record_atom()`, deleted at B8). At 6.0 the per-kind fold passes the atom's
+-- index within its kind, and NOTHING else changed: `stamp_holder(world, id)`
+-- stays per extension and the stamp grammar `"${name}#${idx}"` (A3) never
+-- carries it. Kept at the END of the file so `tools/predicate-anchors/anchors.sh`'s
+-- pinned line 199 does not move.
+func pre_step_stage_carries_a_typed_atom_test() -> bool
+  tests [((), true)]
+  {
+    let stage: PreStepStage = { ext_id: "scratchpad#5", atom: 2, outcome: StagePassed };
+    -- the atom lives in the record; the stamp still resolves to the base name
+    stage.atom == 2
+      && hook_name(stage.ext_id) == "scratchpad"
+      && hash_index(stage.ext_id) == 10
+  }
+
+-- B8: two Compactor atoms in ONE registration (D4 signed off) are chained in
+-- list order and carry atom indices 0 and 1; a second extension restarts at 0.
+func second_compactor_atom_is_index_one_test() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace}
+  tests [((), true)]{
+    let pass = func(ctx: AiCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} { { decision: PassThrough, next_state: ctx.world } };
+    let two: ExtEntry = { id: "two", config: jo([]), caps: [Compactor(pass), ToolPolicy(\_ctx _call. NoOpinion), Compactor(pass)] };
+    let one: ExtEntry = { id: "one", config: jo([]), caps: [Compactor(pass)] };
+    let v: VerificationConfig = { enabled: false, command: "make check_core" };
+    let rt = { registry: { entries: [two, one] }, strict_mode: false, verification: v };
+    let result = dispatch_pre_step_chain(rt, smoke_ctx(), [chain_msg("user", "u")]);
+    match result.stages {
+      a :: b :: c :: [] => a.ext_id == "two" && a.atom == 0 && b.ext_id == "two" && b.atom == 1 && c.ext_id == "one" && c.atom == 0,
+      _ => false
+    }
+  }
+
+-- ============================================================================
+-- PLACED BELOW THE ATTRIBUTED CLOCK READ, DELIBERATELY — and paid for above.
+--
+-- The `std/crypto` import this needs is a line ABOVE the anchor, so
+-- `loaded_extension_names` was collapsed to the one-line `=` form used elsewhere
+-- in the tree (`config.load_invocation_config`) to pay for it. Same expression,
+-- same export, net zero lines: nothing above the anchor moved at all.
+--
+-- `tools/predicate-anchors/anchors.sh` pins the `now()` above as the ambient
+-- clock read attributed to `test_dummy`, and SEVEN discovered-site fixtures
+-- carry its line number (`driver_only_dst`, `driver_plus_no_ops_dst`,
+-- `driver_plus_compose_dst`, `profile_definition_dst`, `herdr_graded_dst` and
+-- `attribution_table_dst` twice over). Adding fifty lines above it moves the
+-- anchor and turns a one-file change into the NINE-FILE re-baseline form the
+-- anchor script's own note calls "the price of moving any anchor those fixtures
+-- carry". This code reads no clock and has no reason to sit above one, so it
+-- sits below and the anchor does not move. PLAN-003 §0.2 priced ONE P3
+-- re-baseline and P3 Part 3 spent it.
+-- ============================================================================
+
+-- ADR-003 v6.1 D5's `ext_set_digest`, computed FROM THE REGISTRY.
+--
+-- D5 says it explicitly, and PLAN-003 P3 Part 4's "do not" list repeats it: this is not derived
+-- from the `loaded_extensions` names on `session_start`. Those names are `hook_name(e.id)` --
+-- `hook_names` slices the id at its `#`, so two different registrations of one extension collapse
+-- to one name, and the ORDER-SENSITIVE instance ids that decide which hook shapes the prompt first
+-- are gone. A digest over that would report "same extension set" for two registries that build
+-- different system prompts, which is the one thing a resume's compatibility row must not do.
+--
+-- So the digest covers the full instance id AND the KINDS of capability each entry registered, in
+-- registry order. The capabilities themselves are closures (`Capability`'s payloads are functions)
+-- and nothing can hash those; the kind is what is left, and it is what changes when an extension
+-- gains or loses a hook. What this digest therefore does NOT see is a change inside an extension's
+-- code that keeps its id and its hook set -- stated here rather than discovered at a resume that
+-- accepted a journal it should have refused.
+export pure func ext_set_digest(rt: ExtRuntime) -> string {
+  "sha256:${sha256Hex(ext_set_canonical(rt.registry.entries))}"
+}
+
+pure func ext_set_canonical(entries: [ExtEntry]) -> string {
+  match entries {
+    [] => "",
+    e :: rest => "${e.id}[${join_semis(capability_kinds(e.caps))}]\n${ext_set_canonical(rest)}"
+  }
+}
+
+pure func join_semis(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: [] => x,
+    x :: rest => "${x};${join_semis(rest)}"
+  }
+}
+
+pure func capability_kinds(caps: [Capability]) -> [string] {
+  match caps {
+    [] => [],
+    c :: rest => capability_kind(c) :: capability_kinds(rest)
+  }
+}
+
+pure func capability_kind(c: Capability) -> string {
+  match c {
+    DescribeTools(_) => "describe_tools",
+    PromptShaper(_) => "prompt_shaper",
+    BudgetShaper(_) => "budget_shaper",
+    Compactor(_) => "compactor",
+    ToolPolicy(_) => "tool_policy",
+    ToolProvider(_, _) => "tool_provider",
+    ResponseInterceptor(_) => "response_interceptor",
+    SolverJudge(_) => "solver_judge",
+    ExitIntent(_, _, _) => "exit_intent",
+    WorkInFlight(_, _) => "work_in_flight",
+    -- 8.0: the two decision variants. Their descriptor is DATA the D6
+    -- `Descriptor` row compares on its own; here only the kind is read.
+    DecisionSolverJudge(_, _, _) => "decision_solver_judge",
+    DecisionToolPolicy(_, _, _) => "decision_tool_policy"
+  }
+}
+
+-- ============================================================================
+-- 8.0 (031 ADR-001 D2): THE STAMP, observed from inside each callback.
+-- `cfg_tag` reads the `tag` field of the `ext_config` a view carries. Each
+-- test registers TWO entries with different configurations and asserts that
+-- every dispatcher hands each callback ITS OWN entry's configuration -- not
+-- the other entry's, not an empty one -- through the row's view. One test per
+-- fold: `evidence/P1.1/p11_mutgate_spec.tsv` mutates each fold's projection
+-- to an empty stamp and expects that fold's test to go red.
+-- ============================================================================
+pure func cfg_tag(cfg: Json) -> string {
+  match get(cfg, "tag") {
+    Some(v) => match asString(v) { Some(s) => s, None => "" },
+    None => ""
+  }
+}
+
+pure func tagged(tag: string) -> Json { jo([kv("tag", js(tag))]) }
+
+pure func stamp_rt(entries: [ExtEntry]) -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "make check_core" };
+  { registry: { entries: entries }, strict_mode: false, verification: v }
+}
+
+func stamped_prompt_shaper_test() -> bool ! {IO, Clock}
+  tests [((), true)]{
+    let shape = func(ctx: PureCtx) -> PromptPatch { { prepend: [], append: [cfg_tag(ctx.ext_config)] } };
+    let a: ExtEntry = { id: "pa", config: tagged("A"), caps: [PromptShaper(shape)] };
+    let b: ExtEntry = { id: "pb", config: tagged("B"), caps: [PromptShaper(shape)] };
+    dispatch_build_system_prompt(stamp_rt([a, b]), smoke_ctx(), "BASE") == "BASE\nA\nB"
+  }
+
+func stamped_budget_shaper_test() -> bool ! {IO, Clock}
+  tests [((), true)]{
+    let total_if_a = func(ctx: PureCtx, _p: BudgetPlan) -> BudgetPatch {
+      { requested_total: Some(if cfg_tag(ctx.ext_config) == "A" then 7 else 1), requested_solver: None, requested_verifier: None }
+    };
+    let solver_if_b = func(ctx: PureCtx, _p: BudgetPlan) -> BudgetPatch {
+      { requested_total: None, requested_solver: Some(if cfg_tag(ctx.ext_config) == "B" then 3 else 1), requested_verifier: None }
+    };
+    let a: ExtEntry = { id: "ba", config: tagged("A"), caps: [BudgetShaper(total_if_a)] };
+    let b: ExtEntry = { id: "bb", config: tagged("B"), caps: [BudgetShaper(solver_if_b)] };
+    let plan = dispatch_budget_plan(stamp_rt([a, b]), smoke_ctx(), { total: 10, solver: 6, verifier: 4 });
+    plan.total == 7 && plan.solver == 3 && plan.verifier == 4
+  }
+
+func stamped_compactor_test() -> bool ! {AI, Clock, IO, Trace}
+  tests [((), true)]{
+    let tag_stage = func(ctx: AiCtx, msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} {
+      { decision: Compacted(msgs ++ [chain_msg("user", cfg_tag(ctx.ext_config))], "tag", jo([])), next_state: ctx.world }
+    };
+    let a: ExtEntry = { id: "ca", config: tagged("A"), caps: [Compactor(tag_stage)] };
+    let b: ExtEntry = { id: "cb", config: tagged("B"), caps: [Compactor(tag_stage)] };
+    let result = dispatch_pre_step_chain(stamp_rt([a, b]), smoke_ctx(), [chain_msg("user", "seed")]);
+    match result.msgs {
+      seed :: first :: second :: [] => seed.content == "seed" && first.content == "A" && second.content == "B",
+      _ => false
+    }
+  }
+
+func stamped_tool_policy_test() -> bool ! {IO, Clock}
+  tests [((), true)]{
+    let deny_if_a = func(ctx: PureCtx, _c: ToolCallEnvelope) -> ToolPolicyDecision { if cfg_tag(ctx.ext_config) == "A" then Deny("A") else Allow };
+    let silent_if_b = func(ctx: PureCtx, _c: ToolCallEnvelope) -> ToolPolicyDecision { if cfg_tag(ctx.ext_config) == "B" then NoOpinion else Deny("wrong") };
+    let a: ExtEntry = { id: "ta", config: tagged("A"), caps: [ToolPolicy(deny_if_a)] };
+    let b: ExtEntry = { id: "tb", config: tagged("B"), caps: [ToolPolicy(silent_if_b)] };
+    match dispatch_tool_policy(stamp_rt([a, b]), smoke_ctx(), { id: "p", tool: "X", arguments: jo([]) }) {
+      Deny(msg) => msg == "A",
+      _ => false
+    }
+  }
+
+func stamped_tool_provider_test() -> bool ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace}
+  tests [((), true)]{
+    let echo = func(ctx: ProviderCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+      { decision: Handled({ tool_call_id: call.id, tool: call.tool, exit_code: 0, stdout: cfg_tag(ctx.ext_config), stderr: "", metadata: jo([]) }), next_state: ctx.world }
+    };
+    let a: ExtEntry = { id: "ha", config: tagged("A"), caps: [ToolProvider(["T"], echo)] };
+    let b: ExtEntry = { id: "hb", config: tagged("B"), caps: [ToolProvider(["U"], echo)] };
+    let rt = stamp_rt([a, b]);
+    let t = match dispatch_tool_handle(rt, smoke_ctx(), { id: "1", tool: "T", arguments: jo([]) }).decision { Handled(r) => r.stdout, Delegate => "" };
+    let u = match dispatch_tool_handle(rt, smoke_ctx(), { id: "2", tool: "U", arguments: jo([]) }).decision { Handled(r) => r.stdout, Delegate => "" };
+    t == "A" && u == "B"
+  }
+
+func stamped_response_interceptor_test() -> bool ! {IO, Process, FS, Clock}
+  tests [((), true)]{
+    let pass_if_a = func(ctx: InterceptCtx, _r: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
+      { decision: if cfg_tag(ctx.ext_config) == "A" then NoIntercept else InterceptHandled({ tool_call_id: "x", tool: "x", exit_code: 1, stdout: "wrong", stderr: "", metadata: jo([]) }), next_state: ctx.world }
+    };
+    let echo = func(ctx: InterceptCtx, _r: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
+      { decision: InterceptHandled({ tool_call_id: "y", tool: "y", exit_code: 0, stdout: cfg_tag(ctx.ext_config), stderr: "", metadata: jo([]) }), next_state: ctx.world }
+    };
+    let a: ExtEntry = { id: "ia", config: tagged("A"), caps: [ResponseInterceptor(pass_if_a)] };
+    let b: ExtEntry = { id: "ib", config: tagged("B"), caps: [ResponseInterceptor(echo)] };
+    match dispatch_response_intercept(stamp_rt([a, b]), smoke_ctx(), "text").decision {
+      InterceptHandled(r) => r.stdout == "B",
+      NoIntercept => false
+    }
+  }
+
+func stamped_solver_judge_test() -> bool ! {Process, IO, Clock}
+  tests [((), true)]{
+    let silent_if_a = func(ctx: ProcessCtx, _c: string) -> FinalizeOutcome ! {Process} {
+      { decision: if cfg_tag(ctx.ext_config) == "A" then NoDecision else ContinueWithFeedback("wrong"), next_state: ctx.world }
+    };
+    let echo = func(ctx: ProcessCtx, _c: string) -> FinalizeOutcome ! {Process} {
+      { decision: ContinueWithFeedback(cfg_tag(ctx.ext_config)), next_state: ctx.world }
+    };
+    let a: ExtEntry = { id: "ja", config: tagged("A"), caps: [SolverJudge(silent_if_a)] };
+    let b: ExtEntry = { id: "jb", config: tagged("B"), caps: [SolverJudge(echo)] };
+    match dispatch_solver_candidate(stamp_rt([a, b]), smoke_ctx(), "candidate").decision {
+      ContinueWithFeedback(msg) => msg == "B",
+      _ => false
+    }
+  }
+
+pure func published_tmp(actions: [ExitAction]) -> string {
+  match actions {
+    PublishFile(p) :: _ => p.tmp,
+    _ => ""
+  }
+}
+
+func stamped_exit_intent_test() -> bool ! {FS}
+  tests [((), true)]{
+    let publish = func(ctx: FsCtx) -> ExitIntentOutcome ! {FS} {
+      { actions: [PublishFile({ tmp: cfg_tag(ctx.ext_config), dest: "d", expect_sha256: "" })], next_state: ctx.world }
+    };
+    let a: ExtEntry = { id: "ea", config: tagged("A"), caps: [ExitIntent("la", true, publish)] };
+    let b: ExtEntry = { id: "eb", config: tagged("B"), caps: [ExitIntent("lb", true, publish)] };
+    match dispatch_exit_intents(stamp_rt([a, b]), smoke_ctx()).intents {
+      x :: y :: [] => published_tmp(x.actions) == "A" && published_tmp(y.actions) == "B",
+      _ => false
+    }
+  }
+
+-- Also the 7.3 bootstrap rule, now structural in the projection: the declarer
+-- sees `work_in_flight: []` even when the host's context carries an aggregate.
+func stamped_work_in_flight_test() -> bool ! {FS}
+  tests [((), true)]{
+    let declare = func(ctx: FsCtx) -> WorkOutcome ! {FS} {
+      { items: [{ label: cfg_tag(ctx.ext_config), detail: match ctx.work_in_flight { [] => "bootstrap-empty", _ => "aggregate-leaked" } }], next_state: ctx.world }
+    };
+    let a: ExtEntry = { id: "wa", config: tagged("A"), caps: [WorkInFlight("la", declare)] };
+    let b: ExtEntry = { id: "wb", config: tagged("B"), caps: [WorkInFlight("lb", declare)] };
+    let ctx = { smoke_ctx() | work_in_flight: [{ label: "already", detail: "" }] };
+    match dispatch_work_in_flight(stamp_rt([a, b]), ctx).items {
+      x :: y :: [] => x.label == "A" && y.label == "B" && x.detail == "bootstrap-empty" && y.detail == "bootstrap-empty",
+      _ => false
+    }
+  }
+
+-- ============================================================================
+-- PRECEDENCE, UNCHANGED AT 8.0 (plan §3 P1.1: "dispatchers unchanged in
+-- precedence, re-typed to views"). Tool policy: Deny > Pending > Allow >
+-- NoOpinion. Finalize: ContinueWithFeedback > Accept > NoDecision, with
+-- `Accept` now nullary. Each stated against the merge alone; the dispatch
+-- paths are covered by `dispatch_smoke_record_hooks` above.
+-- ============================================================================
+func merge_tool_policy_precedence_test() -> bool
+  tests [((), true)]
+  {
+    let allow_over_noop = match merge_tool_decisions([NoOpinion, Allow, NoOpinion], false, None) { Allow => true, _ => false };
+    let pending_over_allow = match merge_tool_decisions([Allow, Pending("p", AllowAfterTimeout), Allow], false, None) { Pending(r, _) => r == "p", _ => false };
+    let deny_over_pending = match merge_tool_decisions([Pending("p", DenyAfterTimeout), Deny("d"), Allow], false, None) { Deny(m) => m == "d", _ => false };
+    let noop = match merge_tool_decisions([NoOpinion], false, None) { NoOpinion => true, _ => false };
+    allow_over_noop && pending_over_allow && deny_over_pending && noop
+  }
+
+func merge_finalize_precedence_test() -> bool
+  tests [((), true)]
+  {
+    let continue_over_accept = match merge_finalize_decisions([Accept, ContinueWithFeedback("fix"), Accept]) { ContinueWithFeedback(m) => m == "fix", _ => false };
+    let accept_over_none = match merge_finalize_decisions([NoDecision, Accept, NoDecision]) { Accept => true, _ => false };
+    let none = match merge_finalize_decisions([NoDecision]) { NoDecision => true, _ => false };
+    let empty = match merge_finalize_decisions([]) { NoDecision => true, _ => false };
+    continue_over_accept && accept_over_none && none && empty
+  }
+
+-- 8.0: `ext_set_digest` STAYS KIND-ONLY (031 ADR-001 D2). Two registries that
+-- differ only in `config` have the same set digest -- the config digest is
+-- `registry_normalize.ext_config_digest`'s, per epoch -- and a kind change
+-- still moves it.
+func ext_set_digest_is_kind_only_test() -> bool
+  tests [((), true)]
+  {
+    let policy = func(_ctx: PureCtx, _c: ToolCallEnvelope) -> ToolPolicyDecision { NoOpinion };
+    let shape = func(_ctx: PureCtx) -> PromptPatch { { prepend: [], append: [] } };
+    let a: ExtEntry = { id: "x#0", config: tagged("A"), caps: [ToolPolicy(policy)] };
+    let b: ExtEntry = { id: "x#0", config: tagged("B"), caps: [ToolPolicy(policy)] };
+    let c: ExtEntry = { id: "x#0", config: tagged("A"), caps: [ToolPolicy(policy), PromptShaper(shape)] };
+    ext_set_digest(stamp_rt([a])) == ext_set_digest(stamp_rt([b]))
+      && ext_set_digest(stamp_rt([a])) != ext_set_digest(stamp_rt([c]))
+  }
+
+-- ...and a same-profile `SolverJudge` -> `DecisionSolverJudge` change DOES move
+-- it (ADR-001 (031) D7: it "changes `ext_set_digest` and triggers its existing
+-- resume refusal"), because the kind enumeration names the two variants.
+pure func neutral_descriptor() -> DecisionPolicyDescriptor {
+  { local_id: "j", question_version: "1", question_config: jo([]), interpretation_version: "1", interpretation_config: jo([]), max_interventions: 0 }
+}
+
+pure func neutral_prepare(_ctx: PureCtx, _c: string) -> JudgePreparation { JudgeImmediate(NoDecision) }
+
+pure func neutral_interpret(_ctx: PureCtx, _c: string, _r: DecisionRequest, _o: DecisionObservation) -> FinalizeDecision { NoDecision }
+
+func ext_set_digest_sees_the_decision_variant_test() -> bool
+  tests [((), true)]
+  {
+    let legacy = func(ctx: ProcessCtx, _c: string) -> FinalizeOutcome ! {Process} { { decision: NoDecision, next_state: ctx.world } };
+    let a: ExtEntry = { id: "g#0", config: jo([]), caps: [SolverJudge(legacy)] };
+    let b: ExtEntry = { id: "g#0", config: jo([]), caps: [DecisionSolverJudge(neutral_descriptor(), neutral_prepare, neutral_interpret)] };
+    ext_set_digest(stamp_rt([a])) != ext_set_digest(stamp_rt([b]))
+  }
+
+-- ============================================================================
+-- 8.0 (031 ADR-001 D4), PLAN-001 P1.3r: THE DECISION CURSOR AND ITS STUB ARM.
+-- Each test states one clause of the cursor above against the real folds;
+-- `evidence/P1.3r/p13r_mutgate_spec.tsv` mutates the clause and expects the
+-- named test to go red. The probe consumers read their label from
+-- `ext_config` (`cfg_tag`), so a vote says which extension cast it.
+-- ============================================================================
+pure func probe_request(binding: string) -> DecisionRequest {
+  { backend_binding: binding, state: jo([]), questions: [] }
+}
+
+pure func probe_descriptor(local_id: string) -> DecisionPolicyDescriptor {
+  { local_id: local_id, question_version: "1", question_config: jo([]), interpretation_version: "1", interpretation_config: jo([]), max_interventions: 1 }
+}
+
+-- What an observation reads as, in one string: the stub's is `unconfigured`.
+pure func observation_tag(obs: DecisionObservation) -> string {
+  match obs.result {
+    Unavailable(UnconfiguredBackend) => "unconfigured",
+    Unavailable(_) => "unavailable-other",
+    Answered(resp) => match resp.answers {
+      [] => "answered",
+      a :: _ => match a.answer { BinaryAnswer(p) => "answered:${a.question_id}:${show(p)}", _ => "answered:${a.question_id}" }
+    }
+  }
+}
+
+pure func querying_tool_prepare(ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPreparation { ToolQuery(probe_request("bind-${cfg_tag(ctx.ext_config)}")) }
+
+pure func querying_judge_prepare(ctx: PureCtx, _c: string) -> JudgePreparation { JudgeQuery(probe_request("bind-${cfg_tag(ctx.ext_config)}")) }
+
+-- The query-path consumers VOTE ON THE OBSERVATION: the stub's `Unavailable`
+-- is turned into a Deny / ContinueWithFeedback naming the extension, the
+-- binding of the request `interpret` was handed (so the EXACT prepared request
+-- is proved to reach it) and the observation.
+pure func tagging_tool_interpret(ctx: PureCtx, _call: ToolCallEnvelope, req: DecisionRequest, obs: DecisionObservation) -> ToolPolicyDecision {
+  Deny("${cfg_tag(ctx.ext_config)}:${req.backend_binding}:${observation_tag(obs)}")
+}
+
+pure func tagging_judge_interpret(ctx: PureCtx, _c: string, req: DecisionRequest, obs: DecisionObservation) -> FinalizeDecision {
+  ContinueWithFeedback("${cfg_tag(ctx.ext_config)}:${req.backend_binding}:${observation_tag(obs)}")
+}
+
+pure func never_tool_interpret(_ctx: PureCtx, _call: ToolCallEnvelope, _r: DecisionRequest, _o: DecisionObservation) -> ToolPolicyDecision { Deny("interpret reached after an immediate vote") }
+
+pure func never_judge_interpret(_ctx: PureCtx, _c: string, _r: DecisionRequest, _o: DecisionObservation) -> FinalizeDecision { ContinueWithFeedback("interpret reached after an immediate vote") }
+
+pure func allow_now(_ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPreparation { ToolImmediate(Allow) }
+
+pure func pending_now(ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPreparation { ToolImmediate(Pending(cfg_tag(ctx.ext_config), AllowAfterTimeout)) }
+
+pure func deny_now(ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPreparation { ToolImmediate(Deny(cfg_tag(ctx.ext_config))) }
+
+pure func accept_now(_ctx: PureCtx, _c: string) -> JudgePreparation { JudgeImmediate(Accept) }
+
+pure func continue_now(ctx: PureCtx, _c: string) -> JudgePreparation { JudgeImmediate(ContinueWithFeedback(cfg_tag(ctx.ext_config))) }
+
+pure func tool_query_entry(tag: string) -> ExtEntry {
+  { id: tag, config: tagged(tag), caps: [DecisionToolPolicy(probe_descriptor(tag), querying_tool_prepare, tagging_tool_interpret)] }
+}
+
+pure func tool_immediate_entry(tag: string, prepare: (PureCtx, ToolCallEnvelope) -> ToolPreparation) -> ExtEntry {
+  { id: tag, config: tagged(tag), caps: [DecisionToolPolicy(probe_descriptor(tag), prepare, never_tool_interpret)] }
+}
+
+pure func judge_query_entry(tag: string) -> ExtEntry {
+  { id: tag, config: tagged(tag), caps: [DecisionSolverJudge(probe_descriptor(tag), querying_judge_prepare, tagging_judge_interpret)] }
+}
+
+pure func judge_immediate_entry(tag: string, prepare: (PureCtx, string) -> JudgePreparation) -> ExtEntry {
+  { id: tag, config: tagged(tag), caps: [DecisionSolverJudge(probe_descriptor(tag), prepare, never_judge_interpret)] }
+}
+
+pure func legacy_policy_entry(tag: string, vote: ToolPolicyDecision) -> ExtEntry {
+  { id: tag, config: tagged(tag), caps: [ToolPolicy(\_ctx _call. vote)] }
+}
+
+pure func legacy_judge_entry(tag: string, vote: FinalizeDecision) -> ExtEntry {
+  let judge = func(ctx: ProcessCtx, _c: string) -> FinalizeOutcome ! {Process} { { decision: vote, next_state: ctx.world } };
+  { id: tag, config: tagged(tag), caps: [SolverJudge(judge)] }
+}
+
+pure func probe_call() -> ToolCallEnvelope { { id: "c1", tool: "WriteFile", arguments: jo([]) } }
+
+pure func tool_votes_tags(xs: [ToolPolicyDecision]) -> string {
+  match xs {
+    [] => "",
+    x :: rest => {
+      let t = match x { Allow => "allow", NoOpinion => "noop", Deny(m) => "deny(${m})", Pending(r, _) => "pending(${r})" };
+      "${t};${tool_votes_tags(rest)}"
+    }
+  }
+}
+
+pure func judge_votes_tags(xs: [FinalizeDecision]) -> string {
+  match xs {
+    [] => "",
+    x :: rest => {
+      let t = match x { Accept => "accept", NoDecision => "noop", ContinueWithFeedback(m) => "continue(${m})" };
+      "${t};${judge_votes_tags(rest)}"
+    }
+  }
+}
+
+pure func tool_tag(d: ToolPolicyDecision) -> string { tool_votes_tags([d]) }
+
+pure func judge_tag(d: FinalizeDecision) -> string { judge_votes_tags([d]) }
+
+-- THE STUB ARM: `Unavailable(UnconfiguredBackend)`, usage known to be zero.
+func stub_answers_unavailable_unconfigured_with_zero_usage_test() -> bool
+  tests [((), true)]
+  {
+    let obs = stub_decision_answer({ ext_id: "x", atom: 0, site: ToolPolicySite, request: probe_request("b") });
+    let unconfigured = match obs.result { Unavailable(UnconfiguredBackend) => true, _ => false };
+    let zero = match (obs.usage.input_tokens, obs.usage.output_tokens, obs.usage.cost_millicents) {
+      (Some(0), Some(0), Some(0)) => true,
+      _ => false
+    };
+    unconfigured && zero
+  }
+
+-- EVERY ATOM RUNS, IN REGISTRY ORDER, and each query's interpreter votes on the
+-- stub's observation: a queried Deny first does not stop the legacy Pending or
+-- the immediate Allow behind it. The merge then picks the first Deny.
+func tool_cursor_runs_every_atom_in_order_test() -> bool ! {IO, Clock}
+  tests [((), true)]
+  {
+    let rt = stamp_rt([tool_query_entry("A"), legacy_policy_entry("B", Pending("B", DenyAfterTimeout)), tool_immediate_entry("C", allow_now), tool_query_entry("D")]);
+    let votes = collect_tool_decisions(rt.registry.entries, smoke_ctx(), probe_call());
+    let merged = dispatch_tool_policy(rt, smoke_ctx(), probe_call());
+    tool_votes_tags(votes) == "deny(A:bind-A:unconfigured);pending(B);allow;deny(D:bind-D:unconfigured);"
+      && tool_tag(merged) == "deny(A:bind-A:unconfigured);"
+  }
+
+func finalize_cursor_runs_every_atom_in_order_test() -> bool ! {Process, IO, Clock}
+  tests [((), true)]
+  {
+    let rt = stamp_rt([judge_query_entry("A"), legacy_judge_entry("B", Accept), judge_immediate_entry("C", accept_now), judge_query_entry("D")]);
+    let ctx = smoke_ctx();
+    let votes = collect_finalize_decisions(rt.registry.entries, ctx, "cand", ctx.world);
+    let merged = dispatch_solver_candidate(rt, ctx, "cand");
+    judge_votes_tags(votes.decisions) == "continue(A:bind-A:unconfigured);accept;accept;continue(D:bind-D:unconfigured);"
+      && judge_tag(merged.decision) == "continue(A:bind-A:unconfigured);"
+  }
+
+-- NO ORDINAL ADVANCES AND NO HOLDER IS STAMPED BY A DECLARED ATOM: the finalize
+-- fold's successor after declared atoms alone is the input world, holder
+-- cleared exactly as every dispatcher clears it.
+func declared_atoms_leave_the_world_untouched_test() -> bool ! {Process, IO, Clock}
+  tests [((), true)]
+  {
+    let w: ExtWorld = { token: jo([kv("trace", js("before;")), kv("ordinal", jnum(7.0))]) };
+    let ctx = { smoke_ctx() | world: w };
+    let rt = stamp_rt([judge_query_entry("A"), judge_immediate_entry("B", accept_now), judge_query_entry("C")]);
+    let out = dispatch_solver_candidate(rt, ctx, "cand");
+    let inner = collect_finalize_decisions(rt.registry.entries, ctx, "cand", w);
+    encode(out.next_state.token) == encode(clear_holder(w).token) && encode(inner.next_state.token) == encode(w.token)
+  }
+
+-- PRECEDENCE, LEGACY VERSUS DECLARED, IN EACH FAMILY AND IN BOTH ORDERS. Tool
+-- policy: the FIRST Deny wins and the LAST Pending wins, whichever kind cast
+-- it; a declared immediate Allow does not out-vote a later legacy Deny.
+-- Finalize: the FIRST ContinueWithFeedback wins; a declared immediate Accept
+-- does not out-vote a later legacy ContinueWithFeedback.
+func tool_policy_legacy_vs_declared_precedence_test() -> bool ! {IO, Clock}
+  tests [((), true)]
+  {
+    let ctx = smoke_ctx();
+    let c = probe_call();
+    let deny_legacy_first = tool_tag(dispatch_tool_policy(stamp_rt([legacy_policy_entry("L", Deny("L")), tool_immediate_entry("D", deny_now)]), ctx, c)) == "deny(L);";
+    let deny_declared_first = tool_tag(dispatch_tool_policy(stamp_rt([tool_immediate_entry("D", deny_now), legacy_policy_entry("L", Deny("L"))]), ctx, c)) == "deny(D);";
+    let deny_queried_first = tool_tag(dispatch_tool_policy(stamp_rt([tool_query_entry("Q"), legacy_policy_entry("L", Deny("L"))]), ctx, c)) == "deny(Q:bind-Q:unconfigured);";
+    let pending_last_declared = tool_tag(dispatch_tool_policy(stamp_rt([legacy_policy_entry("L", Pending("L", DenyAfterTimeout)), tool_immediate_entry("D", pending_now)]), ctx, c)) == "pending(D);";
+    let pending_last_legacy = tool_tag(dispatch_tool_policy(stamp_rt([tool_immediate_entry("D", pending_now), legacy_policy_entry("L", Pending("L", DenyAfterTimeout))]), ctx, c)) == "pending(L);";
+    let allow_then_deny = tool_tag(dispatch_tool_policy(stamp_rt([tool_immediate_entry("D", allow_now), legacy_policy_entry("L", Deny("L"))]), ctx, c)) == "deny(L);";
+    let pending_over_declared_allow = tool_tag(dispatch_tool_policy(stamp_rt([legacy_policy_entry("L", Pending("L", DenyAfterTimeout)), tool_immediate_entry("D", allow_now)]), ctx, c)) == "pending(L);";
+    deny_legacy_first && deny_declared_first && deny_queried_first && pending_last_declared && pending_last_legacy && allow_then_deny && pending_over_declared_allow
+  }
+
+func finalize_legacy_vs_declared_precedence_test() -> bool ! {Process, IO, Clock}
+  tests [((), true)]
+  {
+    let ctx = smoke_ctx();
+    let continue_legacy_first = judge_tag(dispatch_solver_candidate(stamp_rt([legacy_judge_entry("L", ContinueWithFeedback("L")), judge_immediate_entry("D", continue_now)]), ctx, "c").decision) == "continue(L);";
+    let continue_declared_first = judge_tag(dispatch_solver_candidate(stamp_rt([judge_immediate_entry("D", continue_now), legacy_judge_entry("L", ContinueWithFeedback("L"))]), ctx, "c").decision) == "continue(D);";
+    let continue_queried_first = judge_tag(dispatch_solver_candidate(stamp_rt([judge_query_entry("Q"), legacy_judge_entry("L", ContinueWithFeedback("L"))]), ctx, "c").decision) == "continue(Q:bind-Q:unconfigured);";
+    let accept_then_continue = judge_tag(dispatch_solver_candidate(stamp_rt([judge_immediate_entry("D", accept_now), legacy_judge_entry("L", ContinueWithFeedback("L"))]), ctx, "c").decision) == "continue(L);";
+    let declared_accept_over_noop = judge_tag(dispatch_solver_candidate(stamp_rt([legacy_judge_entry("L", NoDecision), judge_immediate_entry("D", accept_now)]), ctx, "c").decision) == "accept;";
+    continue_legacy_first && continue_declared_first && continue_queried_first && accept_then_continue && declared_accept_over_noop
+  }
+
+-- P0.5's `neutral_registration` through the cursor: src/core/test/ext_neutral_registration.ail
+-- (P1.3r-a2: production core does not import the conformance harness; its `Scenario`
+-- collides with dst_harness.Scenario on a cold cache).
+
+-- ============================================================================
+-- 8.0 (031 ADR-001 D3), PLAN-001 P1.4r: TRUTHFUL EVIDENCE DEFAULTS, AND THE
+-- DECISION STATE AT DECISION SITES. Each test is one clause of D3 against the
+-- real folds; `evidence/P1.4r/p14r_mutgate_spec.tsv` mutates the clause and
+-- expects the named test to go red. A probe callback reports what it was
+-- handed as ONE STRING in its vote, so the expected values below are literals,
+-- written from the descriptors, never recomputed through the code under test.
+-- ============================================================================
+
+-- What a view's three D3 fields read as.
+pure func verification_tag(v: VerificationEvidence) -> string {
+  match v {
+    NotReached => "not_reached",
+    Disabled => "disabled",
+    Passed(_) => "passed",
+    Failed(_) => "failed",
+    VerificationUnavailable(_, _) => "unavailable"
+  }
+}
+
+pure func window_tag(w: ToolEvidenceWindow) -> string {
+  let recs = match w.records { [] => "empty", _ => "records" };
+  let complete = if w.complete_from_session_start then "complete" else "incomplete";
+  let omitted = match w.omitted_count { None => "unknown", Some(n) => show(n) };
+  "${recs}:${complete}:${omitted}"
+}
+
+pure func mode_tag(m: DecisionMode) -> string {
+  match m { DisabledDecision => "disabled", ShadowDecision => "shadow", EnforcingDecision => "enforcing" }
+}
+
+pure func state_tag(st: Option[DecisionInvocationState]) -> string {
+  match st {
+    None => "none",
+    Some(s) => {
+      let cap = match s.run_cap_millicents { None => "none", Some(n) => "some(${show(n)})" };
+      "some[${s.invocation_id}|${mode_tag(s.mode)}|used=${show(s.interventions_used)}|limit=${show(s.intervention_limit)}|q=${encode(s.question_config)}|i=${encode(s.interpretation_config)}|ledger=${show(s.allowance_millicents)},${show(s.known_spend_millicents)},${show(s.outstanding_millicents)},${show(s.run_cost_millicents)},${cap}]"
+    }
+  }
+}
+
+pure func evidence_tag(v: VerificationEvidence, w: ToolEvidenceWindow, st: Option[DecisionInvocationState]) -> string {
+  "${verification_tag(v)}|${window_tag(w)}|${state_tag(st)}"
+}
+
+-- The truthful defaults, as one string: nothing reached, an empty INCOMPLETE
+-- window with an unknown omitted count, no decision state.
+pure func truthful_default_tag() -> string { "not_reached|empty:incomplete:unknown|none" }
+
+-- A host context that WRONGLY carries a decision state, with non-zero ledger
+-- terms and foreign projections: no atom may see it (entry_base resets it; a
+-- decision atom sees only its own).
+pure func foreign_state() -> DecisionInvocationState {
+  { invocation_id: "host/finalize/foreign", mode: ShadowDecision, interventions_used: 5, intervention_limit: 9,
+    question_config: jo([kv("foreign", js("q"))]), interpretation_config: jo([kv("foreign", js("i"))]),
+    allowance_millicents: 7, known_spend_millicents: 7, outstanding_millicents: 7, run_cost_millicents: 7, run_cap_millicents: Some(7) }
+}
+
+-- ORDINARY-SITE probes: each reports the three fields of the view it got.
+pure func evidence_shaper(ctx: PureCtx) -> PromptPatch {
+  { prepend: [], append: [evidence_tag(ctx.verification, ctx.tool_evidence, ctx.decision_state)] }
+}
+
+pure func evidence_policy(ctx: PureCtx, _c: ToolCallEnvelope) -> ToolPolicyDecision {
+  Deny(evidence_tag(ctx.verification, ctx.tool_evidence, ctx.decision_state))
+}
+
+func evidence_judge(ctx: ProcessCtx, _c: string) -> FinalizeOutcome ! {Process} {
+  { decision: ContinueWithFeedback(evidence_tag(ctx.verification, ctx.tool_evidence, ctx.decision_state)), next_state: ctx.world }
+}
+
+func evidence_work(ctx: FsCtx) -> WorkOutcome ! {FS} {
+  { items: [{ label: evidence_tag(ctx.verification, ctx.tool_evidence, ctx.decision_state), detail: "" }], next_state: ctx.world }
+}
+
+-- The runtime's host literal (`smoke_ctx`, D3's "legacy context fixtures must
+-- explicitly initialize these new fields") carries the truthful defaults, and
+-- every ordinary view projected from it shows them: a prompt shaper, a legacy
+-- tool policy, a legacy judge (ProcessCtx), a work declarer (FsCtx).
+func ordinary_sites_see_truthful_defaults_test() -> bool ! {Process, IO, Clock, FS}
+  tests [((), true)]
+  {
+    let e: ExtEntry = { id: "o#0", config: jo([]), caps: [PromptShaper(evidence_shaper), ToolPolicy(evidence_policy), SolverJudge(evidence_judge), WorkInFlight("w", evidence_work)] };
+    let rt = stamp_rt([e]);
+    let ctx = smoke_ctx();
+    let host = evidence_tag(ctx.verification, ctx.tool_evidence, ctx.decision_state) == truthful_default_tag();
+    let prompt = dispatch_build_system_prompt(rt, ctx, "base") == "base\n${truthful_default_tag()}";
+    let tool = tool_tag(dispatch_tool_policy(rt, ctx, probe_call())) == "deny(${truthful_default_tag()});";
+    let judge = judge_tag(dispatch_solver_candidate(rt, ctx, "c").decision) == "continue(${truthful_default_tag()});";
+    let work = match dispatch_work_in_flight(rt, ctx).items { x :: [] => x.label == truthful_default_tag(), _ => false };
+    host && prompt && tool && judge && work
+  }
+
+-- ...and an ordinary site sees `None` even when the host's context carries a
+-- state: `decision_state = None` at ordinary sites is the runtime's, not a
+-- property each host literal must remember.
+func ordinary_sites_see_none_whatever_the_host_carries_test() -> bool ! {Process, IO, Clock}
+  tests [((), true)]
+  {
+    let e: ExtEntry = { id: "o#0", config: jo([]), caps: [PromptShaper(evidence_shaper), ToolPolicy(evidence_policy), SolverJudge(evidence_judge)] };
+    let rt = stamp_rt([e]);
+    let ctx = { smoke_ctx() | decision_state: Some(foreign_state()) };
+    let prompt = dispatch_build_system_prompt(rt, ctx, "base") == "base\n${truthful_default_tag()}";
+    let tool = tool_tag(dispatch_tool_policy(rt, ctx, probe_call())) == "deny(${truthful_default_tag()});";
+    let judge = judge_tag(dispatch_solver_candidate(rt, ctx, "c").decision) == "continue(${truthful_default_tag()});";
+    prompt && tool && judge
+  }
+
+-- DECISION-SITE probes. Two descriptors that differ in EVERY field the state
+-- carries, so a projection taken from the wrong atom, a crossed projection or
+-- a wrong limit changes the string.
+pure func descriptor_a() -> DecisionPolicyDescriptor {
+  { local_id: "guard.a", question_version: "qa/1", question_config: jo([kv("binding", js("bind-a")), kv("window", jnum(3.0))]),
+    interpretation_version: "ia/1", interpretation_config: jo([kv("min_bp", jnum(6000.0))]), max_interventions: 2 }
+}
+
+pure func descriptor_b() -> DecisionPolicyDescriptor {
+  { local_id: "guard.b", question_version: "qb/1", question_config: jo([kv("binding", js("bind-b"))]),
+    interpretation_version: "ib/1", interpretation_config: jo([kv("deny_bp", jnum(7000.0)), kv("chars", jnum(200.0))]), max_interventions: 3 }
+}
+
+-- The expected state strings, written out: identity `owner/site/local_id`,
+-- enforcing, 0 used, the descriptor's limit, its two projections byte for
+-- byte, every ledger term zero and no cap.
+pure func expected_a(owner: string, site: string) -> string {
+  "some[${owner}/${site}/guard.a|enforcing|used=0|limit=2|q={\"binding\":\"bind-a\",\"window\":3}|i={\"min_bp\":6000}|ledger=0,0,0,0,none]"
+}
+
+pure func expected_b(owner: string, site: string) -> string {
+  "some[${owner}/${site}/guard.b|enforcing|used=0|limit=3|q={\"binding\":\"bind-b\"}|i={\"deny_bp\":7000,\"chars\":200}|ledger=0,0,0,0,none]"
+}
+
+-- `prepare` votes immediately with the state it was handed; the query-path
+-- probes ask, and `interpret` votes with the state IT was handed, so both
+-- callbacks are shown.
+pure func state_judge_now(ctx: PureCtx, _c: string) -> JudgePreparation { JudgeImmediate(ContinueWithFeedback(state_tag(ctx.decision_state))) }
+
+pure func state_judge_ask(ctx: PureCtx, _c: string) -> JudgePreparation { JudgeQuery(probe_request("p:${state_tag(ctx.decision_state)}")) }
+
+pure func state_judge_interpret(ctx: PureCtx, _c: string, req: DecisionRequest, _o: DecisionObservation) -> FinalizeDecision {
+  ContinueWithFeedback("${req.backend_binding}>i:${state_tag(ctx.decision_state)}")
+}
+
+pure func state_tool_now(ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPreparation { ToolImmediate(Deny(state_tag(ctx.decision_state))) }
+
+pure func state_tool_ask(ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPreparation { ToolQuery(probe_request("p:${state_tag(ctx.decision_state)}")) }
+
+pure func state_tool_interpret(ctx: PureCtx, _call: ToolCallEnvelope, req: DecisionRequest, _o: DecisionObservation) -> ToolPolicyDecision {
+  Deny("${req.backend_binding}>i:${state_tag(ctx.decision_state)}")
+}
+
+-- A `DecisionSolverJudge` atom sees `Some` with ITS OWN descriptor: two
+-- extensions, different descriptors, the host carrying a foreign state; the
+-- immediate path (prepare) and the query path (prepare and interpret); and a
+-- legacy judge behind a declared one in the SAME extension sees `None` again.
+func decision_solver_judge_sees_its_own_state_test() -> bool ! {Process, IO, Clock}
+  tests [((), true)]
+  {
+    let a: ExtEntry = { id: "ga#0", config: jo([]), caps: [DecisionSolverJudge(descriptor_a(), state_judge_now, neutral_interpret), SolverJudge(evidence_judge)] };
+    let b: ExtEntry = { id: "gb#1", config: jo([]), caps: [DecisionSolverJudge(descriptor_b(), state_judge_ask, state_judge_interpret)] };
+    let ctx = { smoke_ctx() | decision_state: Some(foreign_state()) };
+    let votes = collect_finalize_decisions(stamp_rt([a, b]).registry.entries, ctx, "cand", ctx.world);
+    let ea = expected_a("ga#0", "finalize");
+    let eb = expected_b("gb#1", "finalize");
+    judge_votes_tags(votes.decisions) == "continue(${ea});continue(${truthful_default_tag()});continue(p:${eb}>i:${eb});"
+  }
+
+-- ...and a `DecisionToolPolicy` atom likewise, the descriptors swapped between
+-- the two extensions so the state follows the atom, not the position.
+func decision_tool_policy_sees_its_own_state_test() -> bool ! {IO, Clock}
+  tests [((), true)]
+  {
+    let a: ExtEntry = { id: "pa#0", config: jo([]), caps: [DecisionToolPolicy(descriptor_b(), state_tool_now, never_tool_interpret), ToolPolicy(evidence_policy)] };
+    let b: ExtEntry = { id: "pb#1", config: jo([]), caps: [DecisionToolPolicy(descriptor_a(), state_tool_ask, state_tool_interpret)] };
+    let ctx = { smoke_ctx() | decision_state: Some(foreign_state()) };
+    let votes = collect_tool_decisions(stamp_rt([a, b]).registry.entries, ctx, probe_call());
+    let eb = expected_b("pa#0", "tool_policy");
+    let ea = expected_a("pb#1", "tool_policy");
+    tool_votes_tags(votes) == "deny(${eb});deny(${truthful_default_tag()});deny(p:${ea}>i:${ea});"
+  }
+
+-- One extension declaring BOTH decision variants: each atom sees its own
+-- descriptor at its own site, never the other family's.
+func both_families_in_one_extension_see_their_own_state_test() -> bool ! {Process, IO, Clock}
+  tests [((), true)]
+  {
+    let e: ExtEntry = { id: "both#0", config: jo([]), caps: [DecisionSolverJudge(descriptor_a(), state_judge_now, neutral_interpret), DecisionToolPolicy(descriptor_b(), state_tool_now, never_tool_interpret)] };
+    let rt = stamp_rt([e]);
+    let judge = judge_tag(dispatch_solver_candidate(rt, smoke_ctx(), "c").decision) == "continue(${expected_a("both#0", "finalize")});";
+    let tool = tool_tag(dispatch_tool_policy(rt, smoke_ctx(), probe_call())) == "deny(${expected_b("both#0", "tool_policy")});";
+    judge && tool
   }

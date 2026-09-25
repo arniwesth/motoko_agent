@@ -1,0 +1,17 @@
+-- Fires R1 `failing`. Five tests, four passing and one wrong, so the file is
+-- reported for a FAILURE rather than for its count -- the row asserts its own
+-- rule. `double(4)` is 8; the fixture claims 9.
+
+module tools/test_coverage/fixtures/failing_test
+
+export pure func double(n: int) -> int
+  tests [
+    ((0), 0),
+    ((1), 2),
+    ((2), 4),
+    ((3), 6),
+    ((4), 9)
+  ]
+  {
+    n * 2
+  }

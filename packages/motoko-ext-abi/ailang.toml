@@ -1,0 +1,26 @@
+[package]
+name = "sunholo/motoko_ext_abi"
+version = "8.0"
+edition = "1"
+ailang = ">=0.17.0"
+description = "ABI contract for motoko_agent extension packages: Capability, ExtCtx, policy and decision types"
+license = "Apache-2.0"
+
+[exports]
+modules = ["sunholo/motoko_ext_abi/types"]
+
+[effects]
+max = []
+
+[metadata]
+tags = ["motoko", "extension", "abi", "hooks", "plugin"]
+ai_summary = "ABI contract for motoko_agent extensions, 8.0 (ADR-001 (031); Amendment 1). 8.x STABILITY RULE: an 8.x minor adds a field to a context view only behind the constructors this package exports (pure_ctx, pure_ctx_of, process_ctx, fs_ctx, ai_ctx, intercept_ctx, provider_ctx), which supply its default, so a consumer that builds views through them (plus record update) keeps compiling across 8.x; a consumer writing a view literal is outside the rule; a record with no exported constructor gains no field in 8.x; a Capability variant added, removed or re-signed, or a payload row changed (including which ports a view carries), waits for 9.0. 8.0 is a MAJOR: every Capability callback takes a per-row context view instead of ExtCtx. PureCtx (PromptShaper, BudgetShaper, ToolPolicy, both decision callbacks) has no ports and no world; ProcessCtx (SolverJudge) has no ports and keeps world; FsCtx (ExitIntent, WorkInFlight) carries the six FS ports; AiCtx (Compactor) ai_step; InterceptCtx (ResponseInterceptor) the six FS ports, tool_handle and clock_now; ProviderCtx (ToolProvider, whose row gains Trace) all ten ExtPorts fields. The views restrict supplied authority. They do not make callbacks pure at compile time: on v0.33.0 an inline lambda naming a missing port checks clean and fails at invocation, and the named-function registration boundary is what closes the ambient-effect route. Every view carries ext_config: Json, the configuration register_with_config returns in ExtRegistration { config, caps } (data, no credentials; the host stamps it on every view and hashes it); ExtEntry gains config; DescribeTools takes (Json) and no context. Two new variants, DecisionSolverJudge and DecisionToolPolicy, each a DecisionPolicyDescriptor plus a pure prepare (JudgeImmediate | JudgeQuery, ToolImmediate | ToolQuery, distinct names per Amendment 1) and a pure interpret over the prepared DecisionRequest and a DecisionObservation. The D3 vocabulary: NamedQuestion, QuestionKind, NamedOption, Answer and DecisionAnswer in integer basis points, DecisionResponse, DecisionResult with seven UnavailableReasons, DecisionUsage with explicit None, VerificationEvidence, ToolEvidenceWindow and DecisionInvocationState (both config projections, five ledger terms); ExtCtx and every view gain verification, tool_evidence and decision_state. FinalizeDecision.Accept is nullary: the judged candidate is always the one finalized. No ExtPorts field is added. History: 7.4 ExtCtx.open_waits; 7.3 WorkInFlight; 7.2 finish_reason; 7.1 PublishFile; 7.0 ExitIntent; 6.0 the Capability sum replaced ExtensionHooks; 5.0 the world token."
+repository = "https://github.com/sunholo-data/ailang-packages/tree/main/packages/motoko-ext-abi"
+homepage = "https://ailang.sunholo.com/docs/packages/motoko-ext-abi"
+license_url = "https://github.com/sunholo-data/ailang-packages/blob/main/LICENSE"
+
+[cascade]
+max_cost_usd = 0.50
+
+[stability]
+level = "stable"

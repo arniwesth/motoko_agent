@@ -1,0 +1,148 @@
+-- scripts/verify_wait_descriptor_fixtures.ail
+--
+-- PLAN-002 W2 gate 6 (review change 7; R7): THE CROSS-PRODUCER CHECK. W1b's
+-- commit (957c91e) captured, under packages/motoko-ext-herdr/fixtures/plan002-gate6/,
+-- the envelopes `herdr.ail`'s own tests build; `make verify_herdr_delegate_wait`
+-- keeps those files equal to the extension's builder. This script is the other
+-- half: the CORE's strict decoder and lifecycle read the same bytes.
+--
+--   * each `Delegate` envelope's `metadata.wait` decodes to `DelegateWait` with
+--     `id == metadata.delegate` (W1b's matching key), `delegate_kind ==
+--     metadata.kind` and `locator.pane == metadata.pane_id`, and
+--     `apply_tool_lifecycle` registers exactly it;
+--   * each `DelegateCheck` envelope's `settled` and `delegate` read as Part 3
+--     reads them: `check_done` and `check_lost` remove the matching wait (and do
+--     so idempotently), `check_pending`, `check_error_only` and
+--     `check_arg_error` keep every wait.
+--
+-- W1b shipped only the fixtures and touched no core file, so the test lands
+-- with W2 (W1b landed first).
+
+module scripts/verify_wait_descriptor_fixtures
+
+import std/ai (ToolCall)
+import std/fs (readFile)
+import std/io (println, exit)
+import std/json (Json, decode, get, asString, asNumber)
+import std/list (length)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import src/core/phase_vocab (WaitDescriptor, DelegateWait, OperatorWait, TimerWait, wait_descriptor_from_json, wait_id, apply_tool_lifecycle)
+import src/core/tool_contract (ToolResultEnvelope)
+
+func fixture_dir() -> string {
+  "packages/motoko-ext-herdr/fixtures/plan002-gate6"
+}
+
+func str_or(obj: Json, key: string) -> string {
+  match get(obj, key) {
+    Some(v) => match asString(v) { Some(s) => s, None => "" },
+    None => ""
+  }
+}
+
+func int_or(obj: Json, key: string) -> int {
+  match get(obj, key) {
+    Some(v) => match asNumber(v) { Some(f) => floatToInt(f), None => -1 },
+    None => -1
+  }
+}
+
+func load(name: string) -> Result[ToolResultEnvelope, string] ! {FS} {
+  match decode(readFile("${fixture_dir()}/${name}.json")) {
+    Err(e) => Err("${name}: ${e}"),
+    Ok(j) => {
+      let metadata = match get(j, "metadata") { Some(m) => m, None => decode_empty() };
+      Ok({
+        tool_call_id: str_or(j, "tool_call_id"),
+        tool: str_or(j, "tool"),
+        exit_code: int_or(j, "exit_code"),
+        stdout: str_or(j, "stdout"),
+        stderr: str_or(j, "stderr"),
+        metadata: metadata
+      })
+    }
+  }
+}
+
+func decode_empty() -> Json {
+  match decode("{}") { Ok(j) => j, Err(_) => decode_empty() }
+}
+
+func call_for(env: ToolResultEnvelope) -> ToolCall {
+  { id: env.tool_call_id, name: env.tool, arguments: "{}" }
+}
+
+func ids(ws: [WaitDescriptor]) -> string {
+  match ws {
+    [] => "",
+    w :: [] => wait_id(w),
+    w :: rest => "${wait_id(w)},${ids(rest)}"
+  }
+}
+
+func report(name: string, ok: bool, detail: string) -> int ! {IO} {
+  if ok then { let _ = println("OK ${name}"); 0 }
+  else { let _ = println("FAIL ${name} ${detail}"); 1 }
+}
+
+-- The Delegate row: decode, match the envelope's own keys, register exactly it.
+func check_delegate(name: string, kind: string) -> Result[WaitDescriptor, string] ! {FS, IO} {
+  match load(name) {
+    Err(e) => Err(e),
+    Ok(env) => match get(env.metadata, "wait") {
+      None => Err("${name}: metadata has no `wait`"),
+      Some(w) => match wait_descriptor_from_json(w) {
+        Err(e) => Err("${name}: strict decoder refused the producer's wait: ${e}"),
+        Ok(OperatorWait(_)) => Err("${name}: decoded to OperatorWait"),
+        Ok(TimerWait(_)) => Err("${name}: decoded to TimerWait"),
+        Ok(DelegateWait(d)) => {
+          let delegate = str_or(env.metadata, "delegate");
+          let registered = apply_tool_lifecycle([], call_for(env), env);
+          if d.id != delegate then Err("${name}: wait.id=${d.id} != metadata.delegate=${delegate}")
+          else if d.delegate_kind != kind || d.delegate_kind != str_or(env.metadata, "kind") then Err("${name}: delegate_kind=${d.delegate_kind}")
+          else if d.locator.pane != str_or(env.metadata, "pane_id") then Err("${name}: locator.pane=${d.locator.pane} != pane_id")
+          else if ids(registered) != d.id then Err("${name}: lifecycle registered [${ids(registered)}]")
+          else Ok(DelegateWait(d))
+        }
+      }
+    }
+  }
+}
+
+-- A DelegateCheck row: apply to `before`, compare the surviving ids.
+func check_row(name: string, before: [WaitDescriptor], expected: string) -> int ! {FS, IO} {
+  match load(name) {
+    Err(e) => report(name, false, e),
+    Ok(env) => {
+      let after = apply_tool_lifecycle(before, call_for(env), env);
+      let again = apply_tool_lifecycle(after, call_for(env), env);
+      report(name, ids(after) == expected && ids(again) == expected,
+        "(after=[${ids(after)}] again=[${ids(again)}] expected=[${expected}] settled-delegate=${str_or(env.metadata, "delegate")})")
+    }
+  }
+}
+
+export func main() -> () ! {IO, FS} {
+  match check_delegate("delegate_motoko", "motoko") {
+    Err(e) => { let _ = println("FAIL delegate_motoko ${e}"); exit(1) },
+    Ok(motoko) => match check_delegate("delegate_claude", "claude") {
+      Err(e) => { let _ = println("FAIL delegate_claude ${e}"); exit(1) },
+      Ok(claude) => {
+        let _ = println("OK delegate_motoko");
+        let _ = println("OK delegate_claude");
+        let both = [motoko, claude];
+        let motoko_id = wait_id(motoko);
+        let claude_id = wait_id(claude);
+        let fails =
+          check_row("check_done", both, claude_id)
+          + check_row("check_lost", both, claude_id)
+          + check_row("check_pending", both, "${motoko_id},${claude_id}")
+          + check_row("check_error_only", both, "${motoko_id},${claude_id}")
+          + check_row("check_arg_error", both, "${motoko_id},${claude_id}");
+        if fails == 0 then println("verify_wait_descriptor_fixtures: 7 envelopes, 0 failed")
+        else { let _ = println("verify_wait_descriptor_fixtures: ${show(fails)} failed"); exit(1) }
+      }
+    }
+  }
+}

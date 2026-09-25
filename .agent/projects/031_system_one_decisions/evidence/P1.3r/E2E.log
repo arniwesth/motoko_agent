@@ -1,0 +1,15 @@
+finalize (completion_guard, DecisionSolverJudge):
+  ok   prepare: JudgeQuery(completion-judge)
+  ok   interpret on the stub's observation: NoDecision
+  ok   control: interpret on Answered(1500 bp): ContinueWithFeedback
+  ok   dispatched alone, merged vote: NoDecision
+  ok   successor world is the input world: {"trace":"e2e;","holder_ext_id":""}
+  ok   with a legacy Accept behind it, merged vote: Accept
+tool_policy (repeat_failure_policy, DecisionToolPolicy):
+  ok   prepare: ToolQuery(repeat-failure-judge)
+  ok   interpret on the stub's observation: NoOpinion
+  ok   control: interpret on Answered(9000 bp): Deny
+  ok   dispatched alone, merged vote: NoOpinion
+  ok   with a legacy Pending behind it, merged vote: Pending(next atom ran)
+END_TO_END finalize=PASS tool_policy=PASS
+p13r: e2e ok

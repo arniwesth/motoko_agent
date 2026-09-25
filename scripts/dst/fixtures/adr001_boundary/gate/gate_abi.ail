@@ -1,0 +1,5 @@
+module scripts/dst/fixtures/adr001_boundary/gate/gate_abi
+import std/json (Json)
+export type Ctx = { name: string }
+export type Capability = ToolPolicy((Ctx) -> int) | PromptShaper((Ctx) -> int) | DescribeTools((Json) -> [string])
+export type Registration = { config: Json, caps: [Capability] }

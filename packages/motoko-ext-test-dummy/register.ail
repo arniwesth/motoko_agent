@@ -1,0 +1,124 @@
+-- Minimal no-op motoko_agent extension for testing generate-extension-registry.
+--
+-- All hooks return their pass-through defaults. Behaviour can be overridden
+-- via environment variables (see EXT_DUMMY_* env vars below).
+--
+-- Config parameter is polymorphic (type variable 'a') because this extension
+-- loads its own config from env vars and does not need any RuntimeConfig fields.
+--
+-- ABI 8.0 (031 ADR-001 D2, Amendment 3): the env-derived `DummyConfig` is read
+-- once at registration and disclosed as `config`; every callback is a named
+-- top-level function that decodes what it needs from `ctx.ext_config`.
+
+module sunholo/motoko_ext_test_dummy/register
+
+import std/option (Option, Some, None)
+import std/env (getEnvOr)
+import std/string (stringToInt)
+import std/json (Json, jo, kv, js, jint, jn, getString, getInt)
+import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
+  Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, ToolSchema,
+  PureCtx, ProcessCtx, ExtRegistration,
+  BudgetPlan, BudgetPatch, PromptPatch,
+  ToolCallEnvelope, ToolResultEnvelope,
+  ToolPolicyDecision, ToolHandleDecision,
+  ResponseInterceptDecision, FinalizeDecision, PreStepDecision,
+  Allow, Deny, NoOpinion, Delegate, NoIntercept, NoDecision,
+  Accept, ContinueWithFeedback, PassThrough,
+  Msg
+)
+
+type DummyConfig = {
+  prompt_marker: string,
+  tool_decision: string,
+  finalize: string,
+  budget_total: Option[int]
+}
+
+func parse_optional_int(raw: string) -> Option[int] {
+  if raw == "" then None
+  else match stringToInt(raw) {
+    Some(n) => Some(n),
+    None => None
+  }
+}
+
+func load_dummy_config() -> DummyConfig ! {Env} {
+  {
+    prompt_marker: getEnvOr("EXT_DUMMY_PROMPT", ""),
+    tool_decision: getEnvOr("EXT_DUMMY_TOOL_DECISION", "noop"),
+    finalize: getEnvOr("EXT_DUMMY_FINALIZE", "noop"),
+    budget_total: parse_optional_int(getEnvOr("EXT_DUMMY_BUDGET_TOTAL", ""))
+  }
+}
+
+-- The configuration channel: encoded once at registration, decoded per call.
+-- An absent key reads as the pass-through default, so an empty configuration
+-- is the no-op extension.
+export pure func dummy_config_json(dc: DummyConfig) -> Json {
+  jo([
+    kv("prompt_marker", js(dc.prompt_marker)),
+    kv("tool_decision", js(dc.tool_decision)),
+    kv("finalize", js(dc.finalize)),
+    kv("budget_total", match dc.budget_total { Some(n) => jint(n), None => jn() })
+  ])
+}
+
+pure func string_or(cfg: Json, key: string, fallback: string) -> string {
+  match getString(cfg, key) { Some(v) => v, None => fallback }
+}
+
+export pure func dummy_config_of(cfg: Json) -> DummyConfig {
+  {
+    prompt_marker: string_or(cfg, "prompt_marker", ""),
+    tool_decision: string_or(cfg, "tool_decision", "noop"),
+    finalize: string_or(cfg, "finalize", "noop"),
+    budget_total: getInt(cfg, "budget_total")
+  }
+}
+
+func dummy_prompt(ctx: PureCtx) -> PromptPatch {
+  let prompt_marker = dummy_config_of(ctx.ext_config).prompt_marker;
+  if prompt_marker == "" then { prepend: [], append: [] }
+  else { prepend: [], append: [prompt_marker] }
+}
+
+func dummy_budget(ctx: PureCtx, _plan: BudgetPlan) -> BudgetPatch {
+  {
+    requested_total: dummy_config_of(ctx.ext_config).budget_total,
+    requested_solver: None,
+    requested_verifier: None
+  }
+}
+
+func dummy_tool_policy(ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+  let tool_decision = dummy_config_of(ctx.ext_config).tool_decision;
+  if tool_decision == "allow" then Allow
+  else if tool_decision == "deny" then Deny("dummy deny")
+  else NoOpinion
+}
+
+func dummy_finalize(ctx: ProcessCtx, candidate: string) -> FinalizeOutcome ! {Process} {
+  let finalize = dummy_config_of(ctx.ext_config).finalize;
+  { decision: {
+    if finalize == "accept" then Accept
+    else if finalize == "continue" then ContinueWithFeedback("dummy feedback")
+    else NoDecision
+  }, next_state: ctx.world }
+}
+
+-- register_with_config uses a type variable for cfg so this extension is
+-- host-config-agnostic. The caller (generated registry) passes RuntimeConfig
+-- which unifies with the type variable at call site.
+export func register_with_config(_cfg: a) -> ExtRegistration ! {Env} {
+  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
+  {
+    config: dummy_config_json(load_dummy_config()),
+    caps: [
+      PromptShaper(dummy_prompt),
+      BudgetShaper(dummy_budget),
+      ToolPolicy(dummy_tool_policy),
+      SolverJudge(dummy_finalize)
+    ]
+  }
+}

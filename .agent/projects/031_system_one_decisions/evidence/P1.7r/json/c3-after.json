@@ -1,0 +1,1169 @@
+{
+  "source_revision": "6d668fdda1292bd1c4105cc383fe7be47de2d154",
+  "compiler": "AILANG v0.33.0",
+  "producer": "ailang.iface/v1",
+  "producer_schemas": [
+    "ailang.iface/v1"
+  ],
+  "provision_failures": [],
+  "producer_disagreements": [],
+  "std_modules_needed": [
+    "std/ai",
+    "std/bytes",
+    "std/crypto",
+    "std/datetime",
+    "std/env",
+    "std/extension",
+    "std/fs",
+    "std/io",
+    "std/json",
+    "std/list",
+    "std/net",
+    "std/option",
+    "std/package",
+    "std/process",
+    "std/rand",
+    "std/result",
+    "std/sem",
+    "std/string"
+  ],
+  "std_modules_resolved": [
+    "std/ai",
+    "std/bytes",
+    "std/crypto",
+    "std/datetime",
+    "std/env",
+    "std/extension",
+    "std/fs",
+    "std/io",
+    "std/json",
+    "std/list",
+    "std/net",
+    "std/option",
+    "std/package",
+    "std/process",
+    "std/rand",
+    "std/result",
+    "std/sem",
+    "std/string"
+  ],
+  "extensions": {
+    "a2a": {
+      "package_dir": "packages/motoko-ext-a2a",
+      "closure_modules": [
+        "packages/motoko-ext-a2a/a2a.ail",
+        "packages/motoko-ext-a2a/config.ail",
+        "packages/motoko-ext-a2a/register.ail",
+        "packages/motoko-ext-a2a/types.ail",
+        "packages/motoko-ext-abi/types.ail"
+      ],
+      "closure_size": 5,
+      "verdict": "AMBIENT",
+      "ambient": [
+        {
+          "extension": "a2a",
+          "file": "packages/motoko-ext-a2a/a2a.ail",
+          "line": 4,
+          "origin": "std/net",
+          "symbol": "httpGet",
+          "verdict": "AMBIENT",
+          "why": "`std/net.httpGet` performs {Net} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "Net"
+          ]
+        },
+        {
+          "extension": "a2a",
+          "file": "packages/motoko-ext-a2a/a2a.ail",
+          "line": 4,
+          "origin": "std/net",
+          "symbol": "httpPost",
+          "verdict": "AMBIENT",
+          "why": "`std/net.httpPost` performs {Net} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "Net"
+          ]
+        },
+        {
+          "extension": "a2a",
+          "file": "packages/motoko-ext-a2a/a2a.ail",
+          "line": 6,
+          "origin": "std/rand",
+          "symbol": "uuid4",
+          "verdict": "AMBIENT",
+          "why": "`std/rand.uuid4` performs {Rand} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "Rand"
+          ]
+        },
+        {
+          "extension": "a2a",
+          "file": "packages/motoko-ext-a2a/config.ail",
+          "line": 3,
+          "origin": "std/fs",
+          "symbol": "fileExists",
+          "verdict": "AMBIENT",
+          "why": "`std/fs.fileExists` performs {FS} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "FS"
+          ]
+        },
+        {
+          "extension": "a2a",
+          "file": "packages/motoko-ext-a2a/config.ail",
+          "line": 3,
+          "origin": "std/fs",
+          "symbol": "readFile",
+          "verdict": "AMBIENT",
+          "why": "`std/fs.readFile` performs {FS} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "FS"
+          ]
+        },
+        {
+          "extension": "a2a",
+          "file": "packages/motoko-ext-a2a/register.ail",
+          "line": 3,
+          "origin": "std/env",
+          "symbol": "getEnvOr",
+          "verdict": "AMBIENT",
+          "why": "`std/env.getEnvOr` performs {Env} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "Env"
+          ]
+        }
+      ],
+      "rejected": [],
+      "ext_ports_calls": 0,
+      "ext_ports_projections": 15,
+      "unresolved_receivers": 0,
+      "producer": "ailang.iface/v1 (.ailang/cache/compile/modules/std__*/iface.json)",
+      "producer_revision": {
+        "std/env": "9aabd9a254c2",
+        "std/fs": "14d73b84d950",
+        "std/json": "0bdb2d34795a",
+        "std/net": "e04bf636c1f8",
+        "std/option": "cbda6d5a1b82",
+        "std/rand": "08c89a985fd4",
+        "std/result": "c725731a4ccf"
+      }
+    },
+    "agentcli": {
+      "package_dir": "packages/motoko-ext-agentcli",
+      "closure_modules": [
+        "packages/motoko-ext-abi/types.ail",
+        "packages/motoko-ext-agentcli/agentcli.ail",
+        "packages/motoko-ext-agentcli/providers.ail",
+        "packages/motoko-ext-agentcli/register.ail"
+      ],
+      "closure_size": 4,
+      "verdict": "AMBIENT",
+      "ambient": [
+        {
+          "extension": "agentcli",
+          "file": "packages/motoko-ext-agentcli/agentcli.ail",
+          "line": 40,
+          "origin": "std/process",
+          "symbol": "exec",
+          "verdict": "AMBIENT",
+          "why": "`std/process.exec` performs {Process} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "Process"
+          ]
+        },
+        {
+          "extension": "agentcli",
+          "file": "packages/motoko-ext-agentcli/register.ail",
+          "line": 3,
+          "origin": "std/env",
+          "symbol": "getEnvOr",
+          "verdict": "AMBIENT",
+          "why": "`std/env.getEnvOr` performs {Env} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "Env"
+          ]
+        }
+      ],
+      "rejected": [],
+      "ext_ports_calls": 3,
+      "ext_ports_projections": 15,
+      "unresolved_receivers": 0,
+      "producer": "ailang.iface/v1 (.ailang/cache/compile/modules/std__*/iface.json)",
+      "producer_revision": {
+        "std/bytes": "d61a9018f683",
+        "std/env": "9aabd9a254c2",
+        "std/json": "0bdb2d34795a",
+        "std/option": "cbda6d5a1b82",
+        "std/process": "0a0d842cc824",
+        "std/result": "c725731a4ccf",
+        "std/string": "72e689971258"
+      }
+    },
+    "ailang_docs": {
+      "package_dir": "packages/motoko-ext-ailang-docs",
+      "closure_modules": [
+        "packages/motoko-ext-abi/types.ail",
+        "packages/motoko-ext-ailang-docs/ailang_docs.ail",
+        "packages/motoko-ext-ailang-docs/prompts.ail",
+        "packages/motoko-ext-ailang-docs/register.ail",
+        "packages/motoko-ext-ailang-docs/types.ail",
+        "packages/motoko-ext-mcp/assets.ail",
+        "packages/motoko-ext-mcp/compress.ail",
+        "packages/motoko-ext-mcp/exec.ail",
+        "packages/motoko-ext-mcp/resolve.ail",
+        "packages/motoko-ext-mcp/types.ail"
+      ],
+      "closure_size": 10,
+      "verdict": "AMBIENT",
+      "ambient": [
+        {
+          "extension": "ailang_docs",
+          "file": "packages/motoko-ext-ailang-docs/ailang_docs.ail",
+          "line": 4,
+          "origin": "std/fs",
+          "symbol": "fileExists",
+          "verdict": "AMBIENT",
+          "why": "`std/fs.fileExists` performs {FS} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "FS"
+          ]
+        },
+        {
+          "extension": "ailang_docs",
+          "file": "packages/motoko-ext-ailang-docs/register.ail",
+          "line": 3,
+          "origin": "std/env",
+          "symbol": "getEnvOr",
+          "verdict": "AMBIENT",
+          "why": "`std/env.getEnvOr` performs {Env} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "Env"
+          ]
+        },
+        {
+          "extension": "ailang_docs",
+          "file": "packages/motoko-ext-mcp/assets.ail",
+          "line": 13,
+          "origin": "std/package",
+          "symbol": "assetPath",
+          "verdict": "AMBIENT",
+          "why": "`std/package.assetPath` performs {FS} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "FS"
+          ]
+        },
+        {
+          "extension": "ailang_docs",
+          "file": "packages/motoko-ext-mcp/exec.ail",
+          "line": 6,
+          "origin": "std/process",
+          "symbol": "exec",
+          "verdict": "AMBIENT",
+          "why": "`std/process.exec` performs {Process} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "Process"
+          ]
+        }
+      ],
+      "rejected": [],
+      "ext_ports_calls": 0,
+      "ext_ports_projections": 15,
+      "unresolved_receivers": 0,
+      "producer": "ailang.iface/v1 (.ailang/cache/compile/modules/std__*/iface.json)",
+      "producer_revision": {
+        "std/bytes": "d61a9018f683",
+        "std/env": "9aabd9a254c2",
+        "std/fs": "14d73b84d950",
+        "std/json": "0bdb2d34795a",
+        "std/option": "cbda6d5a1b82",
+        "std/package": "36ad02d29f98",
+        "std/process": "0a0d842cc824",
+        "std/result": "c725731a4ccf",
+        "std/string": "72e689971258"
+      }
+    },
+    "compaction_ai": {
+      "package_dir": "packages/motoko-ext-compaction-ai",
+      "closure_modules": [
+        "packages/motoko-ext-abi/types.ail",
+        "packages/motoko-ext-compaction-ai/compaction_ai.ail",
+        "packages/motoko-ext-compaction-ai/register.ail",
+        "packages/motoko-ext-compaction-ai/types.ail"
+      ],
+      "closure_size": 4,
+      "verdict": "AMBIENT",
+      "ambient": [
+        {
+          "extension": "compaction_ai",
+          "file": "packages/motoko-ext-compaction-ai/register.ail",
+          "line": 6,
+          "origin": "std/env",
+          "symbol": "getEnvOr",
+          "verdict": "AMBIENT",
+          "why": "`std/env.getEnvOr` performs {Env} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "Env"
+          ]
+        },
+        {
+          "extension": "compaction_ai",
+          "file": "packages/motoko-ext-compaction-ai/register.ail",
+          "line": 8,
+          "origin": "std/fs",
+          "symbol": "readFileResult",
+          "verdict": "AMBIENT",
+          "why": "`std/fs.readFileResult` performs {FS} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "FS"
+          ]
+        }
+      ],
+      "rejected": [],
+      "ext_ports_calls": 1,
+      "ext_ports_projections": 15,
+      "unresolved_receivers": 0,
+      "producer": "ailang.iface/v1 (.ailang/cache/compile/modules/std__*/iface.json)",
+      "producer_revision": {
+        "std/crypto": "9d3c7fee4349",
+        "std/env": "9aabd9a254c2",
+        "std/fs": "14d73b84d950",
+        "std/json": "0bdb2d34795a",
+        "std/list": "0848e9226a2c",
+        "std/option": "cbda6d5a1b82",
+        "std/result": "c725731a4ccf",
+        "std/string": "72e689971258"
+      }
+    },
+    "compaction_structural": {
+      "package_dir": "packages/motoko-ext-compaction-structural",
+      "closure_modules": [
+        "packages/motoko-ext-abi/types.ail",
+        "packages/motoko-ext-compaction-structural/compaction_structural.ail",
+        "packages/motoko-ext-compaction-structural/register.ail"
+      ],
+      "closure_size": 3,
+      "verdict": "PORT-MEDIATED",
+      "ambient": [],
+      "rejected": [],
+      "ext_ports_calls": 0,
+      "ext_ports_projections": 15,
+      "unresolved_receivers": 0,
+      "producer": "ailang.iface/v1 (.ailang/cache/compile/modules/std__*/iface.json)",
+      "producer_revision": {
+        "std/json": "0bdb2d34795a",
+        "std/list": "0848e9226a2c",
+        "std/option": "cbda6d5a1b82",
+        "std/result": "c725731a4ccf",
+        "std/string": "72e689971258"
+      }
+    },
+    "compose": {
+      "package_dir": "packages/motoko-ext-compose",
+      "closure_modules": [
+        "packages/motoko-ext-abi/types.ail",
+        "packages/motoko-ext-ai-compat/ai_compat.ail",
+        "packages/motoko-ext-compose/author_loop.ail",
+        "packages/motoko-ext-compose/author_tools.ail",
+        "packages/motoko-ext-compose/authoring/dispatcher.ail",
+        "packages/motoko-ext-compose/authoring/render.ail",
+        "packages/motoko-ext-compose/authoring/state.ail",
+        "packages/motoko-ext-compose/claimcheck.ail",
+        "packages/motoko-ext-compose/compose.ail",
+        "packages/motoko-ext-compose/config.ail",
+        "packages/motoko-ext-compose/guard.ail",
+        "packages/motoko-ext-compose/ledger.ail",
+        "packages/motoko-ext-compose/proc.ail",
+        "packages/motoko-ext-compose/prompts.ail",
+        "packages/motoko-ext-compose/register.ail",
+        "packages/motoko-ext-compose/store.ail",
+        "packages/motoko-ext-compose/types.ail",
+        "packages/motoko-ext-compose/validator.ail"
+      ],
+      "closure_size": 18,
+      "verdict": "AMBIENT",
+      "ambient": [
+        {
+          "extension": "compose",
+          "file": "packages/motoko-ext-ai-compat/ai_compat.ail",
+          "line": 44,
+          "origin": "std/ai",
+          "symbol": "stepWithStream",
+          "verdict": "AMBIENT",
+          "why": "`std/ai.stepWithStream` performs {AI} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "AI"
+          ]
+        },
+        {
+          "extension": "compose",
+          "file": "packages/motoko-ext-ai-compat/ai_compat.ail",
+          "line": 45,
+          "origin": "std/io",
+          "symbol": "println",
+          "verdict": "AMBIENT",
+          "why": "`std/io.println` performs {IO} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "IO"
+          ]
+        },
+        {
+          "extension": "compose",
+          "file": "packages/motoko-ext-compose/author_loop.ail",
+          "line": 4,
+          "origin": "std/io",
+          "symbol": "println",
+          "verdict": "AMBIENT",
+          "why": "`std/io.println` performs {IO} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "IO"
+          ]
+        },
+        {
+          "extension": "compose",
+          "file": "packages/motoko-ext-compose/claimcheck.ail",
+          "line": 4,
+          "origin": "std/io",
+          "symbol": "println",
+          "verdict": "AMBIENT",
+          "why": "`std/io.println` performs {IO} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "IO"
+          ]
+        },
+        {
+          "extension": "compose",
+          "file": "packages/motoko-ext-compose/compose.ail",
+          "line": 31,
+          "origin": "std/io",
+          "symbol": "println",
+          "verdict": "AMBIENT",
+          "why": "`std/io.println` performs {IO} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "IO"
+          ]
+        },
+        {
+          "extension": "compose",
+          "file": "packages/motoko-ext-compose/config.ail",
+          "line": 3,
+          "origin": "std/fs",
+          "symbol": "fileExists",
+          "verdict": "AMBIENT",
+          "why": "`std/fs.fileExists` performs {FS} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "FS"
+          ]
+        },
+        {
+          "extension": "compose",
+          "file": "packages/motoko-ext-compose/config.ail",
+          "line": 3,
+          "origin": "std/fs",
+          "symbol": "readFile",
+          "verdict": "AMBIENT",
+          "why": "`std/fs.readFile` performs {FS} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "FS"
+          ]
+        },
+        {
+          "extension": "compose",
+          "file": "packages/motoko-ext-compose/register.ail",
+          "line": 3,
+          "origin": "std/env",
+          "symbol": "getEnvOr",
+          "verdict": "AMBIENT",
+          "why": "`std/env.getEnvOr` performs {Env} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "Env"
+          ]
+        }
+      ],
+      "rejected": [],
+      "ext_ports_calls": 36,
+      "ext_ports_projections": 21,
+      "unresolved_receivers": 0,
+      "producer": "ailang.iface/v1 (.ailang/cache/compile/modules/std__*/iface.json)",
+      "producer_revision": {
+        "std/ai": "1928213208ff",
+        "std/bytes": "d61a9018f683",
+        "std/crypto": "9d3c7fee4349",
+        "std/datetime": "ce746fbc7939",
+        "std/env": "9aabd9a254c2",
+        "std/fs": "14d73b84d950",
+        "std/io": "b1ee550c90e3",
+        "std/json": "0bdb2d34795a",
+        "std/option": "cbda6d5a1b82",
+        "std/result": "c725731a4ccf",
+        "std/string": "72e689971258"
+      }
+    },
+    "context_mode": {
+      "package_dir": "packages/motoko-ext-context-mode",
+      "closure_modules": [
+        "packages/motoko-ext-abi/types.ail",
+        "packages/motoko-ext-context-mode/compress.ail",
+        "packages/motoko-ext-context-mode/context_mode.ail",
+        "packages/motoko-ext-context-mode/exec.ail",
+        "packages/motoko-ext-context-mode/prompts.ail",
+        "packages/motoko-ext-context-mode/register.ail",
+        "packages/motoko-ext-context-mode/types.ail"
+      ],
+      "closure_size": 7,
+      "verdict": "AMBIENT",
+      "ambient": [
+        {
+          "extension": "context_mode",
+          "file": "packages/motoko-ext-context-mode/context_mode.ail",
+          "line": 6,
+          "origin": "std/sem",
+          "symbol": "store_frame",
+          "verdict": "AMBIENT",
+          "why": "`std/sem.store_frame` performs {SharedMem} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "SharedMem"
+          ]
+        },
+        {
+          "extension": "context_mode",
+          "file": "packages/motoko-ext-context-mode/context_mode.ail",
+          "line": 6,
+          "origin": "std/sem",
+          "symbol": "load_frame",
+          "verdict": "AMBIENT",
+          "why": "`std/sem.load_frame` performs {SharedMem} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "SharedMem"
+          ]
+        },
+        {
+          "extension": "context_mode",
+          "file": "packages/motoko-ext-context-mode/exec.ail",
+          "line": 6,
+          "origin": "std/process",
+          "symbol": "exec",
+          "verdict": "AMBIENT",
+          "why": "`std/process.exec` performs {Process} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "Process"
+          ]
+        },
+        {
+          "extension": "context_mode",
+          "file": "packages/motoko-ext-context-mode/prompts.ail",
+          "line": 3,
+          "origin": "std/fs",
+          "symbol": "fileExists",
+          "verdict": "AMBIENT",
+          "why": "`std/fs.fileExists` performs {FS} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "FS"
+          ]
+        },
+        {
+          "extension": "context_mode",
+          "file": "packages/motoko-ext-context-mode/prompts.ail",
+          "line": 3,
+          "origin": "std/fs",
+          "symbol": "readFile",
+          "verdict": "AMBIENT",
+          "why": "`std/fs.readFile` performs {FS} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "FS"
+          ]
+        },
+        {
+          "extension": "context_mode",
+          "file": "packages/motoko-ext-context-mode/register.ail",
+          "line": 3,
+          "origin": "std/env",
+          "symbol": "getEnvOr",
+          "verdict": "AMBIENT",
+          "why": "`std/env.getEnvOr` performs {Env} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "Env"
+          ]
+        }
+      ],
+      "rejected": [],
+      "ext_ports_calls": 0,
+      "ext_ports_projections": 15,
+      "unresolved_receivers": 0,
+      "producer": "ailang.iface/v1 (.ailang/cache/compile/modules/std__*/iface.json)",
+      "producer_revision": {
+        "std/bytes": "d61a9018f683",
+        "std/env": "9aabd9a254c2",
+        "std/fs": "14d73b84d950",
+        "std/json": "0bdb2d34795a",
+        "std/option": "cbda6d5a1b82",
+        "std/process": "0a0d842cc824",
+        "std/sem": "c9f1ef3fe733",
+        "std/string": "72e689971258"
+      }
+    },
+    "decision_framework": {
+      "package_dir": "packages/motoko-ext-decision-framework",
+      "closure_modules": [
+        "packages/motoko-ext-abi/types.ail",
+        "packages/motoko-ext-decision-framework/register.ail"
+      ],
+      "closure_size": 2,
+      "verdict": "PORT-MEDIATED",
+      "ambient": [],
+      "rejected": [],
+      "ext_ports_calls": 0,
+      "ext_ports_projections": 15,
+      "unresolved_receivers": 0,
+      "producer": "ailang.iface/v1 (.ailang/cache/compile/modules/std__*/iface.json)",
+      "producer_revision": {
+        "std/json": "0bdb2d34795a",
+        "std/option": "cbda6d5a1b82",
+        "std/string": "72e689971258"
+      }
+    },
+    "empty_stop_guard": {
+      "package_dir": "packages/motoko-ext-empty-stop-guard",
+      "closure_modules": [
+        "packages/motoko-ext-abi/types.ail",
+        "packages/motoko-ext-empty-stop-guard/empty_stop_guard.ail",
+        "packages/motoko-ext-empty-stop-guard/register.ail"
+      ],
+      "closure_size": 3,
+      "verdict": "PORT-MEDIATED",
+      "ambient": [],
+      "rejected": [],
+      "ext_ports_calls": 0,
+      "ext_ports_projections": 15,
+      "unresolved_receivers": 0,
+      "producer": "ailang.iface/v1 (.ailang/cache/compile/modules/std__*/iface.json)",
+      "producer_revision": {
+        "std/json": "0bdb2d34795a",
+        "std/option": "cbda6d5a1b82",
+        "std/string": "72e689971258"
+      }
+    },
+    "exa_search": {
+      "package_dir": "packages/motoko-ext-exa-search",
+      "closure_modules": [
+        "packages/motoko-ext-abi/types.ail",
+        "packages/motoko-ext-exa-search/exa_search.ail",
+        "packages/motoko-ext-exa-search/prompts.ail",
+        "packages/motoko-ext-exa-search/register.ail",
+        "packages/motoko-ext-exa-search/types.ail",
+        "packages/motoko-ext-mcp/assets.ail",
+        "packages/motoko-ext-mcp/compress.ail",
+        "packages/motoko-ext-mcp/exec.ail",
+        "packages/motoko-ext-mcp/resolve.ail",
+        "packages/motoko-ext-mcp/types.ail"
+      ],
+      "closure_size": 10,
+      "verdict": "AMBIENT",
+      "ambient": [
+        {
+          "extension": "exa_search",
+          "file": "packages/motoko-ext-exa-search/prompts.ail",
+          "line": 3,
+          "origin": "std/fs",
+          "symbol": "fileExists",
+          "verdict": "AMBIENT",
+          "why": "`std/fs.fileExists` performs {FS} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "FS"
+          ]
+        },
+        {
+          "extension": "exa_search",
+          "file": "packages/motoko-ext-exa-search/prompts.ail",
+          "line": 3,
+          "origin": "std/fs",
+          "symbol": "readFile",
+          "verdict": "AMBIENT",
+          "why": "`std/fs.readFile` performs {FS} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "FS"
+          ]
+        },
+        {
+          "extension": "exa_search",
+          "file": "packages/motoko-ext-exa-search/register.ail",
+          "line": 3,
+          "origin": "std/env",
+          "symbol": "getEnvOr",
+          "verdict": "AMBIENT",
+          "why": "`std/env.getEnvOr` performs {Env} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "Env"
+          ]
+        },
+        {
+          "extension": "exa_search",
+          "file": "packages/motoko-ext-mcp/assets.ail",
+          "line": 13,
+          "origin": "std/package",
+          "symbol": "assetPath",
+          "verdict": "AMBIENT",
+          "why": "`std/package.assetPath` performs {FS} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "FS"
+          ]
+        },
+        {
+          "extension": "exa_search",
+          "file": "packages/motoko-ext-mcp/exec.ail",
+          "line": 6,
+          "origin": "std/process",
+          "symbol": "exec",
+          "verdict": "AMBIENT",
+          "why": "`std/process.exec` performs {Process} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "Process"
+          ]
+        }
+      ],
+      "rejected": [],
+      "ext_ports_calls": 0,
+      "ext_ports_projections": 15,
+      "unresolved_receivers": 0,
+      "producer": "ailang.iface/v1 (.ailang/cache/compile/modules/std__*/iface.json)",
+      "producer_revision": {
+        "std/bytes": "d61a9018f683",
+        "std/env": "9aabd9a254c2",
+        "std/fs": "14d73b84d950",
+        "std/json": "0bdb2d34795a",
+        "std/option": "cbda6d5a1b82",
+        "std/package": "36ad02d29f98",
+        "std/process": "0a0d842cc824",
+        "std/result": "c725731a4ccf",
+        "std/string": "72e689971258"
+      }
+    },
+    "herdr": {
+      "package_dir": "packages/motoko-ext-herdr",
+      "closure_modules": [
+        "packages/motoko-ext-abi/types.ail",
+        "packages/motoko-ext-herdr/dagr.ail",
+        "packages/motoko-ext-herdr/herdr.ail",
+        "packages/motoko-ext-herdr/orchestrator.ail",
+        "packages/motoko-ext-herdr/register.ail",
+        "packages/motoko-ext-herdr/types.ail"
+      ],
+      "closure_size": 6,
+      "verdict": "AMBIENT",
+      "ambient": [
+        {
+          "extension": "herdr",
+          "file": "packages/motoko-ext-herdr/register.ail",
+          "line": 26,
+          "origin": "std/env",
+          "symbol": "getEnvOr",
+          "verdict": "AMBIENT",
+          "why": "`std/env.getEnvOr` performs {Env} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "Env"
+          ]
+        },
+        {
+          "extension": "herdr",
+          "file": "packages/motoko-ext-herdr/register.ail",
+          "line": 31,
+          "origin": "std/fs",
+          "symbol": "listDir",
+          "verdict": "AMBIENT",
+          "why": "`std/fs.listDir` performs {FS} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "FS"
+          ]
+        },
+        {
+          "extension": "herdr",
+          "file": "packages/motoko-ext-herdr/register.ail",
+          "line": 31,
+          "origin": "std/fs",
+          "symbol": "isDir",
+          "verdict": "AMBIENT",
+          "why": "`std/fs.isDir` performs {FS} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "FS"
+          ]
+        },
+        {
+          "extension": "herdr",
+          "file": "packages/motoko-ext-herdr/register.ail",
+          "line": 31,
+          "origin": "std/fs",
+          "symbol": "readFileResult",
+          "verdict": "AMBIENT",
+          "why": "`std/fs.readFileResult` performs {FS} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "FS"
+          ]
+        }
+      ],
+      "rejected": [],
+      "ext_ports_calls": 50,
+      "ext_ports_projections": 15,
+      "unresolved_receivers": 0,
+      "producer": "ailang.iface/v1 (.ailang/cache/compile/modules/std__*/iface.json)",
+      "producer_revision": {
+        "std/crypto": "9d3c7fee4349",
+        "std/datetime": "ce746fbc7939",
+        "std/env": "9aabd9a254c2",
+        "std/fs": "14d73b84d950",
+        "std/json": "0bdb2d34795a",
+        "std/option": "cbda6d5a1b82",
+        "std/process": "0a0d842cc824",
+        "std/result": "c725731a4ccf",
+        "std/string": "72e689971258"
+      }
+    },
+    "mcp": {
+      "package_dir": "packages/motoko-ext-mcp",
+      "closure_modules": [
+        "packages/motoko-ext-abi/types.ail",
+        "packages/motoko-ext-mcp/mcp.ail",
+        "packages/motoko-ext-mcp/register.ail",
+        "packages/motoko-ext-mcp/resolve.ail",
+        "packages/motoko-ext-mcp/types.ail"
+      ],
+      "closure_size": 5,
+      "verdict": "AMBIENT",
+      "ambient": [
+        {
+          "extension": "mcp",
+          "file": "packages/motoko-ext-mcp/mcp.ail",
+          "line": 3,
+          "origin": "std/fs",
+          "symbol": "fileExists",
+          "verdict": "AMBIENT",
+          "why": "`std/fs.fileExists` performs {FS} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "FS"
+          ]
+        },
+        {
+          "extension": "mcp",
+          "file": "packages/motoko-ext-mcp/mcp.ail",
+          "line": 3,
+          "origin": "std/fs",
+          "symbol": "readFile",
+          "verdict": "AMBIENT",
+          "why": "`std/fs.readFile` performs {FS} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "FS"
+          ]
+        },
+        {
+          "extension": "mcp",
+          "file": "packages/motoko-ext-mcp/register.ail",
+          "line": 3,
+          "origin": "std/env",
+          "symbol": "getEnvOr",
+          "verdict": "AMBIENT",
+          "why": "`std/env.getEnvOr` performs {Env} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "Env"
+          ]
+        }
+      ],
+      "rejected": [],
+      "ext_ports_calls": 0,
+      "ext_ports_projections": 15,
+      "unresolved_receivers": 0,
+      "producer": "ailang.iface/v1 (.ailang/cache/compile/modules/std__*/iface.json)",
+      "producer_revision": {
+        "std/env": "9aabd9a254c2",
+        "std/fs": "14d73b84d950",
+        "std/json": "0bdb2d34795a",
+        "std/option": "cbda6d5a1b82",
+        "std/result": "c725731a4ccf",
+        "std/string": "72e689971258"
+      }
+    },
+    "microrag": {
+      "package_dir": "packages/motoko-ext-microrag",
+      "closure_modules": [
+        "packages/motoko-ext-abi/types.ail",
+        "packages/motoko-ext-microrag/register.ail"
+      ],
+      "closure_size": 2,
+      "verdict": "AMBIENT",
+      "ambient": [
+        {
+          "extension": "microrag",
+          "file": "packages/motoko-ext-microrag/register.ail",
+          "line": 31,
+          "origin": "std/process",
+          "symbol": "exec",
+          "verdict": "AMBIENT",
+          "why": "`std/process.exec` performs {Process} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "Process"
+          ]
+        },
+        {
+          "extension": "microrag",
+          "file": "packages/motoko-ext-microrag/register.ail",
+          "line": 32,
+          "origin": "std/fs",
+          "symbol": "writeFile",
+          "verdict": "AMBIENT",
+          "why": "`std/fs.writeFile` performs {FS} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "FS"
+          ]
+        }
+      ],
+      "rejected": [],
+      "ext_ports_calls": 0,
+      "ext_ports_projections": 15,
+      "unresolved_receivers": 0,
+      "producer": "ailang.iface/v1 (.ailang/cache/compile/modules/std__*/iface.json)",
+      "producer_revision": {
+        "std/bytes": "d61a9018f683",
+        "std/fs": "14d73b84d950",
+        "std/json": "0bdb2d34795a",
+        "std/option": "cbda6d5a1b82",
+        "std/process": "0a0d842cc824",
+        "std/string": "72e689971258"
+      }
+    },
+    "omnigraph": {
+      "package_dir": "packages/motoko-ext-omnigraph",
+      "closure_modules": [
+        "packages/motoko-ext-abi/types.ail",
+        "packages/motoko-ext-omnigraph/args.ail",
+        "packages/motoko-ext-omnigraph/exec.ail",
+        "packages/motoko-ext-omnigraph/guardrail.ail",
+        "packages/motoko-ext-omnigraph/normalize.ail",
+        "packages/motoko-ext-omnigraph/omnigraph.ail",
+        "packages/motoko-ext-omnigraph/prompts.ail",
+        "packages/motoko-ext-omnigraph/register.ail"
+      ],
+      "closure_size": 8,
+      "verdict": "AMBIENT",
+      "ambient": [
+        {
+          "extension": "omnigraph",
+          "file": "packages/motoko-ext-omnigraph/exec.ail",
+          "line": 5,
+          "origin": "std/process",
+          "symbol": "exec",
+          "verdict": "AMBIENT",
+          "why": "`std/process.exec` performs {Process} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "Process"
+          ]
+        },
+        {
+          "extension": "omnigraph",
+          "file": "packages/motoko-ext-omnigraph/prompts.ail",
+          "line": 3,
+          "origin": "std/fs",
+          "symbol": "fileExists",
+          "verdict": "AMBIENT",
+          "why": "`std/fs.fileExists` performs {FS} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "FS"
+          ]
+        },
+        {
+          "extension": "omnigraph",
+          "file": "packages/motoko-ext-omnigraph/prompts.ail",
+          "line": 3,
+          "origin": "std/fs",
+          "symbol": "readFile",
+          "verdict": "AMBIENT",
+          "why": "`std/fs.readFile` performs {FS} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "FS"
+          ]
+        },
+        {
+          "extension": "omnigraph",
+          "file": "packages/motoko-ext-omnigraph/register.ail",
+          "line": 3,
+          "origin": "std/env",
+          "symbol": "getEnvOr",
+          "verdict": "AMBIENT",
+          "why": "`std/env.getEnvOr` performs {Env} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "Env"
+          ]
+        },
+        {
+          "extension": "omnigraph",
+          "file": "packages/motoko-ext-omnigraph/register.ail",
+          "line": 4,
+          "origin": "std/extension",
+          "symbol": "requireWorkdirFile",
+          "verdict": "AMBIENT",
+          "why": "`std/extension.requireWorkdirFile` performs {FS} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "FS"
+          ]
+        }
+      ],
+      "rejected": [],
+      "ext_ports_calls": 0,
+      "ext_ports_projections": 15,
+      "unresolved_receivers": 0,
+      "producer": "ailang.iface/v1 (.ailang/cache/compile/modules/std__*/iface.json)",
+      "producer_revision": {
+        "std/bytes": "d61a9018f683",
+        "std/env": "9aabd9a254c2",
+        "std/extension": "845af59a4afc",
+        "std/fs": "14d73b84d950",
+        "std/json": "0bdb2d34795a",
+        "std/option": "cbda6d5a1b82",
+        "std/process": "0a0d842cc824",
+        "std/result": "c725731a4ccf",
+        "std/string": "72e689971258"
+      }
+    },
+    "progress_contract_guard": {
+      "package_dir": "packages/motoko-ext-progress-contract-guard",
+      "closure_modules": [
+        "packages/motoko-ext-abi/types.ail",
+        "packages/motoko-ext-progress-contract-guard/progress_contract_guard.ail",
+        "packages/motoko-ext-progress-contract-guard/register.ail"
+      ],
+      "closure_size": 3,
+      "verdict": "PORT-MEDIATED",
+      "ambient": [],
+      "rejected": [],
+      "ext_ports_calls": 0,
+      "ext_ports_projections": 15,
+      "unresolved_receivers": 0,
+      "producer": "ailang.iface/v1 (.ailang/cache/compile/modules/std__*/iface.json)",
+      "producer_revision": {
+        "std/json": "0bdb2d34795a",
+        "std/option": "cbda6d5a1b82",
+        "std/string": "72e689971258"
+      }
+    },
+    "repetition_guard": {
+      "package_dir": "packages/motoko-ext-repetition-guard",
+      "closure_modules": [
+        "packages/motoko-ext-abi/types.ail",
+        "packages/motoko-ext-repetition-guard/register.ail",
+        "packages/motoko-ext-repetition-guard/repetition_guard.ail"
+      ],
+      "closure_size": 3,
+      "verdict": "AMBIENT",
+      "ambient": [
+        {
+          "extension": "repetition_guard",
+          "file": "packages/motoko-ext-repetition-guard/register.ail",
+          "line": 16,
+          "origin": "std/env",
+          "symbol": "getEnvOr",
+          "verdict": "AMBIENT",
+          "why": "`std/env.getEnvOr` performs {Env} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "Env"
+          ]
+        }
+      ],
+      "rejected": [],
+      "ext_ports_calls": 0,
+      "ext_ports_projections": 15,
+      "unresolved_receivers": 0,
+      "producer": "ailang.iface/v1 (.ailang/cache/compile/modules/std__*/iface.json)",
+      "producer_revision": {
+        "std/env": "9aabd9a254c2",
+        "std/json": "0bdb2d34795a",
+        "std/option": "cbda6d5a1b82",
+        "std/result": "c725731a4ccf",
+        "std/string": "72e689971258"
+      }
+    },
+    "scratchpad": {
+      "package_dir": "packages/motoko_scratchpad",
+      "closure_modules": [
+        "packages/motoko-ext-abi/types.ail",
+        "packages/motoko_scratchpad/prompts.ail",
+        "packages/motoko_scratchpad/register.ail",
+        "packages/motoko_scratchpad/scratchpad.ail",
+        "packages/motoko_scratchpad/types.ail",
+        "src/core/env_client.ail",
+        "src/core/tool_contract.ail",
+        "src/core/types.ail"
+      ],
+      "closure_size": 8,
+      "verdict": "AMBIENT",
+      "ambient": [
+        {
+          "extension": "scratchpad",
+          "file": "packages/motoko_scratchpad/register.ail",
+          "line": 3,
+          "origin": "std/env",
+          "symbol": "getEnvOr",
+          "verdict": "AMBIENT",
+          "why": "`std/env.getEnvOr` performs {Env} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "Env"
+          ]
+        },
+        {
+          "extension": "scratchpad",
+          "file": "src/core/env_client.ail",
+          "line": 21,
+          "origin": "std/net",
+          "symbol": "httpPost",
+          "verdict": "AMBIENT",
+          "why": "`std/net.httpPost` performs {Net} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "Net"
+          ]
+        }
+      ],
+      "rejected": [],
+      "ext_ports_calls": 0,
+      "ext_ports_projections": 15,
+      "unresolved_receivers": 0,
+      "producer": "ailang.iface/v1 (.ailang/cache/compile/modules/std__*/iface.json)",
+      "producer_revision": {
+        "std/ai": "1928213208ff",
+        "std/env": "9aabd9a254c2",
+        "std/json": "0bdb2d34795a",
+        "std/net": "e04bf636c1f8",
+        "std/option": "cbda6d5a1b82",
+        "std/string": "72e689971258"
+      }
+    },
+    "test_dummy": {
+      "package_dir": "packages/motoko-ext-test-dummy",
+      "closure_modules": [
+        "packages/motoko-ext-abi/types.ail",
+        "packages/motoko-ext-test-dummy/register.ail"
+      ],
+      "closure_size": 2,
+      "verdict": "AMBIENT",
+      "ambient": [
+        {
+          "extension": "test_dummy",
+          "file": "packages/motoko-ext-test-dummy/register.ail",
+          "line": 16,
+          "origin": "std/env",
+          "symbol": "getEnvOr",
+          "verdict": "AMBIENT",
+          "why": "`std/env.getEnvOr` performs {Env} and is reached by an ambient import, not through an ExtPorts field",
+          "effects": [
+            "Env"
+          ]
+        }
+      ],
+      "rejected": [],
+      "ext_ports_calls": 0,
+      "ext_ports_projections": 15,
+      "unresolved_receivers": 0,
+      "producer": "ailang.iface/v1 (.ailang/cache/compile/modules/std__*/iface.json)",
+      "producer_revision": {
+        "std/env": "9aabd9a254c2",
+        "std/json": "0bdb2d34795a",
+        "std/option": "cbda6d5a1b82",
+        "std/string": "72e689971258"
+      }
+    }
+  }
+}

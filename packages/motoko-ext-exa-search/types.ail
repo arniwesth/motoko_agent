@@ -1,0 +1,45 @@
+module sunholo/motoko_ext_exa_search/types
+
+import pkg/sunholo/motoko_ext_mcp/types (McpServerConfig, McpToolMapping)
+
+export func tool_filter() -> [string] {
+  ["web_search_exa", "web_fetch_exa"]
+}
+
+-- Tool aliases. ADVERTISED to the model via all_tool_names(). MUST match
+-- Anthropic's Bedrock pattern ^[a-zA-Z0-9_-]{1,128}$ — no dots. The
+-- 6 dotted aliases (exa.search/exa_search.search/exa.fetch/etc) were
+-- dropped in motoko v0.18.1 because Bedrock rejects them. resolve_tool()
+-- still accepts the dotted forms as INPUT — in case a model generated
+-- them — so the resolver is unchanged. Only the OUTPUT (advertised) list
+-- needs Bedrock-compat names.
+export func tool_mappings() -> [McpToolMapping] {
+  [
+    {
+      canonical: "ExaSearch",
+      mcp_name: "web_search_exa",
+      aliases: ["exa_search"]
+    },
+    {
+      canonical: "ExaFetch",
+      mcp_name: "web_fetch_exa",
+      aliases: ["exa_fetch"]
+    },
+    {
+      canonical: "ExaCrawl",
+      mcp_name: "web_fetch_exa",
+      aliases: ["exa_crawl"]
+    }
+  ]
+}
+
+export func mcp_config(timeout_ms: int, max_output_chars: int) -> McpServerConfig {
+  {
+    base_url: "https://mcp.exa.ai/mcp",
+    auth_env_var: "EXA_API_KEY",
+    auth_style: "query:exaApiKey",
+    tool_filter: tool_filter(),
+    timeout_ms: timeout_ms,
+    max_output_chars: max_output_chars
+  }
+}

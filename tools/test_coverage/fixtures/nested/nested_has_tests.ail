@@ -1,0 +1,20 @@
+-- SURVIVOR, and the reason the enumeration is a recursive walk rather than a
+-- glob. `make check_core` globs `src/core/*.ail` and therefore never saw
+-- `src/core/test/scripted_ports.ail` or `src/core/ext/runtime.ail`; a
+-- single-directory enumeration reproduces that bug. Six tests, all passing,
+-- one directory down: discovered and run, never reported.
+
+module tools/test_coverage/fixtures/nested/nested_has_tests
+
+export pure func clamp_low(n: int) -> int
+  tests [
+    ((-3), 0),
+    ((-1), 0),
+    ((0),  0),
+    ((1),  1),
+    ((4),  4),
+    ((9),  9)
+  ]
+  {
+    if n < 0 then 0 else n
+  }

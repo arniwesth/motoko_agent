@@ -1,0 +1,34 @@
+module tools/ext_call_inventory/fixtures/form_projection_not_a_view
+
+-- FORM 3 STILL: two value-escapes that LOOK like projections and are not.
+--
+-- The projection rule (control_view_projection) admits a field forwarded under
+-- its own name into a record whose type is a VIEW -- every field an ExtPorts
+-- field with the identical signature. Both records here fail that:
+--
+--   * `Renamed` forwards `file_read` under ANOTHER name (`reader`), so the
+--     later call site `x.reader(` is not an ExtPorts field call and this tool
+--     would never see it;
+--   * `Widened` keeps the name but declares a DIFFERENT signature (no world,
+--     a bare string result), so the record is not a view and what is called
+--     through it is not the port.
+--
+-- Both must stay UNRESOLVED: two sites, fail closed.
+
+import pkg/sunholo/motoko_ext_abi/types (ExtPorts, ExtWorld, ExtFileRead)
+
+type Renamed = {
+  reader: (ExtWorld, string) -> ExtFileRead ! {FS}
+}
+
+type Widened = {
+  file_read: (string) -> string ! {FS}
+}
+
+export func rename(p: ExtPorts) -> Renamed {
+  { reader: p.file_read }
+}
+
+export func widen(p: ExtPorts) -> Widened {
+  { file_read: p.file_read }
+}

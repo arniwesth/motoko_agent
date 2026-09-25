@@ -1,0 +1,83 @@
+-- 031 PLAN-001 P1.3r (moved by P1.3r-a2): P0.5's no-op profile through the
+-- per-atom decision cursor.
+--
+-- This test lived in `src/core/ext/runtime.ail`, which imported
+-- `pkg/sunholo/motoko_ext_conformance/harness (neutral_registration)` for it.
+-- That harness declares its own `Scenario`, which collides on the pin with
+-- `src/core/test/dst_harness.Scenario`: a program reaching both fails on a cold
+-- cache (evidence/P1.2c/README.md, "Scenario"). Production core must not import
+-- a conformance kit for its tests, so the test lives here, under test/, where
+-- only tests import it. Its assertions are unchanged; the three helpers below
+-- are copies of runtime.ail's private test helpers (`smoke_ctx`, `stamp_rt`,
+-- `probe_call`), and the tags are runtime.ail's `tool_tag` / `judge_tag`.
+
+module src/core/test/ext_neutral_registration
+
+import std/json (jo, kv, js, ja, encode)
+import std/option (None)
+import src/core/config (VerificationConfig)
+import src/core/tool_contract (ToolCallEnvelope)
+import src/core/ext_world (clear_holder)
+import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry, empty_tool_evidence)
+import src/core/ext/runtime (dispatch_tool_policy, dispatch_solver_candidate)
+import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, ExtCtx, ExtEntry, ExtRuntime, ExtWorld, NotReached,
+  ToolPolicyDecision, Allow, NoOpinion, Deny, Pending, FinalizeDecision, Accept, NoDecision, ContinueWithFeedback)
+import pkg/sunholo/motoko_ext_conformance/harness (neutral_registration)
+
+func neutral_ctx() -> ExtCtx {
+  {
+    task: "t",
+    step: 0,
+    model: "m",
+    context_limit: 0,
+    cwd: ".",
+    hybrid_tools: true,
+    budget: { total: 10, solver: 6, verifier: 4 },
+    mode: "default",
+    workdir: ".",
+    env_server_url: "",
+    budget_remaining: 10,
+    history_slice: [],
+    state_key: "k",
+    finish_reason: "",
+    work_in_flight: [],
+    open_waits: ja([]),
+    ports: noop_ext_ports(),
+    artifacts: empty_ext_artifacts(),
+    telemetry: zero_token_telemetry(),
+    verification: NotReached,
+    tool_evidence: empty_tool_evidence(),
+    decision_state: None,
+    world: empty_ext_world()
+  }
+}
+
+pure func neutral_rt(entries: [ExtEntry]) -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "make check_core" };
+  { registry: { entries: entries }, strict_mode: false, verification: v }
+}
+
+pure func neutral_probe_call() -> ToolCallEnvelope { { id: "c1", tool: "WriteFile", arguments: jo([]) } }
+
+pure func tool_tag(d: ToolPolicyDecision) -> string {
+  match d { Allow => "allow;", NoOpinion => "noop;", Deny(m) => "deny(${m});", Pending(r, _) => "pending(${r});" }
+}
+
+pure func judge_tag(d: FinalizeDecision) -> string {
+  match d { Accept => "accept;", NoDecision => "noop;", ContinueWithFeedback(m) => "continue(${m});" }
+}
+
+-- THE NO-OP PROFILE THROUGH THE CURSOR (P0.5's `neutral_registration`: a
+-- `DescribeTools` plus one neutral atom of each decision variant). Both
+-- dispatchers stay neutral and the world is untouched.
+func neutral_registration_is_neutral_through_the_cursor_test() -> bool ! {Process, IO, Clock}
+  tests [((), true)]
+  {
+    let reg = neutral_registration();
+    let rt = neutral_rt([{ id: "neutral", config: reg.config, caps: reg.caps }]);
+    let w: ExtWorld = { token: jo([kv("trace", js("n;"))]) };
+    let ctx = { neutral_ctx() | world: w };
+    let tool = tool_tag(dispatch_tool_policy(rt, ctx, neutral_probe_call())) == "noop;";
+    let out = dispatch_solver_candidate(rt, ctx, "c");
+    tool && judge_tag(out.decision) == "noop;" && encode(out.next_state.token) == encode(clear_holder(w).token)
+  }

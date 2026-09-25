@@ -1,0 +1,15 @@
+-- RESOLVING CONTROL, and the one the producer choice turns on.
+-- `std/json.jo` carries NO textual effect row, so the per-declaration textual
+-- parse reports it UNRESOLVED.  Three of the four port-mediated extensions
+-- import it, which is why the textual route's yield is 1 of 15 rather than 4.
+-- The cached interface answers it directly: purity true, a CLOSED EMPTY row.
+--
+-- This fixture must resolve CLEAN.  If it ever reports a verdict, the producer
+-- has regressed to the cheap route and the yield has silently collapsed.
+module fixtures/control_pure_unannotated
+
+import std/json (jo)
+
+export func emit(s: string) -> () {
+  ()
+}

@@ -1,0 +1,87 @@
+flowchart TB
+  %% ADR-004 long Qwen compaction-session DST.
+  %% The claim: live Qwen is calibration evidence only; the standing oracle is a
+  %% deterministic, Qwen-labeled long-session replay over the phase-core ledger,
+  %% plus direct compaction_ai/chain scenarios for payload-shape details.
+
+  subgraph CAL["1 · Live calibration — opt-in evidence, never CI oracle"]
+    qprof["qwen36-compaction-live profile<br/>agent = openrouter/qwen/qwen3.6-35b-a3b<br/>compaction_ai model = Qwen by default"]
+    qcat["production catalog binding<br/>openrouter/qwen/qwen3.6-35b-a3b &rarr; 262144"]
+    qrun["archived live session<br/>JSONL / markdown evidence<br/>date · profile · model · log path"]
+  end
+
+  subgraph DST["2 · Standing DST — deterministic replay, no network"]
+    script["scripts/long_qwen_compaction_dst.ail<br/>scenario ids:<br/>long_qwen_ai_multiple_compactions<br/>long_qwen_ai_replay_deterministic"]
+    testcat["test MOTOKO_MODELS_FILE<br/>same Qwen model label<br/>small context limit for tractable pressure"]
+    routed["custom routed Ported(Ports)<br/>normal agent calls: retained marker routing<br/>summarizer calls: single-user prompt &rarr; fake summary"]
+    tools["test extension on_tool_handle<br/>large deterministic tool results<br/>preserves assistant/tool ids"]
+  end
+
+  subgraph LOOP["3 · Production path under test — same transition code"]
+    session["session.c2_loop / run_v2_session_traced<br/>driver · sole logical ledger authority"]
+    split["split_for_compaction<br/>pin system prefix<br/>sealed compactable segment"]
+    chain["dispatch_pre_step_chain<br/>registry order: compaction_ai &rarr; structural"]
+    seal["seal_compacted_payload<br/>single send gate"]
+    provider["dispatch_step<br/>scripted provider result"]
+  end
+
+  subgraph TRACE["4 · Ledger oracle — in-memory, normalized"]
+    stage["CompactionStageRecord<br/>ext_id = compaction_ai<br/>outcome = TraceStageApplied"]
+    prepared["ProviderCallPrepared<br/>system_prefix_count &gt;= 1<br/>system_prefix_chars &gt; 0<br/>payload_digest"]
+    clean["negative outcomes absent<br/>TraceStageRejected<br/>compaction_exhausted<br/>SystemPromptEmpty"]
+    replay["normalized trace projection<br/>two runs byte-stable after volatile fields removed"]
+  end
+
+  subgraph DIRECT["5 · Direct extension/chain scenarios — payload details not in ledger"]
+    shape["compaction_ai_output_shape_valid<br/>validate_compactor_output accepts output<br/>tool_call/tool_result ids paired"]
+    cache["compaction_ai_artifact_cache_stable<br/>first run writes artifact<br/>second run must use cached summary"]
+  end
+
+  gate[["6 · Fast gate<br/>make compaction_dst or successor<br/>runs offline with test catalog override"]]
+
+  qprof --> qcat
+  qcat --> qrun
+  qrun -.->|"calibrates fixture realism only"| script
+
+  script --> testcat
+  script --> routed
+  script --> tools
+
+  routed --> session
+  tools --> session
+  testcat -->|"catalog_context_limit_for(model)"| session
+
+  session --> split
+  split --> chain
+  chain --> seal
+  seal --> prepared
+  seal --> provider
+  provider --> session
+
+  chain --> stage
+  session --> clean
+  stage --> replay
+  prepared --> replay
+
+  chain -.->|"same compactor law, direct fixture"| shape
+  chain -.->|"ExtCtx.artifacts replay"| cache
+
+  replay --> gate
+  shape --> gate
+  cache --> gate
+
+  classDef calib fill:#3a3218,stroke:#e0af68,color:#f2e0b8;
+  classDef dst fill:#20303a,stroke:#7dcfff,color:#c6e6f5;
+  classDef shell fill:#1e2a4a,stroke:#7aa2f7,color:#c8d3f5;
+  classDef pure fill:#1c3a2b,stroke:#73daca,color:#c3e8d8;
+  classDef sink fill:#123038,stroke:#2ac3de,color:#bdeef5;
+  classDef inv fill:#2f2145,stroke:#bb9af7,color:#e5d5fb;
+  classDef report fill:#3a2024,stroke:#f7768e,color:#f7c5cd;
+
+  class qprof,qcat,qrun calib;
+  class script,testcat,routed,tools dst;
+  class session,provider shell;
+  class split,chain,seal pure;
+  class stage,prepared,clean,replay sink;
+  class shape,cache inv;
+  class gate report;

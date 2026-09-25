@@ -1,0 +1,722 @@
+-- src/eval/journal/candidate_checks.ail
+--
+-- ADR-004 v5 D3 "Candidate checks", "The verdict", "The envelope";
+-- PLAN-004 v2 §3 P1.9b (graph id P1.9b-v2): K1–K7 and the candidate verdict.
+-- The pure half:
+--
+--   check_k1(program, w0)                       -> Result[[KFinding], ReplayRefusal]
+--   check_k2(program, log)                      -> [KFinding]
+--   candidate_witness(entry, trace, w0, w1)     -> DiscoveryWitness
+--   check_k3(entry, log, witness_C)             -> [KFinding]
+--   check_k4(entry, execution, census_C)        -> [KFinding]
+--   check_k5(frame) / check_k6(entry, end) / check_k7(entry, transcript)
+--   k_findings(entry, run)                      -> Result[[KFinding], ReplayRefusal]
+--   candidate_verdict(entry, run, provenance)   -> Candidate
+--   refused_candidate(refusal, provenance)      -> Candidate
+--
+-- The run (C's `run_v2_session_traced` against `world_state_of(program)`),
+-- the bridge (`execution_of`, which needs `src/core/session`) and the entry
+-- record's JSON are `candidate_checks_run.ail` (admission.ail's header: a
+-- module importing session cannot run `std/json` getters under `ailang test`).
+-- Built on P1.9a (`candidate.ail`'s `CandidateRefusal`), P1.7a
+-- (`source_checks.transcript_findings`, reused UNCHANGED as K7) and P1.7b
+-- (`witness.ail`'s witness parts and census, `admission.ail`'s A5/A6 checks,
+-- reused unchanged as K5/K6), all imported; no new copy of a src/core
+-- function is made here.
+--
+-- COMPARANDS. Every K check compares the CANDIDATE's run with the ENTRY —
+-- its program, its expectations (end, calls, recorded chain, the witness's
+-- source-derived env reads and route zeros, the three runtime counts), its
+-- budgets and metadata, its family_evidence record and its census — never
+-- with anything the admission run derived beyond what the entry stores
+-- (`CandidateEntry` is exactly that stored set).
+--
+--   K1  `world_state_of(program)` succeeds (else the verdict is
+--       `Refused(ProgramUndecodable(r))` — P1.9a refuses it before running;
+--       K1 re-asserts it), then `reconstitution_balance(program, ·)` is empty
+--       on the harness's own rebuilt world and — when that one is clean — on
+--       the world the runner actually handed C (`w0`). Findings at
+--       `Aggregate("reconstitution:<queue|clock|env|files>")`: a balance has
+--       no program position.
+--   K2  `strict_replay_findings(program.interactions, C.world.log)`, each at
+--       `Interaction(mismatch_position(m))` (the walk's position; programs are
+--       dense from 0, so it is the ordinal).
+--   K3  `check_discovery(C.log, witness_C)` where witness_C is built from C's
+--       OWN run: `provider_calls` = ProviderCallPrepared records in C's trace,
+--       `tool_dispatches` = |C.w0.tools| - |C.w1.tools|, `clock_delta_ms` =
+--       C.w1 - C.w0, and — from the ENTRY's witness — the source-derived
+--       `expected_env_reads` and the route zeros (approvals, file mutations,
+--       extension effects). THEN, separately, C's three runtime counts equal
+--       the entry's (`RuntimeCountDiffers`). The prepared events' digests are
+--       not consulted (K2 carries the evaluator's private digests); their
+--       COUNT is. Findings at `Aggregate("witness")` (the balance) and
+--       `Aggregate("witness:<count>")` (the second step).
+--   K4  `evaluate` of the execution built under
+--       `StrictAgainst(program.interactions)` with the entry's decision
+--       budget, retry budget (0), `ambient_rng_reads` 0, `[]` sites, the
+--       entry's metadata and epoch (the run module builds it). A
+--       replay-family violation is at the `Interaction` of the strict walk's
+--       finding it lifts (`InteractionsUnconsumed(total, consumed)` at
+--       `Interaction(consumed)`); every other violation at
+--       `Aggregate("invariants:<family>")`. Then `family_evidence` equals the
+--       entry's record, family for family (`FamilyEvidenceDiffers` at
+--       `Aggregate("family:<family>")`) with ONE declared difference: the
+--       entry was recorded under NoReplay, so `replay-consistency` reads
+--       evaluated=false there and must read true here (StrictAgainst); its
+--       inputs are compared like every other family's. Then the census
+--       recomputed from C's run equals the entry's recorded census, count for
+--       count by name (`CensusMismatch` at `Aggregate("census:<count>")`).
+--   K5  A5's function (`check_a5`) on C's frame; `FrameMismatch(<A5 name>)`
+--       at A5's location.
+--   K6  A6's function (`check_a6`) against the ENTRY's end and call count,
+--       including its independent no-marker scan; `EndMismatch(<A6 name>)`
+--       at A6's `Call(k)`.
+--   K7  A2's function (`source_checks.transcript_findings`) UNCHANGED, on C's
+--       trace and final history against the entry's seed digest and recorded
+--       chain; `ChainMismatch(<A2 name>)` at A2's location.
+--
+-- THE VERDICT (v5 D3):
+--
+--   Candidate = Reproduced { calls: N, end, envelope }
+--             | Diverged   { location, finding, envelope }
+--             | Refused    { CandidateRefusal, envelope }
+--
+-- `finding` is one `CandidateFinding`, whose FAMILY is one of D3's eight:
+-- ReplayMismatch (K2), ReconstitutionFinding (K1), DiscoveryFinding (K3,
+-- incl. `RuntimeCountDiffers`), Violation (K4's evaluate), CensusMismatch
+-- (K4's census and family record), FrameMismatch (K5), EndMismatch (K6),
+-- ChainMismatch (K7). The findings of all seven checks are listed in K order
+-- (each check's own order kept) and the FIRST is the verdict's, at its own
+-- location; so when K2 and K4's replay family both report, K2's is the
+-- verdict's. No interaction index is invented for an aggregate.
+--
+-- ANY K FAILURE FORBIDS A SCORE: `score_permitted` is true only for
+-- `Reproduced`, and every envelope says which.
+-- `regression_replay_findings` is DIAGNOSTIC ONLY: its report is printed in
+-- a Diverged envelope and never consulted by the verdict.
+--
+-- THE ENVELOPE, printed with every verdict: checked (K0–K7); pinned; the
+-- unreproduced and not-observed lists; the family-evidence and census lines
+-- (the four words, `witness.evidence_lines`); what the run's identity rests
+-- on — the execution-provenance record (D5), because the marker check is
+-- NOT APPLICABLE to an observation-preserving candidate; the residual gap
+-- (P1.9a); the positions of any exhausted marker in C's log (`call:k`,
+-- reported whether or not K6 is reached); the score line; the diagnostic.
+--
+-- Privacy (§0.6): synthetic fixtures only; findings carry identities,
+-- counts, ordinals and digests.
+
+module src/eval/journal/candidate_checks
+
+import std/list as List (length, map, foldl, filter)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/string (join)
+import src/core/ports (WorldState)
+import src/core/phase_vocab (LedgerTrace)
+import src/core/dst_interaction (Interaction, IdentityBody, ProviderIdentity, ToolIdentity, EnvironmentReadIdentity, OutcomeOk)
+import src/core/dst_program (ExecutionProgram)
+import src/core/dst_result (ReplayMetadata)
+import src/core/dst_profile (ExecutionManifest)
+import src/core/dst_driver_only (driver_only_manifest)
+import src/core/dst_replay (
+  ReplayMismatch, WrongKind, WrongOrigin, UnsafeIdentity, ProjectionDiffers, OutcomeDiffers,
+  ProgramExhausted, UnusedInteraction, strict_replay_findings, mismatch_position,
+  world_state_of, reconstitution_balance, reconstitution_rule,
+  ReconstitutionFinding, QueueUnderfilled, QueueOverfilled, EpochNotCarried, EnvironmentNotCarried, FilesNotCarried,
+  ReplayRefusal, ProgramStructurallyInvalid, regression_replay_findings, regression_report
+)
+import src/core/dst_fault_catalogue (required_class_ids)
+import src/core/dst_discovery (DiscoveryWitness, EnvExpectation, DiscoveryFinding, check_discovery)
+import src/core/dst_invariants (
+  ExecutionUnderTest, FamilyEvidence, Violation, ReplayRuleViolated, InteractionsUnconsumed,
+  ReplayObligation, StrictAgainst, evaluate, family_evidence, violation_rule, violation_family, family_id, obligation_id
+)
+import src/eval/journal/stopping (ExpectedEnd, EndSuspended, EndFinalize, end_id, end_value, t0_omissions)
+import src/eval/journal/admission (
+  Location, Interaction, Call, Source, Aggregate, Snapshot, AdmissionFinding,
+  FrameObservation, EndObservation, check_a5, check_a6, exhausted_markers, location_label
+)
+import src/eval/journal/source_checks (TranscriptExpectation, TranscriptObservation, AppendedRecord, transcript_findings)
+import src/eval/journal/witness (
+  CensusRow, CensusCount, prepared_calls, tool_dispatches, census_counts, evidence_lines, discovery_finding_name,
+  discovery_finding_detail
+)
+import src/eval/journal/candidate (CandidateRefusal, InadmissibleCandidate, EvaluatorTouched, ProtectedRegionTouched, PreflightMismatch, GuardTripped, ProgramUndecodable, candidate_refusal_label)
+
+-- ============================================================================
+-- The entry, as K1–K7 read it.
+-- ============================================================================
+
+export type CandidateEntry = {
+  name: string,
+  program: ExecutionProgram,
+  end: ExpectedEnd,
+  calls: int,
+  transcript: TranscriptExpectation,
+  witness: DiscoveryWitness,
+  decision_budget: int,
+  retry_budget: int,
+  metadata: ReplayMetadata,
+  epoch: int,
+  family_evidence: [FamilyEvidence],
+  census: [CensusRow],
+  omissions: [string]
+}
+
+-- What K1–K7 read off C's run (the run module builds it from a
+-- `TracedSessionResult`; a test may mutate either).
+export type KRun = {
+  w0: WorldState,
+  w1: WorldState,
+  log: [Interaction],
+  trace: LedgerTrace,
+  frame: FrameObservation,
+  end: EndObservation,
+  transcript: TranscriptObservation,
+  execution: ExecutionUnderTest,
+  census: [CensusRow]
+}
+
+-- ============================================================================
+-- Findings.
+-- ============================================================================
+
+export type KCheck = K1 | K2 | K3 | K4 | K5 | K6 | K7
+
+export type CandidateFinding
+  = ReplayFinding(ReplayMismatch)
+  | Reconstitution(ReconstitutionFinding)
+  | Discovery(DiscoveryFinding)
+  | RuntimeCountDiffers(string, int, int)          -- count, candidate, entry
+  | InvariantViolation(Violation)
+  | FamilyEvidenceDiffers(string, string, string)  -- family, candidate, entry
+  | CensusDiffers(string, int, int)                -- count, candidate, entry
+  | FrameMismatch(string, string)                  -- A5's name, detail
+  | EndMismatch(string, string)                    -- A6's name, detail
+  | ChainMismatch(string, string)                  -- A2's name, detail
+
+export type KFinding = { check: KCheck, location: Location, finding: CandidateFinding }
+
+export pure func k_label(c: KCheck) -> string {
+  match c { K1 => "K1", K2 => "K2", K3 => "K3", K4 => "K4", K5 => "K5", K6 => "K6", K7 => "K7" }
+}
+
+export pure func replay_name(m: ReplayMismatch) -> string {
+  match m {
+    WrongKind(_, _, _) => "WrongKind",
+    WrongOrigin(_, _, _) => "WrongOrigin",
+    UnsafeIdentity(_, _, _) => "UnsafeIdentity",
+    ProjectionDiffers(_, _, _) => "ProjectionDiffers",
+    OutcomeDiffers(_, _, _) => "OutcomeDiffers",
+    ProgramExhausted(_, _) => "ProgramExhausted",
+    UnusedInteraction(_, _) => "UnusedInteraction"
+  }
+}
+
+pure func cc_reconstitution_name(f: ReconstitutionFinding) -> string {
+  match f {
+    QueueUnderfilled(_, _, _) => "QueueUnderfilled",
+    QueueOverfilled(_, _, _) => "QueueOverfilled",
+    EpochNotCarried(_, _) => "EpochNotCarried",
+    EnvironmentNotCarried(_, _) => "EnvironmentNotCarried",
+    FilesNotCarried(_, _) => "FilesNotCarried"
+  }
+}
+
+pure func cc_violation_name(v: Violation) -> string {
+  match v {
+    ReplayRuleViolated(rule, _) => "replay-rule-violated(${rule})",
+    _ => violation_rule(v)
+  }
+}
+
+-- The constructor-level name (the MATRIX `first_finding` after `Kn:`).
+export pure func candidate_finding_name(f: CandidateFinding) -> string {
+  match f {
+    ReplayFinding(m) => replay_name(m),
+    Reconstitution(r) => cc_reconstitution_name(r),
+    Discovery(d) => discovery_finding_name(d),
+    RuntimeCountDiffers(_, _, _) => "RuntimeCountDiffers",
+    InvariantViolation(v) => cc_violation_name(v),
+    FamilyEvidenceDiffers(_, _, _) => "FamilyEvidenceDiffers",
+    CensusDiffers(_, _, _) => "CensusMismatch",
+    FrameMismatch(n, _) => n,
+    EndMismatch(n, _) => n,
+    ChainMismatch(n, _) => n
+  }
+}
+
+-- D3's eight finding families.
+export pure func candidate_finding_family(f: CandidateFinding) -> string {
+  match f {
+    ReplayFinding(_) => "ReplayMismatch",
+    Reconstitution(_) => "ReconstitutionFinding",
+    Discovery(_) => "DiscoveryFinding",
+    RuntimeCountDiffers(_, _, _) => "DiscoveryFinding",
+    InvariantViolation(_) => "Violation",
+    FamilyEvidenceDiffers(_, _, _) => "CensusMismatch",
+    CensusDiffers(_, _, _) => "CensusMismatch",
+    FrameMismatch(_, _) => "FrameMismatch",
+    EndMismatch(_, _) => "EndMismatch",
+    ChainMismatch(_, _) => "ChainMismatch"
+  }
+}
+
+export pure func candidate_finding_detail(f: CandidateFinding) -> string {
+  match f {
+    ReplayFinding(m) => match m {
+      WrongKind(_, e, a) => "expected ${e} actual ${a}",
+      WrongOrigin(_, e, a) => "expected ${e} actual ${a}",
+      UnsafeIdentity(_, e, a) => "expected ${e} actual ${a}",
+      ProjectionDiffers(_, e, a) => "expected ${e} actual ${a}",
+      OutcomeDiffers(_, e, a) => "expected ${e} actual ${a}",
+      ProgramExhausted(_, a) => "no interaction for ${a}",
+      UnusedInteraction(_, e) => "unconsumed ${e}"
+    },
+    Reconstitution(r) => reconstitution_rule(r),
+    Discovery(d) => discovery_finding_detail(d),
+    RuntimeCountDiffers(n, c, e) => "${n} candidate ${show(c)} entry ${show(e)}",
+    InvariantViolation(v) => "${family_id(violation_family(v))}/${violation_rule(v)}",
+    FamilyEvidenceDiffers(fam, c, e) => "${fam} candidate ${c} entry ${e}",
+    CensusDiffers(n, c, e) => "${n} candidate ${show(c)} entry ${show(e)}",
+    FrameMismatch(_, d) => d,
+    EndMismatch(_, d) => d,
+    ChainMismatch(_, d) => d
+  }
+}
+
+export pure func k_finding_label(f: KFinding) -> string {
+  "${k_label(f.check)}:${candidate_finding_name(f.finding)}@${location_label(f.location)}"
+}
+
+-- `Location`'s `Interaction(ordinal)` (in a type position `Interaction` is
+-- `dst_interaction`'s record; source_checks.ail's note).
+pure func at_interaction(o: int) -> Location { Interaction(o) }
+
+pure func kf(c: KCheck, l: Location, f: CandidateFinding) -> KFinding {
+  { check: c, location: l, finding: f }
+}
+
+-- ============================================================================
+-- K1 — world_state_of and reconstitution_balance.
+-- ============================================================================
+
+export pure func balance_location(f: ReconstitutionFinding) -> Location {
+  match f {
+    QueueUnderfilled(q, _, _) => Aggregate("reconstitution:${q}"),
+    QueueOverfilled(q, _, _) => Aggregate("reconstitution:${q}"),
+    EpochNotCarried(_, _) => Aggregate("reconstitution:clock"),
+    EnvironmentNotCarried(_, _) => Aggregate("reconstitution:env"),
+    FilesNotCarried(_, _) => Aggregate("reconstitution:files")
+  }
+}
+
+export pure func check_k1(p: ExecutionProgram, w0: WorldState) -> Result[[KFinding], ReplayRefusal] {
+  match world_state_of(p, required_class_ids()) {
+    Err(r) => Err(r),
+    Ok(rebuilt) => {
+      let own = reconstitution_balance(p, rebuilt);
+      let handed = match own { [] => reconstitution_balance(p, w0), _ => [] };
+      Ok(List.map(\f. kf(K1, balance_location(f), Reconstitution(f)), own ++ handed))
+    }
+  }
+}
+
+-- ============================================================================
+-- K2 — strict replay.
+-- ============================================================================
+
+export pure func check_k2(p: ExecutionProgram, log: [Interaction]) -> [KFinding] {
+  List.map(\m. kf(K2, at_interaction(mismatch_position(m)), ReplayFinding(m)),
+           strict_replay_findings(p.interactions, log))
+}
+
+-- ============================================================================
+-- K3 — the candidate's own witness, then the entry's three counts.
+-- ============================================================================
+
+export pure func candidate_witness(e: CandidateEntry, t: LedgerTrace, w0: WorldState, w1: WorldState) -> DiscoveryWitness {
+  { e.witness |
+    provider_calls: prepared_calls(t),
+    tool_dispatches: tool_dispatches(w0, w1),
+    clock_delta_ms: w1.clock_ms - w0.clock_ms }
+}
+
+pure func cc_count(name: string, c: int, e: int) -> [KFinding] {
+  if c == e then [] else [kf(K3, Aggregate("witness:${name}"), RuntimeCountDiffers(name, c, e))]
+}
+
+export pure func check_k3(e: CandidateEntry, log: [Interaction], wc: DiscoveryWitness) -> [KFinding] {
+  List.map(\d. kf(K3, Aggregate("witness"), Discovery(d)), check_discovery(log, wc))
+    ++ cc_count("provider_calls", wc.provider_calls, e.witness.provider_calls)
+    ++ cc_count("tool_dispatches", wc.tool_dispatches, e.witness.tool_dispatches)
+    ++ cc_count("clock_delta_ms", wc.clock_delta_ms, e.witness.clock_delta_ms)
+}
+
+-- ============================================================================
+-- K4 — evaluate under StrictAgainst, the family record, the census.
+-- ============================================================================
+
+type VAcc = { positions: [int], out: [KFinding] }
+
+pure func cc_replay_positions(o: ReplayObligation, log: [Interaction]) -> [int] {
+  match o {
+    StrictAgainst(prog) => List.map(mismatch_position, strict_replay_findings(prog, log)),
+    _ => []
+  }
+}
+
+pure func cc_violation_step(a: VAcc, v: Violation) -> VAcc {
+  match v {
+    ReplayRuleViolated(_, _) => match a.positions {
+      p :: rest => { positions: rest, out: a.out ++ [kf(K4, at_interaction(p), InvariantViolation(v))] },
+      [] => { positions: [], out: a.out ++ [kf(K4, Aggregate("invariants:replay-consistency"), InvariantViolation(v))] }
+    },
+    InteractionsUnconsumed(_, consumed) =>
+      { a | out: a.out ++ [kf(K4, at_interaction(consumed), InvariantViolation(v))] },
+    _ => { a | out: a.out ++ [kf(K4, Aggregate("invariants:${family_id(violation_family(v))}"), InvariantViolation(v))] }
+  }
+}
+
+export pure func violation_findings(x: ExecutionUnderTest) -> [KFinding] {
+  let acc = List.foldl(cc_violation_step, { positions: cc_replay_positions(x.replay, x.world.log), out: [] }, evaluate(x));
+  acc.out
+}
+
+pure func cc_fe_text(f: FamilyEvidence) -> string {
+  "evaluated=${if f.evaluated then "true" else "false"},inputs=${show(f.inputs)}"
+}
+
+pure func cc_find_family(fe: [FamilyEvidence], family: string) -> Option[FamilyEvidence] {
+  List.foldl(\acc f. match acc { Some(_) => acc, None => if f.family == family then Some(f) else None }, None, fe)
+}
+
+-- The one declared difference: replay-consistency was recorded under
+-- NoReplay (false) and is evaluated under StrictAgainst (true).
+pure func cc_family_agrees(c: FamilyEvidence, e: FamilyEvidence) -> bool {
+  c.inputs == e.inputs
+    && (if c.family == "replay-consistency" then c.evaluated && not e.evaluated else c.evaluated == e.evaluated)
+}
+
+export pure func family_record_findings(c: [FamilyEvidence], e: [FamilyEvidence]) -> [KFinding] {
+  let at = \fam. Aggregate("family:${fam}");
+  let rows = if List.length(c) == List.length(e) then []
+             else [kf(K4, at("rows"), FamilyEvidenceDiffers("rows", show(List.length(c)), show(List.length(e))))];
+  rows ++ List.foldl(\acc x. match cc_find_family(e, x.family) {
+    None => acc ++ [kf(K4, at(x.family), FamilyEvidenceDiffers(x.family, cc_fe_text(x), "absent"))],
+    Some(y) => if cc_family_agrees(x, y) then acc
+               else acc ++ [kf(K4, at(x.family), FamilyEvidenceDiffers(x.family, cc_fe_text(x), cc_fe_text(y)))]
+  }, [], c)
+}
+
+pure func cc_find_count(cs: [CensusCount], name: string) -> Option[CensusCount] {
+  List.foldl(\acc c. match acc { Some(_) => acc, None => if c.name == name then Some(c) else None }, None, cs)
+}
+
+export pure func census_record_findings(c: [CensusRow], e: [CensusRow]) -> [KFinding] {
+  let ec = census_counts(e);
+  let cc = census_counts(c);
+  let missing = List.map(\x. kf(K4, Aggregate("census:${x.name}"), CensusDiffers(x.name, -1, x.observed)),
+                         List.filter(\x. match cc_find_count(cc, x.name) { None => true, Some(_) => false }, ec));
+  List.foldl(\acc x. match cc_find_count(ec, x.name) {
+    None => acc ++ [kf(K4, Aggregate("census:${x.name}"), CensusDiffers(x.name, x.observed, -1))],
+    Some(y) => if x.observed == y.observed then acc
+               else acc ++ [kf(K4, Aggregate("census:${x.name}"), CensusDiffers(x.name, x.observed, y.observed))]
+  }, [], cc) ++ missing
+}
+
+export pure func check_k4(e: CandidateEntry, x: ExecutionUnderTest, census_c: [CensusRow]) -> [KFinding] {
+  violation_findings(x)
+    ++ family_record_findings(family_evidence(x), e.family_evidence)
+    ++ census_record_findings(census_c, e.census)
+}
+
+-- ============================================================================
+-- K5, K6, K7 — A5, A6 and A2's functions, unchanged.
+-- ============================================================================
+
+export pure func check_k5(f: FrameObservation) -> [KFinding] {
+  List.map(\a. kf(K5, a.location, FrameMismatch(a.finding, a.detail)), check_a5(f))
+}
+
+export pure func check_k6(e: CandidateEntry, o: EndObservation) -> [KFinding] {
+  List.map(\a. kf(K6, a.location, EndMismatch(a.finding, a.detail)), check_a6(e.end, e.calls, o))
+}
+
+export pure func check_k7(e: CandidateEntry, o: TranscriptObservation) -> [KFinding] {
+  List.map(\s. kf(K7, s.location, ChainMismatch(s.finding, s.detail)), transcript_findings(e.transcript, o))
+}
+
+-- ============================================================================
+-- All seven, in K order.
+-- ============================================================================
+
+export pure func k_findings(e: CandidateEntry, r: KRun) -> Result[[KFinding], ReplayRefusal] {
+  match check_k1(e.program, r.w0) {
+    Err(x) => Err(x),
+    Ok(k1) => Ok(k1
+      ++ check_k2(e.program, r.log)
+      ++ check_k3(e, r.log, candidate_witness(e, r.trace, r.w0, r.w1))
+      ++ check_k4(e, r.execution, r.census)
+      ++ check_k5(r.frame)
+      ++ check_k6(e, r.end)
+      ++ check_k7(e, r.transcript))
+  }
+}
+
+-- ============================================================================
+-- The verdict and the envelope.
+-- ============================================================================
+
+export type CandidateEnvelope = {
+  checked: [string],
+  pinned: [string],
+  unreproduced: [string],
+  not_observed: [string],
+  omissions: [string],
+  evidence: [string],
+  identity_evidence: string,
+  marker_check: string,
+  residual_gap: string,
+  exhausted_markers: [string],
+  findings: [string],
+  score: string,
+  diagnostic: [string]
+}
+
+export type Reproduction = { calls: int, end: ExpectedEnd, envelope: CandidateEnvelope }
+
+export type Divergence = { check: KCheck, location: Location, finding: CandidateFinding, envelope: CandidateEnvelope }
+
+export type Candidate
+  = Reproduced(Reproduction)
+  | Diverged(Divergence)
+  | Refused(CandidateRefusal, CandidateEnvelope)
+
+export pure func residual_gap() -> string {
+  "a module's selected path is the runner's re-derivation of the loader's rules, cross-checked against the compiler's compiled set, not the loader's own report (no id->path flag and no -trace-loader output at AILANG ae36986)"
+}
+
+export pure func marker_check_line() -> string {
+  "not applicable: observation-preserving candidate (D5); the run's identity rests on the execution-provenance record"
+}
+
+export pure func base_envelope(omissions: [string], provenance: string) -> CandidateEnvelope {
+  {
+    checked: ["K0", "K1", "K2", "K3", "K4", "K5", "K6", "K7"],
+    pinned: ["recorded_config", "t0_settings", "registry:empty", "execution_provenance"],
+    unreproduced: ["prior_counts", "cumulative", "cache_usage", "tool_exit_status", "context_limit_source"],
+    not_observed: ["model_parameters", "tool_schemas", "request_encoding", "real_tool_execution", "streaming",
+                   "extensions", "compaction", "live_gc_timing", "path_stat", "dir_list"],
+    omissions: omissions,
+    evidence: [],
+    identity_evidence: "execution-provenance record: ${provenance}",
+    marker_check: marker_check_line(),
+    residual_gap: residual_gap(),
+    exhausted_markers: [],
+    findings: [],
+    score: "forbidden: no K1-K7 verdict",
+    diagnostic: []
+  }
+}
+
+pure func cc_markers(log: [Interaction]) -> [string] {
+  List.map(\k. location_label(Call(k)), exhausted_markers(log))
+}
+
+export pure func run_envelope(e: CandidateEntry, r: KRun, provenance: string, fs: [KFinding]) -> CandidateEnvelope {
+  let base = base_envelope(e.omissions, provenance);
+  let diverged = List.length(fs) > 0;
+  { base |
+    evidence: evidence_lines(family_evidence(r.execution), r.census),
+    exhausted_markers: cc_markers(r.log),
+    findings: List.map(k_finding_label, fs),
+    score: if diverged then "forbidden: ${show(List.length(fs))} K finding(s)" else "permitted: Reproduced",
+    diagnostic: if diverged then [regression_report(regression_replay_findings(e.program.interactions, r.log))] else [] }
+}
+
+export pure func candidate_verdict(e: CandidateEntry, r: KRun, provenance: string) -> Candidate {
+  match k_findings(e, r) {
+    Err(x) => Refused(ProgramUndecodable(x), { base_envelope(e.omissions, provenance) | exhausted_markers: cc_markers(r.log),
+                                                score: "forbidden: refused at K1" }),
+    Ok(fs) => {
+      let env = run_envelope(e, r, provenance, fs);
+      match fs {
+        [] => Reproduced({ calls: e.calls, end: e.end, envelope: env }),
+        f :: _ => Diverged({ check: f.check, location: f.location, finding: f.finding, envelope: env })
+      }
+    }
+  }
+}
+
+-- K1's refusal when nothing ran (the world could not be built).
+export pure func unstartable_candidate(e: CandidateEntry, x: ReplayRefusal, provenance: string) -> Candidate {
+  Refused(ProgramUndecodable(x), { base_envelope(e.omissions, provenance) | score: "forbidden: refused at K1" })
+}
+
+export pure func refused_candidate(r: CandidateRefusal, provenance: string) -> Candidate {
+  Refused(r, { base_envelope(t0_omissions(), provenance) | score: "forbidden: refused before running" })
+}
+
+export pure func score_permitted(c: Candidate) -> bool {
+  match c { Reproduced(_) => true, _ => false }
+}
+
+export pure func candidate_envelope(c: Candidate) -> CandidateEnvelope {
+  match c { Reproduced(r) => r.envelope, Diverged(d) => d.envelope, Refused(_, env) => env }
+}
+
+export pure func candidate_label(c: Candidate) -> string {
+  match c {
+    Reproduced(r) => "Reproduced(calls=${show(r.calls)},end=${end_id(r.end)}(${end_value(r.end)}))",
+    Diverged(d) => "Diverged(${k_label(d.check)}:${candidate_finding_name(d.finding)}[${candidate_finding_family(d.finding)}]@${location_label(d.location)})",
+    Refused(r, _) => "Refused(${candidate_refusal_label(r)})"
+  }
+}
+
+-- The MATRIX.expected.tsv fields.
+export pure func candidate_verdict_word(c: Candidate) -> string {
+  match c { Reproduced(_) => "reproduced", Diverged(_) => "diverged", Refused(_, _) => "refused" }
+}
+
+export pure func candidate_first_finding(c: Candidate) -> string {
+  match c {
+    Reproduced(_) => "-",
+    Diverged(d) => "${k_label(d.check)}:${candidate_finding_name(d.finding)}",
+    Refused(r, _) => candidate_refusal_label(r)
+  }
+}
+
+export pure func candidate_position(c: Candidate) -> string {
+  match c {
+    Reproduced(_) => "-",
+    Diverged(d) => location_label(d.location),
+    Refused(ProgramUndecodable(_), _) => "aggregate:program",
+    Refused(GuardTripped(_), _) => "aggregate:guard",
+    Refused(PreflightMismatch(_), _) => "aggregate:k0",
+    Refused(_, _) => "aggregate:refusal"
+  }
+}
+
+export pure func envelope_lines(c: Candidate) -> [string] {
+  let e = candidate_envelope(c);
+  ["ENVELOPE checked=${join(",", e.checked)}",
+   "ENVELOPE pinned=${join(",", e.pinned)}",
+   "ENVELOPE unreproduced=${join(",", e.unreproduced)}",
+   "ENVELOPE not_observed=${join(",", e.not_observed)}",
+   "ENVELOPE omissions=${join(",", e.omissions)}",
+   "ENVELOPE identity_evidence=${e.identity_evidence}",
+   "ENVELOPE marker_check=${e.marker_check}",
+   "ENVELOPE residual_gap=${e.residual_gap}",
+   "ENVELOPE exhausted_markers=[${join(",", e.exhausted_markers)}]",
+   "ENVELOPE findings=[${join(";", e.findings)}]",
+   "ENVELOPE score=${e.score}"]
+    ++ List.map(\l. "ENVELOPE evidence ${l}", e.evidence)
+    ++ List.map(\l. "ENVELOPE diagnostic(never scored) ${l}", e.diagnostic)
+}
+
+-- ============================================================================
+-- Tests (pure). The run-bearing M14 cases are candidate_checks_live_test.ail.
+-- ============================================================================
+
+pure func cx_strs_eq(a: [string], b: [string]) -> bool {
+  match a {
+    [] => (match b { [] => true, _ => false }),
+    x :: xs => match b { [] => false, y :: ys => x == y && cx_strs_eq(xs, ys) }
+  }
+}
+
+pure func cx_i(o: int, body: IdentityBody, projection: string, payload: string) -> Interaction {
+  { identity: { ordinal: o, body: body }, request_projection: projection, deadline_ms: -1,
+    outcome: { advance_ms: 0, chunks: [], payload: payload, status: OutcomeOk, fault_class_id: "" } }
+}
+
+-- K2's constructors, each at its walk position, the coarsest first.
+pure func test_m14_k2_positions() -> bool
+  tests [((), true)]
+  {
+    let prog = [cx_i(0, EnvironmentReadIdentity("K"), "env", ""),
+                cx_i(1, ProviderIdentity("loop_v2", 0, "m"), "payload=a", "{}"),
+                cx_i(2, ToolIdentity("loop_v2", "c1", "BashExec"), "args=x", "{}")];
+    let p = { cc_program_stub() | interactions: prog };
+    let at = \n f. List.foldl(\acc i. acc ++ [if i.identity.ordinal == n then f(i) else i], [], prog);
+    let lab = \log. List.map(k_finding_label, check_k2(p, log));
+    List.length(check_k2(p, prog)) == 0
+      && cx_strs_eq(lab(at(1, \i. cx_i(1, EnvironmentReadIdentity("K"), "env", ""))), ["K2:WrongKind@interaction:1"])
+      && cx_strs_eq(lab(at(1, \i. { i | identity: { ordinal: 1, body: ProviderIdentity("other", 0, "m") } })), ["K2:WrongOrigin@interaction:1"])
+      && cx_strs_eq(lab(at(2, \i. { i | identity: { ordinal: 2, body: ToolIdentity("loop_v2", "c9", "BashExec") } })), ["K2:UnsafeIdentity@interaction:2"])
+      && cx_strs_eq(lab(at(1, \i. { i | request_projection: "payload=b" })), ["K2:ProjectionDiffers@interaction:1"])
+      && cx_strs_eq(lab(at(2, \i. { i | outcome: { i.outcome | payload: "{\"x\":1}" } })), ["K2:OutcomeDiffers@interaction:2"])
+      && cx_strs_eq(lab(prog ++ [cx_i(3, EnvironmentReadIdentity("K"), "env", "")]), ["K2:ProgramExhausted@interaction:3"])
+      && cx_strs_eq(lab([cx_i(0, EnvironmentReadIdentity("K"), "env", ""), cx_i(1, ProviderIdentity("loop_v2", 0, "m"), "payload=a", "{}")]),
+                    ["K2:UnusedInteraction@interaction:2"])
+  }
+
+pure func cc_program_stub() -> ExecutionProgram {
+  {
+    schema_version: "execution-program/4", generator_id: "fx", generator_version: "fx", seed: 0,
+    initial_world: { messages_and_policy: "{}", synthetic_environment: [], files: [], clock_epoch: 0, extension_profile: "fx" },
+    bounds: { max_interactions: 0, max_chunks_per_interaction: 0, max_payload_bytes: 0, max_resource_size: 0,
+              max_clock_advance_ms: 0, chunk_draw_hi: 0 },
+    manifest: cc_manifest_stub(),
+    interactions: []
+  }
+}
+
+pure func cc_manifest_stub() -> ExecutionManifest {
+  driver_only_manifest("", "", "", "", [], [], "")
+}
+
+-- The family record: equal rows agree; replay-consistency must flip
+-- false -> true and nothing else may; inputs are compared everywhere.
+pure func test_m14_k4_family_record() -> bool
+  tests [((), true)]
+  {
+    let e = [{ family: "terminal-summary", evaluated: true, inputs: 9 },
+             { family: "replay-consistency", evaluated: false, inputs: 20 }];
+    let c = [{ family: "terminal-summary", evaluated: true, inputs: 9 },
+             { family: "replay-consistency", evaluated: true, inputs: 20 }];
+    let lab = \x. List.map(k_finding_label, family_record_findings(x, e));
+    List.length(family_record_findings(c, e)) == 0
+      && cx_strs_eq(lab(e), ["K4:FamilyEvidenceDiffers@aggregate:family:replay-consistency"])
+      && cx_strs_eq(lab([{ family: "terminal-summary", evaluated: true, inputs: 10 },
+                         { family: "replay-consistency", evaluated: true, inputs: 20 }]),
+                    ["K4:FamilyEvidenceDiffers@aggregate:family:terminal-summary"])
+      && cx_strs_eq(lab([{ family: "terminal-summary", evaluated: true, inputs: 9 }]),
+                    ["K4:FamilyEvidenceDiffers@aggregate:family:rows"])
+  }
+
+-- The census record, count for count by name.
+pure func cx_row(counts: [CensusCount]) -> CensusRow {
+  { row: "fx", route: "fx", counts: counts, unobserved: [] }
+}
+
+pure func test_m14_k4_census_record() -> bool
+  tests [((), true)]
+  {
+    let e = [cx_row([{ name: "retries", observed: 0, expected: 0 }, { name: "decisions", observed: 7, expected: 7 }])];
+    let moved = [cx_row([{ name: "retries", observed: 0, expected: 0 }, { name: "decisions", observed: 8, expected: 7 }])];
+    let dropped = [cx_row([{ name: "decisions", observed: 7, expected: 7 }])];
+    List.length(census_record_findings(e, e)) == 0
+      && cx_strs_eq(List.map(k_finding_label, census_record_findings(moved, e)), ["K4:CensusMismatch@aggregate:census:decisions"])
+      && cx_strs_eq(List.map(k_finding_label, census_record_findings(dropped, e)), ["K4:CensusMismatch@aggregate:census:retries"])
+  }
+
+-- The verdict's mapping: the refusal arm's labels and positions; the score.
+pure func test_m14_refused_arm() -> bool
+  tests [((), true)]
+  {
+    let r1 = refused_candidate(InadmissibleCandidate("path:ailang.lock"), "fx");
+    let r2 = refused_candidate(ProgramUndecodable(ProgramStructurallyInvalid("artifact-digest-mismatch")), "fx");
+    let r3 = refused_candidate(GuardTripped("trip"), "fx");
+    let r4 = refused_candidate(PreflightMismatch("binary:sha256"), "fx");
+    candidate_label(r1) == "Refused(InadmissibleCandidate:path:ailang.lock)"
+      && candidate_verdict_word(r1) == "refused" && candidate_position(r1) == "aggregate:refusal"
+      && candidate_first_finding(r2) == "ProgramUndecodable:ProgramStructurallyInvalid(artifact-digest-mismatch)"
+      && candidate_position(r2) == "aggregate:program"
+      && candidate_position(r3) == "aggregate:guard" && candidate_position(r4) == "aggregate:k0"
+      && not score_permitted(r1) && not score_permitted(r2)
+      && candidate_envelope(r1).marker_check == marker_check_line()
+      && List.length(envelope_lines(r1)) >= 11
+  }

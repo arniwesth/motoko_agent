@@ -1,0 +1,91 @@
+flowchart TD
+  %% Plan 3 · checkpoint trigger — END STATE expected after PLAN-checkpoint-trigger.md is implemented.
+  %% Grounded at HEAD 4371de0. This is a CONTROL-FLOW view (the trigger decision + termination-guard
+  %% loop), not an import graph: the plan's essence is when/where the loop decides to checkpoint.
+  %% Colours: green = built by this plan · purple = core file edited · gray = frozen (D7/handler) ·
+  %% blue = acceptance gate · cyan = shared law reused (not copied) · amber = the decision.
+
+  subgraph POLICY["StepPolicy — phase_vocab.ail:270 (2 NEW fields, default OFF)"]
+    flag["checkpoint_enabled : bool<br/>default = false"]
+    pct["checkpoint_pct : int<br/>default = 90  (85 hard &lt; 90 &lt; 95 exhaustion)"]
+  end
+
+  subgraph LOOP["session c2_loop — live loop"]
+    decide["decide(s, pol) — step_machine.ail:78<br/>UNCHANGED · 5 finish-reasons fan in ↓"]
+    cmof{"call_model_or_fail — :67 (EDITED)<br/>1· budget Fail  2· cost Fail<br/>3· should_checkpoint? (NEW gate)"}
+    fail["Fail<br/>step budget / BudgetExceeded"]
+    callmodel["CallModel(model)"]
+    seal["seal_compacted_payload<br/>SealExhausted @95% = honest terminal"]
+    takecp["TakeCheckpoint(plan)"]
+  end
+
+  subgraph PRED["should_checkpoint — NEW · effect-free · short-circuit &amp;&amp;"]
+    c1["① checkpoint_enabled"]
+    c2["② history_usage_percent ≥ checkpoint_pct<br/>history_usage_percent (NEW helper, phase_vocab)"]
+    c3["③ checkpoint_would_relieve (NEW helper, phase_vocab)<br/>projected usage &lt; pct<br/>⚠ SOLE spin-guard — a checkpoint does NOT advance step_idx"]
+  end
+
+  subgraph SUMMARY["summary source (D3-3)"]
+    struct["checkpoint_summary(s) — NEW<br/>structural · pure · no AI/telemetry<br/>AI-delegated = v2"]
+  end
+
+  subgraph FROZEN["Frozen mechanics — D7 (do NOT touch)"]
+    handler["TakeCheckpoint handler — session.ail:1347<br/>apply_checkpoint · ledger_emit(CheckpointTaken)<br/>step_idx UNCHANGED"]
+    cp["checkpoint(h, plan) — :239<br/>history = pinned system prefix ++ [summary]"]
+    rebuilt["rebuilt History (small)<br/>usage ≪ checkpoint_pct → pressure cleared"]
+  end
+
+  law[["validate_compactor_output — invariants.ail (Plan 1)<br/>SHARED LAW · reused, never copied<br/>rejects system msgs → applied to NON-SYSTEM SEGMENT only"]]
+
+  subgraph GATE["Acceptance — phase_c_l1_scenarios PASS count=15 + make check_core"]
+    sneg["checkpoint_never_emitted_when_policy_off<br/>(RETARGETED, must be PRESSURED)"]
+    spos["checkpoint_emitted_under_pressure (NEW)"]
+    sterm["checkpoint_terminates_not_spins (NEW)<br/>after cp → CallModel · prefix-heavy → no spin"]
+    sout["checkpoint_output_is_valid_transcript (EDITED)<br/>segment→shared law + full→history_valid_transcript"]
+    tmod["in-module tests — step_machine.ail:347<br/>test_default_policy_… (RENAMED) + positive twin"]
+  end
+
+  %% policy feeds the predicate
+  flag --> c1
+  pct --> c2
+
+  %% the trigger decision path
+  decide --> cmof
+  cmof -->|"budget/cost exhausted"| fail
+  c1 -->|"true"| c2
+  c2 -->|"true"| c3
+  cmof -.->|"evaluates"| c1
+  cmof -->|"gate = TRUE"| takecp
+  cmof -->|"gate = FALSE (off / below pct / cannot relieve)"| callmodel
+  c3 -.->|"false ⇒ no escape"| callmodel
+  callmodel --> seal
+  struct --> takecp
+
+  %% the termination-guard loop (checkpoint clears pressure, loop makes progress)
+  takecp --> handler
+  handler --> cp
+  cp --> rebuilt
+  rebuilt ==>|"re-enter loop · usage now &lt; pct ⇒ progress"| decide
+
+  %% would_relieve projects through the frozen op
+  c3 -.->|"projects via"| cp
+
+  %% checkpoint-output obligations (D7e), split across two shapes
+  sout --> law
+  cp -.->|"segment validated by"| law
+
+  classDef new fill:#143d24,stroke:#56d364,color:#c6f0cf,stroke-width:2.5px;
+  classDef edited fill:#2f2145,stroke:#bb9af7,color:#e5d5fb;
+  classDef frozen fill:#262a30,stroke:#9aa4b0,color:#d6dbe2;
+  classDef existing fill:#1e2a4a,stroke:#7aa2f7,color:#c8d3f5;
+  classDef leaf fill:#123038,stroke:#2ac3de,color:#bdeef5,stroke-width:2.5px;
+  classDef decision fill:#3a2f12,stroke:#e0af68,color:#f2e2c2,stroke-width:2.5px;
+  classDef terminal fill:#3a1620,stroke:#f7768e,color:#f7c6cf;
+
+  class flag,pct,c1,c2,c3,struct,spos,sterm new;
+  class sneg,sout,tmod edited;
+  class decide,callmodel existing;
+  class handler,cp,rebuilt frozen;
+  class law leaf;
+  class cmof decision;
+  class fail,seal terminal;

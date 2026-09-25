@@ -1,0 +1,37 @@
+module sunholo/motoko_ext_mcp/register
+
+import std/env (getEnvOr)
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtRegistration, ToolProvider, ProviderCtx, ToolCallEnvelope, ToolHandleOutcome
+)
+import pkg/sunholo/motoko_ext_mcp/mcp (read_mcp_config, mcp_config_json, collect_all_tool_names, mcp_decide)
+
+-- ABI 8.0 (031 ADR-001 D2): the ToolProvider, named and bound directly. The
+-- server list arrives as `ext_config`, never by capture. The slot's row is
+-- closed, so the handler declares all of it (8.0: with `Trace`).
+--
+-- IT LIVES IN THIS MODULE, NOT IN `mcp.ail`, and that is measured, not taste:
+-- on the pin (AILANG v0.33.0) an IMPORTED effectful function used as a
+-- constructor argument charges its row to the registering function
+-- (`register_with_config` then fails "Missing effects: AI, Clock, ..."), while
+-- one declared in the same module does not (031 P1.2c evidence,
+-- `import_leak_probe/`).
+func mcp_tool_handle(ctx: ProviderCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  { decision: mcp_decide(ctx.ext_config, call), next_state: ctx.world }
+}
+
+-- `{ config, caps }` with a literal `caps`. The profile directory's VALUE
+-- locates `mcp.json` and is not disclosed; the server list read from it is,
+-- and the handler reads it back. The advertised tool names stay the
+-- constructor's data position.
+export func register_with_config(_cfg: a) -> ExtRegistration ! {Env, FS} {
+  let profile_dir = getEnvOr("MOTOKO_PROFILE_DIR", ".");
+  let cfg         = read_mcp_config(profile_dir);
+  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
+  {
+    config: mcp_config_json(cfg),
+    caps: [
+      ToolProvider(collect_all_tool_names(cfg), mcp_tool_handle)
+    ]
+  }
+}

@@ -1,0 +1,514 @@
+-- src/eval/journal/candidate_checks_live_test.ail
+--
+-- PLAN-004 M14 (P1.9b, the run-bearing half): K1–K7 and the candidate
+-- verdict on real candidate runs over synthetic entries. A runner, as
+-- witness_live_test.ail (`ailang test` grants no Process/SharedMem):
+--
+--   ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace,Rand \
+--     --ai-stub --entry main src/eval/journal/candidate_checks_live_test.ail < /dev/null
+--
+-- One `PASS <check>` / `FAIL <check>` line per check; exit 1 on any failure.
+--
+-- THE ENTRIES. m3_selector_end (EndSuspended(3)) and m4_stop_call_last
+-- (EndFinalize(model_stop)) admitted in-process (`admit_with_evidence`,
+-- report clean), then `entry_of_admission`: the program, the end, the
+-- recorded chain, the witness, the budgets, the metadata, the family record
+-- and the census. m3's program: providers at 7, 14, 18; tools at 10, 13,
+-- 17, 21; 23 interactions.
+--
+-- THE CANDIDATE. C is this build (C = P): its run is `admission_run` against
+-- `world_state_of(program)`. A divergence is produced by mutating ONE thing —
+-- C's returned run (its log, its trace, the world it was handed), C's frame
+-- or end observation, or the entry — and every observation is re-derived
+-- from the mutated run (`k_run_of`), so each case exercises the real path.
+--
+--   m14_reproduced_suspended / m14_reproduced_finalize     C = P -> Reproduced
+--   m14_k2_<variant>          WrongKind, WrongOrigin, UnsafeIdentity,
+--                             ProjectionDiffers, OutcomeDiffers on C's log;
+--                             ProgramExhausted / UnusedInteraction by direct
+--                             log-length mutation. Each: first finding at its
+--                             Interaction; K4's replay family reports the same
+--                             position and K2's is the verdict's.
+--   m14_exhausted_marker_*    the marker's actual first finding (below)
+--   m14_k1_*                  QueueOverfilled on the handed world; an
+--                             undecodable program -> Refused, nothing runs
+--   m14_k3_*                  prepared != recorded both ways (whatever the
+--                             stored witness says); the three runtime counts
+--   m14_k4_*                  Violation (entry budget), census mismatch,
+--                             family record mismatch
+--   m14_k5_frame, m14_k5_pending            FrameMismatch (A5's function)
+--   m14_k6_end, m14_k6_marker_scan          EndMismatch (A6's, incl. the scan)
+--   m14_k7_seed_chain, m14_k7_append_chain  ChainMismatch (A2's, unchanged)
+--   m14_regression_diagnostic_only          a demoted difference: regression
+--                             replay reports 0 fatal, the verdict still diverges
+-- NO SCORE: every Diverged case asserts `score_permitted` false, a
+-- "forbidden" score line, the findings and the diagnostic in its envelope
+-- (`lt_diverged`); the Refused case asserts no score and that nothing ran.
+--
+--   m14_entry_records_round_trip  the entry records (`entry_json`, the one
+--                             entry-comparand codec, P1R C6) decode back to an
+--                             entry that gives C = P the same Reproduced
+--                             verdict; a record missing a field is refused
+--                             with the file named.
+--
+-- M15's K-rows need a candidate build with a real source edit, so they run
+-- through the runner's candidate mode (`scripts/eval/candidate.py`, K0–K7 in
+-- an assembled tree): `scripts/eval/test_candidate.py`'s live tests.
+--
+-- EXHAUSTED MARKER (M14): the actual first finding, never a universal
+-- ProgramExhausted —
+--   past_end    the program truncated before call 3's record (18 of 23
+--               interactions): C's call 3 finds the script exhausted and its
+--               marker lands at position 18, past the program's end ->
+--               K2 ProgramExhausted@interaction:18;
+--   at_position the program's call 3 outcome is the marker itself (so the
+--               world holds two steps and K1 balances): C's marker record
+--               is at 18, inside the program, and its projection differs ->
+--               K2 ProjectionDiffers@interaction:18;
+--   earlier     the same, with call 2's projection also changed ->
+--               K2 ProjectionDiffers@interaction:14 (the earlier mismatch).
+-- Each asserts `exhausted_markers = [call:3]` in the envelope.
+--
+-- Synthetic fixtures only (§0.6).
+
+module src/eval/journal/candidate_checks_live_test
+
+import std/io (println, exit)
+import std/json (Json)
+import std/list as List (length, map, foldl, filter)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/string (join, startsWith, contains, length)
+import src/core/ports (WorldState, ScriptedTool)
+import src/core/session (TracedSessionResult)
+import src/core/dst_interaction (Interaction, ProviderIdentity, ToolIdentity, EnvironmentReadIdentity, OutcomeOk, identity_projection)
+import src/core/phase_vocab (LedgerRecord, WireRecord, ProviderCallPrepared)
+import src/core/dst_driver_only (driver_only_manifest)
+import src/eval/journal/reader (parse_lines)
+import src/eval/journal/stopping (JournalWorld, EndFinalize)
+import src/eval/journal/world (fixture_journal_world)
+import src/eval/journal/admission (Identities, Comparators, SyntheticEntry, report_ok, normalized_configuration, profile_scan_roots)
+import src/eval/journal/admission_run (admit_with_evidence)
+import src/eval/journal/candidate_checks (
+  CandidateEntry, KRun, Candidate, Reproduced, Diverged, Refused,
+  candidate_label, candidate_envelope, candidate_verdict, k_findings, k_finding_label, score_permitted,
+  candidate_verdict_word, candidate_first_finding, candidate_position
+)
+import src/eval/journal/candidate_checks_run (entry_of_admission, candidate_world, candidate_run, k_run_of, evaluate_candidate, print_verdict, entry_json, decode_entry)
+import src/eval/journal/testdata/world_fixtures (WorldFixture, fxw_m3_selector_end, fxw_m4_stop_call_last)
+import src/eval/journal/testdata/admission_fixtures (fxa_all)
+
+func lt_report(name: string, ok: bool) -> bool ! {IO} {
+  let _ = println("${if ok then "PASS" else "FAIL"} ${name}");
+  ok
+}
+
+pure func lt_strs_eq(a: [string], b: [string]) -> bool {
+  match a {
+    [] => (match b { [] => true, _ => false }),
+    x :: xs => match b { [] => false, y :: ys => x == y && lt_strs_eq(xs, ys) }
+  }
+}
+
+pure func lt_has(xs: [string], x: string) -> bool {
+  List.length(List.filter(\y. y == x, xs)) > 0
+}
+
+pure func lt_epoch() -> int { 1789000000000 }
+
+pure func lt_workdir() -> string { ".motoko/eval-admission-workdir" }
+
+pure func lt_provenance() -> string { "synthetic:in-process (no assembly; K0 not run)" }
+
+pure func lt_rederived(name: string) -> string {
+  List.foldl(\acc a. if a.name == name then a.normalized_configuration else acc, "", fxa_all())
+}
+
+pure func lt_ids(jw: JournalWorld) -> Identities {
+  let b = driver_only_manifest("", "", "", "", [], [], "");
+  {
+    source_revision: "a0a0a0", scan_root_commit: "a0a0a0", tracked_changes: [],
+    toolchain: "AILANG fx", toolchain_sha256: "sha256:fxbin", abi_version: "8.0",
+    classifier_2_set: ["env_get"], unrouted_fields: [], scan_roots: ["src", "packages"],
+    packages: [], lock_sha256: "sha256:fxlock",
+    normalized_configuration: normalized_configuration(jw),
+    profile_id: b.profile_id, profile_version: b.profile_version,
+    event_vocabulary_version: b.event_vocabulary_version,
+    profile_rules_version: b.profile_rules_version, coverage_rules_version: b.coverage_rules_version,
+    attribution_rules_version: b.attribution_rules_version, fault_catalogue_version: b.fault_catalogue_version,
+    generator_version: "a0a0a0-dev", extension_packages: []
+  }
+}
+
+pure func lt_cmp(fixture: string) -> Comparators {
+  {
+    revision_is_commit: true, assembled_tree: "t0", revision_tree: "t0",
+    lock_abi_version: "8.0", pinned_classifier_2_set: ["env_get"], pinned_unrouted_fields: [],
+    profile_scan_roots: profile_scan_roots(),
+    leaf_files: ["src/core/session.ail", "src/core/tool_phase.ail", "src/core/context_usage.ail", "src/core/test/stub_step.ail"],
+    rederived_configuration: lt_rederived(fixture), e_pin: None, registry_used: []
+  }
+}
+
+export type Admitted = { jw: JournalWorld, lines: [Json], entry: CandidateEntry }
+
+export func lt_admit(f: WorldFixture) -> Option[Admitted] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  match (fixture_journal_world(f), parse_lines(f.journal)) {
+    (Ok(jw), Ok(lines)) => {
+      let ev = admit_with_evidence("admission", SyntheticEntry, lt_ids(jw), lt_cmp(f.name), jw, lt_epoch(), lt_workdir());
+      match (ev.report.program, ev.witness, ev.a8) {
+        (Some(p), Some(w), Some(a8)) =>
+          if report_ok(ev.report) then Some({ jw: jw, lines: lines, entry: entry_of_admission(f.name, lines, jw, p, w, a8) })
+          else None,
+        _ => None
+      }
+    },
+    _ => None
+  }
+}
+
+-- One C run against the entry's program, kept for mutation.
+type CRun = { a: Admitted, w0: WorldState, run: TracedSessionResult }
+
+func lt_crun(a: Admitted, w0: WorldState) -> CRun ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  { a: a, w0: w0, run: candidate_run(a.jw, w0, lt_workdir()) }
+}
+
+pure func lt_verdict(e: CandidateEntry, w0: WorldState, run: TracedSessionResult) -> Candidate {
+  candidate_verdict(e, k_run_of("candidate", e, w0, run), lt_provenance())
+}
+
+pure func lt_all(e: CandidateEntry, w0: WorldState, run: TracedSessionResult) -> [string] {
+  match k_findings(e, k_run_of("candidate", e, w0, run)) {
+    Ok(fs) => List.map(k_finding_label, fs),
+    Err(_) => ["refused"]
+  }
+}
+
+pure func lt_with_log(run: TracedSessionResult, log: [Interaction]) -> TracedSessionResult {
+  { run | world: { run.world | log: log } }
+}
+
+pure func lt_at(log: [Interaction], o: int, f: Interaction -> Interaction) -> [Interaction] {
+  List.map(\i. if i.identity.ordinal == o then f(i) else i, log)
+}
+
+pure func lt_take[a](n: int, xs: [a]) -> [a] {
+  if n <= 0 then [] else match xs { [] => [], x :: rest => x :: lt_take(n - 1, rest) }
+}
+
+pure func lt_drop_last[a](xs: [a]) -> [a] {
+  match xs { [] => [], [_] => [], x :: rest => x :: lt_drop_last(rest) }
+}
+
+pure func lt_env_read(o: int) -> Interaction {
+  { identity: { ordinal: o, body: EnvironmentReadIdentity("MOTOKO_TOOL_TIMEOUT_MS") }, request_projection: "env_get key=MOTOKO_TOOL_TIMEOUT_MS",
+    deadline_ms: -1, outcome: { advance_ms: 0, chunks: [], payload: "", status: OutcomeOk, fault_class_id: "" } }
+}
+
+-- The verdict's MATRIX triple.
+pure func lt_triple(c: Candidate) -> string {
+  "${candidate_verdict_word(c)}|${candidate_first_finding(c)}|${candidate_position(c)}"
+}
+
+-- A Diverged verdict whose first finding is `want`, with no score, and whose
+-- envelope lists the findings, the score line and the diagnostic.
+pure func lt_diverged(c: Candidate, want: string) -> bool {
+  let e = candidate_envelope(c);
+  lt_triple(c) == want && not score_permitted(c) && startsWith(e.score, "forbidden")
+    && List.length(e.findings) > 0 && List.length(e.diagnostic) == 1
+}
+
+func lt_case(name: string, c: Candidate, all: [string], want: string, extra: bool) -> bool ! {IO} {
+  let _ = println("${name}: ${candidate_label(c)} all=[${join(";", all)}] markers=[${join(",", candidate_envelope(c).exhausted_markers)}]");
+  lt_report(name, lt_diverged(c, want) && extra)
+}
+
+-- ============================================================================
+-- C = P
+-- ============================================================================
+
+func m14_reproduced(name: string, a: Admitted, want: string, exit_reads: int) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let o = evaluate_candidate("candidate", a.entry, a.jw, lt_workdir(), lt_provenance());
+  let _ = print_verdict(o.verdict);
+  let e = candidate_envelope(o.verdict);
+  let ok = match o.verdict {
+    Reproduced(r) => r.calls == 3 && candidate_label(o.verdict) == want,
+    _ => false
+  };
+  lt_report(name,
+    ok && score_permitted(o.verdict) && e.score == "permitted: Reproduced"
+      && lt_triple(o.verdict) == "reproduced|-|-"
+      && List.length(e.findings) == 0 && List.length(e.diagnostic) == 0 && List.length(e.exhausted_markers) == 0
+      && lt_strs_eq(e.checked, ["K0", "K1", "K2", "K3", "K4", "K5", "K6", "K7"])
+      && startsWith(e.marker_check, "not applicable")
+      && startsWith(e.identity_evidence, "execution-provenance record")
+      && contains(e.residual_gap, "re-derivation")
+      && lt_has(e.evidence, "family evaluated replay-consistency true")
+      && lt_has(e.evidence, "family evaluated checkpoint-history true (vacuous: checkpoint_records=0)")
+      && lt_has(e.evidence, "sub-obligation exercised exit_manifest_reads ${show(exit_reads)}${if exit_reads > 0 then "" else " (not exercised)"}")
+      && a.entry.witness.provider_calls == 3 && a.entry.decision_budget == (if exit_reads > 0 then 6 else 7))
+}
+
+-- ============================================================================
+-- K2 — the seven ReplayMismatch variants
+-- ============================================================================
+
+func m14_k2(c: CRun) -> bool ! {IO} {
+  let e = c.a.entry;
+  let log = c.run.world.log;
+  let go = \name mutated want k4. {
+    let run = lt_with_log(c.run, mutated);
+    let all = lt_all(e, c.w0, run);
+    lt_case(name, lt_verdict(e, c.w0, run), all, want, lt_has(all, k4))
+  };
+  let wk = go("m14_k2_wrong_kind",
+    lt_at(log, 7, \i. { lt_env_read(7) | request_projection: i.request_projection }),
+    "diverged|K2:WrongKind|interaction:7", "K4:replay-rule-violated(replay-wrong-kind)@interaction:7");
+  let wo = go("m14_k2_wrong_origin",
+    lt_at(log, 7, \i. { i | identity: { ordinal: 7, body: ProviderIdentity("fx_origin", 0, "fx/model-b") } }),
+    "diverged|K2:WrongOrigin|interaction:7", "K4:replay-rule-violated(replay-wrong-origin)@interaction:7");
+  let ui = go("m14_k2_unsafe_identity",
+    lt_at(log, 10, \i. { i | identity: { ordinal: 10, body: ToolIdentity("loop_v2", "c2z", "BashExec") } }),
+    "diverged|K2:UnsafeIdentity|interaction:10", "K4:replay-rule-violated(replay-unsafe-identity-mismatch)@interaction:10");
+  let pd = go("m14_k2_projection_differs",
+    lt_at(log, 14, \i. { i | request_projection: "${i.request_projection} fx=1" }),
+    "diverged|K2:ProjectionDiffers|interaction:14", "K4:replay-rule-violated(replay-projection-differs)@interaction:14");
+  let od = go("m14_k2_outcome_differs",
+    lt_at(log, 17, \i. { i | outcome: { i.outcome | payload: "${i.outcome.payload} " } }),
+    "diverged|K2:OutcomeDiffers|interaction:17", "K4:replay-rule-violated(replay-outcome-differs)@interaction:17");
+  let pe = go("m14_k2_program_exhausted",
+    log ++ [lt_env_read(23)],
+    "diverged|K2:ProgramExhausted|interaction:23", "K4:replay-rule-violated(replay-program-exhausted)@interaction:23");
+  let un = go("m14_k2_unused_interaction",
+    lt_drop_last(log),
+    "diverged|K2:UnusedInteraction|interaction:22", "K4:interactions-unconsumed@interaction:22");
+  let _ = println("k2: program ${show(List.length(e.program.interactions))} log ${show(List.length(log))}");
+  wk && wo && ui && pd && od && pe && un && List.length(log) == 23
+}
+
+-- ============================================================================
+-- The exhausted marker
+-- ============================================================================
+
+pure func lt_program(e: CandidateEntry, xs: [Interaction]) -> CandidateEntry {
+  { e | program: { e.program | interactions: xs } }
+}
+
+pure func lt_marked(xs: [Interaction]) -> [Interaction] {
+  lt_at(xs, 18, \i. { i | outcome: { i.outcome | payload: "{\"served\":false}", advance_ms: 0 } })
+}
+
+func m14_marker(name: string, a: Admitted, e: CandidateEntry, want: string) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  match candidate_world(e) {
+    Err(_) => lt_report("${name} (world refused)", false),
+    Ok(w0) => {
+      let run = candidate_run(a.jw, w0, lt_workdir());
+      let v = lt_verdict(e, w0, run);
+      let all = lt_all(e, w0, run);
+      lt_case(name, v, all, want,
+        lt_strs_eq(candidate_envelope(v).exhausted_markers, ["call:3"])
+          && List.length(w0.script) == 2
+          -- K1 balances: the marker is not in the world
+          && not lt_has_prefix(all, "K1:"))
+    }
+  }
+}
+
+pure func lt_has_prefix(xs: [string], p: string) -> bool {
+  List.length(List.filter(\x. startsWith(x, p), xs)) > 0
+}
+
+func m14_markers(a: Admitted) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let e = a.entry;
+  let xs = e.program.interactions;
+  let past = m14_marker("m14_exhausted_marker_past_end", a, lt_program(e, lt_take(18, xs)),
+                        "diverged|K2:ProgramExhausted|interaction:18");
+  let at = m14_marker("m14_exhausted_marker_at_position", a, lt_program(e, lt_marked(xs)),
+                      "diverged|K2:ProjectionDiffers|interaction:18");
+  let earlier = m14_marker("m14_exhausted_marker_earlier_mismatch", a,
+                           lt_program(e, lt_at(lt_marked(xs), 14, \i. { i | request_projection: "${i.request_projection} fx=1" })),
+                           "diverged|K2:ProjectionDiffers|interaction:14");
+  past && at && earlier
+}
+
+-- ============================================================================
+-- K1
+-- ============================================================================
+
+func m14_k1(a: Admitted, w0: WorldState) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let extra: ScriptedTool = { tool_call_id: "fx", duration_ms: 0, code: "", message: "", content: "", exit_code: -1 };
+  let handed = { w0 | tools: w0.tools ++ [extra] };
+  let run = candidate_run(a.jw, handed, lt_workdir());
+  let over = lt_case("m14_k1_reconstitution", lt_verdict(a.entry, handed, run), lt_all(a.entry, handed, run),
+                     "diverged|K1:QueueOverfilled|aggregate:reconstitution:tools", true);
+  let bad = lt_program(a.entry, lt_at(a.entry.program.interactions, 7, \i. { i | outcome: { i.outcome | payload: "not json" } }));
+  let o = evaluate_candidate("candidate", bad, a.jw, lt_workdir(), lt_provenance());
+  let _ = println("m14_k1_unstartable: ${candidate_label(o.verdict)}");
+  let refused = lt_report("m14_k1_unstartable",
+    lt_triple(o.verdict) == "refused|ProgramUndecodable:ProviderOutcomeUndecodable(7)|aggregate:program"
+      && not score_permitted(o.verdict)
+      && (match o.run { None => true, Some(_) => false }))
+  over && refused
+}
+
+-- ============================================================================
+-- K3
+-- ============================================================================
+
+pure func lt_prepared() -> LedgerRecord {
+  WireRecord(ProviderCallPrepared({ step: 9, msg_count: 1, estimated_input_tokens: 1, system_prefix_count: 1,
+    system_prefix_chars: 1, system_prefix_digest: "sha256:fx", payload_digest: "sha256:fx", model: "fx" }))
+}
+
+pure func lt_drop_prepared(rs: [LedgerRecord]) -> [LedgerRecord] {
+  match rs {
+    [] => [],
+    r :: rest => match r { WireRecord(ProviderCallPrepared(_)) => rest, _ => r :: lt_drop_prepared(rest) }
+  }
+}
+
+func m14_k3(c: CRun) -> bool ! {IO} {
+  let e = c.a.entry;
+  let run = c.run;
+  let under = { run | trace: { records: run.trace.records ++ [lt_prepared()] } };
+  let over = { run | trace: { records: lt_drop_prepared(run.trace.records) } };
+  -- the stored witness agreeing with the extra prepared call changes nothing
+  let stored4 = { e | witness: { e.witness | provider_calls: 4 } };
+  let u = lt_case("m14_k3_prepared_over_recorded", lt_verdict(e, c.w0, under), lt_all(e, c.w0, under),
+                  "diverged|K3:UnderRecorded|aggregate:witness", true);
+  let u4 = lt_case("m14_k3_prepared_over_recorded_stored_witness_agrees", lt_verdict(stored4, c.w0, under), lt_all(stored4, c.w0, under),
+                   "diverged|K3:UnderRecorded|aggregate:witness", not lt_has_prefix(lt_all(stored4, c.w0, under), "K3:RuntimeCountDiffers"));
+  let o = lt_case("m14_k3_prepared_under_recorded", lt_verdict(e, c.w0, over), lt_all(e, c.w0, over),
+                  "diverged|K3:OverRecorded|aggregate:witness", true);
+  let clock = { e | witness: { e.witness | clock_delta_ms: e.witness.clock_delta_ms + 1 } };
+  let cl = lt_case("m14_k3_runtime_count_clock", lt_verdict(clock, c.w0, run), lt_all(clock, c.w0, run),
+                   "diverged|K3:RuntimeCountDiffers|aggregate:witness:clock_delta_ms",
+                   lt_strs_eq(lt_all(clock, c.w0, run), ["K3:RuntimeCountDiffers@aggregate:witness:clock_delta_ms"]));
+  let tools = { e | witness: { e.witness | tool_dispatches: 5 } };
+  let tl = lt_case("m14_k3_runtime_count_tools", lt_verdict(tools, c.w0, run), lt_all(tools, c.w0, run),
+                   "diverged|K3:RuntimeCountDiffers|aggregate:witness:tool_dispatches", true);
+  let _ = println("k3: entry witness provider=${show(e.witness.provider_calls)} tools=${show(e.witness.tool_dispatches)} clock=${show(e.witness.clock_delta_ms)}");
+  u && u4 && o && cl && tl
+}
+
+-- ============================================================================
+-- K4
+-- ============================================================================
+
+func m14_k4(c: CRun) -> bool ! {IO} {
+  let e = c.a.entry;
+  let run = c.run;
+  let budget = { e | decision_budget: 3 };
+  let v = lt_case("m14_k4_violation", lt_verdict(budget, c.w0, run), lt_all(budget, c.w0, run),
+                  "diverged|K4:decision-budget-exceeded|aggregate:invariants:bounded-progress", true);
+  let census = { e | census: List.map(\r. { r | counts: List.map(\n. if n.name == "decisions" then { n | observed: 8 } else n, r.counts) }, e.census) };
+  let cm = lt_case("m14_k4_census_mismatch", lt_verdict(census, c.w0, run), lt_all(census, c.w0, run),
+                   "diverged|K4:CensusMismatch|aggregate:census:decisions",
+                   lt_strs_eq(lt_all(census, c.w0, run), ["K4:CensusMismatch@aggregate:census:decisions"]));
+  let fam = { e | family_evidence: List.map(\f. if f.family == "tool-pairing" then { f | inputs: f.inputs + 1 } else f, e.family_evidence) };
+  let fm = lt_case("m14_k4_family_record", lt_verdict(fam, c.w0, run), lt_all(fam, c.w0, run),
+                   "diverged|K4:FamilyEvidenceDiffers|aggregate:family:tool-pairing", true);
+  v && cm && fm
+}
+
+-- ============================================================================
+-- K5, K6, K7
+-- ============================================================================
+
+func m14_k567(c: CRun) -> bool ! {IO} {
+  let e = c.a.entry;
+  let r = k_run_of("candidate", e, c.w0, c.run);
+  let at = \name rr want. {
+    let v = candidate_verdict(e, rr, lt_provenance());
+    let all = match k_findings(e, rr) { Ok(fs) => List.map(k_finding_label, fs), Err(_) => [] };
+    lt_case(name, v, all, want, true)
+  };
+  let k5 = at("m14_k5_frame", { r | frame: { r.frame | end_line: "WORLD_RUN_END other ${show(r.frame.final)}" } },
+              "diverged|K5:FrameMalformed|aggregate:frame");
+  let k5p = at("m14_k5_pending", { r | frame: { r.frame | pending: 1 } }, "diverged|K5:PendingNotEmpty|aggregate:frame");
+  let fin = { e | end: EndFinalize("model_stop") };
+  let v6 = candidate_verdict(fin, r, lt_provenance());
+  let k6 = lt_case("m14_k6_end", v6, match k_findings(fin, r) { Ok(fs) => List.map(k_finding_label, fs), Err(_) => [] },
+                   "diverged|K6:EndMismatch|call:3", true);
+  let k6m = at("m14_k6_marker_scan", { r | end: { r.end | markers: [3] } }, "diverged|K6:ExhaustedMarker|call:3");
+  let seeded = { e | transcript: { e.transcript | seed_digest: "sha256:fx" } };
+  let v7 = candidate_verdict(seeded, r, lt_provenance());
+  let k7 = lt_case("m14_k7_seed_chain", v7, match k_findings(seeded, r) { Ok(fs) => List.map(k_finding_label, fs), Err(_) => [] },
+                   "diverged|K7:SeedDigestDiffers|snapshot:${show(e.transcript.seed_position)}", true);
+  let second = match e.transcript.appends { _ :: x :: _ => x.seq, _ => -1 };
+  let rr = { r | transcript: { r.transcript | appended: List.foldl(\acc x. acc ++ [if List.length(acc) == 1 then { x | digest_after: "sha256:fx" } else x], [], r.transcript.appended) } };
+  let k7b = at("m14_k7_append_chain", rr, "diverged|K7:ChainDiffers|snapshot:${show(second)}");
+  let _ = println("k7: seed at snapshot:${show(e.transcript.seed_position)} second append snapshot:${show(second)}");
+  k5 && k5p && k6 && k6m && k7 && k7b
+}
+
+-- ============================================================================
+-- The regression diagnostic never scores.
+-- ============================================================================
+
+func m14_diagnostic(c: CRun) -> bool ! {IO} {
+  let e = c.a.entry;
+  let run = lt_with_log(c.run, lt_at(c.run.world.log, 14, \i. { i | request_projection: "${i.request_projection} fx=1" }));
+  let v = lt_verdict(e, c.w0, run);
+  let d = candidate_envelope(v).diagnostic;
+  let _ = println("diagnostic: ${join(" | ", d)}");
+  lt_report("m14_regression_diagnostic_only",
+    lt_triple(v) == "diverged|K2:ProjectionDiffers|interaction:14"
+      && List.length(d) == 1
+      && (match d { x :: _ => startsWith(x, "regression replay: 0 fatal, 1 recorded difference"), [] => false })
+      && not score_permitted(v))
+}
+
+-- ============================================================================
+-- The entry records (P1R C6): one codec, and it round-trips.
+-- ============================================================================
+
+func m14_entry_records(c: CRun) -> bool ! {IO} {
+  let e = c.a.entry;
+  let r = entry_json(e);
+  let back = decode_entry(r, e.program, c.a.lines, c.a.jw);
+  let same = match back {
+    Ok(d) => lt_triple(lt_verdict(d, c.w0, c.run)) == "reproduced|-|-"
+               && d.calls == e.calls && d.decision_budget == e.decision_budget && d.epoch == e.epoch
+               && List.length(d.census) == List.length(e.census) && List.length(d.family_evidence) == List.length(e.family_evidence),
+    Err(_) => false
+  };
+  let broken = match decode_entry({ r | census: "{\"family_evidence\":[],\"omissions\":[]}\n" }, e.program, c.a.lines, c.a.jw) {
+    Err(why) => why == "census.txt: census",
+    Ok(_) => false
+  };
+  let _ = println("entry_records: witness=${show(length(r.witness))} census=${show(length(r.census))} round_trip=${if same then "reproduced" else "DIFFERS"} broken_refused=${if broken then "true" else "false"}");
+  lt_report("m14_entry_records_round_trip", same && broken)
+}
+
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  main_checks()
+}
+
+func main_checks() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  match (lt_admit(fxw_m3_selector_end()), lt_admit(fxw_m4_stop_call_last())) {
+    (Some(a), Some(b)) => {
+      let r1 = m14_reproduced("m14_reproduced_suspended", a, "Reproduced(calls=3,end=EndSuspended(3))", 0);
+      let r2 = m14_reproduced("m14_reproduced_finalize", b, "Reproduced(calls=3,end=EndFinalize(model_stop))", 1);
+      let rest = match candidate_world(a.entry) {
+        Err(_) => lt_report("candidate world", false),
+        Ok(w0) => {
+          let c = lt_crun(a, w0);
+          let k2 = m14_k2(c);
+          let mk = m14_markers(a);
+          let k1 = m14_k1(a, w0);
+          let k3 = m14_k3(c);
+          let k4 = m14_k4(c);
+          let k5 = m14_k567(c);
+          let dg = m14_diagnostic(c);
+          let er = m14_entry_records(c);
+          k2 && mk && k1 && k3 && k4 && k5 && dg && er
+        }
+      };
+      if r1 && r2 && rest then println("candidate_checks_live_test: all checks passed")
+      else { let _ = println("candidate_checks_live_test: FAILED"); exit(1) }
+    },
+    _ => { let _ = println("FAIL admission of the entries"); exit(1) }
+  }
+}

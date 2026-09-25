@@ -1,0 +1,8 @@
+module tools/verify_classify/fixtures/precondition_tautology
+
+-- The ensures says nothing beyond the assumed domain. The classifier must keep
+-- the requires on its probes and label this tautology, never substantive.
+pure func precondition_only(x: int) -> int
+  requires { x >= 0 }
+  ensures { x >= 0 }
+  { x }

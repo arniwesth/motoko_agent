@@ -1,0 +1,20 @@
+-- A COMPUTED ELEMENT inside a literal list: one atom is a constructor
+-- application and the next is a call that returns one.  The second atom's kind
+-- and binding are unknown to a textual reader.  Fail closed.
+-- P1.7r (031 ADR-001 D2): MIGRATED onto the 8.0 head, the judge named on
+-- `ProcessCtx`; the computed element alone fails the result
+-- (`list-not-enumerable`).
+module fixture/reject_capability_list_element
+
+import std/json (jo)
+import pkg/sunholo/motoko_ext_abi/types (ProcessCtx, FinalizeOutcome, Capability, ExtRegistration, SolverJudge, NoDecision)
+
+func judge(ctx: ProcessCtx, _candidate: string) -> FinalizeOutcome ! {Process} {
+  { decision: NoDecision, next_state: ctx.world }
+}
+
+func make_atom(_cfg: a) -> Capability { SolverJudge(judge) }
+
+export func register_with_config(cfg: a) -> ExtRegistration {
+  { config: jo([]), caps: [SolverJudge(judge), make_atom(cfg)] }
+}

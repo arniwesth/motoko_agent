@@ -1,0 +1,18 @@
+module tools/ext_call_inventory/fixtures/form_alias_untyped
+
+-- FORM 1, as it survives 8.0: a LOCAL ALIAS whose source has NO declared type.
+--
+-- P1.7r sharpened the alias rule: `let p = ctx.ports;` where `ctx` is a
+-- DECLARED parameter binds `p` to the type that path resolves to -- the same
+-- declaration-only lookup a direct `ctx.ports.ai_step(` gets, no inference
+-- (see form_alias.ail). What remains unresolvable is an alias of a value whose
+-- own type is not declared: here `ctx` is an unannotated parameter, so
+-- `ctx.ports` resolves to nothing, `p` stays unbound, and the call is
+-- reported UNRESOLVED -- one site, fail closed.
+
+import pkg/sunholo/motoko_ext_abi/types (AiStepOutcome, Msg)
+
+export func summarize(ctx, model: string, msgs: [Msg]) -> AiStepOutcome ! {AI, IO, Trace} {
+  let p = ctx.ports;
+  p.ai_step(ctx.world, model, msgs)
+}

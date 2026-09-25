@@ -1,0 +1,152 @@
+-- src/eval/journal/admission_run.ail
+--
+-- ADR-004 v5 D2 "The entry" and "Framing", PLAN-004 §3 P1.6: the admission
+-- run and the observations A5/A6 read from it. The checks, the program and
+-- provenance are `admission.ail` (see its header for why the two are split).
+--
+--   admission_run(jw, w0, workdir) -> TracedSessionResult
+--   admit(label, kind, ids, cmp, jw, epoch, workdir) -> AdmissionReport
+--   admit_with_evidence(...)                         -> AdmissionEvidence
+--
+-- The run: `run_v2_session_traced` (session.ail:4423) with the recorded
+-- `BootInputs` (task, env_url, hybrid_tools, budget, ohmy_pi, cost rates),
+-- the LOGICAL model, the seed, a throwaway `workdir`, `step_budget = N`,
+-- `max_cost_millicents: 0`, an `ExtRuntime` with an empty registry and
+-- verification disabled, and `PortedWorld(journal_ports(rt), w0)`.
+--
+-- `admit` prints the frame: `WORLD_RUN_BEGIN <label> <ordinal0>` before the
+-- entry call, `WORLD_RUN_END <label> <final>` after it (or
+-- `WORLD_RUN_REFUSED <label> pending=<n>` when the returned world still holds
+-- witnesses); the run's `world_request` lines fall between them on stdout, so
+-- `scripts/dst/run_world_framed_wire.sh --wire` can check the wire as well.
+-- Nothing runs when the preflight (A9 manifest shape, A9b) has a finding.
+--
+-- P1.7b: the report's findings are A5, A6, A7 (the runner-built witness,
+-- `bridge.a7_of_run`), A8 (the bridge, `evaluate`, the census,
+-- `bridge.a8_of_run`) and A9, in that order. `admit_with_evidence` also
+-- returns the witness and the A8 result (family_evidence recorded unchanged,
+-- the census, the evidence lines).
+
+module src/eval/journal/admission_run
+
+import std/io (println)
+import std/list as List (length, filter)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import pkg/sunholo/motoko_ext_abi/types (ExtRuntime, VerificationConfig)
+import src/core/config (CostRates)
+import src/core/ports (WorldState)
+import src/core/phase_vocab (LedgerRecord, WireRecord, RunSuspended, run_summary_finish_reason)
+import src/core/session as Session
+import src/core/session (TracedSessionResult)
+import src/core/dst_program (ExecutionProgram)
+import src/core/dst_persistence (encode_body, program_digest)
+import src/core/dst_profile (ExecutionManifest)
+import src/core/dst_discovery (DiscoveryWitness)
+import src/eval/journal/stopping (JournalWorld, ExpectedEnd, end_id, end_value)
+import src/eval/journal/world (journal_world_state)
+import src/eval/journal/seams (journal_provider)
+import src/eval/journal/bridge (A8Result, a7_of_run, a8_of_run, run_witness)
+import src/eval/journal/admission (
+  AdmissionFinding, AdmissionReport, FrameObservation, EndObservation, EntryKind, Identities, Comparators,
+  begin_line, end_line, trace_request_ordinals, exhausted_markers, provider_records, observed_end,
+  check_a5, check_a6, check_a9, preflight, a9b_unchecked, manifest_of, admission_program, refused_report
+)
+
+-- An empty registry with verification disabled, stated here rather than
+-- borrowed from the test module's `empty_rt`.
+export pure func admission_rt() -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  { registry: { entries: [] }, strict_mode: false, verification: v }
+}
+
+export pure func admission_rates(jw: JournalWorld) -> CostRates {
+  { input_per_1m_millicents: jw.config.boot.cost_rates.input_per_1m_millicents,
+    output_per_1m_millicents: jw.config.boot.cost_rates.output_per_1m_millicents }
+}
+
+export func admission_run(jw: JournalWorld, w0: WorldState, workdir: string) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let rt = admission_rt();
+  let boot = jw.config.boot;
+  Session.run_v2_session_traced(
+    rt, boot.task, boot.env_url, boot.hybrid_tools, boot.budget,
+    jw.config.logical_model, jw.seed, workdir, List.length(jw.calls),
+    boot.ohmy_pi, 0, admission_rates(jw),
+    journal_provider(rt, w0))
+}
+
+export pure func frame_observation(label: string, ordinal0: int, run: TracedSessionResult) -> FrameObservation {
+  let pending = List.length(run.world.pending);
+  {
+    label: label,
+    ordinal0: ordinal0,
+    begin_line: begin_line(label, ordinal0),
+    end_line: end_line(label, run.world.ordinal, pending),
+    requests: trace_request_ordinals(run.trace),
+    final: run.world.ordinal,
+    pending: pending
+  }
+}
+
+pure func ar_is_run_suspended(r: LedgerRecord) -> bool {
+  match r { WireRecord(RunSuspended(_)) => true, _ => false }
+}
+
+export pure func end_observation(run: TracedSessionResult) -> EndObservation {
+  {
+    ok: match run.result { Ok(_) => true, Err(_) => false },
+    err_code: match run.result { Ok(_) => "", Err(e) => e.code },
+    suspended: match run.suspended { Some(_) => true, None => false },
+    run_suspended: List.length(List.filter(ar_is_run_suspended, run.trace.records)),
+    finish_reason: match run_summary_finish_reason(run.trace) { Some(r) => r, None => "" },
+    provider_records: provider_records(run.world.log),
+    markers: exhausted_markers(run.world.log)
+  }
+}
+
+-- The checks over a finished run, in A-order. Exported for the tests, which
+-- mutate a run before checking it.
+export pure func run_findings(frame: FrameObservation, e: ExpectedEnd, n: int, run: TracedSessionResult, p: ExecutionProgram) -> [AdmissionFinding] {
+  check_a5(frame) ++ check_a6(e, n, end_observation(run)) ++ check_a9(p)
+}
+
+-- Every admission check over a finished run, in A-order (A1–A4 are P1.7a's).
+export pure func admission_findings(frame: FrameObservation, jw: JournalWorld, run: TracedSessionResult, w0: WorldState, p: ExecutionProgram, a8: A8Result) -> [AdmissionFinding] {
+  check_a5(frame) ++ check_a6(jw.end.expected, List.length(jw.calls), end_observation(run))
+    ++ a7_of_run(run, w0, jw) ++ a8.findings ++ check_a9(p)
+}
+
+export type AdmissionEvidence = {
+  report: AdmissionReport,
+  witness: Option[DiscoveryWitness],
+  a8: Option[A8Result]
+}
+
+export func admit(label: string, kind: EntryKind, ids: Identities, cmp: Comparators, jw: JournalWorld, epoch: int, workdir: string) -> AdmissionReport ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  admit_with_evidence(label, kind, ids, cmp, jw, epoch, workdir).report
+}
+
+export func admit_with_evidence(label: string, kind: EntryKind, ids: Identities, cmp: Comparators, jw: JournalWorld, epoch: int, workdir: string) -> AdmissionEvidence ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let pre = preflight(kind, ids, cmp);
+  let unchecked = a9b_unchecked(kind, cmp);
+  match pre {
+    _ :: _ => { report: refused_report(label, jw, pre, unchecked), witness: None, a8: None },
+    [] => {
+      let w0 = journal_world_state(jw, epoch);
+      let _ = println(begin_line(label, w0.ordinal));
+      let run = admission_run(jw, w0, workdir);
+      let frame = frame_observation(label, w0.ordinal, run);
+      let _ = println(frame.end_line);
+      let p = admission_program(jw, w0, run.world.log, manifest_of(ids), ids.generator_version);
+      let m = manifest_of(ids);
+      let a8 = a8_of_run(run, w0, jw, m, epoch);
+      let fs = admission_findings(frame, jw, run, w0, p, a8);
+      let report = { label: label, preflight: [], ran: true, calls: List.length(jw.calls),
+        expected_end: "${end_id(jw.end.expected)}(${end_value(jw.end.expected)})",
+        observed_end: observed_end(end_observation(run)),
+        findings: fs, program: Some(p), program_digest: "sha256:${program_digest(encode_body(p))}",
+        interactions: List.length(run.world.log), unchecked: unchecked };
+      { report: report, witness: Some(run_witness(run, w0, jw)), a8: Some(a8) }
+    }
+  }
+}

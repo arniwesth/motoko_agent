@@ -1,0 +1,427 @@
+{
+  "_comment": [
+    "WI-D15. One fixture per rejection shape the hook-scope split adds, each",
+    "PAIRED with a resolving control. A rejection-only suite is passed by a",
+    "classifier that resolves nothing -- the `agree=0 disagree=0` shape that has",
+    "cost this project two items -- so `verdict: HOOK-PORT-MEDIATED` entries are",
+    "load-bearing, not filler.",
+    "",
+    "The pair that carries the READING is control_registration_only /",
+    "control_hook_reaches_env: same import, same call, different position. If",
+    "they ever agree, the tool has stopped measuring the reading.",
+    "",
+    "ADR-001 Q4 (the default_hooks minor) once had three record-update fixtures",
+    "here (control_record_update_*, reject_update_head_not_default_hooks). B8",
+    "removed them with the record head: the ABI no longer has `ExtensionHooks` or",
+    "`default_hooks`, so the record path, `hook-record-unresolvable` and",
+    "`hook-slot-missing` are gone, and every remaining fixture is written in the",
+    "6.0 `[Capability]` list shape (eight atoms, in the canonical order, unless",
+    "the fixture's purpose is the list itself).",
+    "",
+    "ADR-001 Phase B, B2 (the 6.0 `[Capability]` list head): the four",
+    "control_capability_list_* and four reject_capability_list_* fixtures. Every",
+    "list control pins its ATOM COUNT -- the fail-closed denominator: a reader",
+    "that enumerates fewer atoms than are written cannot report the fixture",
+    "green. The named-wide control is the one that carries B1's finding: the",
+    "payload row bounds nothing in constructor-argument position, so a wide-rowed",
+    "named binding must be SCANNED, and it reaches std/env.",
+    "",
+    "P0.3 (031 ADR-001 D2, the registration-shape gate): every fixture also pins `head`, `shape` and",
+    "`shape_reasons` -- RE-PINNED BY HAND. All seventeen are written on the 7.4 bare list, so every",
+    "one FAILS the shape by `return-shape-unsupported`, plus whatever its payloads add: the eight-atom",
+    "controls bind inline lambdas; `same_kind` let-binds its handle; `binding_unresolvable`'s bare",
+    "name resolves nowhere; the four list rejections are `list-not-enumerable`; `computed`'s tail is `caps-computed` too --",
+    "neither a record nor a list nor a call, so its head is null. The gate's own fixtures, on the 8.0",
+    "head, live in scripts/dst/fixtures/adr001_boundary/gate/ and are run by the same self-test.",
+    "",
+    "P1.7r (031 PLAN-001, ADR-001 D2 on 8.0): FIFTEEN fixtures MIGRATED onto the 8.0 head -- the record",
+    "`{ config, caps }` at the registration tail, every payload a NAMED top-level function on its row's",
+    "view (`PureCtx`, `AiCtx`, `ProcessCtx`, `ProviderCtx`, `InterceptCtx`), `DescribeTools` on `Json`,",
+    "captured registration values disclosed through `config` and decoded from `ext_config` (Amendment 3) --",
+    "and re-pinned BY HAND: the walk verdicts and atom counts are unchanged, `head` is `config-caps`,",
+    "the shape PASSES wherever the fixture's probe is a walk question (so a passing shape now sits",
+    "beside HOOK-AMBIENT and HOOK-UNRESOLVED verdicts: the three layers are distinct), and the four list",
+    "rejections plus `binding_unresolvable` fail by their own reason alone, `return-shape-unsupported` gone.",
+    "TWO fixtures are KEPT on the 7.4 shape deliberately, because the gate is testing the old form:",
+    "`control_capability_list_inline` (the per-atom split over inline lambdas with commas) and",
+    "`reject_applied_local` (a capture no named payload can express). Each says so in its header.",
+    "Several migrated fixtures do not type-check on 8.0 BY DESIGN (a wide row, `Env`/`Clock` on a rowless",
+    "slot, a wrong arity, an unresolvable name); the self-test compiles them only for the std rows and",
+    "never asserts the compile -- evidence/P1.7r/CHECKS.log records each one's compiler verdict."
+  ],
+  "fixtures": {
+    "control_registration_only": {
+      "verdict": "HOOK-PORT-MEDIATED",
+      "shapes": [],
+      "registration_only": [
+        "std/env.getEnvOr"
+      ],
+      "form": "8.0: registration reads Env and discloses it through `config`; the named hook decodes `ext_config` (the WI-D6 shape under Amendment 3)",
+      "atoms": 8,
+      "head": "config-caps",
+      "shape": "pass",
+      "shape_reasons": []
+    },
+    "control_hook_reaches_env": {
+      "verdict": "HOOK-AMBIENT",
+      "shapes": [],
+      "registration_only": [],
+      "form": "8.0: TWO-SIDED twin of the above -- the same call, in the NAMED hook body",
+      "atoms": 8,
+      "head": "config-caps",
+      "shape": "pass",
+      "shape_reasons": []
+    },
+    "control_named_hook_in_register": {
+      "verdict": "HOOK-AMBIENT",
+      "shapes": [],
+      "registration_only": [],
+      "form": "8.0: the microrag shape -- a named ToolProvider handle on ProviderCtx reaching std/fs",
+      "atoms": 8,
+      "head": "config-caps",
+      "shape": "pass",
+      "shape_reasons": []
+    },
+    "control_ext_ports_call": {
+      "verdict": "HOOK-PORT-MEDIATED",
+      "shapes": [],
+      "registration_only": [],
+      "form": "8.0: property 1's positive half -- AiPorts.ai_step on the Compactor's AiCtx is admitted, not rejected",
+      "atoms": 8,
+      "head": "config-caps",
+      "shape": "pass",
+      "shape_reasons": []
+    },
+    "control_interpolated_call": {
+      "verdict": "HOOK-AMBIENT",
+      "shapes": [],
+      "registration_only": [],
+      "form": "8.0: door 4 -- the effectful call exists only inside a string interpolation, in a named payload",
+      "atoms": 8,
+      "head": "config-caps",
+      "shape": "pass",
+      "shape_reasons": []
+    },
+    "reject_binding_unresolvable": {
+      "verdict": "HOOK-UNRESOLVED",
+      "shapes": [
+        "hook-binding-unresolvable"
+      ],
+      "registration_only": [],
+      "form": "8.0: an atom bound to a bare name that resolves nowhere (the gate: payload-unresolved)",
+      "head": "config-caps",
+      "shape": "fail",
+      "shape_reasons": [
+        "payload-unresolved"
+      ],
+      "atoms": 8
+    },
+    "reject_unknown_callee": {
+      "verdict": "HOOK-UNRESOLVED",
+      "shapes": [
+        "unknown-callee"
+      ],
+      "registration_only": [],
+      "form": "8.0: door 3 -- `show` applied in a named payload; the shape PASSES beside the walk's rejection",
+      "head": "config-caps",
+      "shape": "pass",
+      "shape_reasons": [],
+      "atoms": 8
+    },
+    "reject_applied_local": {
+      "verdict": "HOOK-UNRESOLVED",
+      "shapes": [
+        "applied-local"
+      ],
+      "registration_only": [],
+      "form": "KEPT 7.4 (P1.7r): a hook APPLIES a value closed over at registration (door 6's corner) -- a capture 8.0's named payloads cannot express; the gate pins payload-inline-lambda + return-shape-unsupported on it",
+      "head": "capability-list",
+      "shape": "fail",
+      "shape_reasons": [
+        "payload-inline-lambda",
+        "return-shape-unsupported"
+      ]
+    },
+    "control_capability_list_inline": {
+      "verdict": "HOOK-PORT-MEDIATED",
+      "shapes": [],
+      "registration_only": [],
+      "atoms": 3,
+      "form": "KEPT 7.4 (P1.7r): the per-atom split over INLINE lambdas with commas -- a form 8.0 forbids; the gate pins payload-inline-lambda + return-shape-unsupported on it",
+      "head": "capability-list",
+      "shape": "fail",
+      "shape_reasons": [
+        "payload-inline-lambda",
+        "return-shape-unsupported"
+      ]
+    },
+    "control_capability_list_named_wide": {
+      "verdict": "HOOK-AMBIENT",
+      "shapes": [],
+      "registration_only": [],
+      "atoms": 1,
+      "form": "8.0: a wide-rowed NAMED atom on ProcessCtx is scanned, not trusted -- it reaches std/env (the compiler, not the gate, refuses the row)",
+      "head": "config-caps",
+      "shape": "pass",
+      "shape_reasons": []
+    },
+    "control_capability_list_same_kind": {
+      "verdict": "HOOK-PORT-MEDIATED",
+      "shapes": [],
+      "registration_only": [],
+      "atoms": 4,
+      "form": "8.0: N>1 of one kind enumerated per index, ToolProvider(names, handle), delegated at `caps`, every payload named",
+      "head": "config-caps",
+      "shape": "pass",
+      "shape_reasons": []
+    },
+    "control_capability_list_empty": {
+      "verdict": "HOOK-PORT-MEDIATED",
+      "shapes": [],
+      "registration_only": [],
+      "atoms": 0,
+      "form": "8.0: `caps: []` resolves with ZERO atoms, pinned (D7 is B3's question, not the reader's)",
+      "head": "config-caps",
+      "shape": "pass",
+      "shape_reasons": []
+    },
+    "reject_capability_list_computed": {
+      "verdict": "HOOK-UNRESOLVED",
+      "shapes": [
+        "capability-list-unresolvable"
+      ],
+      "registration_only": [],
+      "form": "8.0: `caps` is built by `[..] ++ extra(cfg)` -- literal lists only (caps-computed, the `xs ++ ys` case)",
+      "head": "config-caps",
+      "shape": "fail",
+      "shape_reasons": [
+        "caps-computed"
+      ]
+    },
+    "reject_capability_list_element": {
+      "verdict": "HOOK-UNRESOLVED",
+      "shapes": [
+        "capability-list-unresolvable"
+      ],
+      "registration_only": [],
+      "form": "8.0: one element is a call returning an atom -- a computed element",
+      "head": "config-caps",
+      "shape": "fail",
+      "shape_reasons": [
+        "list-not-enumerable"
+      ]
+    },
+    "reject_capability_list_arity": {
+      "verdict": "HOOK-UNRESOLVED",
+      "shapes": [
+        "capability-list-unresolvable"
+      ],
+      "registration_only": [],
+      "form": "8.0: ToolProvider applied to one argument -- the binding position is a guess",
+      "head": "config-caps",
+      "shape": "fail",
+      "shape_reasons": [
+        "list-not-enumerable"
+      ]
+    },
+    "reject_capability_list_unknown_kind": {
+      "verdict": "HOOK-UNRESOLVED",
+      "shapes": [
+        "capability-list-unresolvable"
+      ],
+      "registration_only": [],
+      "form": "8.0: `Judge(..)` is not a known constructor; plus a trailing comma (count discipline)",
+      "head": "config-caps",
+      "shape": "fail",
+      "shape_reasons": [
+        "list-not-enumerable"
+      ]
+    },
+    "reject_capability_list_juxtaposed": {
+      "verdict": "HOOK-UNRESOLVED",
+      "shapes": [
+        "capability-list-unresolvable"
+      ],
+      "registration_only": [],
+      "form": "8.0: `A(f) ++ B(g)` INSIDE the list -- one element, two constructor heads",
+      "head": "config-caps",
+      "shape": "fail",
+      "shape_reasons": [
+        "list-not-enumerable"
+      ]
+    }
+  },
+  "yield": {
+    "_comment": [
+      "Pinned in BOTH directions over the real seventeen, so a drift in either is a",
+      "failure. `closure` is derive.py's shipped answer and must not move: this",
+      "item reports a second reading, it does not promote one.",
+      "",
+      "The two sets are NOT nested. Hook scope adds mcp and test_dummy (both the",
+      "WI-D6 shape) and DROPS compaction_structural -- not because a hook of it",
+      "reaches an effect, but because `show` is a door the shipped tool does not",
+      "watch. That drop is the finding, and pinning it here is what keeps it from",
+      "being quietly re-admitted.",
+      "",
+      "`capability_list_atoms` (B2) pins, per extension, which registrations",
+      "resolve through the 6.0 list head and how many atoms each holds. Empty on",
+      "the 5.x tree by construction; B8 re-pinned it BY HAND with seventeen entries",
+      "of eight atoms each. Item 4 (6.0 trimming) re-pinned it BY HAND again: each",
+      "package now lists only the atoms it binds with a real body (39 over 17).",
+      "",
+      "RE-PINNED BY HAND for EIGHTEEN: `repetition_guard` joined ailang.toml's",
+      "[extensions] packages and every pin here was still describing seventeen. It",
+      "binds ToolPolicy + SolverJudge with real bodies, so `capability_list_atoms`",
+      "gains `repetition_guard: 2` (41 over 18), and it resolves HOOK-PORT-MEDIATED",
+      "-- both its hooks reach `ctx` and the world and neither reaches an ambient",
+      "source -- so it joins that list rather than `hook_ambient`.",
+      "",
+      "`f` JOINS THE DOOR-3 RESIDUE, and it is a DIFFERENT KIND of gap from the two",
+      "already there. `show` and `intToFloat` are language builtins no producer at",
+      "HEAD can classify. `f` is not a builtin at all: it is the function-typed",
+      "PARAMETER of motoko-ext-herdr's higher-order helpers (`dagr_record`'s",
+      "transition callback at herdr.ail:349, `map_task`/`map_last` in dagr.ail), and",
+      "an applied parameter has whatever effects its caller passed. The tool is",
+      "right that it cannot classify it, and closing it would mean unwinding those",
+      "helpers into first-order code -- a worse module for a greener pin. Recorded",
+      "as a known gap with its cause rather than assumed away, which is what this",
+      "pin is for. It predates the 7.0 work; it is fixed here only because the same",
+      "gate was red for the repetition_guard drift.",
+      "",
+      "RE-PINNED BY HAND: `herdr` 4 -> 6. Orchestrator mode",
+      "(packages/motoko-ext-herdr/orchestrator.ail) adds PromptShaper + ToolPolicy,",
+      "both pure, bound with real bodies, and registered in every configuration (off,",
+      "the patch is empty and the policy has no opinion). Measured reason: a session",
+      "resumed from a handoff made zero delegations after its predecessor made ten,",
+      "because the instruction lived only in a chat turn. The DOOR-3 residue is",
+      "unchanged: the one predicate parameter that would have added `p` was written",
+      "as direct recursion instead.",
+      "",
+      "P0.3 (031 ADR-001 D2; PLAN-001 P0.3) -- RE-PINNED BY HAND for the 8.0 `{ config, caps }` head.",
+      "`capability_list_atoms` now keys on either head and is unchanged: all eighteen still register",
+      "through the 7.4 list (45 atoms), which `registration_heads` pins per extension.",
+      "`registration_shape_results` pins the gate's own field per extension: all eighteen FAIL on the",
+      "unmigrated tree. `shape_binding_rejections` is the MEASURED count the ADR states the tree is red",
+      "by -- 35, and it came out 35 (payload-inline-lambda 19, payload-let-bound 16), matching D2's",
+      "migration table site for site. P1.2 flips heads and results batch by batch and re-pins by hand.",
+      "",
+      "DOOR-3 RESIDUE LOSES `f`, and this is the signature fix doing what N63 says. `f` was never a",
+      "language builtin: it is the function-typed PARAMETER of herdr's higher-order helpers, and it sat",
+      "in this residue only because the walk never read a signature. `_params_at` now reads it, so an",
+      "applied `f` is `applied-local` (a rejection, as before -- herdr stays HOOK-UNRESOLVED) rather",
+      "than `unknown-callee`. The counterfactual list loses herdr for the same reason. `show` and",
+      "`intToFloat` remain: those are real producer gaps.",
+      "",
+      "P1.7r (031 PLAN-001) -- RE-PINNED BY HAND after P1.2a-d landed all eighteen packages on 8.0:",
+      "`registration_heads` all `config-caps`, `registration_shape_results` all `pass`,",
+      "`shape_binding_rejections` 0 (the 35 moved with the batches: A 32, B 18, C 9, D 0 remaining, each",
+      "measured at its intake). `capability_list_atoms` is UNCHANGED at 45 over 18 -- the batches replaced",
+      "each payload in place and added none -- and was re-counted by hand from each register.ail at HEAD",
+      "(evidence/P1.7r/README.md). `hook_port_mediated`, `hook_ambient` and `door_3_residue` did not move.",
+      "",
+      "`closure_port_mediated` IS UNMOVED -- and it was red at HEAD before P1.7r for a reason outside the",
+      "extensions: since P0.4 (`f7df893c`) the 8.0 ABI's own view-port projections (`fs_ports`, `ai_ports`,",
+      "`intercept_ports`, types.ail:1236-1261) take every ExtPorts field as a VALUE, classifier 2",
+      "(tools/ext_call_inventory/derive.py) read that as its form 3, types.ail is in every closure, and the",
+      "shipped closure verdict read 0 of 18. P1.7r taught classifier 2 the views (derived by structure),",
+      "the same-named projection into a view, and function-scoped binders -- the ambient inventory shares",
+      "that scanner -- and the closure came back to exactly these four, measured, so this pin did not move",
+      "and was not re-pinned to [] (which would have recorded a classifier that resolves nothing as the",
+      "expected state, the `agree=0` shape this file exists to refuse). evidence/P1.7r/BEFORE-AFTER.md."
+    ],
+    "extensions": 18,
+    "closure_port_mediated": [
+      "compaction_structural",
+      "decision_framework",
+      "empty_stop_guard",
+      "progress_contract_guard"
+    ],
+    "hook_port_mediated": [
+      "decision_framework",
+      "empty_stop_guard",
+      "mcp",
+      "progress_contract_guard",
+      "repetition_guard",
+      "test_dummy"
+    ],
+    "hook_ambient": [
+      "a2a",
+      "agentcli",
+      "scratchpad"
+    ],
+    "door_3_residue": [
+      "intToFloat",
+      "show"
+    ],
+    "counterfactual_if_residue_resolved": [
+      "compaction_ai",
+      "compaction_structural",
+      "decision_framework",
+      "empty_stop_guard",
+      "mcp",
+      "progress_contract_guard",
+      "test_dummy"
+    ],
+    "capability_list_atoms": {
+      "a2a": 2,
+      "agentcli": 2,
+      "ailang_docs": 3,
+      "compaction_ai": 1,
+      "compaction_structural": 1,
+      "compose": 4,
+      "context_mode": 4,
+      "decision_framework": 1,
+      "empty_stop_guard": 1,
+      "exa_search": 2,
+      "herdr": 6,
+      "mcp": 1,
+      "microrag": 3,
+      "omnigraph": 3,
+      "progress_contract_guard": 1,
+      "repetition_guard": 2,
+      "scratchpad": 4,
+      "test_dummy": 4
+    },
+    "registration_heads": {
+      "a2a": "config-caps",
+      "agentcli": "config-caps",
+      "ailang_docs": "config-caps",
+      "compaction_ai": "config-caps",
+      "compaction_structural": "config-caps",
+      "compose": "config-caps",
+      "context_mode": "config-caps",
+      "decision_framework": "config-caps",
+      "empty_stop_guard": "config-caps",
+      "exa_search": "config-caps",
+      "herdr": "config-caps",
+      "mcp": "config-caps",
+      "microrag": "config-caps",
+      "omnigraph": "config-caps",
+      "progress_contract_guard": "config-caps",
+      "repetition_guard": "config-caps",
+      "scratchpad": "config-caps",
+      "test_dummy": "config-caps"
+    },
+    "registration_shape_results": {
+      "a2a": "pass",
+      "agentcli": "pass",
+      "ailang_docs": "pass",
+      "compaction_ai": "pass",
+      "compaction_structural": "pass",
+      "compose": "pass",
+      "context_mode": "pass",
+      "decision_framework": "pass",
+      "empty_stop_guard": "pass",
+      "exa_search": "pass",
+      "herdr": "pass",
+      "mcp": "pass",
+      "microrag": "pass",
+      "omnigraph": "pass",
+      "progress_contract_guard": "pass",
+      "repetition_guard": "pass",
+      "scratchpad": "pass",
+      "test_dummy": "pass"
+    },
+    "shape_binding_rejections": 0
+  }
+}

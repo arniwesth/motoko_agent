@@ -1,0 +1,27 @@
+module sunholo/motoko_ext_progress_contract_guard/register
+
+import std/json (jo)
+import pkg/sunholo/motoko_ext_abi/types (
+  ProcessCtx,
+  ExtRegistration,
+  SolverJudge,
+  FinalizeOutcome
+)
+import pkg/sunholo/motoko_ext_progress_contract_guard/progress_contract_guard (decide)
+
+func finalize(ctx: ProcessCtx, candidate: string) -> FinalizeOutcome ! {Process} {
+  { decision: decide(ctx, candidate), next_state: ctx.world }
+}
+
+-- ABI 8.0 (031 ADR-001 D2): `{ config, caps }`, the payload a named top-level
+-- function bound directly (at 7.4 it was an inline lambda). Nothing is
+-- captured at registration, so the disclosed configuration is empty.
+export func register_with_config(_cfg: a) -> ExtRegistration ! {Env, FS} {
+  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
+  {
+    config: jo([]),
+    caps: [
+      SolverJudge(finalize)
+    ]
+  }
+}

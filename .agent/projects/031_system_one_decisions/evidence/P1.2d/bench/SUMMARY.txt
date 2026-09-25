@@ -1,0 +1,24 @@
+per-call latency, microseconds (each sample = one timed batch; ms clock)
+case                                       v   n    median       min       max       IQR
+compose_intercept_body_only_subagent      74  45      12.5      10.0     107.5       7.5
+compose_intercept_body_only_subagent      80  45      12.5      10.0      95.0       7.5
+                                         delta median +0.0 us (+0.0%)
+compose_intercept_default_subagent        74  45      12.5      10.0     135.0       7.5
+compose_intercept_default_subagent        80  45     120.0      57.5     327.5      92.5
+                                         delta median +107.5 us (+860.0%)
+compose_intercept_inline_nofence          74  45      15.0      12.5     130.0       2.5
+compose_intercept_inline_nofence          80  45     155.0      70.0     472.5     120.0
+                                         delta median +140.0 us (+933.3%)
+herdr_prompt_body_only_on2                74  45     150.0      72.5     327.5      96.2
+herdr_prompt_body_only_on2                80  45     160.0      75.0     272.5     111.2
+                                         delta median +10.0 us (+6.7%)
+herdr_prompt_off                          74  45      10.0       7.5     132.5       5.0
+herdr_prompt_off                          80  45      42.5      30.0     140.0      51.2
+                                         delta median +32.5 us (+325.0%)
+herdr_prompt_on2                          74  45     160.0      75.0     297.5     108.8
+herdr_prompt_on2                          80  45     335.0     237.5     680.0     156.2
+                                         delta median +175.0 us (+109.4%)
+retained config, bytes of canonical-encoded JSON
+  compose                  610
+  herdr_orch_off           619
+  herdr_orch_on2           672

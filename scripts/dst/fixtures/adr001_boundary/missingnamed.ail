@@ -1,0 +1,7 @@
+module scripts/dst/fixtures/adr001_boundary/missingnamed
+import std/io (println)
+import scripts/dst/fixtures/adr001_boundary/types (PureCtx, Slot, Pure)
+func body(ctx: PureCtx) -> int { let _ = ctx.ports.emit(ctx.name); 1 }
+func build() -> Slot { Pure(body) }
+func invoke(s: Slot, ctx: PureCtx) -> int { match s { Pure(f) => f(ctx) } }
+export func main() -> () ! {IO} { println("result=${show(invoke(build(), {name: "EFFECT WITH NO PORTS OR WORLD"}))}") }

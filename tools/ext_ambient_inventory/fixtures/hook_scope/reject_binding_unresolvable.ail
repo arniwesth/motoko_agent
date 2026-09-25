@@ -1,0 +1,57 @@
+-- REJECTION: `hook-binding-unresolvable`.  The `Compactor` atom is bound to a
+-- bare name that is neither a declaration in this closure, nor an import, nor a
+-- local lambda.  An atom whose text cannot be found is an atom that cannot be
+-- scanned.  B8: eight-atom list.
+-- P1.7r (031 ADR-001 D2): MIGRATED onto the 8.0 head, the seven other payloads
+-- named on their views.  The gate's own result on the same binding is
+-- `payload-unresolved` (its fixture `fx_payload_unresolved` pins it on a
+-- one-atom list); here it is pinned beside the WALK's rejection, on a full
+-- eight-atom registration.
+module fixture/reject_binding_unresolvable
+
+import std/json (Json, jo)
+import std/option (None)
+import pkg/sunholo/motoko_ext_abi/types (
+  PureCtx, ProcessCtx, ProviderCtx, InterceptCtx, ExtRegistration,
+  DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge,
+  ToolSchema, PromptPatch, BudgetPlan, BudgetPatch, ToolCallEnvelope, ToolPolicyDecision,
+  ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome,
+  NoOpinion, Delegate, NoIntercept, NoDecision
+)
+
+func describe(_cfg: Json) -> [ToolSchema] { [] }
+
+func shape(_ctx: PureCtx) -> PromptPatch {
+  { prepend: [], append: [] }
+}
+
+func budget(_ctx: PureCtx, _plan: BudgetPlan) -> BudgetPatch {
+  { requested_total: None, requested_solver: None, requested_verifier: None }
+}
+
+func policy(_ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { NoOpinion }
+
+func handle(ctx: ProviderCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  { decision: Delegate, next_state: ctx.world }
+}
+
+func intercept(ctx: InterceptCtx, _response: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
+  { decision: NoIntercept, next_state: ctx.world }
+}
+
+func judge(ctx: ProcessCtx, _candidate: string) -> FinalizeOutcome ! {Process} {
+  { decision: NoDecision, next_state: ctx.world }
+}
+
+export func register_with_config(_cfg: a) -> ExtRegistration {
+  { config: jo([]), caps: [
+    DescribeTools(describe),
+    PromptShaper(shape),
+    BudgetShaper(budget),
+    Compactor(some_hook_from_nowhere),
+    ToolPolicy(policy),
+    ToolProvider([], handle),
+    ResponseInterceptor(intercept),
+    SolverJudge(judge)
+  ] }
+}

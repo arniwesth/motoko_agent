@@ -1,0 +1,89 @@
+flowchart TB
+  %% Plan 3 · Checkpoint trigger — PLANNED implementation.
+  %% Grounded at HEAD 4371de0 against PLAN-checkpoint-trigger.md (2026-07-08).
+  %% Legend: green = artifact to BUILD; gray = frozen (D7 mechanics / Plan 1 law / Plan 2 ABI);
+  %% purple = core file edited; teal = scenario/test; blue = gate outcome; amber-dashed = decision.
+
+  subgraph DEC["Closed decisions — operator sign-off 2026-07-08 (D3-1..D3-5)"]
+    d1["D3-1 · trigger = usage-% ceiling<br/>checkpoint_pct = 90 (85 hard &lt; 90 &lt; 95 exhaust)"]:::decision
+    d2["D3-2 · emission site = call_model_or_fail<br/>(effect-free path, NOT decide's else)"]:::decision
+    d3["D3-3 · summary = structural, pure<br/>AI-delegated = v2"]:::decision
+    d4["D3-4 · flag default = OFF<br/>v1-never-emits → by-default"]:::decision
+    d5["D3-5 · guard = pressure-cleared + would-relieve<br/>SOLE spin-guard (step_idx never advances)"]:::decision
+  end
+
+  subgraph FROZEN["Frozen — do NOT touch (reuse only)"]
+    cpmech["checkpoint / apply_checkpoint / handler<br/>D7 · session.ail:1347 wired · phase_vocab.ail:239,323"]:::frozen
+    law["validate_compactor_output — invariants.ail<br/>Plan 1 law · REUSE, never copy"]:::frozen
+    abi["motoko-ext-abi @ 3.0 · Plan 2"]:::frozen
+  end
+
+  subgraph CORE["Core files EDITED"]
+    field["StepPolicy + checkpoint_enabled + checkpoint_pct<br/>phase_vocab.ail:270 · update ~8 literals"]:::core
+    mkpol["mk_policy defaults false / 90<br/>step_machine.ail:109"]:::core
+    gate["call_model_or_fail — step_machine.ail:67<br/>+ should_checkpoint gate after budget/cost Fail"]:::core
+  end
+
+  subgraph NEW["Artifacts to BUILD (pure / effect-free)"]
+    hup["history_usage_percent(h, limit)<br/>phase_vocab · owns History destructure"]:::new
+    cwr["checkpoint_would_relieve(h, plan, limit, pct)<br/>phase_vocab · projects post-cp usage"]:::new
+    sum["checkpoint_summary(s) + mk_checkpoint_plan(s)<br/>step_machine · structural, deterministic"]:::new
+    sc["should_checkpoint(s, pol)<br/>enabled &amp;&amp; usage≥pct &amp;&amp; would_relieve"]:::new
+  end
+
+  subgraph SCN["Scenario + in-module test changes"]
+    sneg["checkpoint_never_emitted_when_policy_off<br/>RETARGETED · must be PRESSURED"]:::scn
+    spos["checkpoint_emitted_under_pressure<br/>NEW · flag on + pressure → TakeCheckpoint"]:::scn
+    sterm["checkpoint_terminates_not_spins<br/>NEW · after cp → CallModel; prefix-heavy → no spin"]:::scn
+    sout["checkpoint_output_is_valid_transcript<br/>EDITED · segment→law + full→history_valid_transcript"]:::scn
+    tmod["in-module tests — step_machine.ail:347<br/>rename → test_default_policy_… + positive twin"]:::scn
+  end
+
+  subgraph GATES["Acceptance gate (all green)"]
+    g1["phase_c_l1_scenarios PASS count=15<br/>caps IO · no hydration"]:::gate
+    g2["make check_core<br/>incl. renamed in-module tests"]:::gate
+    g3["ADR-001 D7 amendment applied<br/>never-emits-by-default"]:::gate
+  end
+
+  %% decisions drive the artifacts / edits
+  d1 --> field
+  d1 --> hup
+  d2 --> gate
+  d3 --> sum
+  d4 --> field
+  d4 --> sneg
+  d5 --> cwr
+
+  %% frozen reuse
+  cpmech -. "projected by" .-> cwr
+  cpmech -. "applied by handler on" .-> gate
+  law -. "segment validated by" .-> sout
+  abi --> law
+
+  %% edits compose the gate + predicate
+  field --> mkpol
+  hup --> sc
+  cwr --> sc
+  sum --> sc
+  sc == "wired into" ==> gate
+
+  %% artifacts/edits feed the scenarios
+  gate --> spos
+  gate --> sterm
+  gate --> tmod
+
+  %% scenarios + tests feed the gate outcomes
+  sneg --> g1
+  spos --> g1
+  sterm --> g1
+  sout --> g1
+  tmod --> g2
+  g1 --> g2
+  g2 --> g3
+
+  classDef decision fill:#3a3018,stroke:#d29922,color:#f2e0b8,stroke-dasharray:6 4;
+  classDef frozen fill:#262a30,stroke:#9aa4b0,color:#d6dbe2;
+  classDef new fill:#143d24,stroke:#56d364,color:#c6f0cf,stroke-width:2.5px;
+  classDef core fill:#2f2145,stroke:#bb9af7,color:#e5d5fb;
+  classDef scn fill:#12323a,stroke:#39c5cf,color:#c5f6fb;
+  classDef gate fill:#16294d,stroke:#7aa2f7,color:#cdd9f5,stroke-width:2px;

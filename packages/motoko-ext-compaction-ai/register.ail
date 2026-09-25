@@ -1,0 +1,67 @@
+-- Register the AI compaction extension.
+-- This extension uses AI to summarize old conversation turns when context fills up.
+
+module sunholo/motoko_ext_compaction_ai/register
+
+import std/env (getEnvOr)
+import std/json (Json, jo, decode)
+import std/fs (readFileResult)
+import pkg/sunholo/motoko_ext_abi/types (
+  AiCtx, Msg, PreStepOutcome,
+  ExtRegistration, Compactor
+)
+import pkg/sunholo/motoko_ext_compaction_ai/compaction_ai (compact_with_ai)
+import pkg/sunholo/motoko_ext_compaction_ai/types (config_of_json, config_to_json)
+
+-- Read compaction_ai config from profile directory.
+--
+-- Uses readFileResult (NOT readFile) so a missing config file falls back
+-- to default_config() instead of crashing the AILANG runtime. The plain
+-- readFile in std/fs has signature `string -> string ! {FS}` and PANICS
+-- on FS errors — the previous Err(_)/Ok(content) match arms were dead
+-- code because readFile never returns Err. Caught when motoko_agent's
+-- TUI crashed with "execution failed: readFile: ... no such file or
+-- directory" on the first turn of a session whose profile directory
+-- didn't ship a compaction_ai.json (which is most profiles, since the
+-- file is optional and default_config provides usable defaults).
+--
+-- ABI 8.0: returns the file's JSON (or `{}`); `config_of_json` resolves the
+-- defaults, so a missing file, a malformed one and a partial one all mean the
+-- same record they did before.
+func read_compaction_ai_json(profile_dir: string) -> Json ! {FS} {
+  match readFileResult("${profile_dir}/compaction_ai.json") {
+    Err(_) => jo([]),
+    Ok(content) => match decode(content) {
+      Err(_) => jo([]),
+      Ok(json) => json
+    }
+  }
+}
+
+-- ABI 8.0 (031 ADR-001 D2): the Compactor, named and bound directly. Its
+-- configuration arrives as `ext_config` -- the resolved record registration
+-- disclosed -- never by capture.
+--
+-- WI-B2b. FORWARDS the outcome; it does not re-wrap it. This is the one
+-- hook in the tree that actually calls `ai_step`, so it is the one place
+-- where `next_state: ctx.world` would be a real defect rather than a
+-- harmless identity: `compact_with_ai` may have run the summarizer twice,
+-- and overwriting its successor with the world this hook was ENTERED with
+-- would replay those provider calls. It type-checks either way.
+func compaction_ai_compact(ctx: AiCtx, msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} {
+  compact_with_ai(ctx, msgs, config_of_json(ctx.ext_config))
+}
+
+-- Register the AI compaction extension. The profile directory's VALUE locates
+-- the file and is not disclosed; the resolved configuration record is.
+export func register_with_config(_cfg: a) -> ExtRegistration ! {Env, FS} {
+  let profile_dir = getEnvOr("MOTOKO_PROFILE_DIR", ".");
+  let compaction_cfg = config_of_json(read_compaction_ai_json(profile_dir));
+  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
+  {
+    config: config_to_json(compaction_cfg),
+    caps: [
+      Compactor(compaction_ai_compact)
+    ]
+  }
+}

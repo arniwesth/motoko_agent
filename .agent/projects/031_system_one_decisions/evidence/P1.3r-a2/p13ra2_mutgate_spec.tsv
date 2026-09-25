@@ -1,0 +1,6 @@
+# 031 PLAN-001 P1.3r-a2 mutgate spec. fix_id <TAB> target_file <TAB> sed_expr <TAB> test_cmd
+# Run by evidence/P1.3r-a2/p13ra2_mutgate.sh in a fresh clone. Paths are repo-relative.
+# the regression back: the harness import re-added to runtime.ail (line 40, the blank it replaced) -> cold-cache probe red
+harness_import_readded	src/core/ext/runtime.ail	40s|^$|import pkg/sunholo/motoko_ext_conformance/harness (neutral_registration)|	bash .agent/projects/031_system_one_decisions/evidence/P1.3r-a2/p13ra2_probe.sh
+# a moved test dropped (its `tests` clause removed, so ailang test no longer runs it) -> count check red
+moved_test_dropped	src/core/test/ext_neutral_registration.ail	/^func neutral_registration_is_neutral_through_the_cursor_test/,+1{/^  tests \[((), true)\]$/d}	bash .agent/projects/031_system_one_decisions/evidence/P1.3r-a2/p13ra2_count.sh

@@ -1,0 +1,26 @@
+-- TWO CONSTRUCTORS IN ONE ELEMENT.  `A(f) ++ B(g)` sits INSIDE the literal
+-- list, so the depth-0 comma split sees a single element and the element
+-- pattern `Kind\s*\((.*)\)` accepts it whole -- its greedy `.*` swallows
+-- `policy) ++ PromptShaper(shape`.  One atom would be emitted for two
+-- capabilities, and a comma count agrees with that reading.  The depth-0
+-- constructor-head count is what disagrees.  Fail closed.
+--
+-- Distinct from `reject_capability_list_computed`, where the `++` is OUTSIDE
+-- the brackets and `caps` is rejected as computed before the elements are
+-- read at all.
+-- P1.7r (031 ADR-001 D2): MIGRATED onto the 8.0 head, both payloads named on
+-- `PureCtx`; the juxtaposition alone fails the result (`list-not-enumerable`).
+module fixture/reject_capability_list_juxtaposed
+
+import std/json (jo)
+import pkg/sunholo/motoko_ext_abi/types (PureCtx, ToolCallEnvelope, ToolPolicyDecision, PromptPatch, ExtRegistration, ToolPolicy, PromptShaper, NoOpinion)
+
+func policy(_ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { NoOpinion }
+
+func shape(_ctx: PureCtx) -> PromptPatch {
+  { prepend: [], append: [] }
+}
+
+export func register_with_config(_cfg: a) -> ExtRegistration {
+  { config: jo([]), caps: [ToolPolicy(policy) ++ PromptShaper(shape)] }
+}

@@ -1,0 +1,10 @@
+-- SHAPE 1/5: whole-module alias import.
+-- Every export of std/trace is in scope under `Trace`, and no import site names
+-- a symbol.  Not symbol-granular -> rejection, never a pass.
+module fixtures/shape_module_alias
+
+import std/trace as Trace
+
+export func emit(s: string) -> () {
+  ()
+}

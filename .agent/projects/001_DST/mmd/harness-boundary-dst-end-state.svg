@@ -1,0 +1,232 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2108.508333333333 1921.8000000000002" width="2108.508333333333" height="1921.8000000000002" style="--bg:#1a1b26;--fg:#a9b1d6;--line:#3d59a1;--accent:#7aa2f7;--muted:#565f89;background:var(--bg)">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          var(--fg);
+    --_text-sec:      var(--muted, color-mix(in srgb, var(--fg) 60%, var(--bg)));
+    --_text-muted:    var(--muted, color-mix(in srgb, var(--fg) 40%, var(--bg)));
+    --_text-faint:    color-mix(in srgb, var(--fg) 25%, var(--bg));
+    --_line:          var(--line, color-mix(in srgb, var(--fg) 50%, var(--bg)));
+    --_arrow:         var(--accent, color-mix(in srgb, var(--fg) 85%, var(--bg)));
+    --_node-fill:     var(--surface, color-mix(in srgb, var(--fg) 3%, var(--bg)));
+    --_node-stroke:   var(--border, color-mix(in srgb, var(--fg) 20%, var(--bg)));
+    --_group-fill:    var(--bg);
+    --_group-hdr:     color-mix(in srgb, var(--fg) 5%, var(--bg));
+    --_inner-stroke:  color-mix(in srgb, var(--fg) 12%, var(--bg));
+    --_key-badge:     color-mix(in srgb, var(--fg) 10%, var(--bg));
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="INPUT" data-label="External prompt input — outside the sandbox">
+  <rect x="905.23325" y="315.90000000000003" width="377.7599999999999" height="130.7" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="905.23325" y="315.90000000000003" width="377.7599999999999" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="917.23325" y="329.90000000000003" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">External prompt input — outside the sandbox</text>
+</g>
+<g class="subgraph" data-id="OUTER" data-label="Outer-tier launcher (unsandboxed) — host materialization + spawn prep">
+  <rect x="762.22325" y="506.6" width="1079.1514166666666" height="605.5" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="762.22325" y="506.6" width="1079.1514166666666" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="774.22325" y="520.6" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Outer-tier launcher (unsandboxed) — host materialization + spawn prep</text>
+</g>
+<g class="subgraph" data-id="CORE" data-label="Sandboxed core (AILANG_FS_SANDBOX = workdir) — frozen downstream">
+  <rect x="1604.2803333333334" y="1172.1" width="336.26399999999995" height="249.4" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="1604.2803333333334" y="1172.1" width="336.26399999999995" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="1616.2803333333334" y="1186.1" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Sandboxed core (AILANG_FS_SANDBOX = workdir) — frozen downstream</text>
+</g>
+<g class="subgraph" data-id="TEST" data-label="Layer-2 DST tap — calls the pure fns directly, NO spawn">
+  <rect x="1130.6447083333333" y="58" width="282.17099999999994" height="147.60000000000002" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="1130.6447083333333" y="58" width="282.17099999999994" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="1142.6447083333333" y="72" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Layer-2 DST tap — calls the pure fns directly, NO spawn</text>
+</g>
+<g class="subgraph" data-id="ORACLE" data-label="Contract oracle — must bite (thick); ports to launcher.ail">
+  <rect x="386.9783333333334" y="1290.8000000000002" width="1189.302" height="130.7" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="386.9783333333334" y="1290.8000000000002" width="1189.302" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="398.9783333333334" y="1304.8000000000002" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Contract oracle — must bite (thick); ports to launcher.ail</text>
+</g>
+<g class="subgraph" data-id="GATE" data-label="Fast gate — bun test">
+  <rect x="198.82600000000002" y="1481.5" width="1528.6799999999998" height="215.60000000000002" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="198.82600000000002" y="1481.5" width="1528.6799999999998" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="210.82600000000002" y="1495.5" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Fast gate — bun test</text>
+</g>
+<g class="subgraph" data-id="FUTURE" data-label="Long-term migration — context only, not built here">
+  <rect x="738.2336666666667" y="1751.1" width="271.056" height="130.7" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="738.2336666666667" y="1751.1" width="271.056" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="750.2336666666667" y="1765.1" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Long-term migration — context only, not built here</text>
+</g>
+<polyline class="edge" data-from="ext" data-to="materialize" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1094.1132499999999,430.6 1094.1132499999999,550.6" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="spawn" data-to="coreread" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1689.5446666666667,1096.1 1689.5446666666664,1154.1 1772.4123333333334,1154.1 1772.4123333333332,1216.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="seal" data-to="testfile" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="headless: guard OFF ⇒ Layer-2 is the sole guard" points="1772.4123333333334,1411.1333333333334 1772.4123333333334,1439.5 1950.544333333333,1439.5 1950.544333333333,40 1271.7302083333332,40 1271.7302083333332,102" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="testfile" data-to="materialize" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="call, assert" points="1246.7131083333331,189.60000000000002 1246.7131083333334,235.60000000000002 894.23325,235.60000000000002 894.23325,488.6 996.8909166666665,488.6 996.8909166666666,550.6" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="testfile" data-to="resolve" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="call, assert" points="1196.6789083333333,189.60000000000002 1196.6789083333333,223.60000000000002 820.90525,223.60000000000002 820.90525,488.6 867.3844999999999,488.6 867.3844999999999,768.9000000000001 888.6685833333333,768.9000000000001 888.6685833333333,804.9000000000001" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="testfile" data-to="childenv" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="call, assert" points="1296.7473083333332,189.60000000000002 1296.7473083333332,420.3 1471.110208333333,420.3 1471.110208333333,488.6 1386.4841666666666,488.6 1386.4841666666664,923.6" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="testfile" data-to="supargs" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="call, assert" points="1346.7815083333332,189.60000000000002 1346.7815083333332,408.3 1707.9644166666665,408.3 1707.9644166666665,488.6 1677.2521666666664,488.6 1677.2521666666664,923.6" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="materialize" data-to="o1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1045.5020833333333,638.2 1045.5020833333333,662.2 551.4053333333334,662.2 551.4053333333334,1340.4333333333334" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="resolve" data-to="o2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="938.39125,875.6000000000001 938.39125,899.6000000000001 861.0688333333335,899.6000000000001 861.0688333333335,1340.4333333333334" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="resolve" data-to="o3" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="938.39125,875.6000000000001 938.39125,899.6000000000001 1126.6428333333336,899.6000000000001 1126.6428333333336,1340.4333333333336" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="materialize" data-to="o3" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1045.5020833333333,638.2 1045.5020833333333,662.2 1126.6428333333336,662.2 1126.6428333333336,1340.4333333333336" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="childenv" data-to="o4" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1332.0685,994.3000000000001 1332.0685,1018.3000000000002 1409.6303333333333,1018.3000000000002 1409.6303333333333,1340.4333333333334" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="supargs" data-to="o4" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1638.7679999999998,994.3000000000001 1638.7679999999998,1018.3000000000002 1409.6303333333333,1018.3000000000002 1409.6303333333333,1340.4333333333334" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="o1" data-to="scn1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="600.8810000000001,1394.2333333333333 600.8810000000001,1463.5000000000005 362.51199999999994,1463.5000000000005 362.5120000000001,1525.5" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="o2" data-to="scn2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="861.0688333333335,1394.2333333333333 861.0688333333335,1463.5000000000005 697.7399999999998,1463.5000000000005 697.74,1525.5" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="o3" data-to="scn3" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1126.6428333333333,1394.2333333333336 1126.6428333333333,1463.5000000000005 1095.2119999999998,1463.5000000000005 1095.212,1525.5" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="o4" data-to="scn4" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1359.4136666666666,1411.1333333333334 1359.4136666666666,1463.5000000000005 1522.324,1463.5000000000005 1522.324,1525.5" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="o1" data-to="launcher" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="language-neutral contract" points="501.9296666666667,1394.2333333333333 501.9296666666667,1451.5000000000005 105.5,1451.5000000000005 105.49999999999994,1733.1000000000004 833.9190000000001,1733.1000000000004 833.9190000000001,1795.1" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="o4" data-to="launcher" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="language-neutral contract" points="1459.847,1411.1333333333334 1459.8470000000002,1451.5000000000005 1821.0059999999999,1451.5000000000005 1821.0059999999999,1733.1000000000004 913.6043333333334,1733.1000000000004 913.6043333333334,1795.1" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="materialize" data-to="repoint" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1045.5020833333333,638.2 1045.5020833333333,662.2 1016.808,662.2 1016.808,686.2" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="repoint" data-to="resolve" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1016.808,756.9000000000001 1016.808,768.9000000000001 988.1139166666667,768.9000000000001 988.1139166666667,804.9000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="resolve" data-to="supargs" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="938.39125,875.6000000000001 938.39125,899.6000000000001 1638.7679999999998,899.6000000000001 1638.7679999999998,923.6" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="resolve" data-to="childenv" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="938.39125,875.6000000000001 938.39125,899.6000000000001 1332.0685,899.6000000000001 1332.0685,923.6" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="childenv" data-to="spawn" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1332.0685,994.3000000000001 1332.0685,1018.3000000000002 1689.5446666666664,1018.3000000000002 1689.5446666666664,1042.3000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="supargs" data-to="spawn" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1638.7679999999998,994.3000000000001 1638.7679999999998,1018.3000000000002 1689.5446666666664,1018.3000000000002 1689.5446666666664,1042.3000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="coreread" data-to="seal" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1772.4123333333334,1286.8 1772.4123333333334,1340.4333333333334" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="scn1" data-to="make" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="362.51199999999994,1562.4 362.51199999999994,1586.4 896.4759999999999,1586.4 896.4759999999999,1610.4" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="scn2" data-to="make" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="697.7399999999998,1562.4 697.7399999999998,1586.4 896.4759999999999,1586.4 896.4759999999999,1610.4" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="scn3" data-to="make" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1095.2119999999998,1562.4 1095.2119999999998,1586.4 896.4759999999999,1586.4 896.4759999999999,1610.4" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="scn4" data-to="make" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1522.3239999999998,1562.4 1522.3239999999998,1586.4 896.4759999999999,1586.4 896.4759999999999,1610.4" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="seal" data-to="testfile" data-label="headless: guard OFF ⇒ Layer-2 is the sole guard">
+  <rect x="1828.544333333333" y="427.29999999999984" width="243.96399999999997" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1950.526333333333" y="442.4499999999998" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">headless: guard OFF ⇒ Layer-2 is the sole guard</text>
+</g>
+<g class="edge-label" data-from="testfile" data-to="materialize" data-label="call, assert">
+  <rect x="859.23325" y="242.6" width="69.328" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="893.89725" y="257.75" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">call, assert</text>
+</g>
+<g class="edge-label" data-from="testfile" data-to="resolve" data-label="call, assert">
+  <rect x="785.90525" y="427.3" width="69.328" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="820.56925" y="442.45" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">call, assert</text>
+</g>
+<g class="edge-label" data-from="testfile" data-to="childenv" data-label="call, assert">
+  <rect x="1436.110208333333" y="427.3" width="69.328" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1470.774208333333" y="442.45" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">call, assert</text>
+</g>
+<g class="edge-label" data-from="testfile" data-to="supargs" data-label="call, assert">
+  <rect x="1672.9644166666665" y="427.3" width="69.328" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1707.6284166666665" y="442.45" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">call, assert</text>
+</g>
+<g class="edge-label" data-from="o1" data-to="launcher" data-label="language-neutral contract">
+  <rect x="36" y="1695.8000000000002" width="138.82600000000002" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="105.41300000000001" y="1710.9500000000003" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">language-neutral contract</text>
+</g>
+<g class="edge-label" data-from="o4" data-to="launcher" data-label="language-neutral contract">
+  <rect x="1751.5059999999996" y="1695.8000000000002" width="138.82600000000002" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1820.9189999999996" y="1710.9500000000003" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">language-neutral contract</text>
+</g>
+<g class="node" data-id="ext" data-label="--system-prompt &lt;path&gt; flag OR SYSTEM_MD env
+source path may be ABSOLUTE / out-of-workspace
+unreadable under AILANG_FS_SANDBOX=workdir" data-shape="rectangle">
+  <rect x="921.23325" y="359.90000000000003" width="345.7599999999999" height="70.7" rx="0" ry="0" fill="#262a30" stroke="#9aa4b0" stroke-width="0.75" />
+  <text x="1094.1132499999999" y="395.25000000000006" text-anchor="middle" font-size="13" font-weight="500" fill="#d6dbe2"><tspan x="1094.1132499999999" dy="-12.350000000000001">--system-prompt &lt;path&gt; flag OR SYSTEM_MD env</tspan><tspan x="1094.1132499999999" dy="16.900000000000002">source path may be ABSOLUTE / out-of-workspace</tspan><tspan x="1094.1132499999999" dy="16.900000000000002">unreadable under AILANG_FS_SANDBOX=workdir</tspan></text>
+</g>
+<g class="node" data-id="materialize" data-label="materializeSystemPromptArg(flag, workdir)
+readFileSync out-of-sandbox source
+write &lt;workdir&gt;/.motoko-system-prompt.md
+null + log if unreadable" data-shape="rectangle">
+  <rect x="899.6685833333333" y="550.6" width="291.6669999999999" height="87.60000000000001" rx="0" ry="0" fill="#2f2145" stroke="#bb9af7" stroke-width="0.75" />
+  <text x="1045.5020833333333" y="594.4" text-anchor="middle" font-size="13" font-weight="500" fill="#e5d5fb"><tspan x="1045.5020833333333" dy="-20.8">materializeSystemPromptArg(flag, workdir)</tspan><tspan x="1045.5020833333333" dy="16.900000000000002">readFileSync out-of-sandbox source</tspan><tspan x="1045.5020833333333" dy="16.900000000000002">write &lt;workdir&gt;/.motoko-system-prompt.md</tspan><tspan x="1045.5020833333333" dy="16.900000000000002">null + log if unreadable</tspan></text>
+</g>
+<g class="node" data-id="repoint" data-label="process.env.SYSTEM_MD repointed
+at the in-sandbox managed file
+(TS mechanism · thin)" data-shape="rectangle">
+  <rect x="885.7945" y="686.2" width="262.02699999999993" height="70.7" rx="0" ry="0" fill="#262a30" stroke="#9aa4b0" stroke-width="0.75" />
+  <text x="1016.808" y="721.5500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#d6dbe2"><tspan x="1016.808" dy="-12.350000000000001">process.env.SYSTEM_MD repointed</tspan><tspan x="1016.808" dy="16.900000000000002">at the in-sandbox managed file</tspan><tspan x="1016.808" dy="16.900000000000002">(TS mechanism · thin)</tspan></text>
+</g>
+<g class="node" data-id="resolve" data-label="systemPromptForWorkspace(root, workdir)
+→ workdir-relative path
+'' if missing/escape · '.' at root" data-shape="rectangle">
+  <rect x="789.22325" y="804.9000000000001" width="298.33599999999996" height="70.7" rx="0" ry="0" fill="#2f2145" stroke="#bb9af7" stroke-width="0.75" />
+  <text x="938.39125" y="840.2500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#e5d5fb"><tspan x="938.39125" dy="-12.350000000000001">systemPromptForWorkspace(root, workdir)</tspan><tspan x="938.39125" dy="16.900000000000002">→ workdir-relative path</tspan><tspan x="938.39125" dy="16.900000000000002">&#39;&#39; if missing/escape · &#39;.&#39; at root</tspan></text>
+</g>
+<g class="node" data-id="childenv" data-label="buildChildEnv(workdir, profile, …)
+AILANG_FS_SANDBOX = workdir
+SYSTEM_MD ABSENT · MOTOKO_HEADLESS" data-shape="rectangle">
+  <rect x="1168.8215" y="923.6" width="326.49399999999997" height="70.7" rx="0" ry="0" fill="#2f2145" stroke="#bb9af7" stroke-width="0.75" />
+  <text x="1332.0685" y="958.95" text-anchor="middle" font-size="13" font-weight="500" fill="#e5d5fb"><tspan x="1332.0685" dy="-12.350000000000001">buildChildEnv(workdir, profile, …)</tspan><tspan x="1332.0685" dy="16.900000000000002">AILANG_FS_SANDBOX = workdir</tspan><tspan x="1332.0685" dy="16.900000000000002">SYSTEM_MD ABSENT · MOTOKO_HEADLESS</tspan></text>
+</g>
+<g class="node" data-id="supargs" data-label="buildSupervisorArgs(…)
+--system-prompt &lt;relpath&gt; pair
+prompt carried BY REFERENCE" data-shape="rectangle">
+  <rect x="1523.3155" y="923.6" width="230.90499999999994" height="70.7" rx="0" ry="0" fill="#2f2145" stroke="#bb9af7" stroke-width="0.75" />
+  <text x="1638.7679999999998" y="958.95" text-anchor="middle" font-size="13" font-weight="500" fill="#e5d5fb"><tspan x="1638.7679999999998" dy="-12.350000000000001">buildSupervisorArgs(…)</tspan><tspan x="1638.7679999999998" dy="16.900000000000002">--system-prompt &lt;relpath&gt; pair</tspan><tspan x="1638.7679999999998" dy="16.900000000000002">prompt carried BY REFERENCE</tspan></text>
+</g>
+<g class="node" data-id="spawn" data-label="constructor: mirror* FS side-effects
+then spawn ailang child (env = childEnv)" data-shape="rectangle">
+  <rect x="1553.7146666666665" y="1042.3000000000002" width="271.65999999999997" height="53.800000000000004" rx="0" ry="0" fill="#262a30" stroke="#9aa4b0" stroke-width="0.75" />
+  <text x="1689.5446666666664" y="1069.2000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#d6dbe2"><tspan x="1689.5446666666664" dy="-3.9000000000000012">constructor: mirror* FS side-effects</tspan><tspan x="1689.5446666666664" dy="16.900000000000002">then spawn ailang child (env = childEnv)</tspan></text>
+</g>
+<g class="node" data-id="coreread" data-label="supervisor.ail reads prompt
+via workdir-relative path (rpc.ail:205)
+materialized content is in-sandbox → readable" data-shape="rectangle">
+  <rect x="1620.2803333333334" y="1216.1" width="304.26399999999995" height="70.7" rx="0" ry="0" fill="#262a30" stroke="#9aa4b0" stroke-width="0.75" />
+  <text x="1772.4123333333334" y="1251.4499999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#d6dbe2"><tspan x="1772.4123333333334" dy="-12.350000000000001">supervisor.ail reads prompt</tspan><tspan x="1772.4123333333334" dy="16.900000000000002">via workdir-relative path (rpc.ail:205)</tspan><tspan x="1772.4123333333334" dy="16.900000000000002">materialized content is in-sandbox → readable</tspan></text>
+</g>
+<g class="node" data-id="seal" data-label="in-core seal gate
+require_system_prompt: NOT headless
+OFF in headless → no in-core guard" data-shape="rectangle">
+  <rect x="1636.5823333333333" y="1340.4333333333334" width="271.6599999999999" height="70.7" rx="0" ry="0" fill="#3a2f12" stroke="#e0af68" stroke-width="2.5px" />
+  <text x="1772.4123333333332" y="1375.7833333333333" text-anchor="middle" font-size="13" font-weight="500" fill="#f2e2c2"><tspan x="1772.4123333333332" dy="-12.350000000000001">in-core seal gate</tspan><tspan x="1772.4123333333332" dy="16.900000000000002">require_system_prompt: NOT headless</tspan><tspan x="1772.4123333333332" dy="16.900000000000002">OFF in headless → no in-core guard</tspan></text>
+</g>
+<g class="node" data-id="testfile" data-label="harness-dst.test.ts
+per-test mkdtemp workdir
+save/restore SYSTEM_MD + argv
+no AILANG · no spawn · no network" data-shape="rectangle">
+  <rect x="1146.6447083333333" y="102" width="250.17099999999996" height="87.60000000000001" rx="0" ry="0" fill="#143d24" stroke="#56d364" stroke-width="2.5px" />
+  <text x="1271.7302083333332" y="145.8" text-anchor="middle" font-size="13" font-weight="500" fill="#c6f0cf"><tspan x="1271.7302083333332" dy="-20.8">harness-dst.test.ts</tspan><tspan x="1271.7302083333332" dy="16.900000000000002">per-test mkdtemp workdir</tspan><tspan x="1271.7302083333332" dy="16.900000000000002">save/restore SYSTEM_MD + argv</tspan><tspan x="1271.7302083333332" dy="16.900000000000002">no AILANG · no spawn · no network</tspan></text>
+</g>
+<g class="node" data-id="o1" data-label="scen1 · dest content BYTE-EQUALS source
+dest resolves INSIDE workdir" data-shape="rectangle">
+  <rect x="402.9783333333334" y="1340.4333333333334" width="296.854" height="53.800000000000004" rx="0" ry="0" fill="#123038" stroke="#2ac3de" stroke-width="2.5px" />
+  <text x="551.4053333333334" y="1367.3333333333335" text-anchor="middle" font-size="13" font-weight="500" fill="#bdeef5"><tspan x="551.4053333333334" dy="-3.9000000000000012">scen1 · dest content BYTE-EQUALS source</tspan><tspan x="551.4053333333334" dy="16.900000000000002">dest resolves INSIDE workdir</tspan></text>
+</g>
+<g class="node" data-id="o2" data-label="scen2 · workdir-rel path UNCHANGED
+no .motoko-system-prompt.md written" data-shape="rectangle">
+  <rect x="727.8323333333335" y="1340.4333333333334" width="266.47299999999996" height="53.800000000000004" rx="0" ry="0" fill="#123038" stroke="#2ac3de" stroke-width="2.5px" />
+  <text x="861.0688333333335" y="1367.3333333333335" text-anchor="middle" font-size="13" font-weight="500" fill="#bdeef5"><tspan x="861.0688333333335" dy="-3.9000000000000012">scen2 · workdir-rel path UNCHANGED</tspan><tspan x="861.0688333333335" dy="16.900000000000002">no .motoko-system-prompt.md written</tspan></text>
+</g>
+<g class="node" data-id="o3" data-label="scen3 · '' on missing/escape
+null on unreadable source" data-shape="rectangle">
+  <rect x="1022.3053333333335" y="1340.4333333333336" width="208.67499999999998" height="53.800000000000004" rx="0" ry="0" fill="#123038" stroke="#2ac3de" stroke-width="2.5px" />
+  <text x="1126.6428333333336" y="1367.3333333333337" text-anchor="middle" font-size="13" font-weight="500" fill="#bdeef5"><tspan x="1126.6428333333336" dy="-3.9000000000000012">scen3 · &#39;&#39; on missing/escape</tspan><tspan x="1126.6428333333336" dy="16.900000000000002">null on unreadable source</tspan></text>
+</g>
+<g class="node" data-id="o4" data-label="scen4 · AILANG_FS_SANDBOX == workdir
+SYSTEM_MD absent despite parent sentinel
+--system-prompt &lt;relpath&gt; pair present" data-shape="rectangle">
+  <rect x="1258.9803333333334" y="1340.4333333333334" width="301.2999999999999" height="70.7" rx="0" ry="0" fill="#123038" stroke="#2ac3de" stroke-width="2.5px" />
+  <text x="1409.6303333333333" y="1375.7833333333333" text-anchor="middle" font-size="13" font-weight="500" fill="#bdeef5"><tspan x="1409.6303333333333" dy="-12.350000000000001">scen4 · AILANG_FS_SANDBOX == workdir</tspan><tspan x="1409.6303333333333" dy="16.900000000000002">SYSTEM_MD absent despite parent sentinel</tspan><tspan x="1409.6303333333333" dy="16.900000000000002">--system-prompt &lt;relpath&gt; pair present</tspan></text>
+</g>
+<g class="node" data-id="scn1" data-label="harness.external_system_md_materialized" data-shape="rectangle">
+  <rect x="214.82600000000002" y="1525.5" width="295.37199999999984" height="36.900000000000006" rx="0" ry="0" fill="#16294d" stroke="#7aa2f7" stroke-width="2px" />
+  <text x="362.51199999999994" y="1543.95" text-anchor="middle" font-size="13" font-weight="500" fill="#cdd9f5" dy="4.55">harness.external_system_md_materialized</text>
+</g>
+<g class="node" data-id="scn2" data-label="harness.workspace_system_md_not_rewritten" data-shape="rectangle">
+  <rect x="538.1979999999999" y="1525.5" width="319.08399999999995" height="36.900000000000006" rx="0" ry="0" fill="#16294d" stroke="#7aa2f7" stroke-width="2px" />
+  <text x="697.7399999999998" y="1543.95" text-anchor="middle" font-size="13" font-weight="500" fill="#cdd9f5" dy="4.55">harness.workspace_system_md_not_rewritten</text>
+</g>
+<g class="node" data-id="scn3" data-label="harness.out_of_sandbox_or_missing_system_md_yields_empty" data-shape="rectangle">
+  <rect x="885.2819999999998" y="1525.5" width="419.85999999999996" height="36.900000000000006" rx="0" ry="0" fill="#16294d" stroke="#7aa2f7" stroke-width="2px" />
+  <text x="1095.2119999999998" y="1543.95" text-anchor="middle" font-size="13" font-weight="500" fill="#cdd9f5" dy="4.55">harness.out_of_sandbox_or_missing_system_md_yields_empty</text>
+</g>
+<g class="node" data-id="scn4" data-label="harness.child_env_sandbox_and_prompt_by_reference" data-shape="rectangle">
+  <rect x="1333.1419999999998" y="1525.5" width="378.3639999999999" height="36.900000000000006" rx="0" ry="0" fill="#16294d" stroke="#7aa2f7" stroke-width="2px" />
+  <text x="1522.3239999999998" y="1543.95" text-anchor="middle" font-size="13" font-weight="500" fill="#cdd9f5" dy="4.55">harness.child_env_sandbox_and_prompt_by_reference</text>
+</g>
+<g class="node" data-id="make" data-label="bun test src/tui/src/harness-dst.test.ts
+4 scenarios green · runtime-process family green
+ADR-003 acceptance · 6 criteria" data-shape="rectangle">
+  <rect x="730.6354999999999" y="1610.4" width="331.6809999999999" height="70.7" rx="0" ry="0" fill="#16294d" stroke="#7aa2f7" stroke-width="2px" />
+  <text x="896.4759999999999" y="1645.75" text-anchor="middle" font-size="13" font-weight="500" fill="#cdd9f5"><tspan x="896.4759999999999" dy="-12.350000000000001">bun test src/tui/src/harness-dst.test.ts</tspan><tspan x="896.4759999999999" dy="16.900000000000002">4 scenarios green · runtime-process family green</tspan><tspan x="896.4759999999999" dy="16.900000000000002">ADR-003 acceptance · 6 criteria</tspan></text>
+</g>
+<g class="node" data-id="launcher" data-label="launcher.ail (outer AILANG tier)
+same contract → AILANG scenario
+bun runner retired" data-shape="rectangle">
+  <rect x="754.2336666666667" y="1795.1" width="239.05599999999998" height="70.7" rx="0" ry="0" fill="#3a2f12" stroke="#e0af68" stroke-width="2.5px" />
+  <text x="873.7616666666668" y="1830.4499999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#f2e2c2"><tspan x="873.7616666666668" dy="-12.350000000000001">launcher.ail (outer AILANG tier)</tspan><tspan x="873.7616666666668" dy="16.900000000000002">same contract → AILANG scenario</tspan><tspan x="873.7616666666668" dy="16.900000000000002">bun runner retired</tspan></text>
+</g>
+</svg>

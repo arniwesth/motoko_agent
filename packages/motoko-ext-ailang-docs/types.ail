@@ -1,0 +1,104 @@
+module sunholo/motoko_ext_ailang_docs/types
+
+import pkg/sunholo/motoko_ext_abi/types (ToolSchema)
+import pkg/sunholo/motoko_ext_mcp/types (McpServerConfig, McpToolMapping)
+
+-- Tool names exposed by https://mcp.ailang.sunholo.com/mcp/ — flat 1:1 mapping
+-- with no motoko-side aliasing. Each name already matches Anthropic's
+-- ^[a-zA-Z0-9_-]{1,128}$ pattern, so we advertise canonical MCP names
+-- directly. Generated from tools/list response on 2026-05-14.
+export func tool_filter() -> [string] {
+  [
+    "ailang_versions",
+    "benchmark_run",
+    "benchmarks_compare",
+    "benchmarks_for_model",
+    "benchmarks_list",
+    "changelog_for_version",
+    "design_doc",
+    "design_docs_list",
+    "docs_nav",
+    "docs_search",
+    "effects_catalog",
+    "example_for_concept",
+    "example_get",
+    "examples_list",
+    "install_guide",
+    "limitations_list",
+    "onboarding_guide",
+    "prompt_get",
+    "roadmap",
+    "stdlib_module",
+    "stdlib_modules",
+    "stdlib_search",
+    "submit_feedback"
+  ]
+}
+
+func make_mapping(name: string) -> McpToolMapping {
+  { canonical: name, mcp_name: name, aliases: [] }
+}
+
+func mappings_from(names: [string]) -> [McpToolMapping] {
+  match names {
+    [] => [],
+    n :: rest => make_mapping(n) :: mappings_from(rest)
+  }
+}
+
+export func tool_mappings() -> [McpToolMapping] {
+  mappings_from(tool_filter())
+}
+
+-- The AILANG MCP server is PUBLIC — no auth required. v0.1.2 switches
+-- to the new `auth_style: "none"` support added in motoko_ext_mcp@0.2.5.
+-- The bridge now skips the --auth-env-var / --auth-style flags entirely
+-- when auth_style == "none". auth_env_var is ignored in this branch but
+-- kept as "" for clarity. Earlier hack with HOME-as-sentinel retired.
+export func mcp_config(timeout_ms: int, max_output_chars: int) -> McpServerConfig {
+  {
+    base_url: "https://mcp.ailang.sunholo.com/mcp/",
+    auth_env_var: "",
+    auth_style: "none",
+    tool_filter: tool_filter(),
+    timeout_ms: timeout_ms,
+    max_output_chars: max_output_chars
+  }
+}
+
+func make_schema(name: string, description: string, parameters: string) -> ToolSchema {
+  { name: name, description: description, parameters: parameters }
+}
+
+-- One ToolSchema per advertised name. Descriptions + parameters fetched
+-- verbatim from https://mcp.ailang.sunholo.com/mcp/ tools/list on 2026-05-14.
+-- If the server ships new tools, regenerate by running:
+--   curl ... | jq -r '.result.tools[] | ...'
+-- and patch this function.
+export func tool_schemas() -> [ToolSchema] {
+  [
+    make_schema("ailang_versions", "List all AILANG versions the server can answer for.", "{\"properties\":{\"_\":{\"type\":\"string\"}},\"required\":[\"_\"],\"type\":\"object\"}"),
+    make_schema("benchmark_run", "One run's full result (code, compile_ok, runtime_ok, stdout_ok, cost, tokens).", "{\"properties\":{\"runId\":{\"type\":\"string\"}},\"required\":[\"runId\"],\"type\":\"object\"}"),
+    make_schema("benchmarks_compare", "Pairwise model comparison. Output: {a_only_passes, b_only_passes, both, neither}", "{\"properties\":{\"modelA\":{\"type\":\"string\"},\"modelB\":{\"type\":\"string\"},\"version\":{\"type\":\"string\"}},\"required\":[\"modelA\",\"modelB\",\"version\"],\"type\":\"object\"}"),
+    make_schema("benchmarks_for_model", "Where does a given model pass/fail? Optional version filter. Output: {passes: [...], fails_by_category: {...}, total_cost}", "{\"properties\":{\"model\":{\"type\":\"string\"},\"version\":{\"type\":\"string\"}},\"required\":[\"model\",\"version\"],\"type\":\"object\"}"),
+    make_schema("benchmarks_list", "List benchmark suites and runs, optionally filtered to a since_version cutoff.", "{\"properties\":{\"sinceVersion\":{\"type\":\"string\"}},\"required\":[\"sinceVersion\"],\"type\":\"object\"}"),
+    make_schema("changelog_for_version", "Get the changelog entry for a specific version.", "{\"properties\":{\"version\":{\"type\":\"string\"}},\"required\":[\"version\"],\"type\":\"object\"}"),
+    make_schema("design_doc", "Get a design doc by slug.", "{\"properties\":{\"slug\":{\"type\":\"string\"}},\"required\":[\"slug\"],\"type\":\"object\"}"),
+    make_schema("design_docs_list", "List design docs by state (planned, implemented, completed) and version.", "{\"properties\":{\"state\":{\"type\":\"string\"},\"version\":{\"type\":\"string\"}},\"required\":[\"state\",\"version\"],\"type\":\"object\"}"),
+    make_schema("docs_nav", "Get the docs navigation tree for a specific AILANG version.", "{\"properties\":{\"forVersion\":{\"type\":\"string\"}},\"required\":[\"forVersion\"],\"type\":\"object\"}"),
+    make_schema("docs_search", "Search the AILANG documentation by keyword for a specific version.", "{\"properties\":{\"query\":{\"type\":\"string\"},\"forVersion\":{\"type\":\"string\"}},\"required\":[\"query\",\"forVersion\"],\"type\":\"object\"}"),
+    make_schema("effects_catalog", "Catalog of AILANG effects (IO, FS, Net, Clock, Rand, DB, AI, Process, etc) for a version.", "{\"properties\":{\"forVersion\":{\"type\":\"string\"}},\"required\":[\"forVersion\"],\"type\":\"object\"}"),
+    make_schema("example_for_concept", "Find an example that demonstrates a specific concept for a version.", "{\"properties\":{\"concept\":{\"type\":\"string\"},\"forVersion\":{\"type\":\"string\"}},\"required\":[\"concept\",\"forVersion\"],\"type\":\"object\"}"),
+    make_schema("example_get", "Get a specific example by path for a version.", "{\"properties\":{\"path\":{\"type\":\"string\"},\"forVersion\":{\"type\":\"string\"}},\"required\":[\"path\",\"forVersion\"],\"type\":\"object\"}"),
+    make_schema("examples_list", "List examples filtered by features, status, and version.", "{\"properties\":{\"features\":{\"type\":\"string\"},\"status\":{\"type\":\"string\"},\"forVersion\":{\"type\":\"string\"}},\"required\":[\"features\",\"status\",\"forVersion\"],\"type\":\"object\"}"),
+    make_schema("install_guide", "Get the install guide for AILANG given a harness (claude-code, cursor, etc) and platform.", "{\"properties\":{\"harness\":{\"type\":\"string\"},\"platform\":{\"type\":\"string\"}},\"required\":[\"harness\",\"platform\"],\"type\":\"object\"}"),
+    make_schema("limitations_list", "List known AILANG limitations by category for a specific version.", "{\"properties\":{\"category\":{\"type\":\"string\"},\"forVersion\":{\"type\":\"string\"}},\"required\":[\"category\",\"forVersion\"],\"type\":\"object\"}"),
+    make_schema("onboarding_guide", "Get the AILANG onboarding guide tailored to a role (e.g. backend, frontend, agent-author).", "{\"properties\":{\"role\":{\"type\":\"string\"}},\"required\":[\"role\"],\"type\":\"object\"}"),
+    make_schema("prompt_get", "Fetch an authoritative AILANG prompt template (system prompt, teaching prompt) for a version + kind.", "{\"properties\":{\"forVersion\":{\"type\":\"string\"},\"kind\":{\"type\":\"string\"}},\"required\":[\"forVersion\",\"kind\"],\"type\":\"object\"}"),
+    make_schema("roadmap", "Get the current AILANG roadmap.", "{\"properties\":{\"_\":{\"type\":\"string\"}},\"required\":[\"_\"],\"type\":\"object\"}"),
+    make_schema("stdlib_module", "Get the full contents of a specific stdlib module (e.g. std/json) for a version.", "{\"properties\":{\"name\":{\"type\":\"string\"},\"forVersion\":{\"type\":\"string\"}},\"required\":[\"name\",\"forVersion\"],\"type\":\"object\"}"),
+    make_schema("stdlib_modules", "List all stdlib modules available in a specific version.", "{\"properties\":{\"forVersion\":{\"type\":\"string\"}},\"required\":[\"forVersion\"],\"type\":\"object\"}"),
+    make_schema("stdlib_search", "Search stdlib for functions/types matching a query (highest-value tool for avoiding hallucinated symbols).", "{\"properties\":{\"query\":{\"type\":\"string\"},\"forVersion\":{\"type\":\"string\"}},\"required\":[\"query\",\"forVersion\"],\"type\":\"object\"}"),
+    make_schema("submit_feedback", "Send feedback to AILANG core (bug report, feature request, doc gap). Same channel as `ailang messages send`.", "{\"properties\":{\"title\":{\"type\":\"string\"},\"body\":{\"type\":\"string\"},\"category\":{\"type\":\"string\"},\"ailang_version\":{\"type\":\"string\"}},\"required\":[\"title\",\"body\",\"category\",\"ailang_version\"],\"type\":\"object\"}")
+  ]
+}

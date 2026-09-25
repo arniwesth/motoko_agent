@@ -1,0 +1,29 @@
+# P1.5r-a3 mutgate: each row's MUTATED run (p15ra3_test.sh prints every failing row and the last line)
+== p15ra3_absorb_fs_off_by_one
+  ✗ absorption of 'FS' moved from 12 to 13 rows. That changes how much the WI-D6/D7/D8 slot narrowings actually enforce — re-read the note in declared_vs_performed.ail
+declared_vs_performed: 136 passed, 1 FAILED
+p15ra3: dvp exit 2
+== p15ra3_absorb_process_off_by_one
+  ✗ absorption of 'Process' moved from 4 to 3 rows. That changes how much the WI-D6/D7/D8 slot narrowings actually enforce — re-read the note in declared_vs_performed.ail
+declared_vs_performed: 136 passed, 1 FAILED
+p15ra3: dvp exit 2
+== p15ra3_b8_block_reverted_to_extctx
+  ✗ IMPORTED SUM (named-wide): rejected, but not on closed-row unification over Env alone -- establishes nothing: Error: type error in scripts/dst/.dvp_limitation_probe (decl 1): type unification failed at [function application at scripts/dst/.dvp_limitation_probe.ail:5:57]: failed to unify parameter 0: failed to unify parameter 0: record field mismatch: expected 24 fields, got 23
+  ✗ IMPORTED SUM (named-exact) was REJECTED -- a named impl at the payload's own row and context does not compile, so named-wide above measures something other than the row: Error: type error in scripts/dst/.dvp_limitation_probe (decl 1): type unification failed at [function application at scripts/dst/.dvp_limitation_probe.ail:5:49]: failed to unify parameter 0: failed to unify parameter 0: reco
+  ✗ IMPORTED SUM (8.0 context): a probe above names [ExtCtx ExtCtx ExtCtx ExtCtx ExtCtx ExtCtx] where the 8.0 Compactor slot takes ExtCtx -- an inline probe on the wrong context still checks clean on v0.33.0, so its verdict is about a payload the ABI no longer has
+declared_vs_performed: 134 passed, 3 FAILED
+p15ra3: dvp exit 2
+== p15ra3_b8_inline_probe_reverted
+  ✗ IMPORTED SUM (8.0 context): a probe above names [ExtCtx] where the 8.0 Compactor slot takes AiCtx -- an inline probe on the wrong context still checks clean on v0.33.0, so its verdict is about a payload the ABI no longer has
+declared_vs_performed: 136 passed, 1 FAILED
+p15ra3: dvp exit 2
+== p15ra3_denominator_arith_reverted
+  ✗ the number of register_with_config rows moved from 17 to 16, so every absorption fraction below has a different denominator than the one they were measured against
+declared_vs_performed: 136 passed, 1 FAILED
+p15ra3: dvp exit 2
+== p15ra3_fixture_pattern_reverted_do
+FAIL: could not read `Capability.BudgetShaper`'s payload in packages/motoko-ext-abi/types.ail — the omission basis cannot be checked
+p15ra3: driver_only exit 2
+== p15ra3_fixture_pattern_reverted_pd
+FAIL: could not read `Capability.BudgetShaper`'s payload in packages/motoko-ext-abi/types.ail — the omission basis cannot be checked
+p15ra3: profile_definition exit 2

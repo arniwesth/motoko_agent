@@ -1,6 +1,6 @@
 # Local OpenAI-Compatible Endpoint Integration Plan
 
-**Goal:** Let Motoko/AILANG use models served from a local or LAN OpenAI-compatible endpoint (for example `http://100.79.48.75:8000/v1`) and expose those models in the TUI `/model` picker.
+**Goal:** Let Motoko/AILANG use models served from a local or LAN OpenAI-compatible endpoint (for example `http://<dgx-host>:8000/v1`) and expose those models in the TUI `/model` picker.
 
 **Target model:** `google/gemma-4-26B-A4B-it` on DGX Spark (`/v1/models`, `/v1/chat/completions`).
 
@@ -74,7 +74,7 @@ Expected to update (existing tests, if needed):
     - `http://host:8000/v1` -> `http://host:8000/v1`
 
 ### Acceptance criteria
-- `--ai openai/google/gemma-4-26B-A4B-it` reaches DGX endpoint when `OPENAI_BASE_URL=http://100.79.48.75:8000/v1`.
+- `--ai openai/google/gemma-4-26B-A4B-it` reaches DGX endpoint when `OPENAI_BASE_URL=http://<dgx-host>:8000/v1`.
 - Existing `openai/gpt-*` cloud usage still works unchanged when `OPENAI_BASE_URL` is not set.
 
 ---
@@ -153,7 +153,7 @@ Expected to update (existing tests, if needed):
 
 ### Manual verification
 - Run Motoko with:
-  - `OPENAI_BASE_URL=http://100.79.48.75:8000/v1`
+  - `OPENAI_BASE_URL=http://<dgx-host>:8000/v1`
   - `MODEL=openai/google/gemma-4-26B-A4B-it`
 - Confirm the runtime emits successful `thinking/obs/done` flow using DGX model.
 
@@ -195,7 +195,7 @@ Expected to update (existing tests, if needed):
 ## Done Definition
 
 - A user can run Motoko against DGX Spark model using only:
-  - `OPENAI_BASE_URL=http://100.79.48.75:8000/v1`
+  - `OPENAI_BASE_URL=http://<dgx-host>:8000/v1`
   - `MODEL=openai/google/gemma-4-26B-A4B-it`
 - `/model` picker can discover and present the same model from the local endpoint.
 - Existing OpenAI, OpenRouter, Gemini, Anthropic, and Ollama flows continue to work.

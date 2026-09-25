@@ -1,0 +1,59 @@
+module sunholo/motoko_ext_compaction_structural/register
+
+import std/json (jo)
+import pkg/sunholo/motoko_ext_abi/types (
+  AiCtx,
+  PureCtx,
+  pure_ctx,
+  ExtRegistration,
+  Compactor,
+  Msg,
+  PreStepOutcome
+)
+import pkg/sunholo/motoko_ext_compaction_structural/compaction_structural (compact_for_pre_step)
+
+-- The Compactor's view, less its `ai_step` port and its world: the data the
+-- structural policy reads. Built through the ABI's `pure_ctx` plus record
+-- update (the 8.x rule's sanctioned form), every data field carried over.
+pure func pure_view(ctx: AiCtx) -> PureCtx {
+  { pure_ctx(ctx.ext_config) |
+    task: ctx.task,
+    step: ctx.step,
+    model: ctx.model,
+    cwd: ctx.cwd,
+    hybrid_tools: ctx.hybrid_tools,
+    budget: ctx.budget,
+    mode: ctx.mode,
+    workdir: ctx.workdir,
+    env_server_url: ctx.env_server_url,
+    budget_remaining: ctx.budget_remaining,
+    history_slice: ctx.history_slice,
+    state_key: ctx.state_key,
+    context_limit: ctx.context_limit,
+    finish_reason: ctx.finish_reason,
+    work_in_flight: ctx.work_in_flight,
+    open_waits: ctx.open_waits,
+    artifacts: ctx.artifacts,
+    telemetry: ctx.telemetry,
+    verification: ctx.verification,
+    tool_evidence: ctx.tool_evidence,
+    decision_state: ctx.decision_state
+  }
+}
+
+func pre_step(ctx: AiCtx, msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} {
+  { decision: compact_for_pre_step(pure_view(ctx), msgs), next_state: ctx.world }
+}
+
+-- ABI 8.0 (031 ADR-001 D2): `{ config, caps }`, the payload a named top-level
+-- function bound directly. Nothing is captured at registration, so the
+-- disclosed configuration is empty.
+export func register_with_config(_cfg: a) -> ExtRegistration ! {Env, FS} {
+  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
+  {
+    config: jo([]),
+    caps: [
+      Compactor(pre_step)
+    ]
+  }
+}

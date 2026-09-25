@@ -11,20 +11,26 @@ module src/core/rpc
 -- For history of what was here before, see the M-MOTOKO-RPC-LOOP-FULL-
 -- MIGRATION sprint plan + CHANGELOG.md and git log around 2026-05-06.
 
-import src/core/agent_loop_v2 (run_v2_with_conversation)
-import src/core/context_usage (catalog_context_limit_for)
+import src/core/agent_loop_v2 (run_v2_with_conversation, run_v2_resume_with_conversation)
+import src/core/context_usage (resolve_context_limit)
+import src/core/ports (ambient_context_reader, empty_world_state)
 import src/core/test/stub_step (LiveAI)
-import std/io     (println, exit)
-import std/json   (Json, encode, jo, ja, kv, js, jb, jnum)
+import std/io     (println, exit, readLine)
+import std/json   (Json, encode, decode, get, asString, jo, ja, kv, js, jb, jnum)
 import std/list   (foldl)
-import std/string (length)
+import std/string (length, trim)
+import std/option (Option, Some, None)
+import std/result (Ok, Err)
+import std/env    (getEnv)
 import std/fs     (readFile, fileExists)
 import src/core/types  (Msg, version)
-import src/core/prompts (with_cache_hint, with_agents_context)
-import src/core/cache   (get_hint)
+import src/core/prompts (with_agents_context)
+import src/core/phase_vocab (msgs_to_messages, system_prefix_digest_for)
+import src/core/journal (fold_journal, journal_leaf, parse_journal_text, plan_resume, refusal_id, refusal_message, Refusal, Header, ResumePlan, ResumeInvocation)
 import src/core/config  (RuntimeConfig, InvocationConfig, load_runtime_config, load_invocation_config, CostRates)
-import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtRuntime)
-import src/core/ext/runtime (init_runtime_with_config, loaded_extension_names, dispatch_build_system_prompt, dispatch_budget_plan)
+import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, BudgetPlan, ExtRuntime, NotReached)
+import src/core/ext/runtime (init_runtime_with_config, loaded_extension_names, ext_set_digest, dispatch_build_system_prompt, dispatch_budget_plan)
+import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry, empty_tool_evidence)
 
 -- RunSettings carries the agent's runtime knobs from RuntimeConfig into
 -- compute_budget_plan and the v2 entry point. Preserved post-M10 because
@@ -46,6 +52,16 @@ type RunSettings = {
   verifier_mode: bool,
   max_cost_millicents: int,
   cost_rates: CostRates
+}
+
+-- What the runtime is about to run: the opening task, the model it runs on,
+-- and whether there is an opening turn at all. `live: false` means the session
+-- ended before one arrived (abort, exit, `/restart`, EOF, or headless with no
+-- TASK) and nothing should be built or called.
+type FirstTask = {
+  task: string,
+  model: string,
+  live: bool
 }
 
 func emit(obj: string) -> () ! {IO} {
@@ -103,7 +119,15 @@ func compute_budget_plan(
   let verifier_mode = settings.verifier_mode;
   let base = default_budget_plan(max_steps, verifier_mode);
   let remaining = if base.total - step < 0 then 0 else base.total - step;
-  let context_limit = catalog_context_limit_for(model);
+  -- WI-D3. The AMBIENT reader, deliberately and not as a fallback: `rpc` is the
+  -- live launcher and reads the host two lines below this in `run_with_config`,
+  -- so a world here would be a world nothing else in this module has.
+  --
+  -- The successor is not threaded, and that costs nothing rather than being
+  -- excused: both ambient bindings return `next_state: state` unchanged — D1's
+  -- identity transition — so there is no successor to lose. A deterministic run
+  -- never reaches this module; it drives `run_v2_session_traced` directly.
+  let context_limit = resolve_context_limit(ambient_context_reader(), empty_world_state(), model).value;
   let ctx = {
     task: task,
     step: step,
@@ -116,9 +140,15 @@ func compute_budget_plan(
     env_server_url: "",
     budget_remaining: remaining,
     history_slice: [],
-    state_key: "core:ext:budget",
-    context_limit: context_limit
-  };
+	    state_key: "core:ext:budget",
+	    finish_reason: "",
+	    work_in_flight: [],
+	    open_waits: ja([]),
+	    context_limit: context_limit,
+	    ports: noop_ext_ports(),
+	    artifacts: empty_ext_artifacts(),
+	    telemetry: zero_token_telemetry(), verification: NotReached, tool_evidence: empty_tool_evidence(), decision_state: None, world: empty_ext_world() -- 8.0 (D3): truthful defaults; an INLINE literal the name search missed (P1.1 attempt 2)
+	  };
   let patched = dispatch_budget_plan(ext_runtime, ctx, base);
   clamp_budget_plan(patched, max_steps)
 }
@@ -154,7 +184,94 @@ func reject_if_ohmy_pi_unsupported(cfg: RuntimeConfig) -> () ! {IO} {
   }
 }
 
-export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {Net, AI, SharedMem, IO, Env, FS, Clock, Process, Stream, Trace} {
+pure func get_str(obj: Json, key: string) -> string {
+  match get(obj, key) {
+    None    => "",
+    Some(j) => match asString(j) { None => "", Some(s) => s }
+  }
+}
+
+func headless_mode() -> bool ! {Env} {
+  match getEnv("MOTOKO_HEADLESS") {
+    Ok(raw) => trim(raw) == "1",
+    Err(_)  => false
+  }
+}
+
+-- ADR-003 v6.1 D5's `resume_count`: the host's counter, 0 for a fresh session
+-- and incremented on every `--resume` spawn (P3), forwarded as
+-- MOTOKO_RESUME_COUNT and reaching the conversation loop as the middle field
+-- of `run_id = <session_id>.r<resume_count>.<run_ordinal>`.
+--
+-- READ AMBIENTLY, on `headless_mode()`'s pattern immediately above, and
+-- PLAN-003 §0.8 is why rather than style: every `ports.env_get` is a helped
+-- `EnvRead` in the driver-leaf inventory (`derive.py:95`) and five DST fixtures
+-- pin the exact key set the policy init reads
+-- (`seeded_generator_dst`, `run_report_dst`, `strict_replay_dst`,
+-- `discovery_dst`, `driver_plus_compose_dst`). This read happens in `rpc.ail`,
+-- which is not in `SCAN_FILES` and sits above the traced surface, so it adds
+-- no leaf and re-pins no fixture. A part that finds itself adding a `Ports`
+-- field or a `ports.env_get` key here has left the ADR.
+--
+-- A missing, empty or unparseable value is 0, and so is a negative one: the
+-- count is an ordinal position in a resume chain, and there is no turn before
+-- the first.
+func resume_count_env() -> int ! {Env} {
+  match getEnv("MOTOKO_RESUME_COUNT") {
+    Ok(raw) => match _stringToInt(trim(raw)) {
+      Some(n) => if n > 0 then n else 0,
+      None    => 0
+    },
+    Err(_) => 0
+  }
+}
+
+-- A pre-warm spawn (the TUI boots one so the AILANG module load overlaps with
+-- the user typing) or a `/restart` respawn carries no task. Block here for the
+-- first command rather than handing the empty string to the builders below.
+--
+-- WHY IT HAS TO BE HERE and not after: the system prompt and the budget plan
+-- are BOTH task-conditional and BOTH built exactly once. Extensions shape the
+-- prompt off `ctx.task` -- `motoko-ext-decision-framework` gates its patch on
+-- `task_signals_self_modification(ctx.task)`, `motoko-ext-ailang-docs` builds
+-- its patch from the same field -- and `dispatch_budget_plan` reads it too.
+-- Building them before the task is known hands every shaper "" for the whole
+-- session, including the user's real prompt. Waiting first makes the pre-warm
+-- path identical to the CLI path; the warming that motivates the pre-spawn
+-- (module graph, config, extension init, the system-prompt file read) has all
+-- already happened above.
+--
+-- Only the commands that can reach a task-less runtime are handled:
+-- `model_change` (the TUI sends one on a model switch), `restart` and
+-- abort/exit/EOF (nothing to run -- exit and let the TUI respawn if it wants
+-- one; no SessionSuspend is emitted because no session has started). Anything
+-- else is a mid-task command that cannot arrive before the first task:
+-- discard and keep waiting, matching `conversation_loop_v2_with_policy`'s
+-- fall-through.
+func await_first_task(model: string) -> FirstTask ! {IO} {
+  let raw = readLine();
+  if raw == "" then { task: "", model: model, live: false }
+  else match decode(raw) {
+    Err(_) => await_first_task(model),
+    Ok(obj) => {
+      let cmd_type = get_str(obj, "type");
+      if cmd_type == "abort" || cmd_type == "exit" || cmd_type == "restart"
+      then { task: "", model: model, live: false }
+      else if cmd_type == "model_change" then {
+        let new_model = trim(get_str(obj, "model"));
+        await_first_task(if new_model == "" then model else new_model)
+      }
+      else if cmd_type == "user_message" then {
+        let content = get_str(obj, "content");
+        if trim(content) == "" then await_first_task(model)
+        else { task: content, model: model, live: true }
+      }
+      else await_first_task(model)
+    }
+  }
+}
+
+export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = reject_if_ohmy_pi_unsupported(cfg);
   let env_url = cfg.backend.url;
   let task = inv.task;
@@ -163,8 +280,67 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
   let ext_runtime = init_runtime_with_config(cfg);
   let ailang_built = inv.ailang_built;
   let cwd = if inv.workdir_override != "" then inv.workdir_override else cfg.agent.workdir;
+  let bv = version();
+  let _ = emit(encode(jo([
+    kv("type", js("session_start")),
+    kv("task", js(task)),
+    kv("model", js(model)),
+    kv("brainVersion", js(bv)),
+    kv("ailangBuilt", js(ailang_built)),
+    kv("config_profile", js(cfg.profile)),
+    kv("config_dir", js(cfg.profile_dir)),
+    kv("backend_mode", js(cfg.backend.mode)),
+    kv("loaded_extensions", ja(json_string_values(loaded_extension_names(ext_runtime))))
+  ])));
+
+  let system_md_path = cfg.agent.system_prompt;
+  let raw_system =
+    if system_md_path == "" then ""
+    else if fileExists(system_md_path)
+    then readFile(system_md_path)
+    else {
+      let _ = emit(encode(jo([
+        kv("type", js("warning")),
+        kv("message", js("system prompt file not found at '${system_md_path}'; running without a system prompt."))])));
+      ""
+    };
+
+  -- ADR-003 v6.1 D6, THE CROSS-PROCESS RESUME (PLAN-003 P3 Part 5). A `--resume`
+  -- child has its task already: it is `header.boot.task`, and the session is the
+  -- journal's. So it does not wait in `await_first_task` — it folds, decides, and
+  -- enters the conversation loop between turns (or holding the continuation), where
+  -- the loop's own `readLine` is the wait. See `resume_from_journal`.
+  if inv.resume != "" then resume_from_journal(cfg, inv, ext_runtime, raw_system, cwd, env_url, hybrid_enabled)
+  else {
+  -- Everything above this line is task-independent warming. Everything below it
+  -- reads the task, so it waits for one: see `await_first_task`.
+  let first =
+    if task != "" then { task: task, model: model, live: true }
+    -- Headless never blocks on stdin -- the AILANG readLine builtin hangs on a
+    -- non-TTY rather than returning EOF, which is the hang MOTOKO_HEADLESS
+    -- exists to avoid -- so there is no task here and there never will be one.
+    -- Say so and exit non-zero rather than falling through: headless makes
+    -- `conversation_loop_v2_with_policy` return () immediately, so the two
+    -- branches would compose into running no turn at all and still exiting 0 --
+    -- a success code for zero work, the one outcome a calling harness cannot
+    -- tell apart from a completed run.
+    else if headless_mode() then {
+      let _ = emit(encode(jo([
+        kv("type", js("error")),
+        kv("error_code", js("headless_without_task")),
+        kv("message", js("MOTOKO_HEADLESS=1 with no task. Headless mode runs one task and exits; it never reads a task from stdin. Pass the task as the last argument or set TASK."))
+      ])));
+      let _ = exit(2);
+      { task: "", model: model, live: false }
+    }
+    else await_first_task(model);
+
+  if not first.live then ()
+  else {
+  let run_task = first.task;
+  let run_model = first.model;
   let settings = {
-    task: task,
+    task: run_task,
     ailang_built: ailang_built,
     snippet_caps: join_csv(cfg.tools.snippet_caps),
     workdir: cwd,
@@ -180,36 +356,120 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
     max_cost_millicents: cfg.agent.max_cost_millicents,
     cost_rates: cfg.cost_rates
   };
-  let bv = version();
-  let _ = emit(encode(jo([
-    kv("type", js("session_start")),
-    kv("task", js(task)),
-    kv("model", js(model)),
-    kv("brainVersion", js(bv)),
-    kv("ailangBuilt", js(ailang_built)),
-    kv("config_profile", js(cfg.profile)),
-    kv("config_dir", js(cfg.profile_dir)),
-    kv("backend_mode", js(cfg.backend.mode)),
-    kv("loaded_extensions", ja(json_string_values(loaded_extension_names(ext_runtime))))
-  ])));
-
-  let hint = get_hint(task);
-  let system_md_path = cfg.agent.system_prompt;
-  let raw_system =
-    if system_md_path == "" then ""
-    else if fileExists(system_md_path)
-    then readFile(system_md_path)
-    else {
-      let _ = emit(encode(jo([
-        kv("type", js("warning")),
-        kv("message", js("system prompt file not found at '${system_md_path}'; running without a system prompt."))])));
-      ""
-    };
-  let budget = compute_budget_plan(ext_runtime, task, model, cwd, hybrid_enabled, 0, settings);
+  let budget = compute_budget_plan(ext_runtime, run_task, run_model, cwd, hybrid_enabled, 0, settings);
   let remaining = budget.total;
   let system_with_agents = with_agents_context(raw_system, cwd);
-  let system_with_hint = with_cache_hint(system_with_agents, hint);
-  let context_limit = catalog_context_limit_for(model);
+  -- WI-D3, and see `compute_budget_plan` for why the reader is the ambient one.
+  let context_limit = resolve_context_limit(ambient_context_reader(), empty_world_state(), run_model).value;
+  let system_ctx = {
+    task: run_task,
+    step: 0,
+    model: run_model,
+    cwd: cwd,
+    hybrid_tools: hybrid_enabled,
+    budget: budget,
+    mode: "default",
+    workdir: cwd,
+    env_server_url: env_url,
+    budget_remaining: remaining,
+    history_slice: [],
+	    state_key: "core:ext:system",
+	    finish_reason: "",
+	    work_in_flight: [],
+	    open_waits: ja([]),
+	    context_limit: context_limit,
+	    ports: noop_ext_ports(),
+	    artifacts: empty_ext_artifacts(),
+	    telemetry: zero_token_telemetry(), verification: NotReached, tool_evidence: empty_tool_evidence(), decision_state: None, world: empty_ext_world() -- 8.0 (D3): truthful defaults; an INLINE literal the name search missed (P1.1 attempt 2)
+	  };
+  let system = dispatch_build_system_prompt(ext_runtime, system_ctx, system_with_agents);
+
+  let system_msg: Msg = { role: "system", content: system, tool_calls: [], tool_call_id: "" };
+  let init: [Msg] = [system_msg, { role: "user", content: run_task, tool_calls: [], tool_call_id: "" }];
+
+  -- ADR-003 v6.1 D3: THE CHILD'S HALF OF THE HEADER, on the one line that is emitted after every
+  -- field of it exists.
+  --
+  -- The host writes the header before the first spawn from what it has -- the session id, the
+  -- workdir, the profile and the model -- and completes it in place from this report. What it
+  -- CANNOT have is here: the system-prefix digest (the system prompt is built from the task, three
+  -- lines above, so `session_start` at :282 is emitted before there is one to digest) and D1's
+  -- `boot` inputs, which are profile-config values the TUI never parses -- it reads the model, the
+  -- extensions and the ClickStack block out of `config.json` and nothing else.
+  --
+  -- PLAN-003 names only the two digests as the child's and says the header is completed on
+  -- `session_start`. The boot inputs are in exactly the same position and the plan does not say so;
+  -- resolved by putting all of them on ONE line the host already receives, at the point where all
+  -- of them are known. The host keys on the `header` OBJECT rather than on this event's name, so
+  -- moving them costs nothing later.
+  --
+  -- THE CHILD STILL WRITES NOTHING (PLAN-003 §0.8). This is an emit on the wire it already owns.
+  let _ = emit(encode(jo([
+    kv("type", js("v2_mode")),
+    kv("note", js("running with upstream std/ai.step (typed tool_calls) — M-MOTOKO-RPC-LOOP-FULL-MIGRATION cutover complete")),
+    kv("header", jo([
+      -- The digest of the PINNED SYSTEM PREFIX, `phase_vocab.system_prefix_digest_for`, which is
+      -- the same function D6 step 4's compatibility row compares against on a resume. Computed
+      -- over the one system message this run built, which is what that prefix is at this point.
+      kv("system_prefix_digest", js(system_prefix_digest_for(msgs_to_messages([system_msg])))),
+      -- FROM THE REGISTRY, never from `loaded_extensions` -- see `ext_set_digest`.
+      kv("ext_set_digest", js(ext_set_digest(ext_runtime))),
+      kv("boot", jo([
+        kv("task", js(run_task)),
+        kv("env_url", js(env_url)),
+        kv("hybrid_tools", jb(hybrid_enabled)),
+        kv("budget", jo([
+          kv("total", jnum(_int_to_float(budget.total))),
+          kv("solver", jnum(_int_to_float(budget.solver))),
+          kv("verifier", jnum(_int_to_float(budget.verifier)))
+        ])),
+        kv("step_budget", jnum(_int_to_float(budget.total))),
+        kv("ohmy_pi", jb(settings.ohmy_pi)),
+        kv("max_cost_millicents", jnum(_int_to_float(settings.max_cost_millicents))),
+        kv("cost_rates", jo([
+          kv("input_per_1m_millicents", jnum(_int_to_float(settings.cost_rates.input_per_1m_millicents))),
+          kv("output_per_1m_millicents", jnum(_int_to_float(settings.cost_rates.output_per_1m_millicents)))
+        ]))
+      ]))
+    ]))
+  ])));
+  run_v2_with_conversation(ext_runtime, run_task, env_url, hybrid_enabled, budget, run_model, init, settings.workdir, budget.total, settings.ohmy_pi, settings.max_cost_millicents, settings.cost_rates, LiveAI, cfg.profile, resume_count_env())
+  }
+  }
+}
+
+
+-- ============================================================================
+-- ADR-003 v6.1 D6, the cross-process resume (PLAN-003 P3 Part 5).
+-- ============================================================================
+
+func run_settings_for(cfg: RuntimeConfig, task: string, ailang_built: string, cwd: string) -> RunSettings {
+  {
+    task: task,
+    ailang_built: ailang_built,
+    snippet_caps: join_csv(cfg.tools.snippet_caps),
+    workdir: cwd,
+    ohmy_pi: cfg.tools.ohmy_pi,
+    delegated_timeout_ms: cfg.tools.delegated_timeout_ms,
+    delegated_poll_ms: cfg.tools.delegated_poll_ms,
+    delegated_timeout_slack_ms: cfg.tools.delegated_timeout_slack_ms,
+    max_retries: cfg.agent.max_retries,
+    retry_base_ms: cfg.agent.retry_base_ms,
+    retry_cap_ms: cfg.agent.retry_cap_ms,
+    max_steps: cfg.agent.max_steps,
+    verifier_mode: cfg.agent.semi_formal_verifier_mode,
+    max_cost_millicents: cfg.agent.max_cost_millicents,
+    cost_rates: cfg.cost_rates
+  }
+}
+
+-- The system message the invoked runtime builds for a task: the same three steps
+-- the fresh path runs inline below (`with_agents_context`, the ambient context
+-- limit, `dispatch_build_system_prompt`). Shared by name with the resume path, so
+-- the prompt a resume compares is the prompt a fresh session would have built.
+func build_system_msg(ext_runtime: ExtRuntime, raw_system: string, task: string, model: string, cwd: string, hybrid_enabled: bool, budget: BudgetPlan, env_url: string) -> Msg ! {Env, IO, Clock, FS} {
+  let system_with_agents = with_agents_context(raw_system, cwd);
+  let context_limit = resolve_context_limit(ambient_context_reader(), empty_world_state(), model).value;
   let system_ctx = {
     task: task,
     step: 0,
@@ -220,26 +480,118 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
     mode: "default",
     workdir: cwd,
     env_server_url: env_url,
-    budget_remaining: remaining,
+    budget_remaining: budget.total,
     history_slice: [],
     state_key: "core:ext:system",
-    context_limit: context_limit
+    finish_reason: "",
+    work_in_flight: [],
+    open_waits: ja([]),
+    context_limit: context_limit,
+    ports: noop_ext_ports(),
+    artifacts: empty_ext_artifacts(),
+    telemetry: zero_token_telemetry(), verification: NotReached, tool_evidence: empty_tool_evidence(), decision_state: None, world: empty_ext_world() -- 8.0 (D3): truthful defaults; an INLINE literal the name search missed (P1.1 attempt 2)
   };
-  let system = dispatch_build_system_prompt(ext_runtime, system_ctx, system_with_hint);
-
-  let init: [Msg] = [
-    { role: "system", content: system, tool_calls: [], tool_call_id: "" },
-    { role: "user", content: task, tool_calls: [], tool_call_id: "" }
-  ];
-
-  let _ = emit(encode(jo([
-    kv("type", js("v2_mode")),
-    kv("note", js("running with upstream std/ai.step (typed tool_calls) — M-MOTOKO-RPC-LOOP-FULL-MIGRATION cutover complete"))
-  ])));
-  run_v2_with_conversation(ext_runtime, task, env_url, hybrid_enabled, budget, model, init, settings.workdir, budget.total, settings.ohmy_pi, settings.max_cost_millicents, settings.cost_rates, LiveAI)
+  let system = dispatch_build_system_prompt(ext_runtime, system_ctx, system_with_agents);
+  { role: "system", content: system, tool_calls: [], tool_call_id: "" }
 }
 
-export func main() -> () ! {Net, AI, SharedMem, IO, Env, FS, Clock, Process, Stream, Trace} {
+-- D5's canonical workdir, as the INVOCATION knows it. The header's `workdir` is
+-- the host's own string (`WORKDIR` or its cwd), while `--workdir` reaches the
+-- child in `supervisorWorkdirArg`'s relative form ("." for the common case), so
+-- comparing the flag with the header would refuse every ordinary resume. The host
+-- forwards the SAME string it wrote into the header as MOTOKO_JOURNAL_WORKDIR, read
+-- here AMBIENTLY on `resume_count_env`'s pattern (§0.8: `rpc.ail` is outside the
+-- traced surface, and this is not a `ports.env_get`). Without it — a hand-run
+-- child — the flag itself is the invocation's workdir, which is the honest fallback.
+--
+-- NOT MOTOKO_WORKDIR: five extensions read that with "." as the default and check
+-- the directories they derive from it against the relative `--workdir`, so an
+-- absolute value there refused every herdr `Delegate` (845239c, fixed after).
+func invoked_workdir(cwd: string) -> string ! {Env} {
+  match getEnv("MOTOKO_JOURNAL_WORKDIR") {
+    Ok(raw) => if trim(raw) != "" then trim(raw) else cwd,
+    Err(_) => cwd
+  }
+}
+
+-- A refused resume says which rule and why on the wire, then exits 3 — the
+-- lease's refusal code on the host, for the same kind of answer: this session
+-- cannot be continued by this process. The TUI renders it and marks the session.
+func refuse_resume(path: string, r: Refusal) -> () ! {IO} {
+  let _ = emit(encode(jo([
+    kv("type", js("session_resume_refused")),
+    kv("journal", js(path)),
+    kv("refusal", js(refusal_id(r))),
+    kv("message", js(refusal_message(r)))
+  ])));
+  exit(3)
+}
+
+-- D6's order, steps 2–5 (step 1, the lease, is the host's and happened before
+-- this process existed):
+--
+--   2. read the journal with the AMBIENT `readFile` — the pre-driver read the
+--      system prompt file already uses (§0.8: not a helped leaf, not scanned, and
+--      the child writes nothing) — and fold it from its leaf; refuse on `Refusal`;
+--   3. the runtime for the invoked profile is `ext_runtime`, already built by the
+--      caller; its `ext_set_digest` is from the registry;
+--   4. the budget plan and the system prompt from `header.boot.task`, and the
+--      model from `--model` else the folded one;
+--   5. `plan_resume` applies the compatibility rows and the head/boundary rules,
+--      and `run_v2_resume_with_conversation` emits `SessionResumed` and enters the
+--      loop.
+func resume_from_journal(cfg: RuntimeConfig, inv: InvocationConfig, ext_runtime: ExtRuntime, raw_system: string, cwd: string, env_url: string, hybrid_enabled: bool) -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let path = inv.resume;
+  if not fileExists(path) then refuse_resume(path, Header)
+  else match parse_journal_text(readFile(path)) {
+    Err(r) => refuse_resume(path, r),
+    Ok(entries) => {
+      let leaf = journal_leaf(entries);
+      match fold_journal(entries, leaf) {
+        Err(r) => refuse_resume(path, r),
+        Ok(s) => {
+          let task = s.header.boot.task;
+          let run_model = if inv.model_override != "" then inv.model_override else s.model;
+          let settings = run_settings_for(cfg, task, inv.ailang_built, cwd);
+          let budget = compute_budget_plan(ext_runtime, task, run_model, cwd, hybrid_enabled, 0, settings);
+          let system_msg = build_system_msg(ext_runtime, raw_system, task, run_model, cwd, hybrid_enabled, budget, env_url);
+          let system_message = match msgs_to_messages([system_msg]) { m :: _ => m, [] => { role: "system", content: "", tool_calls: [], tool_call_id: "", images: [] } };
+          let resume_count = resume_count_env();
+          let invocation: ResumeInvocation = {
+            workdir: invoked_workdir(cwd),
+            ext_set_digest: ext_set_digest(ext_runtime),
+            profile: cfg.profile,
+            system: system_message,
+            boot: {
+              task: task,
+              env_url: env_url,
+              hybrid_tools: hybrid_enabled,
+              budget: budget,
+              step_budget: budget.total,
+              ohmy_pi: settings.ohmy_pi,
+              max_cost_millicents: settings.max_cost_millicents,
+              cost_rates: settings.cost_rates
+            },
+            model: run_model,
+            resume_count: resume_count,
+            from_id: leaf,
+            -- The lease is the host's (D3): a child spawned with `--resume` exists
+            -- only because its host already holds it.
+            leased: false,
+            force: inv.resume_force
+          };
+          match plan_resume(s, invocation) {
+            Err(r) => refuse_resume(path, r),
+            Ok(plan) =>
+              run_v2_resume_with_conversation(ext_runtime, env_url, hybrid_enabled, budget, plan, cwd, budget.total, settings.ohmy_pi, settings.max_cost_millicents, settings.cost_rates, LiveAI, cfg.profile, resume_count)
+          }
+        }
+      }
+    }
+  }
+}
+
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let cfg = load_runtime_config();
   let inv = load_invocation_config();
   run_with_config(cfg, inv)

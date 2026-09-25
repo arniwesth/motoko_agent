@@ -1,0 +1,40 @@
+module sunholo/motoko_ext_a2a/register
+
+import std/env (getEnvOr)
+import std/json (Json)
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtRegistration, DescribeTools, ToolProvider,
+  ProviderCtx, ToolCallEnvelope, ToolHandleOutcome, ToolSchema
+)
+import pkg/sunholo/motoko_ext_a2a/config (read_a2a_config, parse_a2a_json, a2a_config_json)
+import pkg/sunholo/motoko_ext_a2a/a2a (collect_schemas, collect_tool_names, a2a_decide)
+
+-- ABI 8.0 (031 ADR-001 D2): every payload a named top-level function bound
+-- directly, in this module (an imported one charges its row to
+-- `register_with_config` on the pin -- 031 P1.2c `import_leak_probe/`). The
+-- agents read at registration reach both through `ext_config`, never by capture.
+
+-- The catalog is a function of the configuration: one `delegate_to_<name>`
+-- schema per configured agent, none for `{}`.
+func a2a_describe_tools(cfg: Json) -> [ToolSchema] {
+  collect_schemas(parse_a2a_json(cfg).agents)
+}
+
+func a2a_tool_handle(ctx: ProviderCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  { decision: a2a_decide(parse_a2a_json(ctx.ext_config).agents, call), next_state: ctx.world }
+}
+
+-- The profile directory's VALUE locates `a2a.json` and is not disclosed; the
+-- agent list read from it is, encoded once and shared by both payloads.
+export func register_with_config(_cfg: a) -> ExtRegistration ! {Env, FS} {
+  let profile_dir = getEnvOr("MOTOKO_PROFILE_DIR", ".");
+  let cfg = read_a2a_config(profile_dir);
+  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
+  {
+    config: a2a_config_json(cfg),
+    caps: [
+      DescribeTools(a2a_describe_tools),
+      ToolProvider(collect_tool_names(cfg.agents), a2a_tool_handle)
+    ]
+  }
+}

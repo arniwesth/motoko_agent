@@ -1,0 +1,116 @@
+-- ============================================================================
+-- fold_live_journal.ail — PLAN-003 P3 Part 4's LIVE GATE.
+--
+-- "A live run leaves a journal whose entries the core's `fold_journal` accepts."
+-- The host's writer is TypeScript and the fold is AILANG, so nothing in either
+-- language's test suite can make that claim: the host's tests assert the SHAPE
+-- it writes and `journal.ail`'s tests assert what the fold accepts, and the two
+-- sets of assertions were written by the same hand from the same document. The
+-- only check that is not that is a real file, written by the real host from a
+-- real run, handed to the real fold.
+--
+-- So this reads `.motoko/sessions/<id>/journal.jsonl` with the SAME ambient
+-- `readFile` that PLAN-003 §0.8 reserves for the resume path — outside the
+-- traced surface, not a helped leaf, not scanned — folds it from its last
+-- entry, and prints what it got or which refusal it hit.
+--
+--   ailang run --caps IO,FS --entry main scripts/fold_live_journal.ail -- <path>
+--
+-- P3 Part 5 replaces the argument parsing here with `--resume`; the fold call
+-- is the same call.
+-- ============================================================================
+
+module scripts/fold_live_journal
+
+import std/io (println)
+import std/fs (readFile, fileExists)
+import std/json (Json, decode, getString)
+import std/list (length as list_length)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/string (trim)
+import std/ai (Message)
+import src/core/journal (
+  fold_journal, journal_leaf, refusal_id, refusal_message,
+  boundary_id, SessionState
+)
+import std/env (getArgs)
+
+-- One JSON value per line; a blank line is skipped and an undecodable one is
+-- FATAL rather than skipped. A fold that quietly dropped a line it could not
+-- read would fold a prefix of the session and report it as the session.
+func parse_lines(ls: [string], acc: [Json], bad: int) -> { entries: [Json], bad: int } {
+  match ls {
+    [] => { entries: acc, bad: bad },
+    l :: rest =>
+      if trim(l) == "" then parse_lines(rest, acc, bad)
+      else match decode(l) {
+        Err(_) => parse_lines(rest, acc, bad + 1),
+        Ok(j) => parse_lines(rest, acc ++ [j], bad)
+      }
+  }
+}
+
+func split_lines(s: string) -> [string] { split_at_newline(s, "", []) }
+
+func split_at_newline(s: string, cur: string, acc: [string]) -> [string] {
+  if _str_len(s) == 0 then acc ++ [cur]
+  else {
+    let c = _str_slice(s, 0, 1);
+    let rest = _str_slice(s, 1, _str_len(s));
+    if c == "\n" then split_at_newline(rest, "", acc ++ [cur])
+    else split_at_newline(rest, "${cur}${c}", acc)
+  }
+}
+
+func describe(st: SessionState) -> () ! {IO} {
+  let _ = println("ACCEPTED");
+  let _ = println("  session_id           ${st.header.session_id}");
+  let _ = println("  profile              ${st.header.profile}");
+  let _ = println("  model                ${st.model}");
+  let _ = println("  workdir              ${st.header.workdir}");
+  let _ = println("  system_prefix_digest ${st.header.system_prefix_digest}");
+  let _ = println("  ext_set_digest       ${st.header.ext_set_digest}");
+  let _ = println("  boot.task            ${st.header.boot.task}");
+  let _ = println("  boot.step_budget     ${show(st.header.boot.step_budget)}");
+  let _ = println("  history              ${show(list_length(st.history))} messages");
+  let _ = println("  dangling             ${show(list_length(st.dangling))} tool call(s)");
+  let _ = println("  provider_calls       ${show(st.cumulative.provider_calls_started)} started / ${show(st.cumulative.provider_calls_completed)} completed");
+  let _ = println("  last                 ${boundary_id(st.last)}");
+  ()
+}
+
+func last_arg(xs: [string]) -> [string] {
+  match xs {
+    [] => [],
+    x :: [] => [x],
+    _ :: rest => last_arg(rest)
+  }
+}
+
+export func main() -> () ! {IO, FS, Env} {
+  -- The runtime passes everything after `--` through `getArgs`. The journal path
+  -- is the last argument, so the match takes the tail rather than the head.
+  let args = last_arg(getArgs());
+  match args {
+    [] => println("usage: ailang run --caps IO,FS --entry main scripts/fold_live_journal.ail -- <journal.jsonl>"),
+    p :: _ =>
+      if not fileExists(p) then println("REFUSED  no such journal: ${p}")
+      else {
+        let raw = readFile(p);
+        let parsed = parse_lines(split_lines(raw), [], 0);
+        let n = list_length(parsed.entries);
+        let _ = println("journal ${p}");
+        let _ = println("  ${show(n)} entr(ies), ${show(parsed.bad)} undecodable line(s)");
+        if parsed.bad > 0 then println("REFUSED  the file has lines that are not JSON")
+        else {
+          let leaf = journal_leaf(parsed.entries);
+          let _ = println("  leaf                 ${leaf}");
+          match fold_journal(parsed.entries, leaf) {
+            Err(r) => println("REFUSED  ${refusal_id(r)}: ${refusal_message(r)}"),
+            Ok(st) => describe(st)
+          }
+        }
+      }
+  }
+}

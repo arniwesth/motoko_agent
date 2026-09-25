@@ -1,0 +1,61 @@
+-- PROPERTY 1's POSITIVE HALF.  `ctx.ports.ai_step(...)` is what criterion 2
+-- ADMITS.  A classifier that rejected it could never clear the one extension in
+-- the tree that actually mediates, which would make the whole instrument
+-- vacuous in the direction that matters.  Must resolve CLEAN.
+-- B8: the port call sits in the `Compactor` atom of an eight-atom list.
+-- P1.7r (031 ADR-001 D2): MIGRATED onto the 8.0 head -- eight NAMED payloads,
+-- each on its row's view; the port call is `AiPorts.ai_step` on the
+-- Compactor's `AiCtx`, the only port that view carries.
+module fixture/control_ext_ports_call
+
+import std/json (Json, jo)
+import std/option (None)
+import pkg/sunholo/motoko_ext_abi/types (
+  PureCtx, AiCtx, ProcessCtx, ProviderCtx, InterceptCtx, ExtRegistration,
+  DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge,
+  Msg, ToolSchema, PromptPatch, BudgetPlan, BudgetPatch, ToolCallEnvelope, ToolPolicyDecision,
+  PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome,
+  PassThrough, NoOpinion, Delegate, NoIntercept, NoDecision
+)
+
+func describe(_cfg: Json) -> [ToolSchema] { [] }
+
+func shape(_ctx: PureCtx) -> PromptPatch {
+  { prepend: [], append: [] }
+}
+
+func budget(_ctx: PureCtx, _plan: BudgetPlan) -> BudgetPatch {
+  { requested_total: None, requested_solver: None, requested_verifier: None }
+}
+
+func compact(ctx: AiCtx, msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} {
+  let stepped = ctx.ports.ai_step(ctx.world, ctx.model, msgs);
+  { decision: PassThrough, next_state: stepped.next_state }
+}
+
+func policy(_ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { NoOpinion }
+
+func handle(ctx: ProviderCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  { decision: Delegate, next_state: ctx.world }
+}
+
+func intercept(ctx: InterceptCtx, _response: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
+  { decision: NoIntercept, next_state: ctx.world }
+}
+
+func judge(ctx: ProcessCtx, _candidate: string) -> FinalizeOutcome ! {Process} {
+  { decision: NoDecision, next_state: ctx.world }
+}
+
+export func register_with_config(_cfg: a) -> ExtRegistration {
+  { config: jo([]), caps: [
+    DescribeTools(describe),
+    PromptShaper(shape),
+    BudgetShaper(budget),
+    Compactor(compact),
+    ToolPolicy(policy),
+    ToolProvider([], handle),
+    ResponseInterceptor(intercept),
+    SolverJudge(judge)
+  ] }
+}

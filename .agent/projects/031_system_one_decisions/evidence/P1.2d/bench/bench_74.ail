@@ -1,0 +1,169 @@
+-- P1.2d measurement, BEFORE (ABI 7.4, the packages as of 181051d0): compose's
+-- ResponseInterceptor and herdr's PromptShaper, invoked as the 7.4 host did -- the
+-- registered closure on the full ExtCtx, its registration values captured. Same
+-- inputs, same repetitions as bench_80.ail. Prints `SAMPLE <case> <elapsed_ms> <calls>`.
+module local/p12dbench/bench_74
+
+import std/clock (now)
+import std/io (println)
+import std/json (Json, jo, ja)
+import std/result (Err)
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtWorld, ExtPorts, Msg, AiStepOutcome, ExtProcOutcome, ExtFileRead, ExtFileMutation, ExtPathStat,
+  ExtDirListing, ExtClockReading, ExtPathMissing, empty_ext_world,
+  Capability, ResponseInterceptor, PromptShaper, ExtCtx,
+  ResponseInterceptOutcome, PromptPatch, NoIntercept
+)
+import pkg/sunholo/motoko_ext_compose/types (ComposeHostConfig)
+import pkg/sunholo/motoko_ext_compose/compose as Compose (register_with_config, on_response_intercept)
+import pkg/sunholo/motoko_ext_herdr/herdr (HerdrConfig, make_hooks_with)
+import pkg/sunholo/motoko_ext_herdr/orchestrator (OrchestratorMode, orchestrator_off, default_guarded, prompt_patch)
+
+-- ---- shared by bench_74 and bench_80 (identical text) ----------------------
+func noop_ai_step(world: ExtWorld, _m: string, _msgs: [Msg]) -> AiStepOutcome ! {AI, IO, Trace} {
+  { result: Err("bench: no model"), next_state: world }
+}
+func noop_tool_handle(world: ExtWorld, _t: string, _a: string) -> ExtProcOutcome ! {IO, Process, FS} {
+  { output: "", exit_code: -1, next_state: world }
+}
+func noop_file_read(world: ExtWorld, _p: string) -> ExtFileRead ! {FS} { { present: false, content: "", next_state: world } }
+func noop_mut(world: ExtWorld, _p: string) -> ExtFileMutation ! {FS} { { ok: false, error: "bench", next_state: world } }
+func noop_write(world: ExtWorld, _p: string, _c: string) -> ExtFileMutation ! {FS} { { ok: false, error: "bench", next_state: world } }
+func noop_stat(world: ExtWorld, _p: string) -> ExtPathStat ! {FS} { { kind: ExtPathMissing, next_state: world } }
+func noop_list(world: ExtWorld, _p: string) -> ExtDirListing ! {FS} { { present: false, entries: [], next_state: world } }
+func noop_clock(world: ExtWorld) -> ExtClockReading ! {Clock} { { now_ms: 0, next_state: world } }
+func noop_env(_k: string, fallback: string) -> string ! {Env} { fallback }
+
+func bench_ports() -> ExtPorts {
+  { ai_step: noop_ai_step, tool_handle: noop_tool_handle, file_read: noop_file_read, file_write: noop_write,
+    file_remove: noop_mut, path_stat: noop_stat, dir_list: noop_list, dir_make: noop_mut,
+    clock_now: noop_clock, env_get: noop_env }
+}
+
+-- Synthetic registration values only (PLAN-001 §0 item 9).
+func compose_cfg(mode: string) -> ComposeHostConfig {
+  { compose: { mode: mode, subagent_model: "bench-model", max_attempts: 3, effect_guard: "1",
+               certificate_template: false,
+               authoring: { structured: true, author_tools: false, author_tools_budget: 25,
+                            author_tools_max_bytes: 16384, author_tools_max_turns: 24,
+                            author_tools_deny_globs: [".env*", "secrets/**"], authoring_budget: 40,
+                            fallback_after: 3, min_observed_chars: 180, stdout_max_bytes: 4000 },
+               claimcheck: { enabled: true, informalizer_model: "", comparator_model: "", timeout_ms: 30000,
+                             max_invocations: 10, stdout_max_bytes: 4000, ledger_in_informalizer: true } },
+    snippet_caps: ["IO", "FS", "Process"] }
+}
+
+func herdr_cfg() -> HerdrConfig {
+  { bin: "/opt/bench/bin/herdr", own_pane: "w1:p1", work_dir: "/w/.motoko/herdr-delegates", kind: "",
+    allowed_kinds: "claude,codex,motoko", depth: 0, max_depth: 1, motoko_script: "./scripts/run-agent.sh",
+    session_ms: "1756000000000", sweep_stale: false, dagr_dir: "/w/.dagr", dagr_pane: false,
+    start_timeout_ms: 20000, check_wait_ms: 45000, max_output_chars: 16000,
+    reap_on_exit: false, settle_on_exit: true, sweep_settle: false, dagr_bin: "dagr", dagr_plan: "" }
+}
+
+func orch_two() -> OrchestratorMode {
+  { on: true, run_paths: [".dagr/run-plan001.json", ".dagr/run-plan003.json"], pane: "w1:p1",
+    max_in_flight: 1, guarded: default_guarded() }
+}
+
+-- ~2 KB of model prose with no ```ailang fence: the inline path scans it and declines.
+pure func prose_rep(n: int, acc: string) -> string {
+  if n == 0 then acc else prose_rep(n - 1, "${acc}The delegate finished the task and reported its commit; nothing here is code. ")
+}
+func no_fence_text() -> string { prose_rep(24, "") }
+func fenced_text() -> string { "here is code\n```ailang\nexport func main() -> () ! {IO} { () }\n```\n" }
+
+pure func k() -> int { 400 }
+pure func samples_n() -> int { 15 }
+-- ---------------------------------------------------------------------------
+
+func bench_ctx() -> ExtCtx {
+  { task: "bench", step: 1, model: "bench-model", cwd: ".", hybrid_tools: false,
+    budget: { total: 10, solver: 6, verifier: 4 }, mode: "v2", workdir: ".", env_server_url: "",
+    budget_remaining: 10, history_slice: [], state_key: "bench", context_limit: 0, finish_reason: "",
+    work_in_flight: [], open_waits: ja([]), ports: bench_ports(), artifacts: jo([]),
+    telemetry: { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 },
+    world: empty_ext_world() }
+}
+
+func no_interceptor(ctx: ExtCtx, _t: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
+  { decision: NoIntercept, next_state: ctx.world }
+}
+
+func no_shaper(_ctx: ExtCtx) -> PromptPatch { { prepend: [], append: [] } }
+
+-- BODY ONLY (no registration values to read): the unchanged hook bodies with the
+-- values passed in, as the 7.4 closures did. The difference between a case and its
+-- body-only twin in the same version is what the payload adds around the body.
+func body_intercept(ctx: ExtCtx, t: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
+  Compose.on_response_intercept(ctx, t, "subagent", "IO,FS,Process")
+}
+
+func body_prompt(_ctx: ExtCtx) -> PromptPatch { prompt_patch(orch_two()) }
+
+func interceptor_of(caps: [Capability]) -> (ExtCtx, string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
+  match caps {
+    ResponseInterceptor(f) :: _ => f,
+    _ :: rest => interceptor_of(rest),
+    [] => no_interceptor
+  }
+}
+
+func shaper_of(caps: [Capability]) -> (ExtCtx) -> PromptPatch {
+  match caps {
+    PromptShaper(f) :: _ => f,
+    _ :: rest => shaper_of(rest),
+    [] => no_shaper
+  }
+}
+
+func run_i(f: (ExtCtx, string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}, ctx: ExtCtx, t: string, n: int, acc: int) -> int ! {IO, Process, FS, Clock} {
+  if n == 0 then acc else {
+    let o = f(ctx, t);
+    run_i(f, ctx, t, n - 1, acc + (match o.decision { NoIntercept => 0, _ => 1 }))
+  }
+}
+
+func run_p(f: (ExtCtx) -> PromptPatch, ctx: ExtCtx, n: int, acc: int) -> int {
+  if n == 0 then acc else {
+    let p = f(ctx);
+    run_p(f, ctx, n - 1, acc + (match p.append { [] => 0, _ => 1 }))
+  }
+}
+
+func sample_i(label: string, s: int, f: (ExtCtx, string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}, ctx: ExtCtx, t: string) -> () ! {IO, Process, FS, Clock} {
+  if s == 0 then () else {
+    let t0 = now();
+    let hits = run_i(f, ctx, t, k(), 0);
+    let t1 = now();
+    let _ = println("SAMPLE ${label} ${show(t1 - t0)} ${show(k())} hits=${show(hits)}");
+    sample_i(label, s - 1, f, ctx, t)
+  }
+}
+
+func sample_p(label: string, s: int, f: (ExtCtx) -> PromptPatch, ctx: ExtCtx) -> () ! {IO, Clock} {
+  if s == 0 then () else {
+    let t0 = now();
+    let hits = run_p(f, ctx, k(), 0);
+    let t1 = now();
+    let _ = println("SAMPLE ${label} ${show(t1 - t0)} ${show(k())} hits=${show(hits)}");
+    sample_p(label, s - 1, f, ctx)
+  }
+}
+
+func icase(label: string, mode: string, t: string) -> () ! {IO, Process, FS, Clock, Env, AI, Rand} {
+  sample_i(label, samples_n(), interceptor_of(Compose.register_with_config(compose_cfg(mode))), bench_ctx(), t)
+}
+
+func pcase(label: string, orch: OrchestratorMode) -> () ! {IO, Process, FS, Clock} {
+  sample_p(label, samples_n(), shaper_of(make_hooks_with(herdr_cfg(), ["Delegate", "DelegateCheck"], orch)), bench_ctx())
+}
+
+export func main() -> () ! {IO, Process, FS, Clock, Env, AI, Rand} {
+  let _ = sample_i("compose_intercept_body_only_subagent", samples_n(), body_intercept, bench_ctx(), fenced_text());
+  let _ = sample_p("herdr_prompt_body_only_on2", samples_n(), body_prompt, bench_ctx());
+  let _ = icase("compose_intercept_default_subagent", "subagent", fenced_text());
+  let _ = icase("compose_intercept_inline_nofence", "inline", no_fence_text());
+  let _ = pcase("herdr_prompt_off", orchestrator_off());
+  pcase("herdr_prompt_on2", orch_two())
+}

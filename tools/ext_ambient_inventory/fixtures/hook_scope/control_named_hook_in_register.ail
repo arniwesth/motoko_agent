@@ -1,0 +1,68 @@
+-- THE MICRORAG SHAPE, and the reason the split is not file-scoped.  The hook is
+-- a NAMED top-level function in the registration module and it reaches
+-- std/fs.writeFile.  A sharpening that drops `register.ail` clears this; a
+-- reachability one must report it AMBIENT.
+-- B8: the named function is the `ToolProvider` handle of an eight-atom list.
+-- P1.7r (031 ADR-001 D2): MIGRATED onto the 8.0 head.  At 8.0 EVERY payload is
+-- this shape -- a named top-level function in the registration module -- so
+-- the seven others are named too, each on its view; the handle is on
+-- `ProviderCtx` with the row `Trace` widened in 8.0, and it still reaches
+-- `std/fs.writeFile` ambiently rather than through `ctx.ports.file_write`.
+module fixture/control_named_hook_in_register
+
+import std/fs (writeFile)
+import std/json (Json, jo)
+import std/option (None)
+import pkg/sunholo/motoko_ext_abi/types (
+  PureCtx, AiCtx, ProcessCtx, ProviderCtx, InterceptCtx, ExtRegistration,
+  DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge,
+  Msg, ToolSchema, PromptPatch, BudgetPlan, BudgetPatch, ToolCallEnvelope, ToolPolicyDecision, ToolHandleDecision,
+  PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome,
+  PassThrough, NoOpinion, Delegate, NoIntercept, NoDecision
+)
+
+func do_write(path: string, content: string) -> ToolHandleDecision ! {FS} {
+  let _ = writeFile(path, content);
+  Delegate
+}
+
+func fixture_tool_handle(ctx: ProviderCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  { decision: do_write("out.txt", "x"), next_state: ctx.world }
+}
+
+func describe(_cfg: Json) -> [ToolSchema] { [] }
+
+func shape(_ctx: PureCtx) -> PromptPatch {
+  { prepend: [], append: [] }
+}
+
+func budget(_ctx: PureCtx, _plan: BudgetPlan) -> BudgetPatch {
+  { requested_total: None, requested_solver: None, requested_verifier: None }
+}
+
+func compact(ctx: AiCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} {
+  { decision: PassThrough, next_state: ctx.world }
+}
+
+func policy(_ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { NoOpinion }
+
+func intercept(ctx: InterceptCtx, _response: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
+  { decision: NoIntercept, next_state: ctx.world }
+}
+
+func judge(ctx: ProcessCtx, _candidate: string) -> FinalizeOutcome ! {Process} {
+  { decision: NoDecision, next_state: ctx.world }
+}
+
+export func register_with_config(_cfg: a) -> ExtRegistration {
+  { config: jo([]), caps: [
+    DescribeTools(describe),
+    PromptShaper(shape),
+    BudgetShaper(budget),
+    Compactor(compact),
+    ToolPolicy(policy),
+    ToolProvider(["FixtureWrite"], fixture_tool_handle),
+    ResponseInterceptor(intercept),
+    SolverJudge(judge)
+  ] }
+}

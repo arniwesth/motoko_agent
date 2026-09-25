@@ -1,0 +1,216 @@
+  ✓ src/core/dst_profile_coverage.ail capability_purity_basis: carries a contract
+  ✓ src/core/dst_profile_coverage.ail test_all_capability_kinds_is_twelve_distinct: excuse checked -- SKIPPED — "calls "all_capability_kinds" whose signature uses an
+      verifier: Reason: Function "test_all_capability_kinds_is_twelve_distinct" calls "all_capability_kinds" whose signature uses an unencodable type "()"
+  ✓ src/core/dst_profile_coverage.ail test_dispatch_kinds_split_ten_one_one: excuse checked -- SKIPPED — "calls "all_capability_kinds" whose signature uses an
+      verifier: Reason: Function "test_dispatch_kinds_split_ten_one_one" calls "all_capability_kinds" whose signature uses an unencodable type "()"
+  ✓ src/core/dst_profile_coverage.ail count_purity: excuse checked -- BLOCKED — RECURSIVE over the kind list. `result >= 0 && result <=
+      verifier: encoding error: unrolling recursive function: encoding unrolled body at depth 1: match pattern: unsupported pattern type *core.ListPattern in SMT encoding
+  ✓ src/core/dst_profile_coverage.ail purity_name: carries a contract
+  ✓ src/core/ext/ctx_defaults.ail empty_tool_evidence: excuse checked -- BLOCKED — the empty list literal mis-sorts in the SMT encoding. A
+      verifier: ! ERROR empty_tool_evidence
+  ✓ src/core/ext/registry_normalize.ail vote_family: excuse checked -- SKIPPED — the fragment cannot declare `Capability`'s sorts: "sort
+      verifier: Reason: SMT declaration closure could not resolve a required sort (unresolvable SMT declaration types: sort "Record_key_value" referenced in declaration of "Json" is not declared)
+  ✓ src/core/ext/registry_normalize.ail capability_data: excuse checked -- SKIPPED — builds `Json`: "calls user function "js" that is not
+      verifier: Reason: SMT declaration closure could not resolve a required sort (cannot encode function body: let value: let body: let value: unresolvable SMT declaration types: calls user function "js" that is not SMT-encodable in this context)
+  ✓ src/core/ext/registry_normalize.ail strings_json: excuse checked -- BLOCKED — RECURSIVE over the name list. `length(result) == length(xs)`
+      verifier: encoding error: unrolling recursive function: encoding unrolled body at depth 1: match pattern: unsupported pattern type *core.ListPattern in SMT encoding
+  ✓ src/core/ext/registry_normalize.ail atoms_data: excuse checked -- BLOCKED — RECURSIVE; see `strings_json`. `length(result) ==
+      verifier: encoding error: unrolling recursive function: encoding unrolled body at depth 1: match pattern: unsupported pattern type *core.ListPattern in SMT encoding
+  ✓ src/core/ext/registry_normalize.ail config_digest_material: excuse checked -- SKIPPED — builds `Json`: "calls user function "kv" that is not
+      verifier: Reason: SMT declaration closure could not resolve a required sort (cannot encode function body: let value: unresolvable SMT declaration types: calls user function "kv" that is not SMT-encodable in this context)
+  ✓ src/core/ext/registry_normalize.ail compare_bytes: excuse checked -- SKIPPED — uses an unencodable builtin: std/string.charAt. Tried as
+      verifier: Reason: Function "compare_bytes" uses an unencodable builtin: std/string.charAt
+  ✓ src/core/ext/registry_normalize.ail insert_kv: excuse checked -- BLOCKED — RECURSIVE over the sorted list. `length(result) ==
+      verifier: encoding error: unrolling recursive function: encoding unrolled body at depth 1: match pattern: unsupported pattern type *core.ListPattern in SMT encoding
+  ✓ src/core/ext/registry_normalize.ail sort_kvs: excuse checked -- BLOCKED — RECURSIVE; see `insert_kv`. `length(result) == length(kvs)`
+      verifier: encoding error: unrolling recursive function: encoding unrolled body at depth 1: match pattern: unsupported pattern type *core.ListPattern in SMT encoding
+  ✓ src/core/ext/registry_normalize.ail canonical_kvs: excuse checked -- BLOCKED — MUTUALLY RECURSIVE with `canonical`: "circular function call
+      verifier: encoding error: resolving cross-function calls: circular function call detected: canonical_list → canonical → canonical_list
+  ✓ src/core/ext/registry_normalize.ail canonical_list: excuse checked -- BLOCKED — MUTUALLY RECURSIVE; the verifier names the other arc of the
+      verifier: encoding error: resolving cross-function calls: circular function call detected: canonical → canonical_kvs → canonical
+  ✓ src/core/ext/registry_normalize.ail canonical: excuse checked -- SKIPPED — "calls user function "canonical_kvs" that is not
+      verifier: Reason: SMT declaration closure could not resolve a required sort (cannot encode function body: match body: let value: unresolvable SMT declaration types: calls user function "canonical_kvs" that is not SMT-encodable in this context)
+  ✓ src/core/ext/registry_normalize.ail canonical_json: excuse checked -- BLOCKED — the `canonical` cycle again: "circular function call
+      verifier: encoding error: resolving cross-function calls: circular function call detected: canonical → canonical_kvs → canonical
+  ✓ src/core/ext/registry_normalize.ail ext_config_digest: excuse checked -- SKIPPED — uses an unencodable builtin: show, from the `"sha256:${...}"`
+      verifier: Reason: Function "ext_config_digest" uses an unencodable builtin: show
+  ✓ src/core/ext/registry_normalize.ail ext_config_digests: excuse checked -- BLOCKED — RECURSIVE, and through `ext_config_digest` it inherits the
+      verifier: encoding error: resolving cross-function calls: circular function call detected: ext_config_digest → canonical_json → canonical → canonical_kvs → canonical
+  ✓ src/core/ext/runtime.ail entry_base: excuse checked -- SKIPPED — "calls user function "pure_ctx_of" that is not SMT-encodable
+      verifier: Reason: SMT declaration closure could not resolve a required sort (cannot encode function body: let body: let value: unresolvable SMT declaration types: calls user function "pure_ctx_of" that is not SMT-encodable in this context)
+  ✓ src/core/ext/runtime.ail stub_usage: carries a contract
+  ✓ src/core/ext/runtime.ail stub_decision_answer: excuse checked -- SKIPPED — "calls "stub_usage" whose signature uses an unencodable type
+      verifier: Reason: Function "stub_decision_answer" calls "stub_usage" whose signature uses an unencodable type "()"
+  ✓ src/core/ext/runtime.ail site_label: carries a contract
+  ✓ src/core/ext/runtime.ail decision_invocation_state: excuse checked -- SKIPPED — uses an unencodable builtin: show, from the `invocation_id`
+      verifier: Reason: Function "decision_invocation_state" uses an unencodable builtin: show
+  ✓ src/core/ext/runtime.ail decision_view: excuse checked -- SKIPPED — "calls user function "decision_invocation_state" that is not
+      verifier: Reason: SMT declaration closure could not resolve a required sort (cannot encode function body: let value: unresolvable SMT declaration types: calls user function "decision_invocation_state" that is not SMT-encodable in this context)
+new_contract_policy: 83 of 109 new declarations unjustified
+  ✗ src/core/dst_profile_coverage.ail test_purity_basis_split_six_four_two: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/dst_profile_coverage.ail test_decision_kinds_round_trip_and_are_not_excludable: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/registry_normalize.ail p_judge: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/registry_normalize.ail p_desc: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/registry_normalize.ail p_prepare_judge: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/registry_normalize.ail p_interpret_judge: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/registry_normalize.ail p_prepare_tool: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/registry_normalize.ail p_interpret_tool: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/registry_normalize.ail no_cfg: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/registry_normalize.ail test_legacy_and_new_finalize_votes_in_one_family_are_rejected: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/registry_normalize.ail test_legacy_and_new_tool_policy_votes_in_one_family_are_rejected: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/registry_normalize.ail test_one_finalize_and_one_tool_policy_atom_coexist: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/registry_normalize.ail test_kind_name_covers_the_decision_variants: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/registry_normalize.ail test_config_is_carried_unchanged_onto_the_entry: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/registry_normalize.ail p_work: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/registry_normalize.ail digest_of: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/registry_normalize.ail data_caps: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/registry_normalize.ail test_config_digest_covers_config: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/registry_normalize.ail test_config_digest_sees_tool_provider_names: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/registry_normalize.ail test_config_digest_sees_exit_intent_label: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/registry_normalize.ail test_config_digest_sees_exit_intent_enabled: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/registry_normalize.ail test_config_digest_sees_work_in_flight_label: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/registry_normalize.ail p_shape2: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/registry_normalize.ail test_config_digest_ignores_callbacks_and_is_canonical: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail cfg_tag: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail tagged: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail stamp_rt: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail published_tmp: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail neutral_descriptor: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail neutral_prepare: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail neutral_interpret: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail probe_request: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail probe_descriptor: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail observation_tag: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail querying_tool_prepare: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail querying_judge_prepare: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail tagging_tool_interpret: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail tagging_judge_interpret: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail never_tool_interpret: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail never_judge_interpret: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail allow_now: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail pending_now: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail deny_now: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail accept_now: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail continue_now: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail tool_query_entry: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail tool_immediate_entry: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail judge_query_entry: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail judge_immediate_entry: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail legacy_policy_entry: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail legacy_judge_entry: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail probe_call: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail tool_votes_tags: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail judge_votes_tags: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail tool_tag: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail judge_tag: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail verification_tag: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail window_tag: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail mode_tag: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail state_tag: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail evidence_tag: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail truthful_default_tag: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail foreign_state: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail evidence_shaper: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail evidence_policy: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail descriptor_a: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail descriptor_b: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail expected_a: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail expected_b: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail state_judge_now: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail state_judge_ask: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail state_judge_interpret: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail state_tool_now: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail state_tool_ask: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/ext/runtime.ail state_tool_interpret: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/test/ext_neutral_registration.ail neutral_rt: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/test/ext_neutral_registration.ail neutral_probe_call: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/test/ext_neutral_registration.ail tool_tag: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/test/ext_neutral_registration.ail judge_tag: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/tool_catalog.ail configured_catalog: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/tool_catalog.ail catalog_rt: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/tool_catalog.ail last_name: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+  ✗ src/core/tool_catalog.ail test_describe_tools_receives_the_entry_config: new `pure func` with neither a contract nor a
+      `-- contracts: ...` line saying what blocks one (ADR-001 §4).
+make: *** [Makefile:2920: new_contract_policy] Error 1

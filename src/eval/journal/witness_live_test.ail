@@ -1,0 +1,475 @@
+-- src/eval/journal/witness_live_test.ail
+--
+-- PLAN-004 M11, the run-bearing half (A7, A8, the census), on real admission
+-- runs over synthetic journal worlds. A runner, as admission_live_test.ail:
+--
+--   ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace,Rand \
+--     --ai-stub --entry main src/eval/journal/witness_live_test.ail < /dev/null
+--
+-- One `PASS <check>` / `FAIL <check>` line per check; exit 1 on any failure.
+--
+--   m11_t0_suspended_clean / m11_t0_finalize_clean
+--     m3_selector_end (EndSuspended(3)) and m4_stop_call_last
+--     (EndFinalize(model_stop)) through `admit_with_evidence`: report clean
+--     with A7/A8 included; the witness (prepared calls, queue consumption,
+--     clock delta, route zeros, each env key's count with T); the bridge
+--     inputs (NoReplay, budget = 2N+1 / 2N = the DecisionRecord count, retry
+--     0, metadata = replay_metadata_of(manifest)); `evaluate` empty;
+--     family_evidence recorded unchanged, ReplayConsistency the only
+--     unevaluated family, CheckpointHistory evaluated-but-vacuous; every
+--     census count zero by name (decisions and the Finalize manifest read at
+--     their expectations).
+--   m11_witness_under_over
+--     the suspended run with one ProviderCallPrepared added (under-count) or
+--     dropped (over-count), and with a tool left in the final queue.
+--   m11_profile_missed_models_file_refused
+--     m5_config_missed_{unknown,non_positive,no_event}: the run reads
+--     MOTOKO_MODELS_FILE; admission's first finding is
+--     A7:EnvReadOverRecorded@aggregate:witness on that key (then MOTOKO_REPO).
+--   m11_fault_path_own_column
+--     the suspended world with its last step removed: call 3 fails
+--     non-retryably and the run reads MOTOKO_CAPTURE_FAILED_PAYLOAD once.
+--     The fault column balances it; the accepted column refuses it; the
+--     census counts it (capture_reads 1).
+--   m11_wrong_obligation_or_metadata
+--     the bridge built with StrictAgainst(log), with another manifest's
+--     metadata, with unknown metadata, with another epoch: each its own A8
+--     finding; StrictAgainst turns ReplayConsistency evaluated; any other
+--     unevaluated family is FamilyUnevaluated.
+--   m11_decision_budget
+--     budget N instead of 2N+1: DecisionBudgetDiffers, and `evaluate` then
+--     reports decision-budget-exceeded; retry 1: RetryBudgetNonZero; a
+--     DecisionRecord dropped from the trace: DecisionCountMismatch.
+--   m11_census_twins_live
+--     on the suspended run, one non-zero twin per census count, each moving
+--     its own count (and a decision twin the decision total too).
+--
+-- Synthetic fixtures only (§0.6).
+
+module src/eval/journal/witness_live_test
+
+import std/io (println, exit)
+import std/list as List (length, map, foldl, filter)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/string (join)
+import src/core/ports (WorldState, ScriptedTool)
+import src/core/dst_interaction (
+  Interaction, IdentityBody, ProviderIdentity, ApprovalIdentity, ExtensionEffectIdentity,
+  EnvironmentReadIdentity, FileWriteIdentity, FileRemoveIdentity, DirMakeIdentity, OutcomeOk
+)
+import src/core/phase_vocab (
+  LedgerTrace, LedgerRecord, WireRecord, DecisionRecord,
+  ProviderCallPrepared, CheckpointTaken, ExtToolHandled, ParkEntered, WakeReceived,
+  StreamErrorRetry, HybridBashExtracted, HistoryAppended, HistoryAppendedInfo
+)
+import src/core/dst_driver_only (driver_only_manifest)
+import src/core/dst_result (unknown_replay_metadata)
+import src/core/dst_execution (execution_of)
+import src/core/dst_invariants (NoReplay, StrictAgainst, family_evidence, evaluate, violation_rule)
+import src/core/dst_profile (replay_metadata_of)
+import src/core/session (TracedSessionResult)
+import src/eval/journal/reader (parse_lines)
+import src/eval/journal/stopping (JournalWorld, EndSuspended, EndFinalize)
+import src/eval/journal/world (journal_world_state, fixture_journal_world)
+import src/eval/journal/admission (
+  AdmissionFinding, Identities, Comparators, SyntheticEntry, finding_label, first_label, report_ok,
+  manifest_of, normalized_configuration, profile_scan_roots, admission_program
+)
+import src/eval/journal/admission_run (admission_run, admit_with_evidence, frame_observation, admission_findings)
+import src/eval/journal/witness (
+  CensusRow, CensusCount, ColSuspended, ColFinalize, ColFault, build_witness, check_a7, census_of,
+  census_counts, census_count, check_census, column_id, admission_column
+)
+import src/eval/journal/bridge (A8Result, admission_execution, a8_of_execution, a8_of_run, a7_of_run, check_bridge_inputs, family_findings, evaluate_findings)
+import src/eval/journal/testdata/world_fixtures (
+  WorldFixture, fxw_m3_selector_end, fxw_m4_stop_call_last,
+  fxw_m5_config_missed_unknown, fxw_m5_config_missed_non_positive, fxw_m5_config_missed_no_event
+)
+import src/eval/journal/source_checks (ordered_findings, admission_verdict, admission_label)
+import src/eval/journal/source_checks_run (run_source_findings)
+import src/eval/journal/testdata/admission_fixtures (fxa_all)
+
+func lt_report(name: string, ok: bool) -> bool ! {IO} {
+  let _ = println("${if ok then "PASS" else "FAIL"} ${name}");
+  ok
+}
+
+pure func lt_strs_eq(a: [string], b: [string]) -> bool {
+  match a {
+    [] => (match b { [] => true, _ => false }),
+    x :: xs => match b { [] => false, y :: ys => x == y && lt_strs_eq(xs, ys) }
+  }
+}
+
+pure func lt_labels(fs: [AdmissionFinding]) -> [string] { List.map(finding_label, fs) }
+
+pure func lt_details(fs: [AdmissionFinding]) -> [string] { List.map(\f. "${finding_label(f)} ${f.detail}", fs) }
+
+pure func lt_epoch() -> int { 1789000000000 }
+
+pure func lt_rederived(name: string) -> string {
+  List.foldl(\acc a. if a.name == name then a.normalized_configuration else acc, "", fxa_all())
+}
+
+pure func lt_ids(jw: JournalWorld) -> Identities {
+  let b = driver_only_manifest("", "", "", "", [], [], "");
+  {
+    source_revision: "a0a0a0", scan_root_commit: "a0a0a0", tracked_changes: [],
+    toolchain: "AILANG fx", toolchain_sha256: "sha256:fxbin", abi_version: "8.0",
+    classifier_2_set: ["env_get"], unrouted_fields: [], scan_roots: ["src", "packages"],
+    packages: [], lock_sha256: "sha256:fxlock",
+    normalized_configuration: normalized_configuration(jw),
+    profile_id: b.profile_id, profile_version: b.profile_version,
+    event_vocabulary_version: b.event_vocabulary_version,
+    profile_rules_version: b.profile_rules_version, coverage_rules_version: b.coverage_rules_version,
+    attribution_rules_version: b.attribution_rules_version, fault_catalogue_version: b.fault_catalogue_version,
+    generator_version: "a0a0a0-dev", extension_packages: []
+  }
+}
+
+pure func lt_cmp(fixture: string) -> Comparators {
+  {
+    revision_is_commit: true, assembled_tree: "t0", revision_tree: "t0",
+    lock_abi_version: "8.0", pinned_classifier_2_set: ["env_get"], pinned_unrouted_fields: [],
+    profile_scan_roots: profile_scan_roots(),
+    leaf_files: ["src/core/session.ail", "src/core/tool_phase.ail", "src/core/context_usage.ail", "src/core/test/stub_step.ail"],
+    rederived_configuration: lt_rederived(fixture), e_pin: None, registry_used: []
+  }
+}
+
+pure func lt_count_lines(rows: [CensusRow]) -> [string] {
+  List.map(\c. "${c.name}=${show(c.observed)}/${show(c.expected)}", census_counts(rows))
+}
+
+pure func lt_zero_counts(decisions: int, exit_reads: int) -> [string] {
+  ["checkpoint_decisions=0/0", "checkpoint_records=0/0", "stream_chunks=0/0",
+   "approval_reads=0/0", "approvals_consumed=0/0", "waits_opened=0/0", "parks=0/0", "wakes=0/0",
+   "extension_effects=0/0", "retries=0/0", "injected_messages=0/0", "hybrid_extractions=0/0",
+   "file_writes=0/0", "file_removes=0/0", "dir_makes=0/0",
+   "exit_manifest_reads=${show(exit_reads)}/${show(exit_reads)}", "exit_manifest_writes=0/0",
+   "capture_reads=0/0", "decisions=${show(decisions)}/${show(decisions)}"]
+}
+
+pure func lt_env_line(w: { key: string, count: int }) -> string { "${w.key}=${show(w.count)}" }
+
+func lt_t0(name: string, f: WorldFixture, calls: int, tools: int, clock: int, decisions: int, exit_reads: int) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  match fixture_journal_world(f) {
+    Err(_) => lt_report("${name} (fixture reads)", false),
+    Ok(jw) => {
+      let ev = admit_with_evidence(name, SyntheticEntry, lt_ids(jw), lt_cmp(f.name), jw, lt_epoch(), ".motoko/eval-admission-workdir");
+      let r = ev.report;
+      match (ev.witness, ev.a8) {
+        (Some(w), Some(a8)) => {
+          let x = a8.execution;
+          let fe_now = family_evidence(x);
+          let fe_same = List.length(fe_now) == 13 && List.length(a8.family_evidence) == 13
+            && lt_strs_eq(List.map(\e. "${e.family}:${if e.evaluated then "t" else "f"}:${show(e.inputs)}", fe_now),
+                          List.map(\e. "${e.family}:${if e.evaluated then "t" else "f"}:${show(e.inputs)}", a8.family_evidence));
+          let env = List.map(lt_env_line, w.expected_env_reads);
+          let want_env = ["MOTOKO_CAPTURE_FAILED_PAYLOAD=0", "MOTOKO_CONFIG=0", "MOTOKO_HEADLESS=1", "MOTOKO_MODELS_FILE=0",
+            "MOTOKO_PERSIST_RETRIES=1", "MOTOKO_PROFILE_DIR=1", "MOTOKO_REPO=0", "MOTOKO_RETRY_STREAM_ERROR=1",
+            "MOTOKO_SESSION_ID=1", "MOTOKO_TOOL_TIMEOUT_MS=${show(tools)}", "OPENAI_BASE_URL=1", "MOTOKO_EXIT_MANIFEST=${show(exit_reads)}"];
+          let _ = println("${name}: findings=[${join(";", lt_labels(r.findings))}] witness provider=${show(w.provider_calls)} tools=${show(w.tool_dispatches)} clock=${show(w.clock_delta_ms)} env=${join(",", env)}");
+          let _ = println("${name}: budget=${show(x.decision_budget)} retry=${show(x.retry_budget)} decisions=${show(census_count(a8.census, "decisions"))} unevaluated=${join(",", a8.unevaluated)} vacuous=${join(",", a8.vacuous)} evaluate=${show(List.length(evaluate(x)))}");
+          let _ = println("${name}: census ${join(" ", lt_count_lines(a8.census))}");
+          let _ = List.map(\l. println("${name}: evidence ${l}"), a8.lines);
+          lt_report(name,
+            report_ok(r) && r.calls == calls
+              && w.provider_calls == calls && w.tool_dispatches == tools && w.clock_delta_ms == clock
+              && w.approval_reads == 0 && w.approvals_consumed == 0 && w.file_writes == 0
+              && w.file_removes == 0 && w.dir_makes == 0 && w.extension_effects == 0
+              && lt_strs_eq(env, want_env)
+              && x.decision_budget == decisions && x.retry_budget == 0 && x.ambient_rng_reads == 0
+              && List.length(x.forbidden_effect_sites) == 0 && x.initial_clock_ms == lt_epoch()
+              && List.length(check_bridge_inputs(x, lt_epoch(), jw, manifest_of(lt_ids(jw)))) == 0
+              && List.length(evaluate(x)) == 0
+              && fe_same
+              && lt_strs_eq(a8.unevaluated, ["replay-consistency"])
+              && lt_strs_eq(a8.vacuous, ["checkpoint-history"])
+              && List.length(List.filter(\e. e.family == "checkpoint-history" && e.evaluated && e.inputs > 0, a8.family_evidence)) == 1
+              && lt_strs_eq(lt_count_lines(a8.census), lt_zero_counts(decisions, exit_reads))
+              && List.length(a8.census) == 13
+              && List.length(List.filter(\l. l == "family evaluated replay-consistency false (NoReplay at admission)", a8.lines)) == 1
+              && List.length(List.filter(\l. l == "family evaluated checkpoint-history true (vacuous: checkpoint_records=0)", a8.lines)) == 1)
+        },
+        _ => lt_report("${name} (no evidence: preflight=${join(";", lt_labels(r.preflight))})", false)
+      }
+    }
+  }
+}
+
+type LiveRun = { jw: JournalWorld, w0: WorldState, run: TracedSessionResult }
+
+func lt_run(f: WorldFixture, drop_last_step: bool) -> Option[LiveRun] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  match fixture_journal_world(f) {
+    Err(_) => None,
+    Ok(jw) => {
+      let w = journal_world_state(jw, lt_epoch());
+      let w0 = if drop_last_step then { w | script: lt_drop_last(w.script) } else w;
+      Some({ jw: jw, w0: w0, run: admission_run(jw, w0, ".motoko/eval-admission-workdir") })
+    }
+  }
+}
+
+pure func lt_drop_last[a](xs: [a]) -> [a] {
+  match xs { [] => [], [_] => [], x :: rest => x :: lt_drop_last(rest) }
+}
+
+pure func lt_prepared() -> LedgerRecord {
+  WireRecord(ProviderCallPrepared({ step: 9, msg_count: 1, estimated_input_tokens: 1, system_prefix_count: 1,
+    system_prefix_chars: 1, system_prefix_digest: "sha256:fx", payload_digest: "sha256:fx", model: "fx" }))
+}
+
+pure func lt_is_prepared(r: LedgerRecord) -> bool {
+  match r { WireRecord(ProviderCallPrepared(_)) => true, _ => false }
+}
+
+pure func lt_is_decision(r: LedgerRecord) -> bool {
+  match r { DecisionRecord(_) => true, _ => false }
+}
+
+-- The trace with the first record matching `p` removed.
+pure func lt_drop_first(rs: [LedgerRecord], p: LedgerRecord -> bool) -> [LedgerRecord] {
+  match rs { [] => [], r :: rest => if p(r) then rest else r :: lt_drop_first(rest, p) }
+}
+
+func m11_under_over(lr: LiveRun) -> bool ! {IO} {
+  let run = lr.run;
+  let under = { run | trace: { records: run.trace.records ++ [lt_prepared()] } };
+  let over = { run | trace: { records: lt_drop_first(run.trace.records, lt_is_prepared) } };
+  let tool_left: ScriptedTool = { tool_call_id: "fx", duration_ms: 0, code: "", message: "", content: "", exit_code: -1 };
+  let kept = { run | world: { run.world | tools: [tool_left] } };
+  let u = a7_of_run(under, lr.w0, lr.jw);
+  let o = a7_of_run(over, lr.w0, lr.jw);
+  let k = a7_of_run(kept, lr.w0, lr.jw);
+  let _ = println("under_over: under=${join(";", lt_details(u))} over=${join(";", lt_details(o))} tool=${join(";", lt_details(k))}");
+  lt_report("m11_witness_under_over",
+    List.length(a7_of_run(run, lr.w0, lr.jw)) == 0
+      && lt_strs_eq(lt_details(u), ["A7:UnderRecorded@aggregate:witness expect_provider witnessed 4 logged 3"])
+      && lt_strs_eq(lt_details(o), ["A7:OverRecorded@aggregate:witness expect_provider witnessed 2 logged 3"])
+      -- one fewer dispatch witnessed: the tool class and its timeout reads (T = 3) both over
+      && lt_strs_eq(lt_details(k), [
+           "A7:OverRecorded@aggregate:witness expect_tool witnessed 3 logged 4",
+           "A7:EnvReadOverRecorded@aggregate:witness MOTOKO_TOOL_TIMEOUT_MS expected 3 logged 4"]))
+}
+
+func m11_profile_missed(f: WorldFixture) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  match fixture_journal_world(f) {
+    Err(_) => lt_report("m11_profile_missed_models_file_refused ${f.name} (fixture)", false),
+    Ok(jw) => {
+      let ev = admit_with_evidence(f.name, SyntheticEntry, lt_ids(jw), lt_cmp(f.name), jw, lt_epoch(), ".motoko/eval-admission-workdir");
+      let r = ev.report;
+      let _ = println("profile_missed ${f.name}: preflight=[${join(";", lt_labels(r.preflight))}] findings=[${join(";", lt_details(r.findings))}]");
+      lt_report("m11_profile_missed_models_file_refused ${f.name}",
+        r.ran && List.length(r.preflight) == 0
+          && lt_strs_eq(lt_details(r.findings), [
+               "A7:EnvReadOverRecorded@aggregate:witness MOTOKO_MODELS_FILE expected 0 logged 1",
+               "A7:EnvReadOverRecorded@aggregate:witness MOTOKO_REPO expected 0 logged 1"]))
+    }
+  }
+}
+
+func m11_fault_path(lr: LiveRun) -> bool ! {IO} {
+  let run = lr.run;
+  let fault = check_a7(run.world.log, build_witness(ColFault, run.trace, lr.w0, run.world));
+  let accepted = check_a7(run.world.log, build_witness(ColSuspended, run.trace, lr.w0, run.world));
+  let admitted = a7_of_run(run, lr.w0, lr.jw);
+  let rows = census_of(lr.jw.end.expected, List.length(lr.jw.calls), run.trace, run.world.log, lr.w0, run.world);
+  let failed = match run.result { Err(e) => e.code, Ok(_) => "ok" };
+  let _ = println("fault_path: result=${failed} fault_col=${join(";", lt_details(fault))} accepted_col=${join(";", lt_details(accepted))} admitted=${join(";", lt_details(admitted))} capture_reads=${show(census_count(rows, "capture_reads"))}");
+  lt_report("m11_fault_path_own_column",
+    failed != "ok"
+      && List.length(fault) == 0
+      && lt_strs_eq(lt_details(accepted), ["A7:EnvReadOverRecorded@aggregate:witness MOTOKO_CAPTURE_FAILED_PAYLOAD expected 0 logged 1"])
+      && lt_strs_eq(lt_details(admitted), lt_details(accepted))
+      && column_id(admission_column(lr.jw.end.expected)) == "EndSuspended"
+      && census_count(rows, "capture_reads") == 1
+      && first_label(check_census(rows)) == "A8:CensusMismatch@aggregate:census:capture_reads")
+}
+
+func m11_wrong_obligation_or_metadata(lr: LiveRun) -> bool ! {IO} {
+  let m = manifest_of(lt_ids(lr.jw));
+  let x = admission_execution(lr.run, lt_epoch(), lr.jw, m);
+  let strict = { x | replay: StrictAgainst(lr.run.world.log) };
+  let other = execution_of(lr.run, lt_epoch(), NoReplay, x.decision_budget, 0, 0, [], replay_metadata_of({ m | source_revision: "b1b1b1" }));
+  let unknown = execution_of(lr.run, lt_epoch(), NoReplay, x.decision_budget, 0, 0, [], unknown_replay_metadata());
+  let epoch = { x | initial_clock_ms: lt_epoch() + 1 };
+  let a = lt_labels(check_bridge_inputs(strict, lt_epoch(), lr.jw, m));
+  let b = lt_labels(check_bridge_inputs(other, lt_epoch(), lr.jw, m));
+  let c = lt_labels(check_bridge_inputs(unknown, lt_epoch(), lr.jw, m));
+  let d = lt_labels(check_bridge_inputs(epoch, lt_epoch(), lr.jw, m));
+  let strict_a8 = a8_of_execution(strict, lr.run, lr.w0, lr.jw, m, lt_epoch());
+  let _ = println("wrong_bridge: strict=${join(",", a)} other=${join(",", b)} unknown=${join(",", c)} epoch=${join(",", d)} strict_unevaluated=[${join(",", strict_a8.unevaluated)}] strict_first=${first_label(strict_a8.findings)}");
+  lt_report("m11_wrong_obligation_or_metadata",
+    List.length(check_bridge_inputs(x, lt_epoch(), lr.jw, m)) == 0
+      && lt_strs_eq(a, ["A8:ObligationNotNoReplay@aggregate:bridge:obligation"])
+      && lt_strs_eq(b, ["A8:MetadataDiffers@aggregate:bridge:metadata"])
+      && lt_strs_eq(c, ["A8:MetadataDiffers@aggregate:bridge:metadata"])
+      && lt_strs_eq(d, ["A8:EpochDiffers@aggregate:bridge:epoch"])
+      && List.length(strict_a8.unevaluated) == 0
+      && first_label(strict_a8.findings) == "A8:ObligationNotNoReplay@aggregate:bridge:obligation"
+      -- only ReplayConsistency may read unevaluated
+      && List.length(family_findings(family_evidence(x))) == 0
+      && lt_strs_eq(lt_labels(family_findings([{ family: "replay-consistency", evaluated: false, inputs: 1 },
+                                               { family: "tool-pairing", evaluated: false, inputs: 0 }])),
+                    ["A8:FamilyUnevaluated@aggregate:family:tool-pairing"]))
+}
+
+func m11_decision_budget(lr: LiveRun, stop: LiveRun) -> bool ! {IO} {
+  let m = manifest_of(lt_ids(lr.jw));
+  let x = admission_execution(lr.run, lt_epoch(), lr.jw, m);
+  let xs = admission_execution(stop.run, lt_epoch(), stop.jw, manifest_of(lt_ids(stop.jw)));
+  let n_budget = { x | decision_budget: List.length(lr.jw.calls) };
+  let n_a8 = a8_of_execution(n_budget, lr.run, lr.w0, lr.jw, m, lt_epoch());
+  let retry = lt_labels(check_bridge_inputs({ x | retry_budget: 1 }, lt_epoch(), lr.jw, m));
+  let dropped = { lr.run | trace: { records: lt_drop_first(lr.run.trace.records, lt_is_decision) } };
+  let dropped_a8 = a8_of_run(dropped, lr.w0, lr.jw, m, lt_epoch());
+  let _ = println("decision_budget: suspended budget=${show(x.decision_budget)} stop budget=${show(xs.decision_budget)} n_budget=${join(",", lt_labels(n_a8.findings))} evaluate=${join(",", List.map(violation_rule, evaluate(n_budget)))} retry=${join(",", retry)} dropped=${join(",", lt_details(dropped_a8.findings))}");
+  lt_report("m11_decision_budget",
+    x.decision_budget == 7 && lr.jw.expected.decisions == 7
+      && xs.decision_budget == 6 && stop.jw.expected.decisions == 6
+      && lt_strs_eq(lt_labels(n_a8.findings), [
+           "A8:DecisionBudgetDiffers@aggregate:bridge:decision_budget",
+           "A8:decision-budget-exceeded@aggregate:invariants:bounded-progress"])
+      && lt_strs_eq(retry, ["A8:RetryBudgetNonZero@aggregate:bridge:retry_budget"])
+      && lt_strs_eq(lt_details(dropped_a8.findings), ["A8:DecisionCountMismatch@aggregate:census:decisions decisions observed 6 expected 7"]))
+}
+
+-- P1R C4 (G1): an admission whose FIRST finding is `evaluate`'s Violation.
+-- The live run's first `history_appended` record names another run id. The
+-- bridge's inputs (obligation, metadata, budgets, epoch) are the entry's; the
+-- census counts none of it; the witness, frame and end are unchanged; and
+-- A1–A4 read the snapshot, the final history and only the records' digests
+-- and `replaces_previous` (source_checks_run.sr_appended) — so every other
+-- check is clean and the first finding, over A1–A9 in A-order, is the
+-- emission-parity violation.
+pure func lt_map_first_appended(rs: [LedgerRecord], f: HistoryAppendedInfo -> HistoryAppendedInfo) -> [LedgerRecord] {
+  match rs {
+    [] => [],
+    r :: rest => match r {
+      WireRecord(HistoryAppended(i)) => WireRecord(HistoryAppended(f(i))) :: rest,
+      _ => r :: lt_map_first_appended(rest, f)
+    }
+  }
+}
+
+func m11_evaluate_violation_first(lr: LiveRun) -> bool ! {IO} {
+  let m = manifest_of(lt_ids(lr.jw));
+  let run = { lr.run | trace: { records: lt_map_first_appended(lr.run.trace.records, \i. { i | run_id: "other.r9.9" }) } };
+  let x = admission_execution(run, lt_epoch(), lr.jw, m);
+  let a8 = a8_of_run(run, lr.w0, lr.jw, m, lt_epoch());
+  let frame = frame_observation("admission", lr.w0.ordinal, run);
+  let p = admission_program(lr.jw, lr.w0, run.world.log, m, "a0a0a0-dev");
+  let lines = match parse_lines(fxw_m3_selector_end().journal) { Ok(ls) => ls, Err(_) => [] };
+  let source = run_source_findings(lines, lr.jw, run, run.world.log);
+  let all = ordered_findings(source ++ admission_findings(frame, lr.jw, run, lr.w0, p, a8));
+  let census = census_of(lr.jw.end.expected, List.length(lr.jw.calls), run.trace, run.world.log, lr.w0, run.world);
+  let v = admission_verdict("synthetic:m3_selector_end", lr.jw, [], all, true, []);
+  let _ = println("m11_a8_evaluate_violation_first: ${admission_label(v)} all=[${join(";", lt_labels(all))}] lines=${show(List.length(lines))}");
+  lt_report("m11_a8_evaluate_violation_first",
+    List.length(lines) > 0
+      && List.length(source) == 0
+      && List.length(check_bridge_inputs(x, lt_epoch(), lr.jw, m)) == 0
+      && List.length(check_census(census)) == 0
+      && List.length(a7_of_run(run, lr.w0, lr.jw)) == 0
+      && lt_strs_eq(lt_labels(all), ["A8:journal-payload-disagrees@aggregate:invariants:emission-parity"])
+      && lt_strs_eq(lt_labels(evaluate_findings(x)), lt_labels(all))
+      -- the clean twin: the unmutated run has no finding at all
+      && List.length(ordered_findings(run_source_findings(lines, lr.jw, lr.run, lr.run.world.log)
+                                      ++ admission_findings(frame_observation("admission", lr.w0.ordinal, lr.run), lr.jw, lr.run, lr.w0,
+                                                            admission_program(lr.jw, lr.w0, lr.run.world.log, m, "a0a0a0-dev"),
+                                                            a8_of_run(lr.run, lr.w0, lr.jw, m, lt_epoch())))) == 0)
+}
+
+-- One non-zero twin per census count on the live run.
+pure func lt_plus(run: TracedSessionResult, r: LedgerRecord) -> TracedSessionResult {
+  { run | trace: { records: run.trace.records ++ [r] } }
+}
+
+pure func lt_plus_ident(run: TracedSessionResult, b: IdentityBody, payload: string) -> TracedSessionResult {
+  let log = run.world.log;
+  let i: Interaction = { identity: { ordinal: List.length(log), body: b }, request_projection: "fx", deadline_ms: 0,
+                         outcome: { advance_ms: 0, chunks: [], payload: payload, status: OutcomeOk, fault_class_id: "" } };
+  { run | world: { run.world | log: log ++ [i] } }
+}
+
+pure func lt_chunked(run: TracedSessionResult) -> TracedSessionResult {
+  let log = List.map(\i. match i.identity.body {
+      ProviderIdentity(_, _, _) => { i | outcome: { i.outcome | chunks: [{ offset_ms: 0, text: "x" }] } },
+      _ => i }, run.world.log);
+  { run | world: { run.world | log: log } }
+}
+
+pure func lt_twin_ok(lr: LiveRun, run: TracedSessionResult, w0: WorldState, name: string, value: int, is_decision: bool) -> bool {
+  let rows = census_of(lr.jw.end.expected, List.length(lr.jw.calls), run.trace, run.world.log, w0, run.world);
+  List.foldl(\acc c. acc && (if c.name == name then c.observed == value
+                             else if is_decision && c.name == "decisions" then c.observed == c.expected + 1
+                             else c.observed == c.expected), true, census_counts(rows))
+    && first_label(check_census(rows)) == "A8:CensusMismatch@aggregate:census:${name}"
+}
+
+func m11_census_twins(lr: LiveRun) -> bool ! {IO} {
+  let run = lr.run;
+  let w0 = lr.w0;
+  let checks = [
+    { n: "checkpoint_decisions", ok: lt_twin_ok(lr, lt_plus(run, DecisionRecord({ step: 9, decision: "TakeCheckpoint" })), w0, "checkpoint_decisions", 1, true) },
+    { n: "checkpoint_records", ok: lt_twin_ok(lr, lt_plus(run, WireRecord(CheckpointTaken({ reason: "fx", before_digest: "a", after_digest: "b" }))), w0, "checkpoint_records", 1, false) },
+    { n: "stream_chunks", ok: lt_twin_ok(lr, lt_chunked(run), w0, "stream_chunks", 3, false) },
+    { n: "approval_reads", ok: lt_twin_ok(lr, lt_plus_ident(run, ApprovalIdentity("loop_v2", "c1", "BashExec"), "y"), w0, "approval_reads", 1, false) },
+    { n: "approvals_consumed", ok: lt_twin_ok(lr, run, { w0 | approvals: ["y"] }, "approvals_consumed", 1, false) },
+    { n: "waits_opened", ok: lt_twin_ok(lr, lt_plus(run, WireRecord(ExtToolHandled({ step: 0, stream_id: "s", tool: "T", id: "c1", exit_code: 0 }))), w0, "waits_opened", 1, false) },
+    { n: "parks", ok: lt_twin_ok(lr, lt_plus(run, WireRecord(ParkEntered({ request_id: "r", step: 0, waits: [] }))), w0, "parks", 1, false) },
+    { n: "wakes", ok: lt_twin_ok(lr, lt_plus(run, WireRecord(WakeReceived({ request_id: "r", wait_id: "w", outcome: "settled", detail: "" }))), w0, "wakes", 1, false) },
+    { n: "extension_effects", ok: lt_twin_ok(lr, lt_plus_ident(run, ExtensionEffectIdentity("x", "k", "c1"), "{}"), w0, "extension_effects", 1, false) },
+    { n: "retries", ok: lt_twin_ok(lr, lt_plus(run, WireRecord(StreamErrorRetry({ step: 0, error: "e" }))), w0, "retries", 1, false) },
+    { n: "injected_messages", ok: lt_twin_ok(lr, lt_plus(run, DecisionRecord({ step: 9, decision: "InjectUserMessage" })), w0, "injected_messages", 1, true) },
+    { n: "hybrid_extractions", ok: lt_twin_ok(lr, lt_plus(run, WireRecord(HybridBashExtracted({ step: 0, cmd: "c" }))), w0, "hybrid_extractions", 1, false) },
+    { n: "file_writes", ok: lt_twin_ok(lr, lt_plus_ident(run, FileWriteIdentity("p"), "{}"), w0, "file_writes", 1, false) },
+    { n: "file_removes", ok: lt_twin_ok(lr, lt_plus_ident(run, FileRemoveIdentity("p"), "{}"), w0, "file_removes", 1, false) },
+    { n: "dir_makes", ok: lt_twin_ok(lr, lt_plus_ident(run, DirMakeIdentity("p"), "{}"), w0, "dir_makes", 1, false) },
+    { n: "exit_manifest_reads", ok: lt_twin_ok(lr, lt_plus_ident(run, EnvironmentReadIdentity("MOTOKO_EXIT_MANIFEST"), ""), w0, "exit_manifest_reads", 1, false) },
+    { n: "exit_manifest_writes",
+      ok: {
+        let twin = lt_plus_ident(run, EnvironmentReadIdentity("MOTOKO_EXIT_MANIFEST"), "fx-manifest.json");
+        let rows = census_of(lr.jw.end.expected, List.length(lr.jw.calls), twin.trace, twin.world.log, w0, twin.world);
+        census_count(rows, "exit_manifest_writes") == 1 && census_count(rows, "exit_manifest_reads") == 1
+          && lt_strs_eq(lt_labels(check_census(rows)), [
+               "A8:CensusMismatch@aggregate:census:exit_manifest_reads",
+               "A8:CensusMismatch@aggregate:census:exit_manifest_writes"])
+      } },
+    { n: "capture_reads", ok: lt_twin_ok(lr, lt_plus_ident(run, EnvironmentReadIdentity("MOTOKO_CAPTURE_FAILED_PAYLOAD"), ""), w0, "capture_reads", 1, false) },
+    { n: "decisions",
+      ok: {
+        let twin = lt_plus(run, DecisionRecord({ step: 9, decision: "CallModel" }));
+        let rows = census_of(lr.jw.end.expected, List.length(lr.jw.calls), twin.trace, twin.world.log, w0, twin.world);
+        census_count(rows, "decisions") == 8
+          && lt_strs_eq(lt_labels(check_census(rows)), ["A8:DecisionCountMismatch@aggregate:census:decisions"])
+      } }
+  ];
+  let bad = List.map(\c. c.n, List.filter(\c. not c.ok, checks));
+  let _ = println("census_twins: ${show(List.length(checks))} twins, failing=[${join(",", bad)}]");
+  lt_report("m11_census_twins_live", List.length(checks) == 19 && List.length(bad) == 0)
+}
+
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let a = lt_t0("m11_t0_suspended_clean", fxw_m3_selector_end(), 3, 4, 6, 7, 0);
+  let b = lt_t0("m11_t0_finalize_clean", fxw_m4_stop_call_last(), 3, 3, 5, 6, 1);
+  let p1 = m11_profile_missed(fxw_m5_config_missed_unknown());
+  let p2 = m11_profile_missed(fxw_m5_config_missed_non_positive());
+  let p3 = m11_profile_missed(fxw_m5_config_missed_no_event());
+  let rest = match (lt_run(fxw_m3_selector_end(), false), lt_run(fxw_m4_stop_call_last(), false), lt_run(fxw_m3_selector_end(), true)) {
+    (Some(c), Some(s), Some(short)) => {
+      let r1 = m11_under_over(c);
+      let r2 = m11_fault_path(short);
+      let r3 = m11_wrong_obligation_or_metadata(c);
+      let r4 = m11_decision_budget(c, s);
+      let r5 = m11_census_twins(c);
+      let r6 = m11_evaluate_violation_first(c);
+      r1 && r2 && r3 && r4 && r5 && r6
+    },
+    _ => lt_report("runs", false)
+  };
+  if a && b && p1 && p2 && p3 && rest then println("witness_live_test: all checks passed")
+  else { let _ = println("witness_live_test: FAILED"); exit(1) }
+}

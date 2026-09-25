@@ -1,0 +1,111 @@
+module sunholo/motoko_ext_exa_search/exa_search
+
+import std/option (Option, Some, None)
+import std/json (Json, jo, kv, js, jint, getInt, getString)
+
+import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
+  PureCtx, ProviderCtx, Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, PromptPatch, BudgetPlan, BudgetPatch,
+  ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision,
+  PassThrough, PreStepDecision, Msg,
+  ToolCallEnvelope
+)
+import pkg/sunholo/motoko_ext_mcp/types (McpServerConfig, McpToolMapping)
+import pkg/sunholo/motoko_ext_mcp/exec (run_mcp_tool)
+import pkg/sunholo/motoko_ext_mcp/resolve (resolve_tool, all_tool_names)
+import pkg/sunholo/motoko_ext_exa_search/types (mcp_config, tool_mappings)
+import pkg/sunholo/motoko_ext_exa_search/prompts (load_agent_prompt, build_prompt_patch)
+
+export func provided_tools() -> [string] {
+  all_tool_names(tool_mappings())
+}
+
+export func on_build_system_prompt(cached_prompt: string, _ctx: PureCtx) -> PromptPatch {
+  build_prompt_patch(cached_prompt)
+}
+
+export func on_tool_handle(cfg: McpServerConfig, mappings: [McpToolMapping], ctx: ProviderCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {Process, FS, Rand}  { { decision: {
+  match resolve_tool(call.tool, mappings) {
+    Some(m) => match run_mcp_tool(call.id, m.canonical, ctx.workdir, cfg, m.mcp_name, call.arguments) {
+      Some(result) => Handled(result),
+      None => Delegate
+    },
+    None => Delegate
+  }
+}, next_state: ctx.world } }
+
+-- THE CONFIGURATION CHANNEL (ABI 8.0, 031 ADR-001 D2 and Amendment 3).
+-- `register` reads the timeouts from the environment and the agent prompt from
+-- the workdir once, and discloses `{"cached_prompt", "timeout_ms",
+-- "max_output_chars"}`; the callbacks decode what they need per call. The
+-- workdir itself is not disclosed. The API key is never read here: the MCP
+-- config carries its NAME (`auth_env_var`), resolved by the bridge.
+export pure func default_timeout_ms() -> int { 30000 }
+export pure func default_max_output_chars() -> int { 8000 }
+
+export pure func exa_config(cached_prompt: string, timeout_ms: int, max_output_chars: int) -> Json {
+  jo([
+    kv("cached_prompt", js(cached_prompt)),
+    kv("timeout_ms", jint(timeout_ms)),
+    kv("max_output_chars", jint(max_output_chars))
+  ])
+}
+
+export pure func cached_prompt_of(cfg: Json) -> string {
+  match getString(cfg, "cached_prompt") { Some(p) => p, None => "" }
+}
+
+export pure func mcp_config_of(cfg: Json) -> McpServerConfig {
+  mcp_config(
+    match getInt(cfg, "timeout_ms") { Some(n) => n, None => default_timeout_ms() },
+    match getInt(cfg, "max_output_chars") { Some(n) => n, None => default_max_output_chars() })
+}
+
+func list_len(xs: [string]) -> int {
+  match xs {
+    [] => 0,
+    _ :: rest => 1 + list_len(rest)
+  }
+}
+
+func first_or_empty(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: _ => x
+  }
+}
+
+func eq_string_list(a: [string], b: [string]) -> bool {
+  match (a, b) {
+    ([], []) => true,
+    (x :: xs, y :: ys) => x == y && eq_string_list(xs, ys),
+    _ => false
+  }
+}
+
+func mappings_define_expected_canonicals() -> bool
+  tests [((), true)]
+  {
+    let names = all_tool_names(tool_mappings());
+    list_len(names) == 12
+      && first_or_empty(names) == "ExaSearch"
+      && eq_string_list(names, [
+        "ExaSearch", "exa_search", "exa.search", "exa_search.search",
+        "ExaFetch", "exa_fetch", "exa.fetch", "exa_search.fetch",
+        "ExaCrawl", "exa_crawl", "exa.crawl", "exa_search.crawl"
+      ])
+  }
+
+func alias_resolves_to_mcp_tool() -> bool
+  tests [((), true)]
+  {
+    match resolve_tool("exa.fetch", tool_mappings()) {
+      Some(m) => m.canonical == "ExaFetch" && m.mcp_name == "web_fetch_exa",
+      None => false
+    }
+  }
+
+func provided_tools_matches_resolver_flattening() -> bool
+  tests [((), true)]
+  {
+    eq_string_list(provided_tools(), all_tool_names(tool_mappings()))
+  }

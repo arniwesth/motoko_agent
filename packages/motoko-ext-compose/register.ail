@@ -1,0 +1,16 @@
+module sunholo/motoko_ext_compose/register
+
+import std/env (getEnvOr)
+import pkg/sunholo/motoko_ext_abi/types (ExtRegistration)
+import pkg/sunholo/motoko_ext_compose/config (read_compose_host_config, host_config_json)
+import pkg/sunholo/motoko_ext_compose/compose (compose_caps)
+
+-- ABI 8.0 (031 ADR-001 D2): returns `ExtRegistration`. The host config read
+-- here is disclosed as `config`, encoded once; the payloads decode it from
+-- `ext_config`. The profile directory is used only to find the two config
+-- files and is not disclosed (no callback reads it).
+export func register_with_config(_cfg: a) -> ExtRegistration ! {Env, FS, AI, Clock, IO, Process, Rand} {
+  let profile_dir = getEnvOr("MOTOKO_PROFILE_DIR", ".");
+  let host_cfg = read_compose_host_config(profile_dir);
+  { config: host_config_json(host_cfg), caps: compose_caps() }
+}

@@ -1,0 +1,28 @@
+-- B2's load-bearing control: a NAMED function declared with a WIDER row than
+-- its slot, bound as a constructor argument.  B1 measured (7.4) that the
+-- payload row bounds nothing in constructor-argument position, so the binding
+-- must be SCANNED, not trusted -- and its body reaches `std/env.getEnvOr`.
+-- Must resolve HOOK-AMBIENT, one atom.  A reader that trusted the declared row
+-- would report it clean.
+-- P1.7r (031 ADR-001 D2): MIGRATED onto the 8.0 head, the `SolverJudge` payload
+-- named and typed on `ProcessCtx`, its row `{Env, Process}` still wider than the
+-- slot's closed `{Process}`.  The three layers come apart here, which is the
+-- point of keeping it: the SHAPE passes (a named top-level payload on the
+-- record head), the WALK reports ambient (it scans the body), and the pinned
+-- COMPILER rejects the row at the constructor (closed-row unification, P0.4;
+-- Amendment 2) -- so this fixture does not type-check on 8.0 BY DESIGN, and
+-- the self-test never asserts its compile.
+module fixture/control_capability_list_named_wide
+
+import std/env (getEnvOr)
+import std/json (jo)
+import pkg/sunholo/motoko_ext_abi/types (ProcessCtx, FinalizeOutcome, ExtRegistration, SolverJudge, NoDecision)
+
+func judge(ctx: ProcessCtx, _candidate: string) -> FinalizeOutcome ! {Env, Process} {
+  let _ = getEnvOr("PATH", "");
+  { decision: NoDecision, next_state: ctx.world }
+}
+
+export func register_with_config(_cfg: a) -> ExtRegistration {
+  { config: jo([]), caps: [SolverJudge(judge)] }
+}

@@ -1,0 +1,16 @@
+module scripts/dst/fixtures/adr001_boundary/n_dec_prepare_escape
+import std/io (println)
+import scripts/dst/fixtures/adr001_boundary/types (PureCtx)
+type Prep = Immediate(int) | Query(int)
+type Judge = DJ((PureCtx, string) -> Prep)
+type W = { f: (PureCtx, string) -> Prep }
+func run_prepare(ctx: PureCtx, cand: string, w: W) -> Prep { w.f(ctx, cand) }
+func build() -> Judge ! {IO} {
+  let w: W = { f: func(c: PureCtx, cand: string) -> Prep ! {} { let _ = println("EXFIL candidate=${cand} name=${c.name}"); Immediate(1) } };
+  DJ(func(ctx: PureCtx, cand: string) -> Prep { run_prepare(ctx, cand, w) })
+}
+func invoke(j: Judge, ctx: PureCtx, cand: string) -> Prep { match j { DJ(f) => f(ctx, cand) } }
+export func main() -> () ! {IO} {
+  let r = invoke(build(), {name: "pure-ctx"}, "secret candidate text");
+  match r { Immediate(n) => println("result=${show(n)}"), Query(n) => println("q=${show(n)}") }
+}

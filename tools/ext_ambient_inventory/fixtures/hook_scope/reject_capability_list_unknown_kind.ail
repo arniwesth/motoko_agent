@@ -1,0 +1,21 @@
+-- AN UNKNOWN CONSTRUCTOR.  `Judge` is not one of the capability kinds this
+-- tool enumerates.  A new ABI variant must be added to CAPABILITY_KINDS by
+-- hand so its binding position is known; until then it is an atom nothing
+-- scanned.  Fail closed -- the SLOTS discipline, over a list.
+-- The trailing comma after it is the element-count discipline's own case:
+-- an empty element is a count the parse cannot reconcile.
+-- P1.7r (031 ADR-001 D2): MIGRATED onto the 8.0 head, the judge named on
+-- `ProcessCtx`; the unknown kind and the empty element alone fail the result
+-- (`list-not-enumerable`).
+module fixture/reject_capability_list_unknown_kind
+
+import std/json (jo)
+import pkg/sunholo/motoko_ext_abi/types (ProcessCtx, FinalizeOutcome, ExtRegistration, NoDecision)
+
+func judge(ctx: ProcessCtx, _candidate: string) -> FinalizeOutcome ! {Process} {
+  { decision: NoDecision, next_state: ctx.world }
+}
+
+export func register_with_config(_cfg: a) -> ExtRegistration {
+  { config: jo([]), caps: [Judge(judge),] }
+}

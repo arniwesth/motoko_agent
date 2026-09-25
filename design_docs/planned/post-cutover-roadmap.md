@@ -54,7 +54,7 @@ Four DX fixes targeted at exactly the surfaces motoko hits, sourced directly fro
 
 ### What M-AI-OPENAI-LOCAL-ENDPOINT-RELAX gives motoko
 
-Restores the local-OpenAI-endpoint-without-API-key support that motoko's fork had ([`2026-05-03-local-openai-endpoint-key-relaxation.md`](../../.agent/learnings/2026-05-03-local-openai-endpoint-key-relaxation.md)) but was lost during the v0.16.x fork retirement. Required for motoko's local-DGX deployment (`OPENAI_BASE_URL=http://100.79.48.75:8000/v1` against an unauthenticated vLLM/TGI server).
+Restores the local-OpenAI-endpoint-without-API-key support that motoko's fork had ([`2026-05-03-local-openai-endpoint-key-relaxation.md`](../../.agent/learnings/2026-05-03-local-openai-endpoint-key-relaxation.md)) but was lost during the v0.16.x fork retirement. Required for motoko's local-DGX deployment (`OPENAI_BASE_URL=http://<dgx-host>:8000/v1` against an unauthenticated vLLM/TGI server).
 
 ---
 

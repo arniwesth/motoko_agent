@@ -1,0 +1,84 @@
+module sunholo/motoko_ext_repetition_guard/register
+
+-- TWO ATOMS, and both are needed to cover one bug. See `repetition_guard`'s
+-- header: `SolverJudge` never fires on a step that carried a tool call, which is
+-- every step of the loop this guard exists for, and `ToolPolicy` never sees the
+-- answer the model is repeating.
+--
+-- THE BUDGETS ARE READ AT REGISTRATION, not per call. `ToolPolicy` is a PURE
+-- row and `SolverJudge` is `{Process}` -- neither view can read the
+-- environment -- so an operator override is resolved here, once, and crosses
+-- into both callbacks as disclosed configuration (ABI 8.0: `{ config, caps }`,
+-- 031 ADR-001 D2 and Amendment 3). Setting either to 0 or below disables that
+-- half; the guard is then inert rather than absent, which is what an operator
+-- wanting to reproduce a loop needs.
+
+import std/env (getEnvOr)
+import std/option (Some, None)
+import std/string (stringToInt)
+
+import pkg/sunholo/motoko_ext_abi/types (
+  Capability, ToolPolicy, SolverJudge, ExtRegistration,
+  PureCtx, ProcessCtx, ToolCallEnvelope, ToolPolicyDecision,
+  FinalizeOutcome, pure_ctx
+)
+import pkg/sunholo/motoko_ext_repetition_guard/repetition_guard (
+  call_budget, answer_budget, budget_config, call_budget_of, answer_budget_of,
+  decide_call_with_budget, decide_answer_with_budget
+)
+
+func parse_int_or(s: string, fallback: int) -> int {
+  match stringToInt(s) {
+    Some(n) => n,
+    None => fallback
+  }
+}
+
+-- The judge's view without its world: the data the shared (`PureCtx`) helpers
+-- read. Constructor plus record update, the 8.x rule's form.
+pure func pure_view(ctx: ProcessCtx) -> PureCtx {
+  { pure_ctx(ctx.ext_config) |
+    task: ctx.task,
+    step: ctx.step,
+    model: ctx.model,
+    cwd: ctx.cwd,
+    hybrid_tools: ctx.hybrid_tools,
+    budget: ctx.budget,
+    mode: ctx.mode,
+    workdir: ctx.workdir,
+    env_server_url: ctx.env_server_url,
+    budget_remaining: ctx.budget_remaining,
+    history_slice: ctx.history_slice,
+    state_key: ctx.state_key,
+    context_limit: ctx.context_limit,
+    finish_reason: ctx.finish_reason,
+    work_in_flight: ctx.work_in_flight,
+    open_waits: ctx.open_waits,
+    artifacts: ctx.artifacts,
+    telemetry: ctx.telemetry,
+    verification: ctx.verification,
+    tool_evidence: ctx.tool_evidence,
+    decision_state: ctx.decision_state
+  }
+}
+
+func policy(ctx: PureCtx, call: ToolCallEnvelope) -> ToolPolicyDecision {
+  decide_call_with_budget(ctx, call, call_budget_of(ctx.ext_config))
+}
+
+func finalize(ctx: ProcessCtx, candidate: string) -> FinalizeOutcome ! {Process} {
+  { decision: decide_answer_with_budget(pure_view(ctx), candidate, answer_budget_of(ctx.ext_config)),
+    next_state: ctx.world }
+}
+
+export func register_with_config(_cfg: a) -> ExtRegistration ! {Env, FS} {
+  let calls = parse_int_or(getEnvOr("MOTOKO_REPEAT_CALL_BUDGET", ""), call_budget());
+  let answers = parse_int_or(getEnvOr("MOTOKO_REPEAT_ANSWER_BUDGET", ""), answer_budget());
+  {
+    config: budget_config(calls, answers),
+    caps: [
+      ToolPolicy(policy),
+      SolverJudge(finalize)
+    ]
+  }
+}

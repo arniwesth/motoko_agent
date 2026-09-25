@@ -1,0 +1,26 @@
+module tools/ext_call_inventory/fixtures/control_view_receiver
+
+-- CONTROL (8.0, ADR-001 (031) D2/D7): a call through a VIEW of ExtPorts.
+--
+-- At 8.0 a callback receives its row's context view, and the view's `ports`
+-- is a projection of `ExtPorts` -- `AiCtx.ports: AiPorts`, `FsCtx.ports:
+-- FsPorts` -- a record of `ExtPorts` fields under the same names with the
+-- identical signatures. A call through it IS the port call; a classifier that
+-- matched `ExtPorts` by name saw neither of these as a call site (and, worse,
+-- skipped them silently as "another type's field"). Both must be reported as
+-- RESOLVED calls, zero unresolved.
+--
+-- Nothing here names `AiPorts` or `FsPorts`: the views are derived from the
+-- ABI by structure, so this control is what fails the day a view's signature
+-- drifts from `ExtPorts` (the structural rule then stops recognising it).
+
+import pkg/sunholo/motoko_ext_abi/types (AiCtx, FsCtx, Msg, PreStepOutcome, ExtFileRead, PassThrough)
+
+export func compact(ctx: AiCtx, msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} {
+  let stepped = ctx.ports.ai_step(ctx.world, ctx.model, msgs);
+  { decision: PassThrough, next_state: stepped.next_state }
+}
+
+export func peek(ctx: FsCtx, path: string) -> ExtFileRead ! {FS} {
+  ctx.ports.file_read(ctx.world, path)
+}

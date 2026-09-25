@@ -1,0 +1,615 @@
+-- src/eval/journal/witness.ail
+--
+-- ADR-004 v5 D3 "The witness" and "The census"; PLAN-004 §3 P1.7b (A7 and the
+-- census half of A8). The pure half:
+--
+--   expected_env_reads(column, t)            -> [EnvExpectation]
+--   build_witness(column, trace, w0, w1)     -> DiscoveryWitness
+--   check_a7(log, witness)                   -> [AdmissionFinding]
+--   census_of(end, n, trace, log, w0, w1)    -> [CensusRow]
+--   check_census(rows)                       -> [AdmissionFinding]
+--   evidence_lines(family_evidence, rows)    -> [string]
+--
+-- The bridge itself (`execution_of`, `evaluate`, `family_evidence`) is
+-- `bridge.ail`: it needs `src/core/session`'s `TracedSessionResult`, and this
+-- module imports `admission.ail` (see that module's header on the split).
+--
+-- THE WITNESS (`dst_discovery.ail:260–310`), built by the runner from the run
+-- and never read off the log it is checked against:
+--   provider_calls      `ProviderCallPrepared` records in the trace
+--   tool_dispatches     queue consumption: |w0.tools| - |w1.tools|
+--   approval_reads, approvals_consumed, file_writes, file_removes, dir_makes,
+--   extension_effects   0 (route expectations for the empty-registry route)
+--   clock_delta_ms      w1.clock_ms - w0.clock_ms (check_discovery compares it
+--                       with the sum of every recorded advance)
+--   expected_env_reads  one entry per `driver_env_keys()` key, zeros included,
+--                       from D3's table below; T = tool_dispatches
+--
+-- D3's env table. Accepted ends and the fault path are separate COLUMNS; only
+-- the first two are admissible (`admission_column` never yields ColFault):
+--
+--   key                            Suspended  Finalize  Fault (never admitted)
+--   MOTOKO_PERSIST_RETRIES             1         1        1
+--   MOTOKO_RETRY_STREAM_ERROR          1         1        1
+--   OPENAI_BASE_URL                    1         1        1
+--   MOTOKO_HEADLESS                    1         1        1
+--   MOTOKO_PROFILE_DIR                 1         1        1
+--   MOTOKO_CONFIG                      0         0        0
+--   MOTOKO_REPO                        0         0        0
+--   MOTOKO_MODELS_FILE                 0         0        0
+--   MOTOKO_SESSION_ID                  1         1        1
+--   MOTOKO_TOOL_TIMEOUT_MS             T         T        T
+--   MOTOKO_EXIT_MANIFEST               0         1        0
+--   MOTOKO_CAPTURE_FAILED_PAYLOAD      0         0        1
+--
+-- A `ProfileMissed` configuration resolves the context limit through the
+-- models file, so its run reads MOTOKO_MODELS_FILE (and MOTOKO_REPO); the
+-- table says 0, and A7 refuses it (M5's pending row, landed here).
+--
+-- A7's findings are at `Aggregate("witness")`, named by the harness's
+-- `DiscoveryFinding` constructor, the class or key and counts in the detail.
+--
+-- THE CENSUS. Thirteen rows, one per input `family_evidence` cannot speak
+-- for, each a count with its route assumption, computed from the trace, the
+-- log and the worlds — not through the family API:
+--
+--   checkpoints          TakeCheckpoint decisions; CheckpointTaken records      0 / 0
+--   stream_chunks        chunks over the log's provider interactions           0
+--   approvals            approval identities; |w0.approvals| - |w1.approvals|  0 / 0
+--   waits_parks_wakes    ExtToolHandled; ParkEntered; WakeReceived             0 / 0 / 0
+--   extension_effects    extension-effect identities                           0
+--   retries              StreamErrorRetry records                              0
+--   injected_messages    InjectUserMessage decisions                           0
+--   hybrid_extractions   HybridBashExtracted records                           0
+--   file_mutations       file write / remove / dir make identities             0 / 0 / 0
+--   exit_manifest        MOTOKO_EXIT_MANIFEST reads; publications that write
+--                        (reads served a non-empty name; no file class is
+--                        recorded for the write)                               0,0 (Suspended) / 1,0 (Finalize)
+--   capture_reads        MOTOKO_CAPTURE_FAILED_PAYLOAD reads                   0
+--   decisions            DecisionRecord count                                  2N+1 (Suspended) / 2N (Finalize)
+--   not_observed         path_stat, dir_list, live extension effects,
+--                        streaming, compaction: no recorder, no count
+--
+-- A census count that differs is `A8:CensusMismatch@aggregate:census:<count>`;
+-- the decision count is `A8:DecisionCountMismatch@aggregate:census:decisions`.
+--
+-- THE FOUR WORDS, kept apart: each evidence line carries exactly one of
+-- "family evaluated", "family aggregate inputs", "sub-obligation exercised",
+-- "not observed".
+--
+-- Privacy (§0.6): synthetic fixtures only; counts, keys and names.
+
+module src/eval/journal/witness
+
+import std/list as List (length, map, foldl, filter)
+import std/string (join)
+import std/string as S (contains)
+import src/core/ports (WorldState, ScriptedTool, empty_world_state)
+import src/core/dst_interaction (
+  Interaction, IdentityBody, ProviderIdentity, ToolIdentity, ApprovalIdentity, ExtensionEffectIdentity,
+  EnvironmentReadIdentity, ClockAdvanceIdentity, FileWriteIdentity, FileRemoveIdentity, DirMakeIdentity,
+  OutcomeOk, OutcomeFault, OutcomeMissing
+)
+import src/core/phase_vocab (
+  LedgerTrace, LedgerRecord, WireRecord, DecisionRecord, LedgerEvent,
+  ProviderCallPrepared, CheckpointTaken, ExtToolHandled, ParkEntered, WakeReceived,
+  StreamErrorRetry, HybridBashExtracted
+)
+import src/core/dst_discovery (
+  DiscoveryWitness, EnvExpectation, DiscoveryFinding, driver_env_keys, check_discovery,
+  UnderRecorded, OverRecorded, ClockUnaccounted, EnvKeyNotInSource, EnvReadUnderRecorded,
+  EnvReadOverRecorded, ApprovalCursorDisagrees, LogNotDense, EmptyLog
+)
+import src/core/dst_invariants (FamilyEvidence)
+import src/eval/journal/stopping (ExpectedEnd, EndSuspended, EndFinalize)
+import src/eval/journal/admission (AdmissionFinding, A7, A8, Aggregate, finding_label, first_label)
+
+-- ============================================================================
+-- A7 — the witness
+-- ============================================================================
+
+export type EndColumn = ColSuspended | ColFinalize | ColFault
+
+export pure func column_id(c: EndColumn) -> string {
+  match c { ColSuspended => "EndSuspended", ColFinalize => "EndFinalize", ColFault => "NonRetryableFailure" }
+}
+
+-- The admissible columns only: the fault path is never an admitted end.
+export pure func admission_column(e: ExpectedEnd) -> EndColumn {
+  match e { EndSuspended(_) => ColSuspended, EndFinalize(_) => ColFinalize }
+}
+
+-- One cell of D3's table.
+export pure func env_table_count(key: string, c: EndColumn, t: int) -> int {
+  if key == "MOTOKO_PERSIST_RETRIES" || key == "MOTOKO_RETRY_STREAM_ERROR" || key == "OPENAI_BASE_URL"
+       || key == "MOTOKO_HEADLESS" || key == "MOTOKO_PROFILE_DIR" || key == "MOTOKO_SESSION_ID" then 1
+  else if key == "MOTOKO_TOOL_TIMEOUT_MS" then t
+  else if key == "MOTOKO_EXIT_MANIFEST" then (match c { ColFinalize => 1, _ => 0 })
+  else if key == "MOTOKO_CAPTURE_FAILED_PAYLOAD" then (match c { ColFault => 1, _ => 0 })
+  else 0
+}
+
+-- One entry per `driver_env_keys()` key, in that order, zeros included.
+export pure func expected_env_reads(c: EndColumn, t: int) -> [EnvExpectation] {
+  List.map(\k. { key: k, count: env_table_count(k, c, t) }, driver_env_keys())
+}
+
+pure func wt_is_prepared(r: LedgerRecord) -> bool {
+  match r { WireRecord(ProviderCallPrepared(_)) => true, _ => false }
+}
+
+export pure func prepared_calls(t: LedgerTrace) -> int {
+  List.length(List.filter(wt_is_prepared, t.records))
+}
+
+export pure func tool_dispatches(w0: WorldState, w1: WorldState) -> int {
+  List.length(w0.tools) - List.length(w1.tools)
+}
+
+export pure func build_witness(c: EndColumn, t: LedgerTrace, w0: WorldState, w1: WorldState) -> DiscoveryWitness {
+  let dispatches = tool_dispatches(w0, w1);
+  { provider_calls: prepared_calls(t),
+    tool_dispatches: dispatches,
+    approval_reads: 0,
+    approvals_consumed: 0,
+    clock_delta_ms: w1.clock_ms - w0.clock_ms,
+    file_writes: 0,
+    file_removes: 0,
+    dir_makes: 0,
+    extension_effects: 0,
+    expected_env_reads: expected_env_reads(c, dispatches) }
+}
+
+export pure func discovery_finding_name(f: DiscoveryFinding) -> string {
+  match f {
+    UnderRecorded(_, _, _) => "UnderRecorded",
+    OverRecorded(_, _, _) => "OverRecorded",
+    ClockUnaccounted(_, _) => "ClockUnaccounted",
+    EnvKeyNotInSource(_) => "EnvKeyNotInSource",
+    EnvReadUnderRecorded(_, _, _) => "EnvReadUnderRecorded",
+    EnvReadOverRecorded(_, _, _) => "EnvReadOverRecorded",
+    ApprovalCursorDisagrees(_, _) => "ApprovalCursorDisagrees",
+    LogNotDense(_, _) => "LogNotDense",
+    EmptyLog => "EmptyLog"
+  }
+}
+
+export pure func discovery_finding_detail(f: DiscoveryFinding) -> string {
+  match f {
+    UnderRecorded(k, w, l) => "${k} witnessed ${show(w)} logged ${show(l)}",
+    OverRecorded(k, w, l) => "${k} witnessed ${show(w)} logged ${show(l)}",
+    ClockUnaccounted(d, s) => "clock delta ${show(d)} advances ${show(s)}",
+    EnvKeyNotInSource(k) => "${k}",
+    EnvReadUnderRecorded(k, e, l) => "${k} expected ${show(e)} logged ${show(l)}",
+    EnvReadOverRecorded(k, e, l) => "${k} expected ${show(e)} logged ${show(l)}",
+    ApprovalCursorDisagrees(c, s) => "cursor ${show(c)} served ${show(s)}",
+    LogNotDense(e, g) => "expected ordinal ${show(e)} found ${show(g)}",
+    EmptyLog => "empty log"
+  }
+}
+
+export pure func check_a7(log: [Interaction], w: DiscoveryWitness) -> [AdmissionFinding] {
+  List.map(\f. { check: A7, location: Aggregate("witness"), finding: discovery_finding_name(f), detail: discovery_finding_detail(f) },
+           check_discovery(log, w))
+}
+
+-- ============================================================================
+-- A8's census
+-- ============================================================================
+
+export type CensusCount = { name: string, observed: int, expected: int }
+
+export type CensusRow = { row: string, route: string, counts: [CensusCount], unobserved: [string] }
+
+export pure func census_row_names() -> [string] {
+  ["checkpoints", "stream_chunks", "approvals", "waits_parks_wakes", "extension_effects", "retries",
+   "injected_messages", "hybrid_extractions", "file_mutations", "exit_manifest", "capture_reads",
+   "decisions", "not_observed"]
+}
+
+-- D3: two per continuation call (CallModel, RunTools) plus the terminal
+-- decision; a stop at N has no RunTools for call N.
+export pure func derived_decisions(e: ExpectedEnd, n: int) -> int {
+  match e { EndSuspended(_) => 2 * n + 1, EndFinalize(_) => 2 * n }
+}
+
+pure func wt_decisions_named(t: LedgerTrace, name: string) -> int {
+  List.length(List.filter(\r. match r { DecisionRecord(d) => d.decision == name, _ => false }, t.records))
+}
+
+pure func wt_decisions(t: LedgerTrace) -> int {
+  List.length(List.filter(\r. match r { DecisionRecord(_) => true, _ => false }, t.records))
+}
+
+pure func wt_events(t: LedgerTrace, p: LedgerEvent -> bool) -> int {
+  List.length(List.filter(\r. match r { WireRecord(e) => p(e), _ => false }, t.records))
+}
+
+pure func wt_idents(log: [Interaction], p: IdentityBody -> bool) -> int {
+  List.length(List.filter(\i. p(i.identity.body), log))
+}
+
+pure func wt_is_key(b: IdentityBody, key: string) -> bool {
+  match b { EnvironmentReadIdentity(k) => k == key, _ => false }
+}
+
+pure func wt_provider_chunks(log: [Interaction]) -> int {
+  List.foldl(\acc i. acc + (match i.identity.body { ProviderIdentity(_, _, _) => List.length(i.outcome.chunks), _ => 0 }), 0, log)
+}
+
+-- A publication writes only when the name it read is non-empty; the write
+-- itself has no recorder.
+pure func wt_manifest_writes(log: [Interaction]) -> int {
+  List.length(List.filter(\i. wt_is_key(i.identity.body, "MOTOKO_EXIT_MANIFEST")
+                                && (match i.outcome.status { OutcomeOk => true, _ => false })
+                                && i.outcome.payload != "", log))
+}
+
+pure func wt_count(name: string, observed: int, expected: int) -> CensusCount {
+  { name: name, observed: observed, expected: expected }
+}
+
+pure func wt_row(row: string, route: string, counts: [CensusCount]) -> CensusRow {
+  { row: row, route: route, counts: counts, unobserved: [] }
+}
+
+export pure func census_of(e: ExpectedEnd, n: int, t: LedgerTrace, log: [Interaction], w0: WorldState, w1: WorldState) -> [CensusRow] {
+  let fin = match e { EndFinalize(_) => 1, EndSuspended(_) => 0 };
+  [wt_row("checkpoints", "checkpoint_enabled false: no TakeCheckpoint, no checkpoint record", [
+     wt_count("checkpoint_decisions", wt_decisions_named(t, "TakeCheckpoint"), 0),
+     wt_count("checkpoint_records", wt_events(t, \ev. match ev { CheckpointTaken(_) => true, _ => false }), 0)]),
+   wt_row("stream_chunks", "the world serves chunks [] on every provider step", [
+     wt_count("stream_chunks", wt_provider_chunks(log), 0)]),
+   wt_row("approvals", "empty approval queue; the route asks for none", [
+     wt_count("approval_reads", wt_idents(log, \b. match b { ApprovalIdentity(_, _, _) => true, _ => false }), 0),
+     wt_count("approvals_consumed", List.length(w0.approvals) - List.length(w1.approvals), 0)]),
+   wt_row("waits_parks_wakes", "empty registry: no extension handles a tool, nothing parks or wakes", [
+     wt_count("waits_opened", wt_events(t, \ev. match ev { ExtToolHandled(_) => true, _ => false }), 0),
+     wt_count("parks", wt_events(t, \ev. match ev { ParkEntered(_) => true, _ => false }), 0),
+     wt_count("wakes", wt_events(t, \ev. match ev { WakeReceived(_) => true, _ => false }), 0)]),
+   wt_row("extension_effects", "empty registry", [
+     wt_count("extension_effects", wt_idents(log, \b. match b { ExtensionEffectIdentity(_, _, _) => true, _ => false }), 0)]),
+   wt_row("retries", "a retry inside a segment is a cutoff", [
+     wt_count("retries", wt_events(t, \ev. match ev { StreamErrorRetry(_) => true, _ => false }), 0)]),
+   wt_row("injected_messages", "no nudge or injected user message inside a segment (cutoff)", [
+     wt_count("injected_messages", wt_decisions_named(t, "InjectUserMessage"), 0)]),
+   wt_row("hybrid_extractions", "a hybrid-step result is a cutoff", [
+     wt_count("hybrid_extractions", wt_events(t, \ev. match ev { HybridBashExtracted(_) => true, _ => false }), 0)]),
+   wt_row("file_mutations", "empty registry: no routed file mutation", [
+     wt_count("file_writes", wt_idents(log, \b. match b { FileWriteIdentity(_) => true, _ => false }), 0),
+     wt_count("file_removes", wt_idents(log, \b. match b { FileRemoveIdentity(_) => true, _ => false }), 0),
+     wt_count("dir_makes", wt_idents(log, \b. match b { DirMakeIdentity(_) => true, _ => false }), 0)]),
+   wt_row("exit_manifest", "read once at EndFinalize, served empty: no publication writes", [
+     wt_count("exit_manifest_reads", wt_idents(log, \b. wt_is_key(b, "MOTOKO_EXIT_MANIFEST")), fin),
+     wt_count("exit_manifest_writes", wt_manifest_writes(log), 0)]),
+   wt_row("capture_reads", "read only on a non-retryable provider failure, never admitted", [
+     wt_count("capture_reads", wt_idents(log, \b. wt_is_key(b, "MOTOKO_CAPTURE_FAILED_PAYLOAD")), 0)]),
+   wt_row("decisions", "one DecisionRecord per decide: 2N+1 (EndSuspended) / 2N (EndFinalize)", [
+     wt_count("decisions", wt_decisions(t), derived_decisions(e, n))]),
+   { row: "not_observed", route: "no recorder exists", counts: [],
+     unobserved: ["path_stat", "dir_list", "live_extension_effects", "streaming", "compaction"] }]
+}
+
+export pure func census_counts(rows: [CensusRow]) -> [CensusCount] {
+  List.foldl(\acc r. acc ++ r.counts, [], rows)
+}
+
+-- The named count, or -1 when the census has no such count.
+export pure func census_count(rows: [CensusRow], name: string) -> int {
+  List.foldl(\acc c. if c.name == name then c.observed else acc, -1, census_counts(rows))
+}
+
+export pure func check_census(rows: [CensusRow]) -> [AdmissionFinding] {
+  List.map(\c. { check: A8, location: Aggregate("census:${c.name}"),
+                 finding: if c.name == "decisions" then "DecisionCountMismatch" else "CensusMismatch",
+                 detail: "${c.name} observed ${show(c.observed)} expected ${show(c.expected)}" },
+           List.filter(\c. c.observed != c.expected, census_counts(rows)))
+}
+
+-- ============================================================================
+-- The four words
+-- ============================================================================
+
+export pure func unevaluated_families(fe: [FamilyEvidence]) -> [string] {
+  List.map(\e. e.family, List.filter(\e. not e.evaluated, fe))
+}
+
+-- Families evaluated over inputs, whose own sub-obligation the census shows
+-- was never exercised. At T0: CheckpointHistory (no checkpoint, chain check
+-- vacuous, `dst_invariants.ail:1631–1640`).
+export pure func vacuous_families(fe: [FamilyEvidence], rows: [CensusRow]) -> [string] {
+  List.map(\e. e.family,
+    List.filter(\e. e.family == "checkpoint-history" && e.evaluated && census_count(rows, "checkpoint_records") == 0, fe))
+}
+
+pure func wt_family_line(e: FamilyEvidence, vacuous: [string]) -> string {
+  let note =
+    if not e.evaluated && e.family == "replay-consistency" then " (NoReplay at admission)"
+    else if List.length(List.filter(\v. v == e.family, vacuous)) > 0 then " (vacuous: checkpoint_records=0)"
+    else "";
+  "family evaluated ${e.family} ${if e.evaluated then "true" else "false"}${note}"
+}
+
+export pure func evidence_lines(fe: [FamilyEvidence], rows: [CensusRow]) -> [string] {
+  let vac = vacuous_families(fe, rows);
+  List.map(\e. wt_family_line(e, vac), fe)
+    ++ List.map(\e. "family aggregate inputs ${e.family} ${show(e.inputs)}", fe)
+    ++ List.map(\c. "sub-obligation exercised ${c.name} ${show(c.observed)}${if c.observed > 0 then "" else " (not exercised)"}", census_counts(rows))
+    ++ List.foldl(\acc r. acc ++ List.map(\u. "not observed ${u}", r.unobserved), [], rows)
+}
+
+-- ============================================================================
+-- Tests (pure; the run-bearing half is witness_live_test.ail)
+-- ============================================================================
+
+pure func wt_strs_eq(a: [string], b: [string]) -> bool {
+  match a {
+    [] => (match b { [] => true, _ => false }),
+    x :: xs => match b { [] => false, y :: ys => x == y && wt_strs_eq(xs, ys) }
+  }
+}
+
+pure func wt_env_col(c: EndColumn, t: int) -> [string] {
+  List.map(\e. "${e.key}=${show(e.count)}", expected_env_reads(c, t))
+}
+
+-- Every key of D3's table, each column asserted, T carried through.
+pure func test_m11_env_table_columns() -> bool
+  tests [((), true)]
+  {
+    wt_strs_eq(wt_env_col(ColSuspended, 4), [
+        "MOTOKO_CAPTURE_FAILED_PAYLOAD=0", "MOTOKO_CONFIG=0", "MOTOKO_HEADLESS=1", "MOTOKO_MODELS_FILE=0",
+        "MOTOKO_PERSIST_RETRIES=1", "MOTOKO_PROFILE_DIR=1", "MOTOKO_REPO=0", "MOTOKO_RETRY_STREAM_ERROR=1",
+        "MOTOKO_SESSION_ID=1", "MOTOKO_TOOL_TIMEOUT_MS=4", "OPENAI_BASE_URL=1", "MOTOKO_EXIT_MANIFEST=0"])
+      && wt_strs_eq(wt_env_col(ColFinalize, 3), [
+        "MOTOKO_CAPTURE_FAILED_PAYLOAD=0", "MOTOKO_CONFIG=0", "MOTOKO_HEADLESS=1", "MOTOKO_MODELS_FILE=0",
+        "MOTOKO_PERSIST_RETRIES=1", "MOTOKO_PROFILE_DIR=1", "MOTOKO_REPO=0", "MOTOKO_RETRY_STREAM_ERROR=1",
+        "MOTOKO_SESSION_ID=1", "MOTOKO_TOOL_TIMEOUT_MS=3", "OPENAI_BASE_URL=1", "MOTOKO_EXIT_MANIFEST=1"])
+      && wt_strs_eq(wt_env_col(ColFault, 0), [
+        "MOTOKO_CAPTURE_FAILED_PAYLOAD=1", "MOTOKO_CONFIG=0", "MOTOKO_HEADLESS=1", "MOTOKO_MODELS_FILE=0",
+        "MOTOKO_PERSIST_RETRIES=1", "MOTOKO_PROFILE_DIR=1", "MOTOKO_REPO=0", "MOTOKO_RETRY_STREAM_ERROR=1",
+        "MOTOKO_SESSION_ID=1", "MOTOKO_TOOL_TIMEOUT_MS=0", "OPENAI_BASE_URL=1", "MOTOKO_EXIT_MANIFEST=0"])
+      && column_id(admission_column(EndSuspended(3))) == "EndSuspended"
+      && column_id(admission_column(EndFinalize("model_stop"))) == "EndFinalize"
+      && env_table_count("NOT_A_DRIVER_KEY", ColFault, 9) == 0
+  }
+
+-- A synthetic run: one provider call, one tool dispatch, the env reads the
+-- column expects, a clock advance of 2.
+
+pure func wt_i(o: int, b: IdentityBody, payload: string, advance: int) -> Interaction {
+  { identity: { ordinal: o, body: b }, request_projection: "fx",
+    deadline_ms: match b { ToolIdentity(_, _, _) => 0, ApprovalIdentity(_, _, _) => 0, ExtensionEffectIdentity(_, _, _) => 0, _ => -1 },
+    outcome: { advance_ms: advance, chunks: [], payload: payload, status: OutcomeOk, fault_class_id: "" } }
+}
+
+pure func wt_env_log(from: int, keys: [string]) -> [Interaction] {
+  List.foldl(\acc k. acc ++ [wt_i(from + List.length(acc), EnvironmentReadIdentity(k), "", 0)], [], keys)
+}
+
+pure func wt_base_keys() -> [string] {
+  ["MOTOKO_PERSIST_RETRIES", "MOTOKO_RETRY_STREAM_ERROR", "OPENAI_BASE_URL", "MOTOKO_HEADLESS",
+   "MOTOKO_PROFILE_DIR", "MOTOKO_SESSION_ID", "MOTOKO_TOOL_TIMEOUT_MS"]
+}
+
+pure func wt_log(extra: [string]) -> [Interaction] {
+  let envs = wt_env_log(0, wt_base_keys() ++ extra);
+  let n = List.length(envs);
+  envs ++ [wt_i(n, ProviderIdentity("loop_v2", 0, "fx"), "{}", 0),
+           wt_i(n + 1, ToolIdentity("loop_v2", "c1", "BashExec"), "{}", 2)]
+}
+
+pure func wt_prepared() -> LedgerRecord {
+  WireRecord(ProviderCallPrepared({ step: 0, msg_count: 1, estimated_input_tokens: 1, system_prefix_count: 1,
+    system_prefix_chars: 1, system_prefix_digest: "sha256:fx", payload_digest: "sha256:fx", model: "fx" }))
+}
+
+pure func wt_trace(prepared: int) -> LedgerTrace {
+  { records: List.map(\_. wt_prepared(), wt_range(prepared)) ++ [DecisionRecord({ step: 0, decision: "CallModel" })] }
+}
+
+pure func wt_range(n: int) -> [int] {
+  if n <= 0 then [] else wt_range(n - 1) ++ [n - 1]
+}
+
+pure func wt_tool(id: string) -> ScriptedTool {
+  { tool_call_id: id, duration_ms: 0, code: "", message: "", content: "", exit_code: -1 }
+}
+
+pure func wt_w0() -> WorldState {
+  { empty_world_state() | clock_ms: 10, tools: [wt_tool("c1")] }
+}
+
+pure func wt_labels(fs: [AdmissionFinding]) -> [string] { List.map(finding_label, fs) }
+
+pure func test_m11_witness_built_not_read() -> bool
+  tests [((), true)]
+  {
+    let w0 = wt_w0();
+    let w1 = { w0 | clock_ms: 12, tools: [] };
+    let w = build_witness(ColSuspended, wt_trace(1), w0, w1);
+    w.provider_calls == 1 && w.tool_dispatches == 1 && w.clock_delta_ms == 2
+      && w.approval_reads == 0 && w.approvals_consumed == 0 && w.file_writes == 0
+      && w.file_removes == 0 && w.dir_makes == 0 && w.extension_effects == 0
+      && List.length(w.expected_env_reads) == 12
+      && prepared_calls(wt_trace(3)) == 3
+  }
+
+pure func wt_w1() -> WorldState { { wt_w0() | clock_ms: 12, tools: [] } }
+
+-- The clean twin, the under- and over-count (provider and tool classes), and
+-- the env refusals: a MODELS_FILE read (ProfileMissed), a fault-path capture
+-- read in an accepted column, and the same read accepted in its own column.
+pure func test_m11_witness_balance() -> bool
+  tests [((), true)]
+  {
+    let w = build_witness(ColSuspended, wt_trace(1), wt_w0(), wt_w1());
+    let clean = check_a7(wt_log([]), w);
+    let under = check_a7(wt_log([]), build_witness(ColSuspended, wt_trace(2), wt_w0(), wt_w1()));
+    let over = check_a7(wt_log([]), build_witness(ColSuspended, wt_trace(0), wt_w0(), wt_w1()));
+    let tool_over = check_a7(wt_log([]), build_witness(ColSuspended, wt_trace(1), wt_w0(), { wt_w1() | tools: [wt_tool("c1")] }));
+    let missed = check_a7(wt_log(["MOTOKO_MODELS_FILE"]), w);
+    let fault_in_accepted = check_a7(wt_log(["MOTOKO_CAPTURE_FAILED_PAYLOAD"]), w);
+    let fault_in_own = check_a7(wt_log(["MOTOKO_CAPTURE_FAILED_PAYLOAD"]), build_witness(ColFault, wt_trace(1), wt_w0(), wt_w1()));
+    let exit_missing = check_a7(wt_log([]), build_witness(ColFinalize, wt_trace(1), wt_w0(), wt_w1()));
+    List.length(clean) == 0
+      && first_label(under) == "A7:UnderRecorded@aggregate:witness"
+      && (match under { f :: _ => f.detail == "expect_provider witnessed 2 logged 1", [] => false })
+      && first_label(over) == "A7:OverRecorded@aggregate:witness"
+      && (match over { f :: _ => f.detail == "expect_provider witnessed 0 logged 1", [] => false })
+      && (match tool_over { f :: _ => f.detail == "expect_tool witnessed 0 logged 1", [] => false })
+      && wt_strs_eq(wt_labels(missed), ["A7:EnvReadOverRecorded@aggregate:witness"])
+      && (match missed { f :: _ => f.detail == "MOTOKO_MODELS_FILE expected 0 logged 1", [] => false })
+      && (match fault_in_accepted { f :: _ => f.detail == "MOTOKO_CAPTURE_FAILED_PAYLOAD expected 0 logged 1", [] => false })
+      && List.length(fault_in_own) == 0
+      && (match exit_missing { f :: _ => f.detail == "MOTOKO_EXIT_MANIFEST expected 1 logged 0", [] => false })
+      && first_label(check_a7(wt_log([]), { w | clock_delta_ms: 3 })) == "A7:ClockUnaccounted@aggregate:witness"
+  }
+
+-- The census: every row zero by name on a synthetic clean run, then a
+-- non-zero twin per row, each changing exactly its own count.
+
+pure func wt_cp() -> LedgerRecord { WireRecord(CheckpointTaken({ reason: "fx", before_digest: "a", after_digest: "b" })) }
+
+pure func wt_clean_rows() -> [CensusRow] {
+  census_of(EndSuspended(1), 1, wt_trace_decisions(3), wt_log([]), wt_w0(), wt_w1())
+}
+
+pure func wt_trace_decisions(n: int) -> LedgerTrace {
+  { records: [wt_prepared()] ++ List.map(\i. DecisionRecord({ step: i, decision: if i == 1 then "RunTools" else "CallModel" }), wt_range(n)) }
+}
+
+pure func wt_rows_with(t: LedgerTrace, log: [Interaction], w0: WorldState, w1: WorldState) -> [CensusRow] {
+  census_of(EndSuspended(1), 1, t, log, w0, w1)
+}
+
+pure func wt_plus(t: LedgerTrace, r: LedgerRecord) -> LedgerTrace { { records: t.records ++ [r] } }
+
+pure func wt_nonzero_only(rows: [CensusRow], name: string, value: int) -> bool {
+  wt_nonzero_with(rows, name, value, false)
+}
+
+-- A twin that is itself a decision also moves the decision total (3 -> 4).
+pure func wt_nonzero_with(rows: [CensusRow], name: string, value: int, is_decision: bool) -> bool {
+  List.foldl(\acc c. acc && (if c.name == name then c.observed == value
+                             else if is_decision && c.name == "decisions" then c.observed == c.expected + 1
+                             else c.observed == c.expected),
+             true, census_counts(rows))
+    && first_label(check_census(rows)) == "A8:${if name == "decisions" then "DecisionCountMismatch" else "CensusMismatch"}@aggregate:census:${name}"
+}
+
+pure func wt_log_plus(b: IdentityBody) -> [Interaction] {
+  let l = wt_log([]);
+  l ++ [wt_i(List.length(l), b, "{}", 0)]
+}
+
+pure func test_m11_census_zero_by_name_and_twins() -> bool
+  tests [((), true)]
+  {
+    let rows = wt_clean_rows();
+    let t = wt_trace_decisions(3);
+    let l = wt_log([]);
+    let chunked = List.map(\i. match i.identity.body {
+        ProviderIdentity(_, _, _) => { i | outcome: { i.outcome | chunks: [{ offset_ms: 0, text: "x" }, { offset_ms: 0, text: "y" }] } },
+        _ => i }, l);
+    let wait = WireRecord(ExtToolHandled({ step: 0, stream_id: "s", tool: "T", id: "c1", exit_code: 0 }));
+    let park = WireRecord(ParkEntered({ request_id: "r", step: 0, waits: [] }));
+    let wake = WireRecord(WakeReceived({ request_id: "r", wait_id: "w", outcome: "settled", detail: "" }));
+    wt_strs_eq(List.map(\r. r.row, rows), census_row_names())
+      && List.length(check_census(rows)) == 0
+      && wt_strs_eq(List.map(\c. "${c.name}=${show(c.observed)}/${show(c.expected)}", census_counts(rows)), [
+           "checkpoint_decisions=0/0", "checkpoint_records=0/0", "stream_chunks=0/0",
+           "approval_reads=0/0", "approvals_consumed=0/0", "waits_opened=0/0", "parks=0/0", "wakes=0/0",
+           "extension_effects=0/0", "retries=0/0", "injected_messages=0/0", "hybrid_extractions=0/0",
+           "file_writes=0/0", "file_removes=0/0", "dir_makes=0/0",
+           "exit_manifest_reads=0/0", "exit_manifest_writes=0/0", "capture_reads=0/0", "decisions=3/3"])
+      && (match List.filter(\r. r.row == "not_observed", rows) {
+            r :: _ => List.length(r.counts) == 0 && wt_strs_eq(r.unobserved, ["path_stat", "dir_list", "live_extension_effects", "streaming", "compaction"]),
+            [] => false })
+      && wt_nonzero_with(wt_rows_with(wt_plus(t, DecisionRecord({ step: 9, decision: "TakeCheckpoint" })), l, wt_w0(), wt_w1()), "checkpoint_decisions", 1, true)
+      && wt_nonzero_only(wt_rows_with(wt_plus(t, wt_cp()), l, wt_w0(), wt_w1()), "checkpoint_records", 1)
+      && wt_nonzero_only(wt_rows_with(t, chunked, wt_w0(), wt_w1()), "stream_chunks", 2)
+      && wt_nonzero_only(wt_rows_with(t, wt_log_plus(ApprovalIdentity("loop_v2", "c1", "T")), wt_w0(), wt_w1()), "approval_reads", 1)
+      && wt_nonzero_only(wt_rows_with(t, l, { wt_w0() | approvals: ["y"] }, wt_w1()), "approvals_consumed", 1)
+      && wt_nonzero_only(wt_rows_with(wt_plus(t, wait), l, wt_w0(), wt_w1()), "waits_opened", 1)
+      && wt_nonzero_only(wt_rows_with(wt_plus(t, park), l, wt_w0(), wt_w1()), "parks", 1)
+      && wt_nonzero_only(wt_rows_with(wt_plus(t, wake), l, wt_w0(), wt_w1()), "wakes", 1)
+      && wt_nonzero_only(wt_rows_with(t, wt_log_plus(ExtensionEffectIdentity("x", "k", "c1")), wt_w0(), wt_w1()), "extension_effects", 1)
+      && wt_nonzero_only(wt_rows_with(wt_plus(t, WireRecord(StreamErrorRetry({ step: 0, error: "e" }))), l, wt_w0(), wt_w1()), "retries", 1)
+      && wt_nonzero_with(wt_rows_with(wt_plus(t, DecisionRecord({ step: 9, decision: "InjectUserMessage" })), l, wt_w0(), wt_w1()), "injected_messages", 1, true)
+      && wt_nonzero_only(wt_rows_with(wt_plus(t, WireRecord(HybridBashExtracted({ step: 0, cmd: "c" }))), l, wt_w0(), wt_w1()), "hybrid_extractions", 1)
+      && wt_nonzero_only(wt_rows_with(t, wt_log_plus(FileWriteIdentity("p")), wt_w0(), wt_w1()), "file_writes", 1)
+      && wt_nonzero_only(wt_rows_with(t, wt_log_plus(FileRemoveIdentity("p")), wt_w0(), wt_w1()), "file_removes", 1)
+      && wt_nonzero_only(wt_rows_with(t, wt_log_plus(DirMakeIdentity("p")), wt_w0(), wt_w1()), "dir_makes", 1)
+      && wt_nonzero_only(wt_rows_with(t, wt_log(["MOTOKO_EXIT_MANIFEST"]), wt_w0(), wt_w1()), "exit_manifest_reads", 1)
+      && wt_nonzero_only(wt_rows_with(t, wt_log(["MOTOKO_CAPTURE_FAILED_PAYLOAD"]), wt_w0(), wt_w1()), "capture_reads", 1)
+      && wt_nonzero_only(wt_rows_with(wt_plus(t, DecisionRecord({ step: 9, decision: "CallModel" })), l, wt_w0(), wt_w1()), "decisions", 4)
+  }
+
+-- A publication that writes: the name served non-empty. Its read is counted
+-- too, so the twin has two counts off, the write the second.
+pure func test_m11_census_exit_manifest_write_twin() -> bool
+  tests [((), true)]
+  {
+    let l = List.map(\i. match i.identity.body {
+        EnvironmentReadIdentity(k) => if k == "MOTOKO_EXIT_MANIFEST" then { i | outcome: { i.outcome | payload: "fx-manifest.json" } } else i,
+        _ => i }, wt_log(["MOTOKO_EXIT_MANIFEST"]));
+    let fin = census_of(EndFinalize("model_stop"), 1, wt_trace_decisions(2), l, wt_w0(), wt_w1());
+    let fin_blank = census_of(EndFinalize("model_stop"), 1, wt_trace_decisions(2), wt_log(["MOTOKO_EXIT_MANIFEST"]), wt_w0(), wt_w1());
+    census_count(fin, "exit_manifest_writes") == 1
+      && census_count(fin, "exit_manifest_reads") == 1
+      && wt_strs_eq(wt_labels(check_census(fin)), ["A8:CensusMismatch@aggregate:census:exit_manifest_writes"])
+      && List.length(check_census(fin_blank)) == 0
+      && census_count(fin_blank, "exit_manifest_writes") == 0
+  }
+
+-- 2N + 1 / 2N; the decision count against it; a Finalize run expects its
+-- manifest read.
+pure func test_m11_decision_count_derived() -> bool
+  tests [((), true)]
+  {
+    let fin = census_of(EndFinalize("model_stop"), 1, wt_trace_decisions(2), wt_log(["MOTOKO_EXIT_MANIFEST"]), wt_w0(), wt_w1());
+    derived_decisions(EndSuspended(3), 3) == 7
+      && derived_decisions(EndFinalize("model_stop"), 3) == 6
+      && derived_decisions(EndSuspended(0), 0) == 1
+      && List.length(check_census(fin)) == 0
+      && wt_strs_eq(wt_labels(check_census(census_of(EndFinalize("model_stop"), 1, wt_trace_decisions(3), wt_log(["MOTOKO_EXIT_MANIFEST"]), wt_w0(), wt_w1()))),
+                    ["A8:DecisionCountMismatch@aggregate:census:decisions"])
+      && wt_strs_eq(wt_labels(check_census(census_of(EndFinalize("model_stop"), 1, wt_trace_decisions(2), wt_log([]), wt_w0(), wt_w1()))),
+                    ["A8:CensusMismatch@aggregate:census:exit_manifest_reads"])
+  }
+
+-- The four words, apart: every line carries exactly one of them; the
+-- unevaluated family is stated; CheckpointHistory evaluated-but-vacuous.
+pure func wt_fe() -> [FamilyEvidence] {
+  [{ family: "checkpoint-history", evaluated: true, inputs: 5 },
+   { family: "replay-consistency", evaluated: false, inputs: 2 },
+   { family: "tool-pairing", evaluated: true, inputs: 2 }]
+}
+
+pure func wt_word_count(line: string) -> int {
+  List.length(List.filter(\w. wt_contains(line, w),
+    ["family evaluated", "family aggregate inputs", "sub-obligation exercised", "not observed"]))
+}
+
+pure func wt_contains(s: string, sub: string) -> bool {
+  S.contains(s, sub)
+}
+
+pure func test_m11_four_words_apart() -> bool
+  tests [((), true)]
+  {
+    let rows = wt_clean_rows();
+    let lines = evidence_lines(wt_fe(), rows);
+    List.length(lines) > 0
+      && List.foldl(\acc l. acc && wt_word_count(l) == 1, true, lines)
+      && wt_strs_eq(unevaluated_families(wt_fe()), ["replay-consistency"])
+      && wt_strs_eq(vacuous_families(wt_fe(), rows), ["checkpoint-history"])
+      && wt_strs_eq(vacuous_families(wt_fe(), wt_rows_with(wt_plus(wt_trace_decisions(3), wt_cp()), wt_log([]), wt_w0(), wt_w1())), [])
+      && List.length(List.filter(\l. l == "family evaluated checkpoint-history true (vacuous: checkpoint_records=0)", lines)) == 1
+      && List.length(List.filter(\l. l == "family evaluated replay-consistency false (NoReplay at admission)", lines)) == 1
+      && List.length(List.filter(\l. l == "family aggregate inputs tool-pairing 2", lines)) == 1
+      && List.length(List.filter(\l. l == "sub-obligation exercised decisions 3", lines)) == 1
+      && List.length(List.filter(\l. l == "sub-obligation exercised retries 0 (not exercised)", lines)) == 1
+      && List.length(List.filter(\l. l == "not observed path_stat", lines)) == 1
+  }

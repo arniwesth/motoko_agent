@@ -1,0 +1,82 @@
+flowchart TD
+  %% ADR-001/002 phase-oriented core — live architecture after Phase C / WI-C6.
+  %% Edges are grounded in tools/code-graph import graph (imports.csv) + the
+  %% session provider seam (session -> test/stub_step) which the core profile omits.
+
+  subgraph SHELL["Imperative shell — real effect row {AI,FS,Process,IO,Env,Net,SharedMem,Clock,Stream,Trace}"]
+    supervisor["supervisor.main<br/>process entry"]
+    rpc["rpc<br/>builds config, provider = LiveAI"]
+    facade["agent_loop_v2<br/><i>thin compat facade</i>"]
+    session["session · c2_loop<br/><b>the driver</b><br/>executes decisions · sole ledger emitter"]
+  end
+
+  subgraph CORE["Functional core — pure, L0/L1, no effects"]
+    step_machine["step_machine.decide<br/>StepState &rarr; StepDecision"]
+    phase_vocab["phase_vocab<br/>sealed History / ProviderPayload<br/>project · <b>seal (send-gate)</b> · LedgerEvent"]
+    recovery["recovery"]
+    compaction["compaction<br/>estimate_tokens · usage_percent · exhaustion_pct"]
+    cost_phase["cost_phase"]
+  end
+
+  subgraph PHASES["Phases — effects only via ports, return PhaseResult"]
+    model_phase["model_phase"]
+    tool_phase["tool_phase"]
+    hook_phase["hook_phase"]
+  end
+
+  subgraph PORTS["Ports seam — nondeterminism injected as values"]
+    ports["ports"]
+    dispatch["stub_step<br/>ported_provider &rarr; Ported<br/>dispatch_step (one-shot call)"]
+  end
+
+  subgraph EXT["Extensions — ABI v3 / compactor chain"]
+    extruntime["ext/runtime<br/>chain · arbitration"]
+    registry["ext/registry_generated"]
+  end
+
+  ledger[["Ledger = trace<br/>schema-v1 JSONL"]]
+
+  supervisor --> rpc
+  rpc --> facade
+  facade --> session
+
+  session -->|"decide()"| step_machine
+  step_machine --> phase_vocab
+  step_machine --> recovery
+  session --> model_phase
+  session --> tool_phase
+  session --> hook_phase
+  session -->|"provider always Ported"| dispatch
+  session --> ports
+  session -->|"seal_compacted_payload"| phase_vocab
+  session --> extruntime
+  session --> compaction
+  session --> cost_phase
+
+  model_phase --> phase_vocab
+  tool_phase --> phase_vocab
+  tool_phase --> ports
+  tool_phase --> extruntime
+  hook_phase --> phase_vocab
+  hook_phase --> extruntime
+  ports --> phase_vocab
+  phase_vocab --> compaction
+  extruntime --> phase_vocab
+  extruntime --> registry
+
+  session -.->|"single emission authority"| ledger
+  phase_vocab -.->|"to_schema_v1"| ledger
+
+  classDef shell fill:#1e2a4a,stroke:#7aa2f7,color:#c8d3f5;
+  classDef pure fill:#1c3a2b,stroke:#73daca,color:#c3e8d8;
+  classDef phase fill:#3a3218,stroke:#e0af68,color:#f2e0b8;
+  classDef port fill:#2f2145,stroke:#bb9af7,color:#e5d5fb;
+  classDef ext fill:#3a2024,stroke:#f7768e,color:#f7c5cd;
+  classDef sink fill:#123038,stroke:#2ac3de,color:#bdeef5;
+
+  class supervisor,rpc,facade,session shell;
+  class step_machine,phase_vocab,recovery,compaction,cost_phase pure;
+  class model_phase,tool_phase,hook_phase phase;
+  class ports,dispatch port;
+  class extruntime,registry ext;
+  class ledger sink;

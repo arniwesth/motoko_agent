@@ -1,0 +1,199 @@
+module sunholo/motoko_ext_compose/proc
+
+-- WI-D26. THE ONE HOME for the two halves of a routed subprocess call: the
+-- request compose hands `ExtPorts.tool_handle`, and the streams it reads back out
+-- of the answer. Four call sites across three modules route through this seam
+-- (`compose.check_snippet`, `compose.run_snippet`,
+-- `author_tools.grep_impl`, `authoring/dispatcher.check_snippet`), and plan rule
+-- S23 says the second consumer of a constant gets it a home rather than a copy.
+-- The rule bites harder here than it usually does, because the two halves have
+-- to AGREE: an encoder that shipped the argv one way and a decoder that read the
+-- answer the other would compile at all four sites and be wrong at all four.
+--
+-- ---------------------------------------------------------------------------
+-- THE ARGV IS AN ARGV, NOT A SHELL STRING — MEASURED, and this is the item's
+-- central correction to its own plan
+-- ---------------------------------------------------------------------------
+--
+-- WI-D26's handoff priced the conversion as a QUOTING BOUNDARY: "each
+-- `exec(cmd, argv)` becomes `p.tool_handle(w, "BashExec", … kv("cmd",
+-- js(<shell string>)) …)`", with the safety resting on the generated charset of
+-- every path compose passes. That framing is unnecessary, because the premise
+-- under it — "the seam's only subprocess door is `BashExec` -> `bash -lc`" — is
+-- FALSE, and the tree says so at `tool_runtime.ail:888`:
+--
+--     let effective = if shell_tokens_in_process(req) || isSome(req.cwd) then
+--                       { cmd: "bash", args: ["-lc", wrapped_cmd], … }
+--                     else req;
+--     match exec(effective.cmd, effective.args) { … }
+--
+-- `bash -lc` is the FALLBACK for a request that needs a shell, not the door.
+-- `shell_tokens_in_process` (`tool_runtime.ail:50`) answers true only when the
+-- command is literally `bash`/`sh`/`zsh`, when `cmd` contains a SPACE, or when
+-- `cmd` or any element of `args` contains one of `| > < && || ; $( \``. A
+-- request whose `cmd` is a bare program name and whose `args` are a list reaches
+-- `exec(cmd, args)` — the SAME `std/process.exec` call, with the same argv, that
+-- the ambient sites made before this item routed them.
+--
+-- So `bash_exec_args` builds the argv form and nothing here quotes anything.
+-- Measured before the routing was written, through the production dispatcher:
+--
+--     {"cmd":"ailang","args":["check","tmp/d26/probe_argv.ail"]}
+--       -> exit 0, stdout "→ Type checking …\n✓ No errors found!\n"
+--     {"cmd":"echo","args":["a b","c"]}
+--       -> stdout "a b c\n"      -- argv preserved; a shell would have split it
+--
+-- THE CONSEQUENCE FOR SAFETY IS THE POINT, AND IT IS UNCONDITIONAL RATHER THAN
+-- CHARSET-CONDITIONAL. The handoff's trap 2 asked each converted site to state
+-- that its safety rests on its generator's charset, and to stop and report if
+-- any argument could ever carry user text. On the argv path there is no shell to
+-- be safe from: `grep_impl`'s `pattern` comes from a MODEL-authored tool call
+-- and is the one argument in this package that carries free text, and it crosses
+-- as one argv element the way it did through ambient `exec`. Had the shell-string
+-- form been taken as written, that site would have been a genuine injection the
+-- item was told to stop and report on. The argv form is not a mitigation of that
+-- risk; it is the absence of the boundary that creates it.
+--
+-- WHAT IS STILL CONDITIONAL, stated per S25 because it is a design assumption
+-- and not a fact about the world: this holds while `cmd` stays a bare program
+-- name. Put a space in `cmd` — "ailang check", say — and
+-- `shell_tokens_in_process` flips, the request is re-wrapped as
+-- `bash -lc "ailang check"`, and every argument becomes shell text in the same
+-- motion. `bash_exec_args` takes `cmd` and `argv` separately so that a caller
+-- has to work at getting this wrong, and this paragraph is the reason it does.
+--
+-- ---------------------------------------------------------------------------
+-- WHAT COMES BACK
+-- ---------------------------------------------------------------------------
+--
+-- `ExtProcOutcome` since WI-D23 carries a TYPED `exit_code` beside the rendered
+-- `output`, and the division of labour between them is what every routed site
+-- here depends on:
+--
+--   * BRANCH ON `outcome.exit_code`. It is the typed field WI-D22's schema bump
+--     and WI-D23's plumbing exist to provide, it survives replay
+--     (`ScriptedTool.exit_code`), and reading it costs no parse.
+--   * DECODE `outcome.output` FOR THE STREAMS ONLY. `dispatch_one`'s
+--     `BashExecResult` rendering (`tool_dispatch_adapter.ail:135-142`) is the
+--     only carrier stdout and stderr have across the ABI.
+--
+-- `decode_bash_result` therefore does NOT return the exit code, and the omission
+-- is the enforcement rather than an oversight: a site that wanted to gate on a
+-- parsed code would have to widen this record to do it, which is a visible edit
+-- in a file whose whole comment says not to.
+--
+-- THE FAILURE ARM IS SILENT BY CONSTRUCTION AND THAT IS CORRECT HERE. An
+-- `output` that does not decode, or that carries `ToolErrorResult`'s
+-- `{tool, error, message, exit_code}` shape instead of `BashExecResult`'s,
+-- yields empty streams and `truncated: false`. Every caller pairs these streams
+-- with the typed code, and the typed code on those paths is non-zero
+-- (`dispatch_one_typed`'s error arms are 1, the ABI's three fault variants are
+-- -1), so an undecodable answer reads as "it failed and said nothing" — which is
+-- true — rather than as a success. `message_of` below is what recovers the
+-- something it did say.
+--
+-- MEASURED AGAINST A REAL SPAWN FAILURE rather than reasoned about, because
+-- WI-D26's trap 5 asked for exactly that. Through the production dispatcher:
+--
+--     {"cmd":"definitely_not_a_command_xyz","args":["--v"]}
+--       -> exit_code 1, and output
+--          {"tool":"BashExec","cmd":"definitely_not_a_command_xyz --v",
+--           "exit_code":1,"stdout":"","stderr":"not found: …","truncated":false}
+--
+-- So a spawn failure arrives as a well-formed `BashExecResult` with the reason on
+-- STDERR, not as the `ToolErrorResult` shape the handoff predicted. `exec`'s old
+-- `Err(ProcessError)` arm is preserved by reading stderr, which is what
+-- `run_process_result`'s own `Err` arm writes it to.
+
+import std/json (Json, decode, encode, get, asString, asBool, jo, ja, kv, js)
+import std/option (Some, None)
+import std/result (Ok, Err)
+
+-- The three fields a caller can only get by decoding. The exit code is
+-- deliberately absent; see the header.
+export type ProcStreams = {
+  stdout: string,
+  stderr: string,
+  truncated: bool
+}
+
+-- The tool name every routed site passes. Named rather than spelled four times:
+-- `tool_handle(w, "ailang", …)` is the mistake WI-D19 made and WI-D21 measured
+-- (it reaches `run_native_call`'s final `else` and answers "ailang requires
+-- extension capability"), and a constant is the cheapest way for that mistake to
+-- be unavailable rather than merely documented.
+export func bash_exec_tool() -> string { "BashExec" }
+
+-- The request. `cmd` and `argv` stay SEPARATE all the way to
+-- `parse_exec_from_args`, which is what keeps the call off the `bash -lc` path.
+--
+-- `cwd` IS NOT SET, and its absence is load-bearing twice over. `isSome(req.cwd)`
+-- is the second trigger for the shell wrap, so setting it would re-introduce the
+-- boundary this module exists to avoid; and the ambient `exec` these sites
+-- replace never set one either, so a routed call runs where the process started,
+-- exactly as before. (The bridge's own `workdir: "."` is inert for this tool:
+-- `run_native_call` passes `workdir` to the file tools and `run_process_result`
+-- never receives it — WI-D21 §8's register entry, unchanged and still owed.)
+export func bash_exec_args(cmd: string, argv: [string]) -> string {
+  encode(jo([
+    kv("cmd", js(cmd)),
+    kv("args", ja(strings_to_json(argv)))
+  ]))
+}
+
+func strings_to_json(xs: [string]) -> [Json] {
+  match xs {
+    [] => [],
+    x :: rest => js(x) :: strings_to_json(rest)
+  }
+}
+
+-- The answer's streams. See the header for why `exit_code` is not among them and
+-- why the undecodable arm is empty rather than an error.
+export func decode_bash_result(output: string) -> ProcStreams {
+  match decode(output) {
+    Err(_) => { stdout: "", stderr: "", truncated: false },
+    Ok(obj) => {
+      { stdout: string_field(obj, "stdout"),
+        stderr: string_field(obj, "stderr"),
+        truncated: bool_field(obj, "truncated") }
+    }
+  }
+}
+
+-- The one line every routed site had as `stderr else stdout` before this item,
+-- and it is here rather than four times over for S23's reason plus one specific
+-- to it: `run_process_result` writes a spawn failure's reason to STDERR and a
+-- compiler's diagnostics sometimes to STDOUT, so the order of the two is a real
+-- decision and not a formatting choice. `message` is the last resort — it is
+-- where `ToolErrorResult` puts the only text it has, so an `output` in that shape
+-- still says something rather than nothing.
+export func message_of(output: string) -> string {
+  let s = decode_bash_result(output);
+  if s.stderr != "" then s.stderr
+  else if s.stdout != "" then s.stdout
+  else match decode(output) {
+    Err(_) => "",
+    Ok(obj) => string_field(obj, "message")
+  }
+}
+
+func string_field(obj: Json, key: string) -> string {
+  match get(obj, key) {
+    None => "",
+    Some(v) => match asString(v) {
+      Some(s) => s,
+      None => ""
+    }
+  }
+}
+
+func bool_field(obj: Json, key: string) -> bool {
+  match get(obj, key) {
+    None => false,
+    Some(v) => match asBool(v) {
+      Some(b) => b,
+      None => false
+    }
+  }
+}

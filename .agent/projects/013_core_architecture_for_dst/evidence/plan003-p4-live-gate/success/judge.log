@@ -1,0 +1,19 @@
+=== live gate judge: session_1789481992510-a735568fbeff5102 (expected wake outcome: settled) ===
+  ✓ the wire holds one session_resumed (the --resume child's first event)
+  ✓ (1) Delegate is called, then the run parks (park_entered session_1789481992510-a735568fbeff5102.r0.0.p0)
+  ✓ (1) the first child issued the wake_request for that park exactly once (attempt 0)
+  ✓ (2) no error event from the first child, and no wake_received from it (it was ended on the park)
+  ✓ (2) the journal's entry after the park is the wake — nothing (no exit) was appended between them
+  ✓ (3) exactly one wake entry is the park's child, outcome settled
+  ✓ (3) the journal holds exactly one wake for the first park's request_id
+  ✓ (4) the journal holds one resumed entry (a --resume child folded it)
+  ✓ (4) the resumed child's first wake event is wake_received for <R'>.p0 (session_1789481992510-a735568fbeff5102.r1.0.p0); no wake_request precedes it
+  ✓ (4) the served wake carries the journal's wake: same outcome and detail
+  ✓ (4) exactly once on the wire: wake_received(<R'>.p0) precedes session_start(R')
+  ✓ (4) the journal: run_started(R') comes after the wake for <R'>.p0
+  ✓ (5) the resumed child calls DelegateCheck, then reports done; no error
+  provider_call_prepared: first child 2, resumed child 2, total 4
+  ✓ provider calls across both processes: 4 (2 + 2)
+  ✓ T0 live: while the session ran, the session directory held journal.jsonl and lease only
+journal kinds: header run_started history_appended history_appended history_appended state_delta history_appended history_appended state_delta park wake resumed park wake run_started history_appended history_appended state_delta history_appended history_appended state_delta run_finished exit 
+live gate judge PASS

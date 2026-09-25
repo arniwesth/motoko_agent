@@ -1,0 +1,2282 @@
+-- Phase vocab module
+--
+-- Phase-oriented core vocabulary. Phase A lands this module unused by
+-- production: sealed history/payload types, state/delta/checkpoint shapes,
+-- the typed ledger vocabulary, and schema-v1 projection scaffolding.
+
+module src/core/phase_vocab
+
+import std/ai (Message, ToolCall, ImagePart, StepResult)
+import std/crypto (sha256Hex)
+import std/json (Json, jo, ja, kv, js, jnum, jb, encode, get, asString, asNumber, asBool, asObject)
+import std/list as List (length, map)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/string (contains, substring, replaceMany, concat)
+import std/string as Str (length)
+import src/core/compaction (estimate_tokens_messages, usage_percent_with_limit, exhaustion_pct, output_token_allowance, effective_input_limit, calibrated_tokens_anchored, calibrated_usage_percent_anchored)
+import src/core/tool_contract (ToolResultEnvelope, result_to_model_json)
+import src/core/types (Msg)
+import pkg/sunholo/motoko_ext_abi/types (DiagnosticField)
+-- P1 (D1): the leaf. It imports nothing from this module, ports or
+-- context_usage, so the hub can name the sum without a cycle.
+import src/core/context_limit (ContextLimit, Bounded, Disabled, Unknown, Catalogue, ProfileKeyAbsent, ModelNotInCatalogue, raw_window_of, limit_arm_id, limit_origin_id, limit_profile_miss_id, limit_catalogue_miss_id, limit_missing_model)
+
+-- ============================================================================
+-- History: sealed. MkHistory is deliberately NOT exported.
+-- ============================================================================
+
+type History = MkHistory([Message])
+
+export func history_from_seed(msgs: [Message]) -> Result[History, string] {
+  if system_is_head_prefix(msgs, true)
+  then Ok(MkHistory(msgs))
+  else Err("history seed: system messages must form a head prefix")
+}
+
+export type CheckpointChain = {
+  initial_digest: string,
+  checkpoints: [CheckpointInfo]
+}
+
+export func history_from_resume(msgs: [Message], chain: CheckpointChain) -> Result[History, string] {
+  if not system_is_head_prefix(msgs, true) then Err("history resume: system messages must form a head prefix")
+  else {
+    let h = MkHistory(msgs);
+    let final_digest = history_digest(h);
+    match validate_checkpoint_chain(chain.initial_digest, chain.checkpoints, final_digest) {
+      Err(e) => Err(e),
+      Ok(_) => Ok(h)
+    }
+  }
+}
+
+export func history_append(h: History, m: Message) -> History {
+  match h { MkHistory(xs) => MkHistory(xs ++ [m]) }
+}
+
+export func history_len(h: History) -> int {
+  match h { MkHistory(xs) => List.length(xs) }
+}
+
+export func history_messages(h: History) -> [Message] {
+  match h { MkHistory(xs) => xs }
+}
+
+export func history_digest(h: History) -> string {
+  match h { MkHistory(xs) => digest_messages(xs) }
+}
+
+export pure func history_digest_matches(h: History, expected: string) -> bool {
+  history_digest(h) == expected
+}
+
+export pure func history_valid_transcript(h: History) -> bool {
+  match h { MkHistory(xs) => valid_message_transcript(xs) }
+}
+
+-- EXPORTED FOR `journal.ail` (ADR-003 D1, PLAN-003 P1 Part 3). Both were
+-- private until the journal needed them, and both are exported as FUNCTIONS
+-- over `[Message]` — `History` and its constructor stay sealed, and the journal
+-- reaches a validated history through `history_from_seed` like every other
+-- caller. `system_is_head_prefix` is the fold's head check (D4 rule 3);
+-- `take_system_prefix` is what a profile switch replaces (D6 step 4).
+export pure func system_is_head_prefix(msgs: [Message], still_head: bool) -> bool {
+  match msgs {
+    [] => true,
+    m :: rest =>
+      if m.role == "system"
+      then still_head && system_is_head_prefix(rest, true)
+      else system_is_head_prefix(rest, false)
+  }
+}
+
+export pure func take_system_prefix(msgs: [Message]) -> [Message] {
+  match msgs {
+    [] => [],
+    m :: rest => if m.role == "system" then m :: take_system_prefix(rest) else []
+  }
+}
+
+export pure func system_prefix_chars(msgs: [Message]) -> int {
+  match msgs {
+    [] => 0,
+    m :: rest => if m.role == "system" then Str.length(m.content) + system_prefix_chars(rest) else 0
+  }
+}
+
+pure func valid_tool_calls(calls: [ToolCall]) -> bool {
+  match calls {
+    [] => true,
+    c :: rest => c.id != "" && valid_tool_calls(rest)
+  }
+}
+
+pure func valid_message_transcript(msgs: [Message]) -> bool {
+  match msgs {
+    [] => true,
+    m :: rest =>
+      if m.role == "tool" then m.tool_call_id != "" && valid_message_transcript(rest)
+      else valid_tool_calls(m.tool_calls) && valid_message_transcript(rest)
+  }
+}
+
+-- ============================================================================
+-- Cumulative runtime counts.
+--
+-- MOVED HERE FROM `session.ail:430–450`, `:544–552` (ADR-003 D1, PLAN-003 P1
+-- Part 3). The type was private to `session.ail` and `Continuation.cumulative`
+-- (`journal.ail`) needs to name it; `journal.ail` cannot import `session.ail`
+-- without a cycle, and this module is already imported by both. No behaviour
+-- change: the three definitions are byte-for-byte what they were, `export`
+-- aside.
+--
+-- WHAT DID NOT MOVE, and it is the same reason in both directions:
+-- `runtime_status_counts(trace)` and `runtime_status_count_one` stay in
+-- `session.ail` because they fold a `LedgerTrace` over records whose meaning is
+-- the driver's, and `zero_totals`/`RuntimeLoopTotals` stay because they are the
+-- per-RUN totals the loop resets and no journal value carries them (ADR-003 D1,
+-- "what the journal never holds").
+-- ============================================================================
+
+export type RuntimeStatusCounts = {
+  provider_calls_started: int,
+  provider_calls_completed: int,
+  stage_applied_total: int,
+  stage_rejected_total: int,
+  compaction_ai_applied: int
+}
+
+export pure func zero_runtime_status_counts() -> RuntimeStatusCounts {
+  {
+    provider_calls_started: 0,
+    provider_calls_completed: 0,
+    stage_applied_total: 0,
+    stage_rejected_total: 0,
+    compaction_ai_applied: 0
+  }
+}
+
+-- The ADD is what a resume is made of: `prior_counts` from the continuation
+-- plus this run's own trace-derived counts (`session.ail:539`), so a suspended
+-- run's provider calls are still counted after the operator continues.
+export pure func runtime_status_counts_add(a: RuntimeStatusCounts, b: RuntimeStatusCounts) -> RuntimeStatusCounts {
+  {
+    provider_calls_started: a.provider_calls_started + b.provider_calls_started,
+    provider_calls_completed: a.provider_calls_completed + b.provider_calls_completed,
+    stage_applied_total: a.stage_applied_total + b.stage_applied_total,
+    stage_rejected_total: a.stage_rejected_total + b.stage_rejected_total,
+    compaction_ai_applied: a.compaction_ai_applied + b.compaction_ai_applied
+  }
+}
+
+-- ============================================================================
+-- Compaction pipeline types: both sealed.
+-- ============================================================================
+
+type CompactableSegment = MkSegment([Message])
+type ProviderPayload = MkPayload([Message])
+
+export type PinnedSplit = { pinned: [Message], segment: CompactableSegment }
+
+export func payload_messages(p: ProviderPayload) -> [Message] {
+  match p { MkPayload(xs) => xs }
+}
+
+pure func take_non_system_tail(msgs: [Message]) -> [Message] {
+  match msgs {
+    [] => [],
+    m :: rest => if m.role == "system" then take_non_system_tail(rest) else msgs
+  }
+}
+
+export pure func split_for_compaction(msgs: [Message]) -> PinnedSplit {
+  { pinned: take_system_prefix(msgs), segment: MkSegment(take_non_system_tail(msgs)) }
+}
+
+export pure func segment_messages(segment: CompactableSegment) -> [Message] {
+  match segment { MkSegment(xs) => xs }
+}
+
+export type SealError = SealExhausted(string) | SealSystemPromptEmpty(string)
+
+export pure func seal_compacted_payload(split: PinnedSplit, chain_msgs: [Message], model: string, raw_context_limit: int, require_system_prompt: bool) -> Result[ProviderPayload, SealError] {
+  let payload_msgs = split.pinned ++ chain_msgs;
+  if require_system_prompt && system_prefix_chars(split.pinned) == 0 then
+    Err(SealSystemPromptEmpty("system prompt required but system prefix is 0 chars"))
+  else {
+    let pct = usage_percent_with_limit(payload_msgs, effective_input_limit(raw_context_limit));
+    if pct >= exhaustion_pct() then
+      Err(SealExhausted("compaction_exhausted: context at ${show(pct)}% of ${model} limit after compactor chain"))
+    else Ok(MkPayload(payload_msgs))
+  }
+}
+
+export type ModelRequest = { model: string }
+
+export type TokenTelemetry = {
+  last_input_tokens: int,
+  last_output_tokens: int,
+  -- char/4 estimate of the window that produced last_input_tokens. Lets the
+  -- compaction gate anchor on provider truth: scale the current raw estimate by
+  -- (last_input_tokens / last_estimated_input_tokens). 0 before the first
+  -- provider result (calibration falls back to the raw estimate).
+  last_estimated_input_tokens: int
+}
+
+-- Re-grounded on current compaction.ail. The Phase-A source of truth is the
+-- named exports in src/core/compaction.ail: elide_tier_pct(),
+-- elide_hard_tier_pct(), emergency_pct(), elide_keep_last(),
+-- elide_hard_keep_last(), emergency_keep_last(), emergency_final_keep_last().
+--
+-- P1 (D1) step 7: `context_limit` is the resolved SUM, stored once by
+-- `session_policy_init` / `session_policy_with_model`. Every int reader goes
+-- through one of `context_limit`'s three named projections (rule 1); nothing
+-- under `packages/` names this record, so the sum does not reach ABI 7.x.
+export type CompactionPolicy = {
+  context_limit: ContextLimit,
+  elide_tier_pct: int,
+  elide_hard_tier_pct: int,
+  emergency_pct: int
+}
+
+-- Pure structural prep for the effectful model-call seal. This pins the system
+-- prefix and identifies the compactable segment; it deliberately does not make
+-- a Fail/exhaustion decision. Context exhaustion is owned by
+-- seal_compacted_payload after the compactor chain has run, and any actual-token
+-- pre-gate is deferred to ABI v3 extension policy. The live driver consumes the
+-- prep directly only after the optional WI-F3 model_phase extraction lands.
+export pure func project(h: History, t: TokenTelemetry, pol: CompactionPolicy)
+  -> Result[{ split: PinnedSplit, events: [LedgerEvent] }, string] {
+  match h {
+    MkHistory(xs) => {
+      let split = split_for_compaction(xs);
+      Ok({
+        split: split,
+        events: [ProviderCallPrepared({
+          step: 0,
+          msg_count: List.length(xs),
+          estimated_input_tokens: estimate_tokens_messages(xs),
+          system_prefix_count: List.length(split.pinned),
+          system_prefix_chars: 0,
+          system_prefix_digest: system_prefix_digest_for(split.pinned),
+          payload_digest: payload_digest(xs),
+          model: ""
+        })]
+      })
+    }
+  }
+}
+
+pure func frame(label: string, value: string) -> string {
+  "${label}:${show(Str.length(value))}:${value};"
+}
+
+pure func digest_content(value: string) -> string {
+  replaceMany(value, [
+    ("make[20]", "make[0]"), ("make[19]", "make[0]"), ("make[18]", "make[0]"), ("make[17]", "make[0]"), ("make[16]", "make[0]"),
+    ("make[15]", "make[0]"), ("make[14]", "make[0]"), ("make[13]", "make[0]"), ("make[12]", "make[0]"), ("make[11]", "make[0]"),
+    ("make[10]", "make[0]"), ("make[9]", "make[0]"), ("make[8]", "make[0]"), ("make[7]", "make[0]"), ("make[6]", "make[0]"),
+    ("make[5]", "make[0]"), ("make[4]", "make[0]"), ("make[3]", "make[0]"), ("make[2]", "make[0]"), ("make[1]", "make[0]")
+  ])
+}
+
+pure func canonical_tool_calls(calls: [ToolCall]) -> string {
+  match calls {
+    [] => "tc-end;"
+    c :: rest =>
+      "tc{${frame("id", c.id)}${frame("name", c.name)}${frame("args", c.arguments)}}${canonical_tool_calls(rest)}"
+  }
+}
+
+pure func canonical_message(m: Message) -> string {
+  "m{${frame("role", m.role)}${frame("content", digest_content(m.content))}${frame("tool_call_id", m.tool_call_id)}${frame("tool_calls_len", show(List.length(m.tool_calls)))}${canonical_tool_calls(m.tool_calls)}}"
+}
+
+-- One join over per-message frames, not a right-nested interpolation: nesting
+-- copies the whole already-built suffix at every message, O(n x history bytes)
+-- per digest, and this runs twice per CallModel step. Byte-identical output.
+pure func canonical_messages(msgs: [Message]) -> string {
+  concat(List.map(canonical_message, msgs) ++ ["m-end;"])
+}
+
+-- EXPORTED FOR `journal.ail` (ADR-003 D1, PLAN-003 P1 Part 3). The journal's
+-- two digests are built from exactly these: the seed's `digest` is
+-- `digest_messages` of the whole seed, and a history entry's `digest_after`
+-- chains the previous one through `canonical_messages_raw` of the ONE message
+-- that entry carries — which is why the raw canonical form is exported and not
+-- just the digest over it. See `journal.chain_digest_after`.
+export pure func canonical_messages_raw(msgs: [Message]) -> string {
+  match msgs {
+    [] => "m-end;"
+    m :: rest =>
+      "m{${canonical_message_body(m)}}${canonical_messages_raw(rest)}"
+  }
+}
+
+-- The four fields both canonical forms have always framed, factored out so that
+-- `canonical_messages_raw` and `canonical_message_frame` below cannot drift
+-- apart. Byte-identical to what `canonical_messages_raw` inlined before
+-- ADR-003 P3 Part 2 split it out: `m{` ++ this ++ `}` per message.
+pure func canonical_message_body(m: Message) -> string {
+  "${frame("role", m.role)}${frame("content", m.content)}${frame("tool_call_id", m.tool_call_id)}${frame("tool_calls_len", show(List.length(m.tool_calls)))}${canonical_tool_calls(m.tool_calls)}"
+}
+
+pure func canonical_images(images: [ImagePart]) -> string {
+  match images {
+    [] => "im-end;"
+    i :: rest =>
+      "im{${frame("source", i.source)}${frame("mime", i.mime)}}${canonical_images(rest)}"
+  }
+}
+
+-- ADR-003 v6.1 D4's CHAIN FRAME, and PLAN-003 P3 Part 2's settlement of the
+-- plan's open question 8. One message's canonical form, and it is the frame
+-- `canonical_messages_raw` builds PLUS AN `images` FRAME.
+--
+-- WHY THE IMAGES FRAME IS NOT OPTIONAL. Both canonical forms above omit
+-- `images` — `canonical_messages` because it predates vision inputs, and
+-- `canonical_messages_raw` because it is `canonical_messages` with the content
+-- normalisation removed. A journal chain built on either would accept a history
+-- whose image parts had been swapped, dropped or re-sourced: the digests would
+-- match and the model would have seen a different conversation. `journal.ail`'s
+-- codec keeps `images` for exactly that reason (the ABI's `Msg` drops it), and a
+-- chain blind to the field the codec was written to preserve would be a seal
+-- over four fifths of the message.
+--
+-- THE CHAIN AND THE CHILD SHARE THIS ONE FUNCTION. `journal.chain_digest_after`
+-- is the only caller today; the emit sites of P3 Part 3 reach it through that.
+-- Two definitions of the frame would be two definitions of the chain digest,
+-- which is the failure mode ADR-003 D1 refuses for the message ENCODER and
+-- refuses here for the same reason.
+--
+-- The `m{...}` wrapper is kept so a frame reads as one message of the raw form
+-- and the length-prefixed framing (`frame`) keeps the concatenation injective;
+-- the trailing `m-end;` of a full list is NOT part of a single frame, because a
+-- frame is concatenated onto a previous digest and never onto another frame.
+export pure func canonical_message_frame(m: Message) -> string {
+  "m{${canonical_message_body(m)}${canonical_images(m.images)}}"
+}
+
+export pure func digest_messages(msgs: [Message]) -> string {
+  "sha256:${sha256Hex(canonical_messages(msgs))}"
+}
+
+export pure func payload_digest(msgs: [Message]) -> string {
+  digest_messages(msgs)
+}
+
+export pure func system_prefix_digest_for(msgs: [Message]) -> string {
+  "sha256:${sha256Hex(canonical_messages_raw(msgs))}"
+}
+
+-- ============================================================================
+-- Checkpoint seam.
+-- ============================================================================
+
+export type CheckpointPlan = { reason: string, summary: string }
+
+export func checkpoint(h: History, plan: CheckpointPlan)
+  -> { history: History, event: LedgerEvent } {
+  match h {
+    MkHistory(xs) => {
+      let pinned = take_system_prefix(xs);
+      let summary_msg: Message =
+        { role: "assistant", content: "[CHECKPOINT] ${plan.summary}", tool_calls: [], tool_call_id: "", images: [] };
+      let rebuilt = MkHistory(pinned ++ [summary_msg]);
+      {
+        history: rebuilt,
+        event: CheckpointTaken({
+          reason: plan.reason,
+          before_digest: history_digest(h),
+          after_digest: history_digest(rebuilt)
+        })
+      }
+    }
+  }
+}
+
+-- ============================================================================
+-- StepState and deltas.
+-- ============================================================================
+
+export type LoopTotals = {
+  input_tokens: int,
+  output_tokens: int,
+  cost_millicents: int,
+  cost_warned_pct: int
+}
+
+export type StepPolicy = {
+  step_budget: int,
+  max_cost_millicents: int,
+  cost_metered: bool,
+  persist_retries: int,
+  retry_stream_errors: bool,
+  require_system_prompt: bool,
+  model: string,
+  provider_base_url: string,
+  checkpoint_enabled: bool,
+  checkpoint_pct: int,
+  compaction: CompactionPolicy
+}
+
+-- ============================================================================
+-- ADR-002 D3, PLAN-002 W2 Parts 1 and 3: the wait descriptor and the lifecycle
+-- rows that need no wake.
+--
+-- A SUM, NOT A RECORD. v2's record admitted a timer with an answer path; the
+-- sum does not. Declared beside `StepState` because both loop states carry it,
+-- and `ports.ail` already imports this module, so W3's `ParkRequest` can name
+-- it without a cycle.
+--
+-- THE WIRE HAS NO DISCRIMINATOR KEY. W1b's producer (`herdr.ail`, the `wait` on
+-- `Delegate`'s metadata) writes `{ id, delegate_kind, locator: { pane },
+-- answer_path, run_key }` and nothing else, so the strict decoder tells the
+-- variants apart by their EXACT key sets. An object with an extra key, a
+-- missing key, a wrong-typed value or an empty string is `Err`, never a
+-- best-effort variant: a wait the core half-understood is a wait it would park
+-- on and never wake from.
+-- ============================================================================
+
+export type WaitDescriptor
+  = DelegateWait({ id: string, delegate_kind: string, locator: { pane: string }, answer_path: string, run_key: string })
+  | OperatorWait({ id: string })
+  | TimerWait({ id: string, deadline_ms: int })
+
+export pure func wait_id(w: WaitDescriptor) -> string {
+  match w {
+    DelegateWait(d) => d.id,
+    OperatorWait(o) => o.id,
+    TimerWait(t) => t.id
+  }
+}
+
+pure func json_field_names(fields: [{key: string, value: Json}]) -> [string] {
+  match fields {
+    [] => [],
+    f :: rest => f.key :: json_field_names(rest)
+  }
+}
+
+pure func string_list_has(xs: [string], x: string) -> bool {
+  match xs {
+    [] => false,
+    y :: rest => y == x || string_list_has(rest, x)
+  }
+}
+
+pure func string_list_covers(have: [string], want: [string]) -> bool {
+  match want {
+    [] => true,
+    w :: rest => string_list_has(have, w) && string_list_covers(have, rest)
+  }
+}
+
+-- Exactly `expected`: equal lengths and every expected key present, which also
+-- rejects a duplicated key (it would push an expected one out).
+pure func json_keys_exactly(fields: [{key: string, value: Json}], expected: [string]) -> bool {
+  List.length(fields) == List.length(expected) && string_list_covers(json_field_names(fields), expected)
+}
+
+pure func wait_required_string(obj: Json, key: string) -> Result[string, string] {
+  match get(obj, key) {
+    None => Err("wait: missing `${key}`"),
+    Some(v) => match asString(v) {
+      None => Err("wait: `${key}` is not a string"),
+      Some(s) => if s == "" then Err("wait: `${key}` is empty") else Ok(s)
+    }
+  }
+}
+
+pure func delegate_wait_from_json(obj: Json) -> Result[WaitDescriptor, string] {
+  match wait_required_string(obj, "id") {
+    Err(e) => Err(e),
+    Ok(id) => match wait_required_string(obj, "delegate_kind") {
+      Err(e) => Err(e),
+      Ok(kind) => match wait_required_string(obj, "answer_path") {
+        Err(e) => Err(e),
+        Ok(answer_path) => match wait_required_string(obj, "run_key") {
+          Err(e) => Err(e),
+          Ok(run_key) => match get(obj, "locator") {
+            None => Err("wait: missing `locator`"),
+            Some(loc) => match asObject(loc) {
+              None => Err("wait: `locator` is not an object"),
+              Some(loc_fields) =>
+                if not json_keys_exactly(loc_fields, ["pane"]) then Err("wait: `locator` must have exactly the key `pane`")
+                else match wait_required_string(loc, "pane") {
+                  Err(e) => Err(e),
+                  Ok(pane) => Ok(DelegateWait({ id: id, delegate_kind: kind, locator: { pane: pane }, answer_path: answer_path, run_key: run_key }))
+                }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+pure func timer_wait_from_json(obj: Json) -> Result[WaitDescriptor, string] {
+  match wait_required_string(obj, "id") {
+    Err(e) => Err(e),
+    Ok(id) => match get(obj, "deadline_ms") {
+      None => Err("wait: missing `deadline_ms`"),
+      Some(v) => match asNumber(v) {
+        None => Err("wait: `deadline_ms` is not a number"),
+        Some(f) => {
+          let n = floatToInt(f);
+          if _int_to_float(n) != f then Err("wait: `deadline_ms` is not an integer")
+          else if n < 0 then Err("wait: `deadline_ms` is negative")
+          else Ok(TimerWait({ id: id, deadline_ms: n }))
+        }
+      }
+    }
+  }
+}
+
+-- The strict decoder (W2 Part 1). The ONE owner of the wire shape: the ABI's
+-- `ExtCtx.open_waits` is this module's encoding, and no mirror type exists.
+export pure func wait_descriptor_from_json(j: Json) -> Result[WaitDescriptor, string] {
+  match asObject(j) {
+    None => Err("wait: not an object"),
+    Some(fields) =>
+      if json_keys_exactly(fields, ["id", "delegate_kind", "locator", "answer_path", "run_key"]) then delegate_wait_from_json(j)
+      else if json_keys_exactly(fields, ["id", "deadline_ms"]) then timer_wait_from_json(j)
+      else if json_keys_exactly(fields, ["id"]) then
+        match wait_required_string(j, "id") { Err(e) => Err(e), Ok(id) => Ok(OperatorWait({ id: id })) }
+      else Err("wait: key set matches no variant (${encode(jo(fields))})")
+  }
+}
+
+-- Key order is the producer's (`herdr.ail`), so a `DelegateWait` re-encodes to
+-- the bytes W1b's fixtures hold.
+export pure func wait_descriptor_to_json(w: WaitDescriptor) -> Json {
+  match w {
+    DelegateWait(d) => jo([
+      kv("id", js(d.id)),
+      kv("delegate_kind", js(d.delegate_kind)),
+      kv("locator", jo([kv("pane", js(d.locator.pane))])),
+      kv("answer_path", js(d.answer_path)),
+      kv("run_key", js(d.run_key))
+    ]),
+    OperatorWait(o) => jo([kv("id", js(o.id))]),
+    TimerWait(t) => jo([kv("id", js(t.id)), kv("deadline_ms", jnum(_int_to_float(t.deadline_ms)))])
+  }
+}
+
+-- `ExtCtx.open_waits` (ABI 7.4): a JSON array, `[]` for none.
+export pure func wait_descriptors_json(ws: [WaitDescriptor]) -> Json {
+  ja(List.map(wait_descriptor_to_json, ws))
+}
+
+-- What a tool result's metadata says about a wait, lifted from the ENVELOPE —
+-- never from the model message, which the cap may have truncated.
+export type WaitLift = WaitAbsent | WaitValid(WaitDescriptor) | WaitInvalid(string)
+
+export pure func lift_wait(result_env: ToolResultEnvelope) -> WaitLift {
+  match get(result_env.metadata, "wait") {
+    None => WaitAbsent,
+    Some(w) => match wait_descriptor_from_json(w) {
+      Ok(d) => WaitValid(d),
+      Err(e) => WaitInvalid(e)
+    }
+  }
+}
+
+-- `settled: true` names the wait it settles by `metadata.delegate`, which is
+-- W1b's matching key: the Delegate's `wait.id` is that same handle.
+pure func settled_wait_id(result_env: ToolResultEnvelope) -> Option[string] {
+  match get(result_env.metadata, "settled") {
+    None => None,
+    Some(v) => match asBool(v) {
+      Some(b) =>
+        if not b then None
+        else match get(result_env.metadata, "delegate") {
+          None => None,
+          Some(d) => match asString(d) {
+            Some(id) => if id == "" then None else Some(id),
+            None => None
+          }
+        },
+      None => None
+    }
+  }
+}
+
+pure func remove_wait(ws: [WaitDescriptor], id: string) -> [WaitDescriptor] {
+  match ws {
+    [] => [],
+    w :: rest => if wait_id(w) == id then remove_wait(rest, id) else w :: remove_wait(rest, id)
+  }
+}
+
+pure func has_wait(ws: [WaitDescriptor], id: string) -> bool {
+  match ws {
+    [] => false,
+    w :: rest => wait_id(w) == id || has_wait(rest, id)
+  }
+}
+
+-- Registration is by id: the same id twice is one wait (the later descriptor
+-- wins, in place); a re-delegation carries a NEW id and is appended beside the
+-- old one, which stays until it is settled or lost.
+pure func register_wait(ws: [WaitDescriptor], w: WaitDescriptor) -> [WaitDescriptor] {
+  if has_wait(ws, wait_id(w)) then replace_wait(ws, w) else ws ++ [w]
+}
+
+pure func replace_wait(ws: [WaitDescriptor], w: WaitDescriptor) -> [WaitDescriptor] {
+  match ws {
+    [] => [],
+    x :: rest => if wait_id(x) == wait_id(w) then w :: rest else x :: replace_wait(rest, w)
+  }
+}
+
+-- ADR-002 D3's lifecycle, the rows that need no wake (W2 Part 3; the wake rows
+-- are W4's). Keyed on the ENVELOPE's metadata, not on the tool's name, so the
+-- core names no extension tool:
+--
+--   `Delegate` succeeds (exit 0, valid `wait`)        register
+--   `Delegate` fails (non-zero exit, or no/invalid `wait`)  nothing
+--   re-delegation (a new id)                           register; the old stays
+--   `settled: true`                                    remove `id == metadata.delegate`
+--   error without settling (`settled: false`)          keep
+--   settles an already-removed wait                    idempotent
+--   gone, second read fails (`lost`, `settled: true`)  remove
+--   run ends                                           `waits_at_run_end`
+--
+-- `_call` is the model's call the envelope answers. No non-wake row reads it;
+-- the invalid-wait diagnostic (`wait_diagnostic_event`) does.
+export pure func apply_tool_lifecycle(open_waits: [WaitDescriptor], _call: ToolCall, result_env: ToolResultEnvelope) -> [WaitDescriptor] {
+  let after_settle = match settled_wait_id(result_env) {
+    Some(id) => remove_wait(open_waits, id),
+    None => open_waits
+  };
+  if result_env.exit_code != 0 then after_settle
+  else match lift_wait(result_env) {
+    WaitValid(w) => register_wait(after_settle, w),
+    _ => after_settle
+  }
+}
+
+-- Run ends (`Finalize`, `Fail`, suspend): the waits are cleared with the run.
+-- ADR-003's `park` entry, not this list, is what carries them across a durable
+-- park, so a resumed run starts from here.
+export pure func waits_at_run_end(_open_waits: [WaitDescriptor]) -> [WaitDescriptor] {
+  []
+}
+
+-- An invalid `wait` registers nothing and leaves THIS in the tool result's
+-- emitted events. `ExtensionDiagnostic` is an existing variant, so the event
+-- vocabulary does not grow.
+export pure func wait_diagnostic_event(step: int, call: ToolCall, result_env: ToolResultEnvelope) -> Option[LedgerEvent] {
+  match lift_wait(result_env) {
+    WaitInvalid(reason) => Some(ExtensionDiagnostic({
+      step: step,
+      extension: "core:open_waits",
+      code: "invalid_wait",
+      fields: [
+        { key: "tool", value: call.name },
+        { key: "id", value: call.id },
+        { key: "reason", value: reason }
+      ]
+    })),
+    _ => None
+  }
+}
+
+export type StepState = {
+  step_idx: int,
+  history: History,
+  telemetry: TokenTelemetry,
+  totals: LoopTotals,
+  nudges_used: int,
+  ext_artifacts: Json,
+  pending_tool_calls: [ToolCall],
+  last_finish_reason: string,
+  last_response_text: string,
+  -- ADR-002 D2/D3, PLAN-002 W2. Projected from `C2LoopState.open_waits`.
+  -- `decide` does not read it in W2 (§1 row 13: stage 3 is inert).
+  open_waits: [WaitDescriptor]
+}
+
+export type StateDelta = {
+  telemetry: Option[TokenTelemetry],
+  totals: Option[LoopTotals],
+  nudges_used: Option[int],
+  ext_artifacts: Option[Json],
+  pending_tool_calls: Option[[ToolCall]],
+  last_finish_reason: Option[string],
+  last_response_text: Option[string]
+}
+
+export pure func empty_delta() -> StateDelta {
+  { telemetry: None, totals: None, nudges_used: None, ext_artifacts: None,
+    pending_tool_calls: None, last_finish_reason: None, last_response_text: None }
+}
+
+export func apply_state_delta(s: StepState, d: StateDelta) -> StepState {
+  {
+    step_idx: s.step_idx,
+    history: s.history,
+    telemetry: match d.telemetry { Some(t) => t, None => s.telemetry },
+    totals: match d.totals { Some(t) => t, None => s.totals },
+    nudges_used: match d.nudges_used { Some(n) => n, None => s.nudges_used },
+    ext_artifacts: match d.ext_artifacts { Some(a) => a, None => s.ext_artifacts },
+    pending_tool_calls: match d.pending_tool_calls { Some(c) => c, None => s.pending_tool_calls },
+    last_finish_reason: match d.last_finish_reason { Some(f) => f, None => s.last_finish_reason },
+    last_response_text: match d.last_response_text { Some(t) => t, None => s.last_response_text },
+    open_waits: s.open_waits
+  }
+}
+
+export func apply_checkpoint(s: StepState, plan: CheckpointPlan)
+  -> { state: StepState, event: LedgerEvent } {
+  let cp = checkpoint(s.history, plan);
+  {
+    state: {
+      step_idx: s.step_idx,
+      history: cp.history,
+      telemetry: s.telemetry,
+      totals: s.totals,
+      nudges_used: s.nudges_used,
+      ext_artifacts: s.ext_artifacts,
+      pending_tool_calls: s.pending_tool_calls,
+      last_finish_reason: s.last_finish_reason,
+      last_response_text: s.last_response_text,
+      open_waits: s.open_waits
+    },
+    event: cp.event
+  }
+}
+
+export pure func history_usage_percent(h: History, limit: int) -> int {
+  match h { MkHistory(xs) => usage_percent_with_limit(xs, limit) }
+}
+
+-- Calibrated token count for the current window. estimate_tokens_messages is a
+-- char/4 proxy that structurally under-counts dense content (code/JSON tokenize
+-- below 4 chars/token) and ignores provider-side request framing (system
+-- scaffolding, tool schemas). We anchor on provider truth: scale the raw
+-- estimate by the (actual / estimate) ratio observed on the previously-sent
+-- window. Before the first provider result — or if either anchor is 0 — we fall
+-- back to the raw estimate.
+export pure func calibrated_tokens_messages(xs: [Message], t: TokenTelemetry) -> int {
+  calibrated_tokens_anchored(xs, t.last_input_tokens, t.last_estimated_input_tokens)
+}
+
+export pure func calibrated_usage_percent(xs: [Message], limit: int, t: TokenTelemetry) -> int {
+  calibrated_usage_percent_anchored(xs, limit, t.last_input_tokens, t.last_estimated_input_tokens)
+}
+
+export pure func history_usage_percent_calibrated(h: History, limit: int, t: TokenTelemetry) -> int {
+  match h { MkHistory(xs) => calibrated_usage_percent(xs, limit, t) }
+}
+
+export pure func checkpoint_would_relieve(h: History, plan: CheckpointPlan, limit: int, threshold: int, t: TokenTelemetry) -> bool {
+  let projected = checkpoint(h, plan).history;
+  history_usage_percent_calibrated(projected, limit, t) < threshold
+}
+
+-- No anchor yet (last_estimated == 0) => calibration falls back to the raw estimate.
+pure func calibrated_falls_back_without_anchor() -> bool
+  tests [((), true)]
+  {
+    let msgs = [{ role: "user", content: "0123456789012345", tool_calls: [], tool_call_id: "", images: [] }];
+    let t: TokenTelemetry = { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 };
+    -- 16 chars => raw estimate 4 tokens; /100 limit *100 == 4%
+    calibrated_usage_percent(msgs, 100, t) == 4
+  }
+
+-- Affine anchor: the last window measured real 200 / est 100, i.e. ~76 tokens of
+-- fixed overhead over density*est. The current tiny 4-token window inherits that
+-- overhead: 1.235*4 + (200 - 1.235*100) ~= 82 => 82% of a 100 limit.
+pure func calibrated_applies_affine_overhead() -> bool
+  tests [((), true)]
+  {
+    let msgs = [{ role: "user", content: "0123456789012345", tool_calls: [], tool_call_id: "", images: [] }];
+    let t: TokenTelemetry = { last_input_tokens: 200, last_output_tokens: 0, last_estimated_input_tokens: 100 };
+    calibrated_usage_percent(msgs, 100, t) == 82
+  }
+
+-- Degenerate anchor (huge real for a tiny sent window) is floored at the raw
+-- estimate (4): calibration can only ever raise usage, never suppress compaction
+-- the raw policy would have triggered.
+pure func calibrated_floors_at_raw() -> bool
+  tests [((), true)]
+  {
+    let msgs = [{ role: "user", content: "0123456789012345", tool_calls: [], tool_call_id: "", images: [] }];
+    let t: TokenTelemetry = { last_input_tokens: 100, last_output_tokens: 0, last_estimated_input_tokens: 400 };
+    calibrated_usage_percent(msgs, 100, t) == 4
+  }
+
+-- ============================================================================
+-- StepDecision and phase result.
+-- ============================================================================
+
+export type ExecutorKind = ExecNative | ExecDelegated | ExecHandledByExt | ExecWsLoopback | ExecStreamIsland
+
+export type ToolPlanEntry = { call: ToolCall, executor: ExecutorKind }
+export type ToolPlan = { entries: [ToolPlanEntry] }
+
+export type ApprovalRequest = {
+  call: ToolCall,
+  default_allow: bool,
+  reason: string,
+  stream_id: string,
+  remaining: [ToolPlanEntry]
+}
+
+export type FinalizeInfo = { reason: string, output: string }
+export type FailInfo = { code: string, message: string, retryable: bool }
+
+export type StepDecision
+  = CallModel(ModelRequest)
+  | RunTools(ToolPlan)
+  | AwaitApproval(ApprovalRequest)
+  | InjectUserMessage(Message)
+  | TakeCheckpoint(CheckpointPlan)
+  | Finalize(FinalizeInfo)
+  | Fail(FailInfo)
+  -- PLAN-002 W4 Part 1 (ADR-002 D2). A stop-class candidate while waits are
+  -- open parks on them. It carries ONLY the waits (§1 row 3): the driver builds
+  -- the `ParkRequest` from `RunIdentity` and its own `park_ordinal`.
+  | Park([WaitDescriptor])
+
+export type PhaseResult = {
+  delta: StateDelta,
+  transcript_append: [Message],
+  events: [LedgerEvent],
+  cost_delta_millicents: int
+}
+
+-- ============================================================================
+-- LedgerEvent: typed/DST-canonical layer. to_schema_v1 targets production wire.
+--
+-- Production schema-v1 inventory — 29 JSONL `type` values (regenerate with:
+--   grep -o 'emit_event(session_id, "[a-z_]*"' src/core/agent_loop_v2.ail
+--   plus the two direct emit_json stream types at :255 and :265):
+--   27 emit_event names:
+--     compaction_exhausted compaction_extension cost_exhausted cost_warning
+--     delegated_tool_deferred done dp7_verifier_rejected error
+--     ext_intercept_handled ext_solver_feedback ext_tool_handled
+--     hybrid_bash_extracted native_tool_calls native_tool_denied
+--     native_tool_results persist_nudge run_summary scratchpad_result
+--     session_start session_suspend stream_error_retry thinking
+--     thinking_stream_end thinking_stream_start tool_pending
+--     v2_tool_dispatch_complete v2_tool_dispatch_start
+--   +2 stream-chunk types emitted via emit_json: thinking_delta reasoning_delta
+--
+-- [prod] constructors project to existing production names. [NEW]
+-- constructors introduce additive names gated in Phase B.
+-- ============================================================================
+
+export type ProviderCallInfo = {
+  step: int,
+  msg_count: int,
+  estimated_input_tokens: int,
+  system_prefix_count: int,
+  system_prefix_chars: int,
+  system_prefix_digest: string,
+  payload_digest: string,
+  model: string
+}
+export type ThinkingInfo = {
+  step: int,
+  text: string,
+  finish_reason: string,
+  tool_calls: int,
+  input_tokens: int,
+  output_tokens: int,
+  cost_usd: float,
+  cache_read_input_tokens: int,
+  cache_creation_input_tokens: int
+}
+export type RunSummaryInfo = {
+  model: string,
+  motoko_commit: string,
+  finish_reason: string,
+  steps_executed: int,
+  input_tokens: int,
+  output_tokens: int,
+  cache_read_input_tokens: int,
+  cache_creation_input_tokens: int,
+  total_cost_usd: float,
+  total_cost_millicents: int,
+  duration_ms: int,
+  error: string,
+  -- ADR-003 v6.1 D1, the `run_finished` entry's counts (PLAN-003 P3 Part 1).
+  --
+  -- WHY THIS FIELD AND NOT `steps_executed`, WHICH IS ALREADY HERE. Both are
+  -- numbers about the same run and they answer different questions.
+  -- `steps_executed` is `st.step_idx` at finalize — THIS run's loop position,
+  -- reset to 0 by every resume. `cumulative` is
+  -- `runtime_status_counts_add(st.prior_counts, runtime_status_counts(st.trace))`
+  -- — the session's running counts, carried across a suspension by the
+  -- continuation, and `provider_calls_completed` is the judging number ADR-003's
+  -- TL;DR names ("a run that dies at step N resumes with N steps of history").
+  -- A fold of the journal reproduces this field; it cannot reproduce
+  -- `steps_executed` without also knowing where each run began.
+  --
+  -- The VALUE is `final.cumulative` (`journal.FinalState`), which every one of
+  -- `c2_finalize`'s callers already builds from `c2_final_state(st)`. Nothing
+  -- new is computed for it and nothing new is threaded to reach it.
+  cumulative: RuntimeStatusCounts,
+  -- ADR-003 v6.1 D5's `run_finished.world_ordinal` (PLAN-003 P3ORD): the
+  -- run's FINAL `WorldState.ordinal`, read in `c2_finalize` off the world that
+  -- already witnessed the finalize clock read — the same value the returned
+  -- `TracedSessionResult.world.ordinal` carries and `run_world_framed_wire.sh`
+  -- reads as a frame's final. The fold's last one is the next resume's
+  -- `SessionResumed.from_ordinal`.
+  world_ordinal: int
+}
+-- D6.2: the typed internal termination reason, mapped exhaustively onto the
+-- wire `finish_reason` string. It lives beside RunSummaryInfo so the wire
+-- string has one source of truth and the RunSummary goldens below hold it.
+--
+-- The list is DERIVED FROM REACHABLE TERMINAL RETURNS, as D6.2 requires,
+-- rather than inherited from the old integer helper. Two consequences:
+--
+--   * There is no ToolFailure. An unrecovered tool failure is not a terminal
+--     path at HEAD — tool results feed back into the loop as messages and the
+--     run ends through one of the reasons below. Adding the variant would mean
+--     asserting a path that cannot be produced.
+--   * There is no DpSevenRejected. The old helper mapped 2 -> "dp7_rejected",
+--     but no call site ever passed 2: a DP7 rejection re-injects a user message
+--     and the run terminates later via MaxSteps or BudgetExhausted. It was a
+--     stale label, which is exactly what D6.2 says not to preserve.
+--
+-- SystemPromptEmpty is reachable (seal failure) and the ADR's enumeration
+-- omits it; see the cluster 4 note.
+-- Variants carry a Term prefix: the unprefixed names would collide with the
+-- LedgerEvent constructors declared later in this same module (CompactionExhausted
+-- is both a termination reason and a wire event).
+export type TerminationReason =
+  | TermSuccess                 -- wire: "stop"
+  | TermBudgetExhausted         -- wire: "cost_exhausted"
+  | TermMaxSteps                -- wire: "max_steps"
+  | TermCompactionExhausted     -- wire: "compaction_exhausted"
+  | TermProviderFailure         -- wire: "error"
+  | TermSystemPromptEmpty       -- wire: "error"
+  | TermInvalidHistory          -- wire: "error"
+  | TermInternalFailure         -- wire: "error"
+
+-- Exhaustive map onto the wire strings. These strings are a compatibility
+-- surface (project 007): they must not change here. The RunSummary goldens at
+-- the foot of this module are what hold this function to that.
+export pure func finish_reason_wire(r: TerminationReason) -> string {
+  match r {
+    TermSuccess => "stop",
+    TermBudgetExhausted => "cost_exhausted",
+    TermMaxSteps => "max_steps",
+    TermCompactionExhausted => "compaction_exhausted",
+    TermProviderFailure => "error",
+    TermSystemPromptEmpty => "error",
+    TermInvalidHistory => "error",
+    TermInternalFailure => "error"
+  }
+}
+
+export type ScratchpadResultInfo = { tool_call_id: string, request_id: string, step: int, cells_json: string }
+export type ToolCallInfo = { step: int, stream_id: string, tool: string, id: string }
+export type ToolDeniedInfo = { step: int, stream_id: string, tool: string, id: string, reason: string }
+export type ToolHandledInfo = { step: int, stream_id: string, tool: string, id: string, exit_code: int }
+export type ToolDispatchCompleteInfo = { step: int, stream_id: string, id: string }
+-- WI-D25 / PLAN-001 live-run fix 1. A native tool call whose `arguments` string
+-- is not JSON. `raw_length` and not the raw string: the payload is a truncated
+-- argument blob that can be several kilobytes of a file the model was writing,
+-- and a ledger record is not the place for it. The LENGTH is what discriminates
+-- the two causes — a few bytes is a malformed emission, four thousand is an
+-- output budget that ran out mid-argument, which is the case this event was
+-- added for.
+export type ToolArgsUndecodableInfo = { step: int, stream_id: string, tool: string, id: string, raw_length: int }
+export type ToolBatchInfo = { request_id: string, step: int, stream_id: string, payload: Json }
+export type CompactionInfo = { step: int, note: string }
+export type CompactionExhaustedInfo = { step: int, model: string, reason: string }
+export type CostExhaustedInfo = { step: int, total_cost_millicents: int, total_cost_usd: float, cap_millicents: int }
+export type CostWarningInfo = { threshold: string, step: int, pct: int, total_cost_millicents: int, total_cost_usd: float, cap_millicents: int }
+export type Dp7RejectedInfo = { step: int, errors: string }
+export type CheckpointInfo = { reason: string, before_digest: string, after_digest: string }
+export type DoneInfo = { step: int, output: string, source: string }
+export type EmptyStopFinalizeInfo = { step: int, input_tokens: int, estimated_input_tokens: int, context_limit: int }
+export type ErrorInfo = { source: string, code: string, message: string }
+export type FeedbackInfo = { step: int, feedback: string }
+export type HybridBashInfo = { step: int, cmd: string }
+export type PersistNudgeInfo = { step: int, nudge_num: int, budget: int }
+-- `run_id` is ADR-003 D5's identity on the `run_started` entry (D1): the host
+-- assigns entry ids, but the child says which RUN an entry belongs to, and the
+-- fold attributes by that rather than by position. `<session_id>.r<resume_count>
+-- .<run_ordinal>`, built by the conversation loop, `""` on the paths that have
+-- no identity yet.
+export type SessionStartInfo = { task: string, model: string, mode: string, run_id: string }
+export type SessionSuspendInfo = { session_id: string, target_profile: string }
+-- PLAN-002 W4 Part 3 (ADR-002 D2). A park's first issue, appended AND emitted
+-- before the port is called; a re-issue of the same `request_id` does not
+-- repeat it (§8.3). LOGICAL: ADR-003 D7's `park` entry reads it.
+export type ParkEnteredInfo = { request_id: string, step: int, waits: [WaitDescriptor] }
+-- The wake the loop APPLIED (R2): a reply whose ids did not match appends
+-- nothing. `outcome` is the arm id `ext_world` writes (`settled`, `lost`,
+-- `operator_input`, `timed_out`, `host_error`, `aborted`) and `detail` its
+-- string; `WakeOutcome` itself lives in `ports`, which imports this module.
+export type WakeReceivedInfo = { request_id: string, wait_id: string, outcome: string, detail: string }
+-- P1 (D1) step 4. ONE per run, at the shared per-run entry: the limit the run's
+-- policy carries, with its arm and — for `Unknown` — both misses. Logical: the
+-- arm is the reason an int 0 is unmeasured rather than healthy.
+export type ContextLimitResolvedInfo = { run_id: string, limit: ContextLimit }
+-- PLAN-001 P2 Part 2 (ADR-001 D2). ONE per helped leaf request, emitted AND
+-- appended by `session.witness` in request order, before the successor that
+-- carried it enters any driver record. `request_class` is
+-- `world_ordinal.request_class_id`'s spelling (`class` is reserved in AILANG);
+-- the wire key is `class`, the key the world token already uses.
+export type WorldRequestInfo = { ordinal: int, request_class: string }
+
+-- ADR-003 v6.1 D2. The typed suspension's wire record: a run that reached its
+-- step budget stops being an `error` and becomes this. It is APPENDED to the
+-- returned trace immediately before the RunSummary and EMITTED in the same
+-- order, which is what `RecordAfterTerminal` and the D2 wire contract both ask
+-- for, and it is why this variant is NOT in `d64_gap_register`.
+--
+-- `session_id` and `run_id` are D5's identity, carried so a journal fold can
+-- attribute the suspension to the run that produced it without inferring it
+-- from position. `reason` is a code and not prose — `budget_exhausted` is the
+-- only value P1 produces, and D7's park will add its own rather than reuse a
+-- message. `step` is `st.step_idx` at the suspension, which is the step the
+-- resumed run continues FROM (the budget is checked before the call that would
+-- have exceeded it, so no step is half-executed).
+export type RunSuspendedInfo = { session_id: string, run_id: string, reason: string, step: int }
+
+-- ============================================================================
+-- ADR-003 v6.1 D1's JOURNAL CLASS (PLAN-003 P3 Part 1).
+--
+-- Five variants that carry the session journal's substance: the history a run
+-- starts from, every message that enters or replaces one, the running counts,
+-- and the resume that opened the frame. The host writes them to the journal
+-- (D3, "one writer: the host"); the child only says them.
+--
+-- NOTHING IN THE DRIVER CONSTRUCTS THESE YET, and that is the shape of this
+-- part rather than an omission. `make event_vocabulary` requires one vocabulary
+-- row and one byte-level golden per `LedgerEvent` variant IN THE SAME COMMIT
+-- (PLAN-003 §0.3), and P3 Part 2's fold cannot name a variant that does not
+-- exist. So the vocabulary lands first, with no emit site: the five rows are
+-- Logical and carry `reaches_trace_today: false`, which puts them on
+-- `dst_invariants.d64_gap_register` with a reason each until P3 Part 3 wires
+-- the sites. A variant that is declared and unemitted is a declared gap; a
+-- variant emitted with no declaration is the artifact-that-validates-while-
+-- incomplete this project's vocabulary gate exists to prevent.
+--
+-- WHY THE MESSAGE PAYLOADS ARE `Json` AND NOT `[Message]`. D1 writes them as
+-- `[Message]` and the WIRE BYTES are exactly that — a JSON array of the codec's
+-- five-field message objects. What cannot be `[Message]` is the field's type
+-- HERE: the codec is `journal.message_json` / `journal.messages_json`
+-- (PLAN-003 P1 Part 3), and `journal.ail` imports THIS module. A `[Message]`
+-- field would force the encoder into `phase_vocab` — a move of what P1 landed —
+-- or a second copy of it, and a journal with two message encoders is a journal
+-- whose chain digest has two definitions. The payload therefore crosses
+-- pre-encoded, which is the `ToolBatchInfo.payload: Json` precedent
+-- (`NativeToolCalls` / `NativeToolResults`) applied to a bigger value.
+-- ============================================================================
+
+-- The history a traced run STARTS from, once per run, before the loop. The host
+-- has three arms for it (D1): journal it as N appends for a session's first
+-- run, as a `history_replaced` after a profile switch, or compare-and-drop.
+--
+-- `digest` IS THE CHAIN QUANTITY, `journal.chain_digest_over(chain_empty_base(),
+-- messages)`, and this sentence is CORRECTED from what P3 Part 1 wrote here —
+-- "`digest_messages(messages)`, the whole-seed digest". D1 does say
+-- `digest_messages`, and P3 Part 2 found that it cannot be: D1's third host arm
+-- compares this field with the last history entry's `digest_after`, and those
+-- would be two different functions over two different inputs, so the comparison
+-- could never succeed. The journal has no `history_seeded` ENTRY type either —
+-- the host expands a seed into N `history_appended` entries, whose digests the
+-- fold recomputes from `chain_empty_base()` — so a seed digest in any other form
+-- is one no reader of the journal can check. P3 Part 3 emits the chain quantity
+-- and `dst_invariants.journal_payload_findings` pins it against `messages`.
+-- `digests` IS THE PREFIX CHAIN, one per message, and it is here because of what
+-- the HOST has to do with this event (PLAN-003 P3 Part 4). D1's first arm has
+-- the host expand ONE seed into N `history_appended` entries and the fold checks
+-- `digest_after` at every one of them; the AILANG twin recomputes those N values
+-- with `chain_digest_after`, and the TypeScript host cannot without a second
+-- copy of `canonical_message_frame` across a language boundary neither compiler
+-- can see. The child computes the chain anyway, so it reports all of it.
+--
+-- `digest` STAYS, and is not redundant: it is the value D1's THIRD arm compares
+-- against the last history entry's `digest_after` when a later run re-states a
+-- history the journal already holds, and that comparison reads one string, not a
+-- list. `digest` is `digests`' last element by construction, which is what
+-- `journal_payload_findings` asserts.
+export type HistorySeededInfo = { run_id: string, messages: Json, digest: string, digests: Json }
+
+-- ONE MESSAGE PER EVENT, never a batch: a batch of N tool results is N
+-- consecutive events, because the host writes one entry per message and
+-- `HistoryReplaced.first_kept` is an INDEX into that one-message-per-entry
+-- sequence. `replaces_previous` is set on the first event of a hybrid-bash
+-- batch, whose augmented assistant supersedes the plain one the previous event
+-- carried; `digest_after` then chains from the entry BEFORE the replaced one,
+-- which is what pins the replacement — a fold that appended instead breaks the
+-- chain exactly there.
+export type HistoryAppendedInfo = {
+  run_id: string,
+  step: int,
+  message: Json,
+  replaces_previous: bool,
+  digest_after: string
+}
+
+-- The checkpoint's replacement, and the profile switch's new head. `first_kept`
+-- is `None` at HEAD and the field is not speculative: `apply_checkpoint`
+-- rebuilds the history as the pinned system prefix plus one summary message and
+-- keeps no tail, so there is no index to report — but the fold's rule ("emit
+-- `messages`, then every history entry after this one, or from `first_kept`
+-- when it is `Some`") is written for both, and a checkpoint that later keeps a
+-- tail must not be a schema change. `Option[int]` rather than a sentinel: -1
+-- would be a value the strict decoder has to special-case, and D4 rule 2 has no
+-- fallbacks.
+export type HistoryReplacedInfo = {
+  run_id: string,
+  step: int,
+  reason: string,
+  first_kept: Option[int],
+  messages: Json,
+  digest_after: string
+}
+
+-- The counts, telemetry and artifacts at a step boundary. `cumulative` is the
+-- same value `RunSummaryInfo.cumulative` carries and is computed the one way
+-- (`runtime_status_counts_add(st.prior_counts, runtime_status_counts(st.trace))`).
+-- `ext_artifacts` is present ONLY when the digest changed, which is why it is
+-- an `Option[Json]` beside its digest rather than a Json that is sometimes
+-- empty: extension artifacts are the largest thing the journal carries, and a
+-- delta that re-states them at every step turns a session's journal into N
+-- copies of them.
+export type StateDeltaInfo = {
+  run_id: string,
+  step: int,
+  cumulative: RuntimeStatusCounts,
+  telemetry: TokenTelemetry,
+  ext_artifacts_digest: string,
+  ext_artifacts: Option[Json]
+}
+
+-- The FIRST event a resumed child emits (D6 step 5), and the `resumed` entry the
+-- host writes from it. It carries both sides of every compatibility comparison
+-- the host already made rather than the verdict alone: `profile_from/to` records
+-- an accepted profile switch, and `prompt_digest_from/to` differing is exactly
+-- what tells the host to journal the next `HistorySeeded` as a
+-- `history_replaced` (D1's second arm) instead of comparing digests. `forced` is
+-- `--resume-force`, recorded because a resume that overrode a refusal is not the
+-- same event as one that did not need to.
+export type SessionResumedInfo = {
+  resume_count: int,
+  from_id: string,
+  from_ordinal: int,
+  profile_from: string,
+  profile_to: string,
+  prompt_digest_from: string,
+  prompt_digest_to: string,
+  forced: bool
+}
+
+export type StreamStartInfo = { step: int, stream_id: string, model: string }
+export type StreamEndInfo = { step: int, stream_id: string, status: string }
+export type StreamErrorRetryInfo = { step: int, error: string }
+export type StreamDeltaInfo = { step: int, stream_id: string, seq: int, kind: string, text: string }
+export type ExtensionDiagnosticInfo = { step: int, extension: string, code: string, fields: [DiagnosticField] }
+
+export type InMemoryStageOutcome = TraceStageApplied(string) | TraceStageRejected(string) | TraceStageObserved(string, [DiagnosticField]) | TraceStagePassed
+export type LedgerRecord
+  = WireRecord(LedgerEvent)
+  | CompactionStageRecord({ step: int, ext_id: string, outcome: InMemoryStageOutcome })
+  | DecisionRecord({ step: int, decision: string })
+export type LedgerTrace = { records: [LedgerRecord] }
+
+export pure func empty_ledger_trace() -> LedgerTrace {
+  { records: [] }
+}
+
+export pure func ledger_append(trace: LedgerTrace, record: LedgerRecord) -> LedgerTrace {
+  { records: trace.records ++ [record] }
+}
+
+export pure func ledger_record_name(record: LedgerRecord) -> string {
+  match record {
+    WireRecord(event) => {
+      match event {
+        ProviderCallPrepared(_) => "provider_call_prepared",
+        ExtCompactionRejected(_) => "ext_compaction_rejected",
+        ExtensionDiagnostic(_) => "extension_diagnostic",
+        _ => "wire"
+      }
+    },
+    CompactionStageRecord(r) =>
+      match r.outcome {
+        TraceStageApplied(_) => "stage_applied",
+        TraceStageRejected(_) => "stage_rejected",
+        TraceStageObserved(_, _) => "stage_observed",
+        TraceStagePassed => "stage_passed"
+      },
+    DecisionRecord(_) => "decision"
+  }
+}
+
+-- D6.1 support: the returned LedgerTrace is authoritative, so the invariant
+-- "exactly one RunSummary, and it is the final record" must be decidable over
+-- the trace ADT itself. ledger_record_name flattens every WireRecord that is
+-- not one of three special cases to "wire", so it cannot answer this.
+export pure func is_run_summary(record: LedgerRecord) -> bool {
+  match record {
+    WireRecord(event) =>
+      match event {
+        RunSummary(_) => true,
+        _ => false
+      },
+    _ => false
+  }
+}
+
+pure func count_run_summaries_rec(records: [LedgerRecord], acc: int) -> int {
+  match records {
+    [] => acc,
+    r :: rest => count_run_summaries_rec(rest, if is_run_summary(r) then acc + 1 else acc)
+  }
+}
+
+export pure func count_run_summaries(trace: LedgerTrace) -> int {
+  count_run_summaries_rec(trace.records, 0)
+}
+
+pure func last_record(records: [LedgerRecord]) -> Option[LedgerRecord] {
+  match records {
+    [] => None,
+    r :: [] => Some(r),
+    _ :: rest => last_record(rest)
+  }
+}
+
+-- The full D6.1 predicate for one established run: exactly one RunSummary in
+-- the returned trace, and it is the last record.
+export pure func has_exactly_one_final_run_summary(trace: LedgerTrace) -> bool {
+  count_run_summaries(trace) == 1
+    && match last_record(trace.records) {
+         None => false,
+         Some(r) => is_run_summary(r)
+       }
+}
+
+-- The RunSummary's own finish_reason, for the D6.3 agreement check between the
+-- returned outcome, the DoneEvent and the RunSummary.
+export pure func run_summary_finish_reason(trace: LedgerTrace) -> Option[string] {
+  match last_record(trace.records) {
+    Some(WireRecord(RunSummary(i))) => Some(i.finish_reason),
+    _ => None
+  }
+}
+
+pure func validate_checkpoint_chain_rec(prev_digest: string, checkpoints: [CheckpointInfo], final_digest: string) -> Result[(), string] {
+  match checkpoints {
+    [] =>
+      if prev_digest == final_digest then Ok(())
+      else Err("checkpoint chain final digest mismatch"),
+    cp :: rest =>
+      if cp.before_digest != prev_digest then Err("checkpoint chain broken before ${cp.reason}")
+      else validate_checkpoint_chain_rec(cp.after_digest, rest, final_digest)
+  }
+}
+
+export pure func validate_checkpoint_chain(initial_digest: string, checkpoints: [CheckpointInfo], final_digest: string) -> Result[(), string] {
+  validate_checkpoint_chain_rec(initial_digest, checkpoints, final_digest)
+}
+
+export type LedgerEvent
+  = ProviderCallPrepared(ProviderCallInfo)   -- [NEW]  provider_call_prepared
+  | ScratchpadResult(ScratchpadResultInfo)   -- [prod] scratchpad_result
+  | RunSummary(RunSummaryInfo)               -- [prod] run_summary
+  | NativeToolDenied(ToolDeniedInfo)         -- [prod] native_tool_denied
+  | ToolPending(ToolDeniedInfo)              -- [prod] tool_pending
+  | ExtToolHandled(ToolHandledInfo)          -- [prod] ext_tool_handled
+  | DelegatedToolDeferred(ToolCallInfo)      -- [prod] delegated_tool_deferred
+  | V2ToolDispatchStart(ToolCallInfo)        -- [prod] v2_tool_dispatch_start
+  | V2ToolDispatchComplete(ToolDispatchCompleteInfo) -- [prod] v2_tool_dispatch_complete
+  | Dp7VerifierRejected(Dp7RejectedInfo)     -- [prod] dp7_verifier_rejected
+  | CostExhausted(CostExhaustedInfo)         -- [prod] cost_exhausted
+  | CompactionApplied(CompactionInfo)        -- [prod] compaction_extension
+  | CompactionExhausted(CompactionExhaustedInfo) -- [prod] compaction_exhausted
+  | ExtCompactionRejected(CompactionInfo)    -- [NEW]  ext_compaction_rejected
+  | ExtensionDiagnostic(ExtensionDiagnosticInfo) -- [NEW] extension_diagnostic
+  | ThinkingStreamStart(StreamStartInfo)     -- [prod] thinking_stream_start
+  | ThinkingStreamEnd(StreamEndInfo)         -- [prod] thinking_stream_end
+  | StreamErrorRetry(StreamErrorRetryInfo)   -- [prod] stream_error_retry
+  | ProviderResult(ThinkingInfo)             -- [prod] thinking
+  | CostWarning(CostWarningInfo)             -- [prod] cost_warning
+  | ExtInterceptHandled(ToolHandledInfo)     -- [prod] ext_intercept_handled
+  | HybridBashExtracted(HybridBashInfo)      -- [prod] hybrid_bash_extracted
+  | ToolArgumentsUndecodable(ToolArgsUndecodableInfo) -- [NEW]  tool_arguments_undecodable
+  | DoneEvent(DoneInfo)                      -- [prod] done
+  | EmptyStopFinalize(EmptyStopFinalizeInfo) -- [prod] empty_stop_finalize
+  | ExtSolverFeedback(FeedbackInfo)          -- [prod] ext_solver_feedback
+  | PersistNudge(PersistNudgeInfo)           -- [prod] persist_nudge
+  | NativeToolCalls(ToolBatchInfo)           -- [prod] native_tool_calls
+  | NativeToolResults(ToolBatchInfo)         -- [prod] native_tool_results
+  | SessionSuspend(SessionSuspendInfo)       -- [prod] session_suspend
+  | RunSuspended(RunSuspendedInfo)           -- [prod] run_suspended
+  | ParkEntered(ParkEnteredInfo)             -- [NEW]  park_entered (PLAN-002 W4)
+  | WakeReceived(WakeReceivedInfo)           -- [NEW]  wake_received (PLAN-002 W4)
+  -- ADR-003 v6.1 D1's journal class. [NEW] on the wire and UNEMITTED at this
+  -- commit (PLAN-003 P3 Part 1); the emit sites are P3 Part 3's.
+  --
+  -- `StateDelta` SHARES ITS NAME with the record type declared at the head of
+  -- this module (the `PhaseResult.delta` shape). AILANG keeps types and
+  -- constructors in separate namespaces and resolves a single imported name to
+  -- both, which `model_phase` (the type) and `dst_event_vocabulary` (the
+  -- constructor) now exercise in the same tree. The collision is tolerated
+  -- rather than dodged because ADR-003 D1 names the entry `state_delta` and its
+  -- event `StateDelta` in two places, and a `JournalStateDelta` here would be a
+  -- third name for one thing. Contrast `TerminationReason`'s `Term` prefix
+  -- above: that collision was constructor-against-constructor, which does NOT
+  -- resolve.
+  | HistorySeeded(HistorySeededInfo)         -- [NEW]  history_seeded
+  | HistoryAppended(HistoryAppendedInfo)     -- [NEW]  history_appended
+  | HistoryReplaced(HistoryReplacedInfo)     -- [NEW]  history_replaced
+  | StateDelta(StateDeltaInfo)               -- [NEW]  state_delta
+  | SessionResumed(SessionResumedInfo)       -- [NEW]  session_resumed
+  | ContextLimitResolved(ContextLimitResolvedInfo) -- [NEW] context_limit_resolved (PLAN-001 P1 step 4)
+  | WorldRequest(WorldRequestInfo)           -- [NEW]  world_request (PLAN-001 P2 Part 2)
+  | SessionStart(SessionStartInfo)           -- [prod] session_start
+  | ErrorEvent(ErrorInfo)                    -- [prod] error
+  | TotalsUpdated(ThinkingInfo)              -- [NEW]  loop_totals_updated
+  | CheckpointTaken(CheckpointInfo)          -- [NEW]  history_checkpoint
+  | StreamDelta(StreamDeltaInfo)             -- [prod] thinking_delta | reasoning_delta
+
+func usage_kvs(input_tokens: int, output_tokens: int, cache_read: int, cache_creation: int) -> [{key: string, value: Json}] {
+  let total_tokens = input_tokens + output_tokens;
+  if cache_read > 0 || cache_creation > 0 then
+    [kv("input_tokens", jnum(_int_to_float(input_tokens))),
+     kv("output_tokens", jnum(_int_to_float(output_tokens))),
+     kv("cache_read_input_tokens", jnum(_int_to_float(cache_read))),
+     kv("cache_creation_input_tokens", jnum(_int_to_float(cache_creation))),
+     kv("total_tokens", jnum(_int_to_float(total_tokens)))]
+  else
+    [kv("input_tokens", jnum(_int_to_float(input_tokens))),
+     kv("output_tokens", jnum(_int_to_float(output_tokens))),
+     kv("total_tokens", jnum(_int_to_float(total_tokens)))]
+}
+
+func thinking_usage_kvs(i: ThinkingInfo) -> [{key: string, value: Json}] {
+  let base = [
+    kv("input_tokens", jnum(_int_to_float(i.input_tokens))),
+    kv("output_tokens", jnum(_int_to_float(i.output_tokens))),
+    kv("cost_usd", jnum(i.cost_usd))
+  ];
+  let with_read =
+    if i.cache_read_input_tokens > 0 then
+      base ++ [kv("cache_read_input_tokens", jnum(_int_to_float(i.cache_read_input_tokens)))]
+    else base;
+  if i.cache_creation_input_tokens > 0 then
+    with_read ++ [kv("cache_creation_input_tokens", jnum(_int_to_float(i.cache_creation_input_tokens)))]
+  else with_read
+}
+
+func done_kvs(i: DoneInfo) -> [{key: string, value: Json}] {
+  let base = [
+    kv("type", js("done")),
+    kv("step", jnum(_int_to_float(i.step))),
+    kv("output", js(i.output))
+  ];
+  if i.source == "" then base else base ++ [kv("source", js(i.source))]
+}
+
+func diagnostic_fields_json(fields: [DiagnosticField]) -> [Json] {
+  match fields {
+    [] => [],
+    f :: rest => jo([kv("key", js(f.key)), kv("value", js(f.value))]) :: diagnostic_fields_json(rest)
+  }
+}
+
+-- The journal class's shared sub-objects (ADR-003 D1). Both are nested rather
+-- than flattened: `cumulative` is one value the fold compares field by field
+-- against `FinalState.cumulative`, and five loose `provider_calls_*` keys on
+-- `run_summary` would collide with the flat shape `runtime_status_json` already
+-- publishes for a DIFFERENT audience (the model's status tool).
+--
+-- The key names are `runtime_status_json`'s (`session.ail`), deliberately: the
+-- two objects report the same counts to the host and to the model, and a reader
+-- who learns one learns the other.
+export func runtime_status_counts_json(c: RuntimeStatusCounts) -> Json {
+  jo([
+    kv("provider_calls_started", jnum(_int_to_float(c.provider_calls_started))),
+    kv("provider_calls_completed", jnum(_int_to_float(c.provider_calls_completed))),
+    kv("stage_applied_total", jnum(_int_to_float(c.stage_applied_total))),
+    kv("stage_rejected_total", jnum(_int_to_float(c.stage_rejected_total))),
+    kv("compaction_ai_applied", jnum(_int_to_float(c.compaction_ai_applied)))
+  ])
+}
+
+export func token_telemetry_json(t: TokenTelemetry) -> Json {
+  jo([
+    kv("last_input_tokens", jnum(_int_to_float(t.last_input_tokens))),
+    kv("last_output_tokens", jnum(_int_to_float(t.last_output_tokens))),
+    kv("last_estimated_input_tokens", jnum(_int_to_float(t.last_estimated_input_tokens)))
+  ])
+}
+
+-- `first_kept` and `ext_artifacts` join `done`'s `source` and `thinking`'s two
+-- cache counters as the vocabulary's OPTIONAL payload keys, and they are
+-- optional in the strong sense: absent means "no tail was kept" and "the
+-- artifacts did not change", which is not the same claim as any value the key
+-- could carry. Their rows declare them `opt(...)`, and `event_vocabulary_dst`
+-- drives both branches — `samples()` carries the absent one, `check 3b` the
+-- present one.
+func history_replaced_kvs(i: HistoryReplacedInfo) -> [{key: string, value: Json}] {
+  let head = [
+    kv("type", js("history_replaced")),
+    kv("run_id", js(i.run_id)),
+    kv("step", jnum(_int_to_float(i.step))),
+    kv("reason", js(i.reason))
+  ];
+  let kept = match i.first_kept {
+    None => [],
+    Some(n) => [kv("first_kept", jnum(_int_to_float(n)))]
+  };
+  head ++ kept ++ [kv("messages", i.messages), kv("digest_after", js(i.digest_after))]
+}
+
+func state_delta_kvs(i: StateDeltaInfo) -> [{key: string, value: Json}] {
+  let base = [
+    kv("type", js("state_delta")),
+    kv("run_id", js(i.run_id)),
+    kv("step", jnum(_int_to_float(i.step))),
+    kv("cumulative", runtime_status_counts_json(i.cumulative)),
+    kv("telemetry", token_telemetry_json(i.telemetry)),
+    kv("ext_artifacts_digest", js(i.ext_artifacts_digest))
+  ];
+  match i.ext_artifacts {
+    None => base,
+    Some(a) => base ++ [kv("ext_artifacts", a)]
+  }
+}
+
+-- P1 (D1) steps 3-4: ONE home for the reason's JSON shape, read by the
+-- `ContextLimitResolved` projection and by `session.runtime_status_json`'s
+-- `context_limit_source`. Fixed keys on every arm ("" where an arm carries no
+-- such part), so a poller never branches on which keys are present.
+export pure func context_limit_source_json(limit: ContextLimit) -> Json {
+  jo([
+    kv("arm", js(limit_arm_id(limit))),
+    kv("origin", js(limit_origin_id(limit))),
+    kv("profile_miss", js(limit_profile_miss_id(limit))),
+    kv("catalogue_miss", js(limit_catalogue_miss_id(limit))),
+    kv("model", js(limit_missing_model(limit)))
+  ])
+}
+
+export func to_schema_v1_kvs(e: LedgerEvent) -> [{key: string, value: Json}] {
+  match e {
+    ProviderCallPrepared(i) => [kv("type", js("provider_call_prepared")), kv("step", jnum(_int_to_float(i.step))), kv("msg_count", jnum(_int_to_float(i.msg_count))), kv("estimated_input_tokens", jnum(_int_to_float(i.estimated_input_tokens))), kv("system_prefix_count", jnum(_int_to_float(i.system_prefix_count))), kv("system_prefix_chars", jnum(_int_to_float(i.system_prefix_chars))), kv("system_prefix_digest", js(i.system_prefix_digest)), kv("payload_digest", js(i.payload_digest)), kv("model", js(i.model))],
+    ScratchpadResult(i) => [kv("type", js("scratchpad_result")), kv("tool_call_id", js(i.tool_call_id)), kv("request_id", js(i.request_id)), kv("step", jnum(_int_to_float(i.step))), kv("cells_json", js(i.cells_json))],
+    RunSummary(i) => [kv("type", js("run_summary")), kv("model", js(i.model)), kv("motoko_commit", js(i.motoko_commit)), kv("finish_reason", js(i.finish_reason)), kv("steps_executed", jnum(_int_to_float(i.steps_executed))), kv("usage", jo(usage_kvs(i.input_tokens, i.output_tokens, i.cache_read_input_tokens, i.cache_creation_input_tokens))), kv("total_cost_usd", jnum(i.total_cost_usd)), kv("total_cost_millicents", jnum(_int_to_float(i.total_cost_millicents))), kv("duration_ms", jnum(_int_to_float(i.duration_ms))), kv("error", js(i.error)), kv("cumulative", runtime_status_counts_json(i.cumulative)), kv("world_ordinal", jnum(_int_to_float(i.world_ordinal)))],
+    NativeToolDenied(i) => [kv("type", js("native_tool_denied")), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("tool", js(i.tool)), kv("id", js(i.id)), kv("reason", js(i.reason))],
+    ToolPending(i) => [kv("type", js("tool_pending")), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("tool", js(i.tool)), kv("id", js(i.id)), kv("reason", js(i.reason))],
+    ExtToolHandled(i) => [kv("type", js("ext_tool_handled")), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("tool", js(i.tool)), kv("id", js(i.id)), kv("exit_code", jnum(_int_to_float(i.exit_code)))],
+    DelegatedToolDeferred(i) => [kv("type", js("delegated_tool_deferred")), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("tool", js(i.tool)), kv("id", js(i.id))],
+    V2ToolDispatchStart(i) => [kv("type", js("v2_tool_dispatch_start")), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("tool", js(i.tool)), kv("id", js(i.id))],
+    V2ToolDispatchComplete(i) => [kv("type", js("v2_tool_dispatch_complete")), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("id", js(i.id))],
+    Dp7VerifierRejected(i) => [kv("type", js("dp7_verifier_rejected")), kv("step", jnum(_int_to_float(i.step))), kv("errors", js(i.errors))],
+    CostExhausted(i) => [kv("type", js("cost_exhausted")), kv("step", jnum(_int_to_float(i.step))), kv("total_cost_millicents", jnum(_int_to_float(i.total_cost_millicents))), kv("total_cost_usd", jnum(i.total_cost_usd)), kv("cap_millicents", jnum(_int_to_float(i.cap_millicents)))],
+    CompactionApplied(i) => [kv("type", js("compaction_extension")), kv("step", jnum(_int_to_float(i.step))), kv("note", js(i.note))],
+    CompactionExhausted(i) => [kv("type", js("compaction_exhausted")), kv("step", jnum(_int_to_float(i.step))), kv("model", js(i.model)), kv("reason", js(i.reason))],
+    ExtCompactionRejected(i) => [kv("type", js("ext_compaction_rejected")), kv("step", jnum(_int_to_float(i.step))), kv("note", js(i.note))],
+    ExtensionDiagnostic(i) => [kv("type", js("extension_diagnostic")), kv("step", jnum(_int_to_float(i.step))), kv("extension", js(i.extension)), kv("code", js(i.code)), kv("fields", ja(diagnostic_fields_json(i.fields)))],
+    ThinkingStreamStart(i) => [kv("type", js("thinking_stream_start")), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("model", js(i.model))],
+    ThinkingStreamEnd(i) => [kv("type", js("thinking_stream_end")), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("status", js(i.status))],
+    StreamErrorRetry(i) => [kv("type", js("stream_error_retry")), kv("step", jnum(_int_to_float(i.step))), kv("error", js(i.error))],
+    ProviderResult(i) => [kv("type", js("thinking")), kv("step", jnum(_int_to_float(i.step))), kv("text", js(i.text)), kv("finish_reason", js(i.finish_reason)), kv("tool_calls", jnum(_int_to_float(i.tool_calls)))] ++ thinking_usage_kvs(i),
+    CostWarning(i) => [kv("type", js("cost_warning")), kv("threshold", js(i.threshold)), kv("step", jnum(_int_to_float(i.step))), kv("pct", jnum(_int_to_float(i.pct))), kv("total_cost_millicents", jnum(_int_to_float(i.total_cost_millicents))), kv("total_cost_usd", jnum(i.total_cost_usd)), kv("cap_millicents", jnum(_int_to_float(i.cap_millicents)))],
+    ExtInterceptHandled(i) => [kv("type", js("ext_intercept_handled")), kv("step", jnum(_int_to_float(i.step))), kv("tool", js(i.tool)), kv("exit_code", jnum(_int_to_float(i.exit_code)))],
+    HybridBashExtracted(i) => [kv("type", js("hybrid_bash_extracted")), kv("step", jnum(_int_to_float(i.step))), kv("cmd", js(i.cmd))],
+    ToolArgumentsUndecodable(i) => [kv("type", js("tool_arguments_undecodable")), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("tool", js(i.tool)), kv("id", js(i.id)), kv("raw_length", jnum(_int_to_float(i.raw_length)))],
+    DoneEvent(i) => done_kvs(i),
+    EmptyStopFinalize(i) => [kv("type", js("empty_stop_finalize")), kv("step", jnum(_int_to_float(i.step))), kv("input_tokens", jnum(_int_to_float(i.input_tokens))), kv("estimated_input_tokens", jnum(_int_to_float(i.estimated_input_tokens))), kv("context_limit", jnum(_int_to_float(i.context_limit)))],
+    ExtSolverFeedback(i) => [kv("type", js("ext_solver_feedback")), kv("step", jnum(_int_to_float(i.step))), kv("feedback", js(i.feedback))],
+    PersistNudge(i) => [kv("type", js("persist_nudge")), kv("step", jnum(_int_to_float(i.step))), kv("nudge_num", jnum(_int_to_float(i.nudge_num))), kv("budget", jnum(_int_to_float(i.budget)))],
+    NativeToolCalls(i) => [kv("type", js("native_tool_calls")), kv("request_id", js(i.request_id)), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("tool_calls", i.payload)],
+    NativeToolResults(i) => [kv("type", js("native_tool_results")), kv("request_id", js(i.request_id)), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("results", i.payload)],
+    SessionSuspend(i) => [kv("type", js("session_suspend")), kv("session_id", js(i.session_id)), kv("target_profile", js(i.target_profile))],
+    RunSuspended(i) => [kv("type", js("run_suspended")), kv("session_id", js(i.session_id)), kv("run_id", js(i.run_id)), kv("reason", js(i.reason)), kv("step", jnum(_int_to_float(i.step)))],
+    ParkEntered(i) => [kv("type", js("park_entered")), kv("request_id", js(i.request_id)), kv("step", jnum(_int_to_float(i.step))), kv("waits", wait_descriptors_json(i.waits))],
+    WakeReceived(i) => [kv("type", js("wake_received")), kv("request_id", js(i.request_id)), kv("wait_id", js(i.wait_id)), kv("outcome", js(i.outcome)), kv("detail", js(i.detail))],
+    HistorySeeded(i) => [kv("type", js("history_seeded")), kv("run_id", js(i.run_id)), kv("messages", i.messages), kv("digest", js(i.digest)), kv("digests", i.digests)],
+    HistoryAppended(i) => [kv("type", js("history_appended")), kv("run_id", js(i.run_id)), kv("step", jnum(_int_to_float(i.step))), kv("message", i.message), kv("replaces_previous", jb(i.replaces_previous)), kv("digest_after", js(i.digest_after))],
+    HistoryReplaced(i) => history_replaced_kvs(i),
+    StateDelta(i) => state_delta_kvs(i),
+    SessionResumed(i) => [kv("type", js("session_resumed")), kv("resume_count", jnum(_int_to_float(i.resume_count))), kv("from_id", js(i.from_id)), kv("from_ordinal", jnum(_int_to_float(i.from_ordinal))), kv("profile_from", js(i.profile_from)), kv("profile_to", js(i.profile_to)), kv("prompt_digest_from", js(i.prompt_digest_from)), kv("prompt_digest_to", js(i.prompt_digest_to)), kv("forced", jb(i.forced))],
+    ContextLimitResolved(i) => [kv("type", js("context_limit_resolved")), kv("run_id", js(i.run_id)), kv("context_limit", jnum(_int_to_float(raw_window_of(i.limit)))), kv("context_limit_source", context_limit_source_json(i.limit))],
+    WorldRequest(i) => [kv("type", js("world_request")), kv("ordinal", jnum(_int_to_float(i.ordinal))), kv("class", js(i.request_class))],
+    SessionStart(i) => [kv("type", js("session_start")), kv("task", js(i.task)), kv("model", js(i.model)), kv("mode", js(i.mode)), kv("run_id", js(i.run_id))],
+    ErrorEvent(i) => [kv("type", js("error")), kv("source", js(i.source)), kv("code", js(i.code)), kv("message", js(i.message))],
+    TotalsUpdated(i) => [kv("type", js("loop_totals_updated")), kv("step", jnum(_int_to_float(i.step))), kv("input_tokens", jnum(_int_to_float(i.input_tokens))), kv("output_tokens", jnum(_int_to_float(i.output_tokens)))],
+    CheckpointTaken(i) => [kv("type", js("history_checkpoint")), kv("reason", js(i.reason)), kv("before_digest", js(i.before_digest)), kv("after_digest", js(i.after_digest))],
+    StreamDelta(i) => [kv("type", js(if i.kind == "reasoning" then "reasoning_delta" else "thinking_delta")), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("seq", jnum(_int_to_float(i.seq))), kv("text_delta", js(i.text))]
+  }
+}
+
+export func to_schema_v1(e: LedgerEvent) -> Json {
+  jo(to_schema_v1_kvs(e))
+}
+
+-- ============================================================================
+-- Transcript builders.
+-- ============================================================================
+
+-- Convert motoko's [Msg] to upstream [Message]. Since motoko_ext_abi 2.1.0
+-- (M-ABI-MSG-WIRE-PARITY), Msg carries tool_calls + tool_call_id fields
+-- structurally identical to Message — copy them verbatim so on_pre_step
+-- compaction round-trips losslessly. Without this, OpenRouter / OpenAI /
+-- Anthropic reject tool-role messages with empty tool_call_id (422).
+export func msgs_to_messages(msgs: [Msg]) -> [Message] {
+  match msgs {
+    [] => [],
+    m :: rest => ({
+      role: m.role,
+      content: m.content,
+      tool_calls: m.tool_calls,
+      tool_call_id: m.tool_call_id,
+      images: []
+    } :: msgs_to_messages(rest))
+  }
+}
+
+-- Build a [Message] entry for one assistant turn from the StepResult. Carries
+-- the typed tool_calls verbatim so the model sees its own tool_call IDs on
+-- the next turn (provider correlation).
+export func step_result_to_message(result: StepResult) -> Message {
+  {
+    role: "assistant",
+    content: result.message.content,
+    tool_calls: result.tool_calls,
+    tool_call_id: "",
+    images: []
+  }
+}
+
+pure func cap_tool_message_content(content: string) -> string {
+  let cap = 65536;
+  let n = Str.length(content);
+  if n <= cap then content
+  else {
+    let marker = "\n...[truncated; original ${show(n)} bytes]";
+    let keep = cap - Str.length(marker);
+    "${substring(content, 0, keep)}${marker}"
+  }
+}
+
+pure func test_cap_tool_message_content_keeps_small_content() -> bool
+  tests [((), true)]
+  {
+    cap_tool_message_content("small result") == "small result"
+  }
+
+pure func test_cap_tool_message_content_truncates_oversized_content() -> bool
+  tests [((), true)]
+  {
+    let x1 = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyzAB";
+    let x2 = "${x1}${x1}";
+    let x4 = "${x2}${x2}";
+    let x8 = "${x4}${x4}";
+    let x16 = "${x8}${x8}";
+    let x32 = "${x16}${x16}";
+    let x64 = "${x32}${x32}";
+    let x128 = "${x64}${x64}";
+    let x256 = "${x128}${x128}";
+    let x512 = "${x256}${x256}";
+    let x1024 = "${x512}${x512}";
+    let capped = cap_tool_message_content(x1024);
+    Str.length(capped) == 65536 && contains(capped, "...[truncated; original ")
+  }
+
+export func result_env_model_content(result: ToolResultEnvelope) -> string {
+  cap_tool_message_content(encode(result_to_model_json(result)))
+}
+
+-- Build a tool-role Message containing a dispatcher result. The tool_call_id
+-- field is the load-bearing wire-format requirement: Anthropic / OpenAI /
+-- Gemini all correlate tool_use → tool_result by this id.
+export func tool_result_message(call: ToolCall, content: string) -> Message {
+  {
+    role: "tool",
+    content: cap_tool_message_content(content),
+    tool_calls: [],
+    tool_call_id: call.id,
+    images: []
+  }
+}
+
+-- Build a tool-role Message from a ToolResultEnvelope returned by an
+-- extension's response-intercept (e.g. compose_check_premise). The model
+-- didn't emit a tool_call for these — the extension synthesized one — so
+-- we use the envelope's own tool_call_id (the extension is responsible for
+-- generating one) and JSON-encode the full envelope as the message content.
+export func envelope_to_tool_message(envelope: ToolResultEnvelope) -> Message {
+  {
+    role: "tool",
+    content: result_env_model_content(envelope),
+    tool_calls: [],
+    tool_call_id: envelope.tool_call_id,
+    images: []
+  }
+}
+
+-- Build a tool-role Message for a tool result handled by an extension. Use the
+-- model-emitted call_id instead of the envelope's id for provider correlation;
+-- providers correlate by the model-emitted id, not the extension-internal id.
+export func handled_tool_message(call_id: string, env: ToolResultEnvelope) -> Message {
+  {
+    role: "tool",
+    content: result_env_model_content(env),
+    tool_calls: [],
+    tool_call_id: call_id,
+    images: []
+  }
+}
+
+-- ============================================================================
+-- Inline pure tests.
+-- ============================================================================
+
+pure func mk_msg(role: string, content: string) -> Message {
+  { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
+}
+
+pure func test_empty_delta_is_identity_shape() -> bool
+  tests [((), true)]
+  {
+    match empty_delta().telemetry { None => true, Some(_) => false }
+  }
+
+pure func test_history_from_seed_accepts_head_prefix() -> bool
+  tests [((), true)]
+  {
+    match history_from_seed([mk_msg("system", "s"), mk_msg("user", "u")]) {
+      Ok(h) => history_len(h) == 2,
+      Err(_) => false
+    }
+  }
+
+pure func test_history_from_seed_rejects_late_system() -> bool
+  tests [((), true)]
+  {
+    match history_from_seed([mk_msg("user", "u"), mk_msg("system", "s")]) {
+      Ok(_) => false,
+      Err(_) => true
+    }
+  }
+
+pure func test_split_for_compaction_pins_system_prefix() -> bool
+  tests [((), true)]
+  {
+    let split = split_for_compaction([mk_msg("system", "s1"), mk_msg("system", "s2"), mk_msg("user", "u")]);
+    List.length(split.pinned) == 2 && match segment_messages(split.segment) {
+      m :: [] => m.role == "user" && m.content == "u",
+      _ => false
+    }
+  }
+
+pure func mk_msg_with_call(id: string) -> Msg {
+  { role: "assistant", content: "call", tool_calls: [{ id: id, name: "T", arguments: "{}" }], tool_call_id: "" }
+}
+
+pure func mk_tool_msg(id: string) -> Msg {
+  { role: "tool", content: "result", tool_calls: [], tool_call_id: id }
+}
+
+pure func mk_plain_msg(role: string, content: string) -> Msg {
+  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+}
+
+pure func result_ok(r: Result[(), string]) -> bool {
+  match r { Ok(_) => true, Err(_) => false }
+}
+
+pure func result_err(r: Result[(), string]) -> bool {
+  match r { Ok(_) => false, Err(_) => true }
+}
+
+pure func digest_shape_ok(d: string) -> bool {
+  Str.length(d) == 71 && substring(d, 0, 7) == "sha256:"
+}
+
+pure func test_payload_digest_is_sha256_content_hash() -> bool
+  tests [((), true)]
+  {
+    let d1 = payload_digest([mk_msg("user", "hello")]);
+    let d2 = payload_digest([mk_msg("user", "hello")]);
+    let d3 = payload_digest([mk_msg("user", "hello!")]);
+    digest_shape_ok(d1) && d1 == d2 && d1 != d3
+  }
+
+pure func test_system_prefix_digest_is_raw_content_hash() -> bool
+  tests [((), true)]
+  {
+    let d1 = system_prefix_digest_for([mk_msg("system", "make[1]")]);
+    let d2 = system_prefix_digest_for([mk_msg("system", "make[1]")]);
+    let d3 = system_prefix_digest_for([mk_msg("system", "make[2]")]);
+    digest_shape_ok(d1) && d1 == d2 && d1 != d3
+  }
+
+pure func test_ledger_trace_records_wire_and_stage_passed() -> bool
+  tests [((), true)]
+  {
+    let t0 = empty_ledger_trace();
+    let t1 = ledger_append(t0, WireRecord(ProviderCallPrepared({ step: 1, msg_count: 2, estimated_input_tokens: 4, system_prefix_count: 1, system_prefix_chars: 3, system_prefix_digest: "sha256:sys", payload_digest: "sha256:abc", model: "m" })));
+    let t2 = ledger_append(t1, CompactionStageRecord({ step: 1, ext_id: "ext", outcome: TraceStagePassed }));
+    let t3 = ledger_append(t2, DecisionRecord({ step: 1, decision: "CallModel" }));
+    List.length(t3.records) == 3
+      && match t2.records {
+        a :: b :: [] => ledger_record_name(a) == "provider_call_prepared" && ledger_record_name(b) == "stage_passed",
+        _ => false
+      }
+      && match t3.records {
+        _ :: _ :: c :: [] => ledger_record_name(c) == "decision",
+        _ => false
+      }
+  }
+
+pure func long_msg(content: string) -> Message {
+  { role: "user", content: content, tool_calls: [], tool_call_id: "", images: [] }
+}
+
+pure func test_seal_compacted_payload_repins_and_seals() -> bool
+  tests [((), true)]
+  {
+    let split = split_for_compaction([mk_msg("system", "sys"), mk_msg("user", "old")]);
+    match seal_compacted_payload(split, [mk_msg("user", "new")], "m", 1000, false) {
+      Ok(payload) =>
+        match payload {
+          MkPayload(msgs) =>
+            match msgs {
+              a :: b :: [] => a.role == "system" && a.content == "sys" && b.role == "user" && b.content == "new",
+              _ => false
+            }
+        },
+      Err(_) => false
+    }
+  }
+
+pure func test_seal_compacted_payload_exhausts_with_live_reason() -> bool
+  tests [((), true)]
+  {
+    let split = split_for_compaction([]);
+    match seal_compacted_payload(split, [long_msg("abcdabcdabcdabcdabcdabcdabcdabcdabcdabcd")], "test-model", output_token_allowance() + 10, false) {
+      Err(SealExhausted(reason)) => reason == "compaction_exhausted: context at 100% of test-model limit after compactor chain",
+      Err(_) => false,
+      Ok(_) => false
+    }
+  }
+
+pure func test_seal_compacted_payload_fail_open_limit_zero() -> bool
+  tests [((), true)]
+  {
+    let split = split_for_compaction([]);
+    match seal_compacted_payload(split, [long_msg("abcdabcdabcdabcdabcdabcdabcdabcdabcdabcd")], "test-model", 0, false) {
+      Ok(_) => true,
+      Err(_) => false
+    }
+  }
+
+pure func test_seal_compacted_payload_fail_open_when_allowance_consumes_window() -> bool
+  tests [((), true)]
+  {
+    let split = split_for_compaction([]);
+    match seal_compacted_payload(split, [long_msg("abcdabcdabcdabcdabcdabcdabcdabcdabcdabcd")], "test-model", 32768, false) {
+      Ok(_) => true,
+      Err(_) => false
+    }
+  }
+
+pure func test_seal_compacted_payload_rejects_empty_system_prompt() -> bool
+  tests [((), true)]
+  {
+    let missing = split_for_compaction([mk_msg("user", "hi")]);
+    let present_empty = split_for_compaction([mk_msg("system", ""), mk_msg("user", "hi")]);
+    let missing_rejected =
+      match seal_compacted_payload(missing, [mk_msg("user", "hi")], "test-model", 1000, true) {
+        Err(SealSystemPromptEmpty(_)) => true,
+        _ => false
+      };
+    let present_empty_rejected =
+      match seal_compacted_payload(present_empty, [mk_msg("user", "hi")], "test-model", 1000, true) {
+        Err(SealSystemPromptEmpty(_)) => true,
+        _ => false
+      };
+    let headless_allowed =
+      match seal_compacted_payload(missing, [mk_msg("user", "hi")], "test-model", 1000, false) {
+        Ok(_) => true,
+        Err(SealSystemPromptEmpty(_)) => false,
+        Err(_) => false
+      };
+    missing_rejected && present_empty_rejected && headless_allowed
+  }
+
+pure func test_checkpoint_preserves_system_prefix() -> bool
+  tests [((), true)]
+  {
+    match history_from_seed([mk_msg("system", "s"), mk_msg("user", "u"), mk_msg("assistant", "a")]) {
+      Err(_) => false,
+      Ok(h) => {
+        let cp = checkpoint(h, { reason: "test", summary: "summ" });
+        history_len(cp.history) == 2
+      }
+    }
+  }
+
+pure func test_checkpoint_digest_chain_validates() -> bool
+  tests [((), true)]
+  {
+    match history_from_seed([mk_msg("system", "s"), mk_msg("user", "u")]) {
+      Err(_) => false,
+      Ok(h) => {
+        let cp = checkpoint(h, { reason: "test", summary: "summ" });
+        match cp.event {
+          CheckpointTaken(info) =>
+            digest_shape_ok(info.before_digest)
+              && digest_shape_ok(info.after_digest)
+              && result_ok(validate_checkpoint_chain(history_digest(h), [info], history_digest(cp.history)))
+              && result_err(validate_checkpoint_chain("sha256:broken", [info], history_digest(cp.history))),
+          _ => false
+        }
+      }
+    }
+  }
+
+pure func test_history_from_resume_validates_checkpoint_chain() -> bool
+  tests [((), true)]
+  {
+    match history_from_seed([mk_msg("system", "s"), mk_msg("user", "u")]) {
+      Err(_) => false,
+      Ok(h) => {
+        let before = history_digest(h);
+        let cp = checkpoint(h, { reason: "test", summary: "summ" });
+        match cp.event {
+          CheckpointTaken(info) =>
+            match cp.history {
+              MkHistory(resumed_msgs) => {
+                let good = history_from_resume(resumed_msgs, { initial_digest: before, checkpoints: [info] });
+                let bad = history_from_resume(resumed_msgs, { initial_digest: "sha256:broken", checkpoints: [info] });
+                match good {
+                  Ok(good_h) => history_digest_matches(good_h, history_digest(cp.history)) && match bad { Err(_) => true, Ok(_) => false },
+                  Err(_) => false
+                }
+              }
+            },
+          _ => false
+        }
+      }
+    }
+  }
+
+pure func test_apply_checkpoint_returns_rewrite_with_event() -> bool
+  tests [((), true)]
+  {
+    match history_from_seed([mk_msg("system", "s"), mk_msg("user", "u")]) {
+      Err(_) => false,
+      Ok(h) => {
+        let s: StepState = {
+          step_idx: 1,
+          history: h,
+          telemetry: { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 },
+          totals: { input_tokens: 0, output_tokens: 0, cost_millicents: 0, cost_warned_pct: 0 },
+          nudges_used: 0,
+          ext_artifacts: jo([]),
+          pending_tool_calls: [],
+          last_finish_reason: "",
+          last_response_text: "",
+          open_waits: []
+        };
+        let applied = apply_checkpoint(s, { reason: "test", summary: "summ" });
+        match applied.event {
+          CheckpointTaken(info) =>
+            info.before_digest == history_digest(h)
+              && info.after_digest == history_digest(applied.state.history)
+              && history_len(applied.state.history) == 2,
+          _ => false
+        }
+      }
+    }
+  }
+
+pure func test_stream_delta_projection_names() -> bool
+  tests [((), true)]
+  {
+    let thinking = encode(to_schema_v1(StreamDelta({ step: 0, stream_id: "s", seq: 1, kind: "thinking", text: "t" })));
+    let reasoning = encode(to_schema_v1(StreamDelta({ step: 0, stream_id: "s", seq: 2, kind: "reasoning", text: "r" })));
+    contains(thinking, "\"type\":\"thinking_delta\"")
+      && contains(thinking, "\"text_delta\":\"t\"")
+      && contains(reasoning, "\"type\":\"reasoning_delta\"")
+      && contains(reasoning, "\"text_delta\":\"r\"")
+  }
+
+pure func golden(e: LedgerEvent, want: string) -> bool {
+  encode(to_schema_v1(e)) == want
+}
+
+pure func test_ledger_projection_golden_bytes() -> bool
+  tests [((), true)]
+  {
+    golden(ProviderCallPrepared({ step: 1, msg_count: 2, estimated_input_tokens: 4, system_prefix_count: 1, system_prefix_chars: 3, system_prefix_digest: "s1", payload_digest: "p2", model: "m" }), "{\"type\":\"provider_call_prepared\",\"step\":1,\"msg_count\":2,\"estimated_input_tokens\":4,\"system_prefix_count\":1,\"system_prefix_chars\":3,\"system_prefix_digest\":\"s1\",\"payload_digest\":\"p2\",\"model\":\"m\"}")
+    && golden(ScratchpadResult({ tool_call_id: "tc", request_id: "step-1", step: 1, cells_json: "[]" }), "{\"type\":\"scratchpad_result\",\"tool_call_id\":\"tc\",\"request_id\":\"step-1\",\"step\":1,\"cells_json\":\"[]\"}")
+    -- RE-PINNED at PLAN-003 P3 Part 1: `cumulative` joined RunSummaryInfo, so
+    -- the wire bytes moved. The two cases keep their old split (no cache
+    -- counters / cache counters) and differ now in the counts too — ZERO in the
+    -- first, so the golden pins that an unresumed run publishes zeros rather
+    -- than omitting the object, and non-zero in the second.
+    && golden(RunSummary({ model: "m", motoko_commit: "abc", finish_reason: "stop", steps_executed: 2, input_tokens: 3, output_tokens: 4, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, total_cost_usd: 1.25, total_cost_millicents: 125000, duration_ms: 9, error: "", cumulative: zero_runtime_status_counts(), world_ordinal: 0 }), "{\"type\":\"run_summary\",\"model\":\"m\",\"motoko_commit\":\"abc\",\"finish_reason\":\"stop\",\"steps_executed\":2,\"usage\":{\"input_tokens\":3,\"output_tokens\":4,\"total_tokens\":7},\"total_cost_usd\":1.25,\"total_cost_millicents\":125000,\"duration_ms\":9,\"error\":\"\",\"cumulative\":{\"provider_calls_started\":0,\"provider_calls_completed\":0,\"stage_applied_total\":0,\"stage_rejected_total\":0,\"compaction_ai_applied\":0},\"world_ordinal\":0}")
+    && golden(RunSummary({ model: "m", motoko_commit: "abc", finish_reason: "stop", steps_executed: 2, input_tokens: 3, output_tokens: 4, cache_read_input_tokens: 5, cache_creation_input_tokens: 0, total_cost_usd: 1.25, total_cost_millicents: 125000, duration_ms: 9, error: "err", cumulative: { provider_calls_started: 5, provider_calls_completed: 4, stage_applied_total: 2, stage_rejected_total: 1, compaction_ai_applied: 1 }, world_ordinal: 19 }), "{\"type\":\"run_summary\",\"model\":\"m\",\"motoko_commit\":\"abc\",\"finish_reason\":\"stop\",\"steps_executed\":2,\"usage\":{\"input_tokens\":3,\"output_tokens\":4,\"cache_read_input_tokens\":5,\"cache_creation_input_tokens\":0,\"total_tokens\":7},\"total_cost_usd\":1.25,\"total_cost_millicents\":125000,\"duration_ms\":9,\"error\":\"err\",\"cumulative\":{\"provider_calls_started\":5,\"provider_calls_completed\":4,\"stage_applied_total\":2,\"stage_rejected_total\":1,\"compaction_ai_applied\":1},\"world_ordinal\":19}")
+    && golden(NativeToolDenied({ step: 1, stream_id: "s", tool: "T", id: "tc", reason: "no" }), "{\"type\":\"native_tool_denied\",\"step\":1,\"stream_id\":\"s\",\"tool\":\"T\",\"id\":\"tc\",\"reason\":\"no\"}")
+    && golden(ToolPending({ step: 1, stream_id: "s", tool: "T", id: "tc", reason: "wait" }), "{\"type\":\"tool_pending\",\"step\":1,\"stream_id\":\"s\",\"tool\":\"T\",\"id\":\"tc\",\"reason\":\"wait\"}")
+    && golden(ExtToolHandled({ step: 1, stream_id: "s", tool: "T", id: "tc", exit_code: 0 }), "{\"type\":\"ext_tool_handled\",\"step\":1,\"stream_id\":\"s\",\"tool\":\"T\",\"id\":\"tc\",\"exit_code\":0}")
+    && golden(DelegatedToolDeferred({ step: 1, stream_id: "s", tool: "T", id: "tc" }), "{\"type\":\"delegated_tool_deferred\",\"step\":1,\"stream_id\":\"s\",\"tool\":\"T\",\"id\":\"tc\"}")
+    && golden(V2ToolDispatchStart({ step: 1, stream_id: "s", tool: "T", id: "tc" }), "{\"type\":\"v2_tool_dispatch_start\",\"step\":1,\"stream_id\":\"s\",\"tool\":\"T\",\"id\":\"tc\"}")
+    && golden(V2ToolDispatchComplete({ step: 1, stream_id: "s", id: "tc" }), "{\"type\":\"v2_tool_dispatch_complete\",\"step\":1,\"stream_id\":\"s\",\"id\":\"tc\"}")
+    && golden(Dp7VerifierRejected({ step: 1, errors: "bad" }), "{\"type\":\"dp7_verifier_rejected\",\"step\":1,\"errors\":\"bad\"}")
+    && golden(CostExhausted({ step: 4, total_cost_millicents: 65600, total_cost_usd: 0.656, cap_millicents: 50000 }), "{\"type\":\"cost_exhausted\",\"step\":4,\"total_cost_millicents\":65600,\"total_cost_usd\":0.656,\"cap_millicents\":50000}")
+    && golden(CompactionApplied({ step: 1, note: "n" }), "{\"type\":\"compaction_extension\",\"step\":1,\"note\":\"n\"}")
+    && golden(CompactionExhausted({ step: 1, model: "m", reason: "full" }), "{\"type\":\"compaction_exhausted\",\"step\":1,\"model\":\"m\",\"reason\":\"full\"}")
+    && golden(ExtCompactionRejected({ step: 1, note: "invalid" }), "{\"type\":\"ext_compaction_rejected\",\"step\":1,\"note\":\"invalid\"}")
+    && golden(ExtensionDiagnostic({ step: 1, extension: "compaction_ai", code: "compaction_ai.summarizer_failed", fields: [{ key: "attempts", value: "2" }, { key: "pct", value: "81" }] }), "{\"type\":\"extension_diagnostic\",\"step\":1,\"extension\":\"compaction_ai\",\"code\":\"compaction_ai.summarizer_failed\",\"fields\":[{\"key\":\"attempts\",\"value\":\"2\"},{\"key\":\"pct\",\"value\":\"81\"}]}")
+    && golden(ThinkingStreamStart({ step: 1, stream_id: "s", model: "m" }), "{\"type\":\"thinking_stream_start\",\"step\":1,\"stream_id\":\"s\",\"model\":\"m\"}")
+    && golden(ThinkingStreamEnd({ step: 1, stream_id: "s", status: "completed" }), "{\"type\":\"thinking_stream_end\",\"step\":1,\"stream_id\":\"s\",\"status\":\"completed\"}")
+    && golden(StreamErrorRetry({ step: 1, error: "oops" }), "{\"type\":\"stream_error_retry\",\"step\":1,\"error\":\"oops\"}")
+    && golden(ProviderResult({ step: 1, text: "hello", finish_reason: "stop", tool_calls: 0, input_tokens: 10, output_tokens: 5, cost_usd: 0.01, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }), "{\"type\":\"thinking\",\"step\":1,\"text\":\"hello\",\"finish_reason\":\"stop\",\"tool_calls\":0,\"input_tokens\":10,\"output_tokens\":5,\"cost_usd\":0.01}")
+    && golden(ProviderResult({ step: 1, text: "hello", finish_reason: "stop", tool_calls: 0, input_tokens: 10, output_tokens: 5, cost_usd: 0.01, cache_read_input_tokens: 7, cache_creation_input_tokens: 8 }), "{\"type\":\"thinking\",\"step\":1,\"text\":\"hello\",\"finish_reason\":\"stop\",\"tool_calls\":0,\"input_tokens\":10,\"output_tokens\":5,\"cost_usd\":0.01,\"cache_read_input_tokens\":7,\"cache_creation_input_tokens\":8}")
+    && golden(CostWarning({ threshold: "75pct", step: 2, pct: 80, total_cost_millicents: 800, total_cost_usd: 0.008, cap_millicents: 1000 }), "{\"type\":\"cost_warning\",\"threshold\":\"75pct\",\"step\":2,\"pct\":80,\"total_cost_millicents\":800,\"total_cost_usd\":0.008,\"cap_millicents\":1000}")
+    && golden(ExtInterceptHandled({ step: 1, stream_id: "", tool: "T", id: "", exit_code: 0 }), "{\"type\":\"ext_intercept_handled\",\"step\":1,\"tool\":\"T\",\"exit_code\":0}")
+    && golden(HybridBashExtracted({ step: 1, cmd: "echo hi" }), "{\"type\":\"hybrid_bash_extracted\",\"step\":1,\"cmd\":\"echo hi\"}")
+    && golden(ToolArgumentsUndecodable({ step: 36, stream_id: "step-36", tool: "WriteFile", id: "call_9", raw_length: 4176 }), "{\"type\":\"tool_arguments_undecodable\",\"step\":36,\"stream_id\":\"step-36\",\"tool\":\"WriteFile\",\"id\":\"call_9\",\"raw_length\":4176}")
+    && golden(DoneEvent({ step: 1, output: "ok", source: "" }), "{\"type\":\"done\",\"step\":1,\"output\":\"ok\"}")
+    && golden(DoneEvent({ step: 1, output: "ok", source: "ext_solver_accept" }), "{\"type\":\"done\",\"step\":1,\"output\":\"ok\",\"source\":\"ext_solver_accept\"}")
+    && golden(EmptyStopFinalize({ step: 96, input_tokens: 22312, estimated_input_tokens: 8600, context_limit: 131072 }), "{\"type\":\"empty_stop_finalize\",\"step\":96,\"input_tokens\":22312,\"estimated_input_tokens\":8600,\"context_limit\":131072}")
+    && golden(ExtSolverFeedback({ step: 1, feedback: "fix" }), "{\"type\":\"ext_solver_feedback\",\"step\":1,\"feedback\":\"fix\"}")
+    && golden(PersistNudge({ step: 1, nudge_num: 2, budget: 3 }), "{\"type\":\"persist_nudge\",\"step\":1,\"nudge_num\":2,\"budget\":3}")
+    && golden(NativeToolCalls({ request_id: "step-1", step: 1, stream_id: "s", payload: ja([]) }), "{\"type\":\"native_tool_calls\",\"request_id\":\"step-1\",\"step\":1,\"stream_id\":\"s\",\"tool_calls\":[]}")
+    && golden(NativeToolResults({ request_id: "step-1", step: 1, stream_id: "s", payload: ja([]) }), "{\"type\":\"native_tool_results\",\"request_id\":\"step-1\",\"step\":1,\"stream_id\":\"s\",\"results\":[]}")
+    && golden(SessionSuspend({ session_id: "sid", target_profile: "dogfood" }), "{\"type\":\"session_suspend\",\"session_id\":\"sid\",\"target_profile\":\"dogfood\"}")
+    && golden(RunSuspended({ session_id: "sid", run_id: "sid.r0.0", reason: "budget_exhausted", step: 3 }), "{\"type\":\"run_suspended\",\"session_id\":\"sid\",\"run_id\":\"sid.r0.0\",\"reason\":\"budget_exhausted\",\"step\":3}")
+    -- PLAN-002 W4 Part 3. The wait list is pinned as the producer's key order.
+    && golden(ParkEntered({ request_id: "sid.r0.0.p0", step: 2, waits: [OperatorWait({ id: "op" })] }), "{\"type\":\"park_entered\",\"request_id\":\"sid.r0.0.p0\",\"step\":2,\"waits\":[{\"id\":\"op\"}]}")
+    && golden(WakeReceived({ request_id: "sid.r0.0.p0", wait_id: "h1", outcome: "settled", detail: "answer" }), "{\"type\":\"wake_received\",\"request_id\":\"sid.r0.0.p0\",\"wait_id\":\"h1\",\"outcome\":\"settled\",\"detail\":\"answer\"}")
+    -- ADR-003 D1's journal class (PLAN-003 P3 Part 1). Eight goldens for five
+    -- variants: `HistoryAppended`, `HistoryReplaced` and `StateDelta` each get
+    -- BOTH states of the payload field that changes their bytes — the
+    -- replacement flag, the kept-tail index, the changed artifacts — because a
+    -- single golden per variant would pin one branch of each and leave the
+    -- other unpinned, which is the shape `DoneEvent.source` and `usage`'s cache
+    -- counters are already double-pinned for.
+    --
+    -- The message payloads are pinned as the Json they cross as: what the
+    -- codec produces is `journal.ail`'s round-tripped concern, and what THIS
+    -- module owes is that the projection passes it through unmodified and puts
+    -- it under the right key.
+    && golden(HistorySeeded({ run_id: "sid.r0.0", messages: ja([jo([kv("role", js("system")), kv("content", js("s"))])]), digest: "sha256:seed", digests: ja([js("sha256:seed")]) }), "{\"type\":\"history_seeded\",\"run_id\":\"sid.r0.0\",\"messages\":[{\"role\":\"system\",\"content\":\"s\"}],\"digest\":\"sha256:seed\",\"digests\":[\"sha256:seed\"]}")
+    && golden(HistoryAppended({ run_id: "sid.r0.0", step: 3, message: jo([kv("role", js("tool")), kv("tool_call_id", js("tc"))]), replaces_previous: false, digest_after: "sha256:a" }), "{\"type\":\"history_appended\",\"run_id\":\"sid.r0.0\",\"step\":3,\"message\":{\"role\":\"tool\",\"tool_call_id\":\"tc\"},\"replaces_previous\":false,\"digest_after\":\"sha256:a\"}")
+    && golden(HistoryAppended({ run_id: "sid.r0.0", step: 4, message: jo([kv("role", js("assistant"))]), replaces_previous: true, digest_after: "sha256:b" }), "{\"type\":\"history_appended\",\"run_id\":\"sid.r0.0\",\"step\":4,\"message\":{\"role\":\"assistant\"},\"replaces_previous\":true,\"digest_after\":\"sha256:b\"}")
+    && golden(HistoryReplaced({ run_id: "sid.r0.0", step: 7, reason: "checkpoint", first_kept: None, messages: ja([]), digest_after: "sha256:r" }), "{\"type\":\"history_replaced\",\"run_id\":\"sid.r0.0\",\"step\":7,\"reason\":\"checkpoint\",\"messages\":[],\"digest_after\":\"sha256:r\"}")
+    && golden(HistoryReplaced({ run_id: "sid.r1.0", step: 0, reason: "profile_switch", first_kept: Some(4), messages: ja([]), digest_after: "sha256:r2" }), "{\"type\":\"history_replaced\",\"run_id\":\"sid.r1.0\",\"step\":0,\"reason\":\"profile_switch\",\"first_kept\":4,\"messages\":[],\"digest_after\":\"sha256:r2\"}")
+    && golden(StateDelta({ run_id: "sid.r0.0", step: 2, cumulative: { provider_calls_started: 3, provider_calls_completed: 3, stage_applied_total: 1, stage_rejected_total: 0, compaction_ai_applied: 0 }, telemetry: { last_input_tokens: 100, last_output_tokens: 20, last_estimated_input_tokens: 400 }, ext_artifacts_digest: "sha256:e", ext_artifacts: None }), "{\"type\":\"state_delta\",\"run_id\":\"sid.r0.0\",\"step\":2,\"cumulative\":{\"provider_calls_started\":3,\"provider_calls_completed\":3,\"stage_applied_total\":1,\"stage_rejected_total\":0,\"compaction_ai_applied\":0},\"telemetry\":{\"last_input_tokens\":100,\"last_output_tokens\":20,\"last_estimated_input_tokens\":400},\"ext_artifacts_digest\":\"sha256:e\"}")
+    && golden(StateDelta({ run_id: "sid.r0.0", step: 3, cumulative: zero_runtime_status_counts(), telemetry: { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 }, ext_artifacts_digest: "sha256:e2", ext_artifacts: Some(jo([kv("compose", js("v1"))])) }), "{\"type\":\"state_delta\",\"run_id\":\"sid.r0.0\",\"step\":3,\"cumulative\":{\"provider_calls_started\":0,\"provider_calls_completed\":0,\"stage_applied_total\":0,\"stage_rejected_total\":0,\"compaction_ai_applied\":0},\"telemetry\":{\"last_input_tokens\":0,\"last_output_tokens\":0,\"last_estimated_input_tokens\":0},\"ext_artifacts_digest\":\"sha256:e2\",\"ext_artifacts\":{\"compose\":\"v1\"}}")
+    && golden(SessionResumed({ resume_count: 1, from_id: "0007", from_ordinal: 42, profile_from: "dogfood", profile_to: "probe-budget", prompt_digest_from: "sha256:p0", prompt_digest_to: "sha256:p1", forced: true }), "{\"type\":\"session_resumed\",\"resume_count\":1,\"from_id\":\"0007\",\"from_ordinal\":42,\"profile_from\":\"dogfood\",\"profile_to\":\"probe-budget\",\"prompt_digest_from\":\"sha256:p0\",\"prompt_digest_to\":\"sha256:p1\",\"forced\":true}")
+    -- PLAN-001 P1 step 4: all three arms pinned, so the bytes of each reason are.
+    && golden(ContextLimitResolved({ run_id: "sid.r0.0", limit: Bounded({ raw_window: 71, source: Catalogue }) }), "{\"type\":\"context_limit_resolved\",\"run_id\":\"sid.r0.0\",\"context_limit\":71,\"context_limit_source\":{\"arm\":\"bounded\",\"origin\":\"catalogue\",\"profile_miss\":\"\",\"catalogue_miss\":\"\",\"model\":\"\"}}")
+    && golden(ContextLimitResolved({ run_id: "sid.r0.0", limit: Disabled }), "{\"type\":\"context_limit_resolved\",\"run_id\":\"sid.r0.0\",\"context_limit\":0,\"context_limit_source\":{\"arm\":\"disabled\",\"origin\":\"\",\"profile_miss\":\"\",\"catalogue_miss\":\"\",\"model\":\"\"}}")
+    && golden(ContextLimitResolved({ run_id: "sid.r0.0", limit: Unknown({ profile: ProfileKeyAbsent, catalogue: ModelNotInCatalogue("m") }) }), "{\"type\":\"context_limit_resolved\",\"run_id\":\"sid.r0.0\",\"context_limit\":0,\"context_limit_source\":{\"arm\":\"unknown\",\"origin\":\"\",\"profile_miss\":\"profile_key_absent\",\"catalogue_miss\":\"model_not_in_catalogue\",\"model\":\"m\"}}")
+    && golden(WorldRequest({ ordinal: 264, request_class: "env_read" }), "{\"type\":\"world_request\",\"ordinal\":264,\"class\":\"env_read\"}")
+    -- RE-PINNED at PLAN-003 P3 Part 1: `run_id` joined SessionStartInfo.
+    && golden(SessionStart({ task: "t", model: "m", mode: "v2", run_id: "sid.r0.0" }), "{\"type\":\"session_start\",\"task\":\"t\",\"model\":\"m\",\"mode\":\"v2\",\"run_id\":\"sid.r0.0\"}")
+    && golden(ErrorEvent({ source: "agent_loop_v2", code: "Internal", message: "bad" }), "{\"type\":\"error\",\"source\":\"agent_loop_v2\",\"code\":\"Internal\",\"message\":\"bad\"}")
+    && golden(TotalsUpdated({ step: 1, text: "", finish_reason: "", tool_calls: 0, input_tokens: 10, output_tokens: 5, cost_usd: 0.0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }), "{\"type\":\"loop_totals_updated\",\"step\":1,\"input_tokens\":10,\"output_tokens\":5}")
+    && golden(CheckpointTaken({ reason: "r", before_digest: "h2", after_digest: "h1" }), "{\"type\":\"history_checkpoint\",\"reason\":\"r\",\"before_digest\":\"h2\",\"after_digest\":\"h1\"}")
+    && golden(StreamDelta({ step: 1, stream_id: "s", seq: 0, kind: "thinking", text: "d" }), "{\"type\":\"thinking_delta\",\"step\":1,\"stream_id\":\"s\",\"seq\":0,\"text_delta\":\"d\"}")
+    && golden(StreamDelta({ step: 1, stream_id: "s", seq: 0, kind: "reasoning", text: "r" }), "{\"type\":\"reasoning_delta\",\"step\":1,\"stream_id\":\"s\",\"seq\":0,\"text_delta\":\"r\"}")
+  }
+
+pure func test_msgs_to_messages_copies_wire_fields() -> bool
+  tests [((), true)]
+  {
+    let call: ToolCall = { id: "tc-1", name: "ReadFile", arguments: "{}" };
+    let msgs: [Msg] = [{ role: "assistant", content: "c", tool_calls: [call], tool_call_id: "ignored" }];
+    match msgs_to_messages(msgs) {
+      m :: [] => m.role == "assistant" && m.content == "c" && List.length(m.tool_calls) == 1 && m.tool_call_id == "ignored",
+      _ => false
+    }
+  }
+
+pure func test_step_result_to_message_copies_tool_calls() -> bool
+  tests [((), true)]
+  {
+    let call: ToolCall = { id: "tc-1", name: "ReadFile", arguments: "{}" };
+    let result: StepResult = {
+      message: { role: "assistant", content: "use tool", tool_calls: [], tool_call_id: "", images: [] },
+      tool_calls: [call],
+      finish_reason: "tool_calls",
+      input_tokens: 1,
+      output_tokens: 2,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0
+    };
+    let m = step_result_to_message(result);
+    m.role == "assistant" && m.content == "use tool" && List.length(m.tool_calls) == 1 && m.tool_call_id == ""
+  }
+
+pure func test_tool_result_message_uses_call_id_and_caps_content() -> bool
+  tests [((), true)]
+  {
+    let call: ToolCall = { id: "tc-1", name: "ReadFile", arguments: "{}" };
+    let m = tool_result_message(call, "content");
+    m.role == "tool" && m.content == "content" && List.length(m.tool_calls) == 0 && m.tool_call_id == "tc-1"
+  }
+
+pure func test_envelope_to_tool_message_uses_envelope_id() -> bool
+  tests [((), true)]
+  {
+    let env: ToolResultEnvelope = {
+      tool_call_id: "env-1",
+      tool: "FakeTool",
+      exit_code: 0,
+      stdout: "ok",
+      stderr: "",
+      metadata: jo([])
+    };
+    let m = envelope_to_tool_message(env);
+    m.role == "tool"
+      && m.tool_call_id == "env-1"
+      && List.length(m.tool_calls) == 0
+      && contains(m.content, "\"tool\":\"FakeTool\"")
+  }
+
+pure func test_handled_tool_message_uses_model_call_id() -> bool
+  tests [((), true)]
+  {
+    let env: ToolResultEnvelope = {
+      tool_call_id: "extension-id",
+      tool: "FakeTool",
+      exit_code: 0,
+      stdout: "ok",
+      stderr: "",
+      metadata: jo([])
+    };
+    let m = handled_tool_message("model-call-id", env);
+    m.role == "tool"
+      && m.tool_call_id == "model-call-id"
+      && List.length(m.tool_calls) == 0
+      && contains(m.content, "\"tool\":\"FakeTool\"")
+  }
+
+-- ============================================================================
+-- PLAN-002 W2 Parts 1 and 3: the strict decoder, and the lifecycle table row by
+-- row (W2 gate 5). The wake rows are W4's.
+-- ============================================================================
+
+pure func w2_wait_json(id: string, pane: string) -> Json {
+  jo([
+    kv("id", js(id)),
+    kv("delegate_kind", js("motoko")),
+    kv("locator", jo([kv("pane", js(pane))])),
+    kv("answer_path", js("/tmp/mot/answer-${id}.md")),
+    kv("run_key", js(id))
+  ])
+}
+
+pure func w2_call(name: string) -> ToolCall {
+  { id: "call-1", name: name, arguments: "{}" }
+}
+
+pure func w2_delegate_env(exit_code: int, stdout: string, wait: Json) -> ToolResultEnvelope {
+  { tool_call_id: "tc-1", tool: "Delegate", exit_code: exit_code, stdout: stdout, stderr: "",
+    metadata: jo([kv("delegate", js("d-1")), kv("pane_id", js("w1:pA")), kv("wait", wait)]) }
+}
+
+pure func w2_check_env(exit_code: int, delegate: string, settled: bool) -> ToolResultEnvelope {
+  { tool_call_id: "tc-2", tool: "DelegateCheck", exit_code: exit_code, stdout: "", stderr: "",
+    metadata: jo([kv("delegate", js(delegate)), kv("pane_id", js("w1:pA")), kv("settled", jb(settled))]) }
+}
+
+pure func w2_ids(ws: [WaitDescriptor]) -> [string] {
+  match ws {
+    [] => [],
+    w :: rest => wait_id(w) :: w2_ids(rest)
+  }
+}
+
+pure func w2_ids_are(ws: [WaitDescriptor], expected: [string]) -> bool {
+  encode(ja(List.map(js, w2_ids(ws)))) == encode(ja(List.map(js, expected)))
+}
+
+pure func w2_is_err(r: Result[WaitDescriptor, string]) -> bool {
+  match r { Err(_) => true, Ok(_) => false }
+}
+
+pure func w2_delegate(id: string) -> WaitDescriptor {
+  DelegateWait({ id: id, delegate_kind: "motoko", locator: { pane: "w1:pA" }, answer_path: "/tmp/mot/answer-${id}.md", run_key: id })
+}
+
+pure func test_wait_decoder_accepts_each_variant() -> bool
+  tests [((), true)]
+  {
+    let d = match wait_descriptor_from_json(w2_wait_json("d-1", "w1:pA")) {
+      Ok(DelegateWait(w)) => w.id == "d-1" && w.locator.pane == "w1:pA" && w.delegate_kind == "motoko" && w.run_key == "d-1",
+      _ => false
+    };
+    let o = match wait_descriptor_from_json(jo([kv("id", js("op-1"))])) {
+      Ok(OperatorWait(w)) => w.id == "op-1",
+      _ => false
+    };
+    let t = match wait_descriptor_from_json(jo([kv("id", js("t-1")), kv("deadline_ms", jnum(1787475025027.0))])) {
+      Ok(TimerWait(w)) => w.id == "t-1" && w.deadline_ms == 1787475025027,
+      _ => false
+    };
+    d && o && t
+  }
+
+pure func test_wait_decoder_round_trips_the_encoder() -> bool
+  tests [((), true)]
+  {
+    let ws = [w2_delegate("d-1"), OperatorWait({ id: "op-1" }), TimerWait({ id: "t-1", deadline_ms: 42 })];
+    let back = List.map(wait_descriptor_from_json, List.map(wait_descriptor_to_json, ws));
+    let ok = \r. match r { Ok(w) => encode(wait_descriptor_to_json(w)), Err(e) => "ERR ${e}" };
+    encode(wait_descriptor_to_json(w2_delegate("d-1"))) == encode(w2_wait_json("d-1", "w1:pA"))
+      && encode(ja(List.map(js, List.map(ok, back)))) == encode(ja(List.map(js, List.map(\w. encode(wait_descriptor_to_json(w)), ws))))
+      && encode(wait_descriptors_json([])) == "[]"
+  }
+
+pure func test_wait_decoder_is_strict() -> bool
+  tests [((), true)]
+  {
+    let missing = jo([kv("id", js("d-1")), kv("delegate_kind", js("motoko")), kv("locator", jo([kv("pane", js("w1:pA"))])), kv("answer_path", js("/a"))]);
+    let extra = jo([kv("id", js("d-1")), kv("delegate_kind", js("motoko")), kv("locator", jo([kv("pane", js("w1:pA"))])), kv("answer_path", js("/a")), kv("run_key", js("r")), kv("extra", js("x"))]);
+    let wrong_type = jo([kv("id", jnum(1.0)), kv("delegate_kind", js("motoko")), kv("locator", jo([kv("pane", js("w1:pA"))])), kv("answer_path", js("/a")), kv("run_key", js("r"))]);
+    let empty_id = w2_wait_json("", "w1:pA");
+    let empty_pane = w2_wait_json("d-1", "");
+    let bad_locator = jo([kv("id", js("d-1")), kv("delegate_kind", js("motoko")), kv("locator", jo([kv("pane", js("w1:pA")), kv("tab", js("t"))])), kv("answer_path", js("/a")), kv("run_key", js("r"))]);
+    let fractional = jo([kv("id", js("t-1")), kv("deadline_ms", jnum(1.5))]);
+    w2_is_err(wait_descriptor_from_json(missing))
+      && w2_is_err(wait_descriptor_from_json(extra))
+      && w2_is_err(wait_descriptor_from_json(wrong_type))
+      && w2_is_err(wait_descriptor_from_json(empty_id))
+      && w2_is_err(wait_descriptor_from_json(empty_pane))
+      && w2_is_err(wait_descriptor_from_json(bad_locator))
+      && w2_is_err(wait_descriptor_from_json(fractional))
+      && w2_is_err(wait_descriptor_from_json(js("d-1")))
+      && w2_is_err(wait_descriptor_from_json(jo([])))
+  }
+
+-- Row: `Delegate` succeeds → register.
+pure func test_lifecycle_delegate_succeeds_registers() -> bool
+  tests [((), true)]
+  {
+    let after = apply_tool_lifecycle([], w2_call("Delegate"), w2_delegate_env(0, "running", w2_wait_json("d-1", "w1:pA")));
+    w2_ids_are(after, ["d-1"])
+  }
+
+-- Row: `Delegate` fails → nothing. A non-zero exit registers nothing even with
+-- a well-formed `wait`, and a malformed `wait` registers nothing on exit 0.
+pure func test_lifecycle_delegate_fails_registers_nothing() -> bool
+  tests [((), true)]
+  {
+    let failed = apply_tool_lifecycle([], w2_call("Delegate"), w2_delegate_env(1, "", w2_wait_json("d-1", "w1:pA")));
+    let malformed_env = w2_delegate_env(0, "running", jo([kv("id", js("d-1"))  , kv("pane", js("w1:pA"))]));
+    let malformed = apply_tool_lifecycle([w2_delegate("d-0")], w2_call("Delegate"), malformed_env);
+    let no_wait: ToolResultEnvelope = { tool_call_id: "tc", tool: "Delegate", exit_code: 0, stdout: "", stderr: "", metadata: jo([]) };
+    w2_ids_are(failed, [])
+      && w2_ids_are(malformed, ["d-0"])
+      && w2_ids_are(apply_tool_lifecycle([], w2_call("Delegate"), no_wait), [])
+  }
+
+-- The invalid wait's diagnostic: present for a malformed `wait`, absent for a
+-- valid one and for no `wait` at all.
+pure func test_lifecycle_invalid_wait_leaves_a_diagnostic() -> bool
+  tests [((), true)]
+  {
+    let malformed_env = w2_delegate_env(0, "running", jo([kv("id", js("d-1"))]  ++ []) );
+    let bad = w2_delegate_env(0, "running", js("not-an-object"));
+    let diag = match wait_diagnostic_event(3, w2_call("Delegate"), bad) {
+      Some(ExtensionDiagnostic(info)) => info.step == 3 && info.code == "invalid_wait" && info.extension == "core:open_waits",
+      _ => false
+    };
+    let none_for_valid = match wait_diagnostic_event(3, w2_call("Delegate"), w2_delegate_env(0, "ok", w2_wait_json("d-1", "w1:pA"))) { None => true, Some(_) => false };
+    let none_for_operator_shape = match wait_diagnostic_event(3, w2_call("Delegate"), malformed_env) { None => true, Some(_) => false };
+    diag && none_for_valid && none_for_operator_shape
+  }
+
+-- Row: re-delegation → a new wait with a new id; the old one stays.
+pure func test_lifecycle_redelegation_keeps_the_old_wait() -> bool
+  tests [((), true)]
+  {
+    let first = apply_tool_lifecycle([], w2_call("Delegate"), w2_delegate_env(0, "", w2_wait_json("d-1", "w1:pA")));
+    let second = apply_tool_lifecycle(first, w2_call("Delegate"), w2_delegate_env(0, "", w2_wait_json("d-2", "w1:pB")));
+    let same_id_again = apply_tool_lifecycle(second, w2_call("Delegate"), w2_delegate_env(0, "", w2_wait_json("d-2", "w1:pC")));
+    w2_ids_are(second, ["d-1", "d-2"]) && w2_ids_are(same_id_again, ["d-1", "d-2"])
+  }
+
+-- Row: `DelegateCheck` with `settled: true` → remove `id == metadata.delegate`.
+pure func test_lifecycle_settled_check_removes_the_matching_wait() -> bool
+  tests [((), true)]
+  {
+    let after = apply_tool_lifecycle([w2_delegate("d-1"), w2_delegate("d-2")], w2_call("DelegateCheck"), w2_check_env(0, "d-1", true));
+    w2_ids_are(after, ["d-2"])
+  }
+
+-- Row: a check that returns an error without settling → keep.
+pure func test_lifecycle_error_without_settle_keeps() -> bool
+  tests [((), true)]
+  {
+    let after = apply_tool_lifecycle([w2_delegate("d-1")], w2_call("DelegateCheck"), w2_check_env(1, "d-1", false));
+    let pending = apply_tool_lifecycle([w2_delegate("d-1")], w2_call("DelegateCheck"), w2_check_env(0, "d-1", false));
+    w2_ids_are(after, ["d-1"]) && w2_ids_are(pending, ["d-1"])
+  }
+
+-- Row: a check that settles an already-removed wait → idempotent.
+pure func test_lifecycle_settling_a_removed_wait_is_idempotent() -> bool
+  tests [((), true)]
+  {
+    let once = apply_tool_lifecycle([w2_delegate("d-1"), w2_delegate("d-2")], w2_call("DelegateCheck"), w2_check_env(0, "d-1", true));
+    let twice = apply_tool_lifecycle(once, w2_call("DelegateCheck"), w2_check_env(0, "d-1", true));
+    w2_ids_are(once, ["d-2"]) && w2_ids_are(twice, ["d-2"])
+  }
+
+-- Row: gone, then the second read fails → the extension publishes `lost`, the
+-- check settles (non-zero exit, `settled: true`) → remove.
+pure func test_lifecycle_lost_settles_and_removes() -> bool
+  tests [((), true)]
+  {
+    let after = apply_tool_lifecycle([w2_delegate("d-1")], w2_call("DelegateCheck"), w2_check_env(1, "d-1", true));
+    w2_ids_are(after, [])
+  }
+
+-- Row: run ends → cleared.
+pure func test_lifecycle_run_end_clears() -> bool
+  tests [((), true)]
+  {
+    w2_ids_are(waits_at_run_end([w2_delegate("d-1"), OperatorWait({ id: "op" })]), [])
+  }
+
+-- Gate 5: a `Handled` envelope whose content is over the 65 536-byte cap still
+-- registers its wait, because the lift reads the envelope; the model message
+-- built from the same envelope IS truncated.
+pure func test_lifecycle_registers_despite_truncated_model_message() -> bool
+  tests [((), true)]
+  {
+    let x1 = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyzAB";
+    let x2 = "${x1}${x1}";
+    let x4 = "${x2}${x2}";
+    let x8 = "${x4}${x4}";
+    let x16 = "${x8}${x8}";
+    let x32 = "${x16}${x16}";
+    let x64 = "${x32}${x32}";
+    let x128 = "${x64}${x64}";
+    let x256 = "${x128}${x128}";
+    let x512 = "${x256}${x256}";
+    let x1024 = "${x512}${x512}";
+    let env = w2_delegate_env(0, x1024, w2_wait_json("d-big", "w1:pZ"));
+    let msg = handled_tool_message("call-1", env);
+    let after = apply_tool_lifecycle([], w2_call("Delegate"), env);
+    Str.length(msg.content) == 65536
+      && contains(msg.content, "...[truncated; original ")
+      && not contains(msg.content, "d-big")
+      && w2_ids_are(after, ["d-big"])
+  }

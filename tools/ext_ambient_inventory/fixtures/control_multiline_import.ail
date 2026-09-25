@@ -1,0 +1,14 @@
+-- RESOLVING CONTROL for the import reader.
+-- The list wraps, and the only effect-bearing symbol in it is on the LAST line.
+-- A line-scoped reader sees `EnvError` alone -- a type -- and reports this file
+-- clean: silently, and in the direction that makes an extension look better
+-- than it is.  This tree's `pkg/sunholo/motoko_ext_abi/types` imports wrap
+-- exactly like this.
+module fixtures/control_multiline_import
+
+import std/env (EnvError,
+                getEnvOr)
+
+export func emit(k: string) -> string ! {Env} {
+  getEnvOr(k, "")
+}

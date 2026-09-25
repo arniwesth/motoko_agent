@@ -1,0 +1,26 @@
+{
+  "_comment": "The `run` block of a dagr v3 run file with an observer grant beside the orchestrator. Only `run` is shown; tasks/events/projects are unchanged. Strict-clean against dagr v0.3.1 (measured 2026-09-19).",
+  "run": {
+    "id": "run-example-v01",
+    "title": "example: orchestrator plus observer",
+    "started_at": "2026-09-19T09:00:00Z",
+    "orchestrator": { "pane": "w3:p1", "mode": "delegate", "max_in_flight": 1 },
+    "observer": {
+      "pane": "w3:pZ",
+      "agent": "observer",
+      "granted_by": "operator",
+      "granted_at": "2026-09-19T17:10:00Z",
+      "authority": "may_decide_and_continue",
+      "scope": [
+        "order and batch size of rows already authorized by an operator ruling",
+        "launch, notify, time-bound and lock discipline for detached legs; re-entry of a dropped chain",
+        "correction of run-file state that its own receipts contradict"
+      ],
+      "return": [
+        "authorizing a new fix set, code part, or evaluator re-pin",
+        "waiving a plan rule",
+        "anything not listed in scope"
+      ]
+    }
+  }
+}

@@ -1,0 +1,136 @@
+flowchart TD
+  %% ADR-004 long Qwen compaction-session DST — END STATE expected after implementation.
+  %% Grounded at HEAD de3c348. This is a RUNTIME/DATAFLOW view: the deterministic
+  %% long-session path through the production loop and the evidence-only live path.
+  %% Colours: green = built by this plan · purple = config/catalog edited · gray = frozen production
+  %% code reused · cyan = oracle law · blue = acceptance gate · amber = live calibration only.
+
+  subgraph LIVE["Live calibration — opt-in, never CI oracle"]
+    liveprof["qwen36-compaction-live profile<br/>agent = openrouter/qwen/qwen3.6-35b-a3b<br/>compaction_ai model = same Qwen"]:::calib
+    livecat["production catalog<br/>openrouter/qwen/qwen3.6-35b-a3b → 262144"]:::edited
+    evidence["archived live evidence<br/>date · profile · model · log path<br/>provider behavior is not oracle"]:::calib
+  end
+
+  subgraph FIXTURE["Deterministic fixture — offline Qwen-labeled pressure"]
+    testcat["MOTOKO_MODELS_FILE fixture<br/>same Qwen label → small limit"]:::new
+    probe["catalog fixture probe<br/>catalog_context_limit_for(Qwen label) == small limit"]:::new
+    history["seed history<br/>non-empty system prefix<br/>user task + growing tool traffic"]:::new
+    markers["retained step markers<br/>latest tool result / tool-call id<br/>survive compaction recent tail"]:::new
+  end
+
+  subgraph PORTS["Custom Ported(Ports) provider — stateless routing"]
+    route{"model_step prompt shape"}
+    summ["summarizer-shaped call<br/>exactly one user msg · no system/tool<br/>return stable fake summary"]:::new
+    agent["agent-shaped call<br/>derive next step from retained marker<br/>emit LongResult tool call or final prose"]:::new
+    fakeports["fixed clock/env/proc ports<br/>no network · no real provider"]:::new
+  end
+
+  subgraph LOOP["Frozen production session path — session.ail"]
+    traced["run_v2_session_traced<br/>returns TracedSessionResult"]:::frozen
+    split["split_for_compaction<br/>pins system prefix<br/>segment excludes system"]:::frozen
+    ctx["mk_v2_ext_ctx<br/>context_limit from catalog<br/>ports + artifacts threaded"]:::frozen
+    chain["dispatch_pre_step_chain<br/>registry order: compaction_ai → structural"]:::frozen
+    seal["seal_compacted_payload<br/>single send gate"]:::frozen
+    prep["ProviderCallPrepared<br/>seal accepted payload<br/>system prefix chars/count + digest"]:::frozen
+    dispatch["dispatch_step<br/>calls routed Ported(Ports)"]:::frozen
+    tool["production on_tool_handle path<br/>LongResult returns large deterministic stdout<br/>assistant/tool ids preserved"]:::new
+  end
+
+  subgraph COMPACTION["Compaction behaviour under pressure"]
+    ai["compaction_ai applies repeatedly<br/>threshold_pct/keep_recent pinned<br/>writes digest artifact summary"]:::new
+    structural["compaction_structural backstop<br/>elides older tool-result content<br/>keeps send under small limit"]:::new
+    artifacts["ExtCtx.artifacts threaded turn-to-turn<br/>single-slot compaction_ai digest cache"]:::new
+  end
+
+  subgraph LEDGER["In-memory LedgerTrace oracle"]
+    applied["CompactionStageRecord<br/>ext_id = compaction_ai<br/>outcome = TraceStageApplied<br/>count ≥ 3"]:::oracle
+    rejected["TraceStageRejected absent<br/>no compaction_exhausted<br/>no SystemPromptEmpty"]:::oracle
+    success["ProviderResult after prepared<br/>scripted dispatch succeeded<br/>prepared alone is not success"]:::oracle
+    persist["returned history grows<br/>provider payload may compact<br/>persisted st.msgs stays uncompacted"]:::oracle
+    replay["normalized trace projection<br/>two deterministic runs byte-stable"]:::oracle
+  end
+
+  subgraph DIRECT["Direct compaction_ai scenarios — payload details not in ledger"]
+    shape["compaction_ai_output_shape_valid<br/>validate_compactor_output accepts<br/>tool_call/tool_result ids paired"]:::oracle
+    cache["compaction_ai_artifact_cache_stable<br/>same old segment digest<br/>second run must use cached summary"]:::oracle
+  end
+
+  subgraph GATE["Fast gate — make compaction_dst"]
+    scn1["compaction.long_qwen_ai_multiple_compactions"]:::gate
+    scn2["compaction.long_qwen_ai_replay_deterministic"]:::gate
+    scn3["compaction.compaction_ai_output_shape_valid"]:::gate
+    scn4["compaction.compaction_ai_artifact_cache_stable"]:::gate
+    make["make compaction_dst<br/>runs offline with MOTOKO_MODELS_FILE<br/>live Qwen not invoked"]:::gate
+  end
+
+  %% live path is side evidence only
+  livecat --> liveprof
+  liveprof --> evidence
+  evidence -. "calibrates realism only" .-> history
+
+  %% deterministic fixture feeds session
+  testcat --> probe
+  probe --> ctx
+  history --> traced
+  markers --> agent
+  fakeports --> traced
+
+  %% routed provider
+  dispatch --> route
+  route -->|"single-user prompt"| summ
+  route -->|"normal agent payload"| agent
+  summ --> ai
+  agent --> dispatch
+
+  %% production loop
+  traced --> split
+  split --> ctx
+  ctx --> chain
+  chain --> ai
+  ai --> artifacts
+  artifacts --> ctx
+  ai --> structural
+  structural --> seal
+  seal --> prep
+  prep --> dispatch
+  agent --> tool
+  tool --> history
+
+  %% ledger observations
+  chain --> applied
+  chain --> rejected
+  prep --> success
+  dispatch --> success
+  traced --> persist
+  applied --> replay
+  prep --> replay
+  success --> replay
+  persist --> replay
+
+  %% direct scenarios
+  ai -. "direct fixture output" .-> shape
+  artifacts -. "same-segment replay" .-> cache
+
+  %% gate
+  applied --> scn1
+  rejected --> scn1
+  success --> scn1
+  persist --> scn1
+  replay --> scn2
+  shape --> scn3
+  cache --> scn4
+  scn1 --> make
+  scn2 --> make
+  scn3 --> make
+  scn4 --> make
+
+  classDef new fill:#143d24,stroke:#56d364,color:#c6f0cf,stroke-width:2.5px;
+  classDef edited fill:#2f2145,stroke:#bb9af7,color:#e5d5fb;
+  classDef frozen fill:#262a30,stroke:#9aa4b0,color:#d6dbe2;
+  classDef existing fill:#1e2a4a,stroke:#7aa2f7,color:#c8d3f5;
+  classDef oracle fill:#123038,stroke:#2ac3de,color:#bdeef5,stroke-width:2.5px;
+  classDef calib fill:#3a2f12,stroke:#e0af68,color:#f2e2c2,stroke-width:2.5px,stroke-dasharray:6 4;
+  classDef gate fill:#16294d,stroke:#7aa2f7,color:#cdd9f5,stroke-width:2px;
+  classDef terminal fill:#3a1620,stroke:#f7768e,color:#f7c6cf;
+
+  class route existing;

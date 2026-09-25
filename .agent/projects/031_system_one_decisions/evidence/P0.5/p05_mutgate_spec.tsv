@@ -1,0 +1,19 @@
+# 031 PLAN-001 P0.5 -- mutgate spec (013 GATE-mutation-red-submission-precondition.md).
+# fix_id <TAB> target_file <TAB> sed_expr <TAB> test_cmd ; run in a throw-away clone only:
+#   bash .agent/projects/013_core_architecture_for_dst/mutgate.sh --spec .agent/projects/031_system_one_decisions/evidence/P0.5/p05_mutgate_spec.tsv --clone-from /workspaces/motoko_agent --repo /workspaces/mutgate-031-p05
+# Every test_cmd exits 0 on success by itself -- no `| grep -q` (pipefail + SIGPIPE scores baseline red).
+# The conformance and registry rows run in throwaway workspaces (the repo lock pins path deps to the primary checkout).
+p05_kinds_drop_decision_judge	tools/profile_definition/check_fixtures.py	/^    "decision_solver_judge": "derived",$/d	python3 tools/profile_definition/check_fixtures.py --capability-kinds
+p05_kinds_drop_decision_policy	tools/profile_definition/check_fixtures.py	/^    "decision_tool_policy": "derived",$/d	python3 tools/profile_definition/check_fixtures.py --capability-kinds
+p05_kinds_basis_disagrees_row	src/core/dst_profile_coverage.ail	s/^    CompactorKind => EffectRow,$/    CompactorKind => DeclaredEmptyRow,/	python3 tools/profile_definition/check_fixtures.py --capability-kinds
+p05_neutral_judge_prepare_nudges	packages/motoko_ext_conformance/invariants.ail	s/^  JudgeImmediate(NoDecision)$/  JudgeImmediate(ContinueWithFeedback("nudge"))/	bash .agent/projects/031_system_one_decisions/evidence/P0.5/p05_conformance_check.sh
+p05_neutral_judge_interpret_accepts	packages/motoko_ext_conformance/invariants.ail	s/^  NoDecision$/  Accept/	bash .agent/projects/031_system_one_decisions/evidence/P0.5/p05_conformance_check.sh
+p05_neutral_tool_prepare_denies	packages/motoko_ext_conformance/invariants.ail	s/^  ToolImmediate(NoOpinion)$/  ToolImmediate(Deny("nudge"))/	bash .agent/projects/031_system_one_decisions/evidence/P0.5/p05_conformance_check.sh
+p05_neutral_tool_interpret_allows	packages/motoko_ext_conformance/invariants.ail	s/^  NoOpinion$/  Allow/	bash .agent/projects/031_system_one_decisions/evidence/P0.5/p05_conformance_check.sh
+p05_registration_neutral_vacuous	packages/motoko_ext_conformance/harness.ail	s/judge_preparation_neutral(prepare(ctx, "conformance candidate"))/true/	bash .agent/projects/031_system_one_decisions/evidence/P0.5/p05_conformance_check.sh
+p05_arity_drop_decision_judge	tools/ext_ambient_inventory/hook_scope.py	/^    "DecisionSolverJudge": (3, (1, 2)),$/d	python3 tools/ext_ambient_inventory/hook_scope.py --gate-fixtures
+p05_arity_policy_wrong_binding	tools/ext_ambient_inventory/hook_scope.py	s/^    "DecisionToolPolicy": (3, (1, 2)),$/    "DecisionToolPolicy": (3, (2,)),/	python3 tools/ext_ambient_inventory/hook_scope.py --gate-fixtures
+p05_arity_existing_slot_checked	tools/ext_ambient_inventory/hook_scope.py	s/^    "ExitIntent": (3, (2,)),$/    "ExitIntent": (2, (1,)),/	python3 tools/ext_ambient_inventory/hook_scope.py --gate-fixtures
+p05_coverage_drops_decision_kind	src/core/dst_profile_coverage.ail	s/ExitIntentKind, WorkInFlightKind, DecisionSolverJudgeKind, DecisionToolPolicyKind\]/ExitIntentKind, WorkInFlightKind, DecisionSolverJudgeKind]/	make -s profile_coverage
+p05_coverage_decision_basis_flips	src/core/dst_profile_coverage.ail	s/^    DecisionSolverJudgeKind => ViewsPlusBoundary,$/    DecisionSolverJudgeKind => DeclaredEmptyRow,/	make -s profile_coverage
+p05_template_drops_config	tools/ext_registry_gen/generate.py	s/normalize_registration(id, reg.config, reg.caps)/normalize_registration(id, reg.caps)/	bash .agent/projects/031_system_one_decisions/evidence/P0.5/p05_registry_fixture_check.sh

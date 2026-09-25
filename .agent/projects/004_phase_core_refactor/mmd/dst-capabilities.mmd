@@ -1,0 +1,79 @@
+flowchart TB
+  %% DST capabilities of the phase-oriented core (ADR-001 §1-6, ADR-002).
+  %% The claim: ONE production transition code path, driven by swappable ports,
+  %% emitting ONE trace that pure invariants + L1 scenarios assert over.
+
+  subgraph INJECT["1 · Injected nondeterminism — swap ports, keep the code"]
+    live["Live adapters<br/>live_ports · LiveAI<br/>real AI / FS / Net / Clock"]
+    fake["Scripted &amp; fake ports (pure)<br/>fake_ports · scripted_ports_from_steps<br/>ScriptedPortsState: model · approvals · clock"]
+  end
+
+  subgraph CORE["2 · Production transition code — identical in prod &amp; DST"]
+    decide["step_machine.decide<br/>StepState &rarr; StepDecision<br/><i>pure · zero effects · L0 · Z3-eligible</i>"]
+    phases["model / tool / hook phases<br/>effects only via ports &rarr; PhaseResult<br/>+ StateDelta (patch = the observation)"]
+    driver["session · c2_loop<br/>executes decisions · sole ledger emitter"]
+  end
+
+  subgraph LEDGER["3 · Ledger = trace (one artifact, always on)"]
+    events["typed LedgerEvent stream<br/>the DST-canonical layer"]
+  end
+
+  subgraph CHECK["4a · Invariants — pure predicates · L0 · Z3-eligible"]
+    inv1["history_valid_transcript<br/>system prefix · tool pairing · ids"]
+    inv2["validate_compactor_output<br/>no system in output · pairing kept"]
+    inv3["validate_checkpoint_chain<br/>digest chain verifiable"]
+  end
+
+  subgraph SCEN["4b · L1 scenarios — --caps IO · no network · no registry"]
+    s1["empty_system_prompt_rejected"]
+    s2["oversized_payload_rejected"]
+    s3["compactor_chain_order_is_registry_order"]
+    s4["invalid_stage_skipped_chain_continues"]
+    s5["checkpoint_output_is_valid_transcript"]
+    s6["summary_cache_replay_stable"]
+  end
+
+  report[["5 · Failure report<br/>to_schema_v1 &rarr; schema-v1 JSONL<br/>scenario id · first failed invariant · normalized trace"]]
+
+  caps["caps-as-conformance<br/>fake ports + minimal caps &rArr; any raw effect<br/>fails at performance time — the runtime is the analyzer"]
+
+  live -->|"production ({AI,FS,Net,Clock,...})"| driver
+  fake -->|"DST (--caps IO or less)"| driver
+  driver --> decide
+  decide --> phases
+  phases --> driver
+  driver ==>|"single emission authority"| events
+
+  events --> inv1
+  events --> inv2
+  events --> inv3
+  events --> s1
+  events --> s2
+  events --> s3
+  events --> s4
+  events --> s5
+  events --> s6
+
+  inv1 --> report
+  inv2 --> report
+  inv3 --> report
+  s5 -.->|reuses| inv1
+  fake -.-> caps
+
+  classDef inject fill:#3a3218,stroke:#e0af68,color:#f2e0b8;
+  classDef pure fill:#1c3a2b,stroke:#73daca,color:#c3e8d8;
+  classDef shell fill:#1e2a4a,stroke:#7aa2f7,color:#c8d3f5;
+  classDef sink fill:#123038,stroke:#2ac3de,color:#bdeef5;
+  classDef inv fill:#2f2145,stroke:#bb9af7,color:#e5d5fb;
+  classDef scen fill:#20303a,stroke:#7dcfff,color:#c6e6f5;
+  classDef report fill:#3a2024,stroke:#f7768e,color:#f7c5cd;
+  classDef note fill:#2a2b3d,stroke:#565f89,color:#a9b1d6;
+
+  class live,fake inject;
+  class decide,phases pure;
+  class driver shell;
+  class events sink;
+  class inv1,inv2,inv3 inv;
+  class s1,s2,s3,s4,s5,s6 scen;
+  class report report;
+  class caps note;

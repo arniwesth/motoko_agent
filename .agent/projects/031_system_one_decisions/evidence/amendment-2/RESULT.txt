@@ -1,0 +1,14 @@
+# ADR-001 Amendment 2 artifact: each batch-A package checked as its OWN root with its OWN ailang.toml ([effects].max enforced),
+# in a throwaway workspace (no primary lock), at 181051d0 (ABI 7.4) and df2df96e (ABI 8.0, P1.2a). Produced by pkgcheck.sh <rev> <pkg>.
+181051d0 compaction-structural rc=1 • compaction_structural.ail: module loading error: failed to load src/core/ext/ctx_defaults: LDR001: module not found: src/core/ext/ctx_defaults|• register.ail: module loading error: failed to load src/core/ext/ctx_defaults: LDR001: module not found: src/core/ext/ctx_defaults|
+df2df96e compaction-structural rc=1 • register.ail: in function pre_step in register: effect ceiling violation in package sunholo/motoko_ext_compaction_structural: effects [Trace] not in max [IO Env AI Ne|
+181051d0 decision-framework rc=0 
+df2df96e decision-framework rc=0 
+181051d0 empty-stop-guard rc=1 • empty_stop_guard.ail: in function noop_ai_step in empty_stop_guard: effect ceiling violation in package sunholo/motoko_ext_empty_stop_guard: effects [Trace] not in ma|
+df2df96e empty-stop-guard rc=0 
+181051d0 microrag rc=1 • register.ail: in function auto_write_with_microrag in register: effect ceiling violation in package sunholo/motoko_ext_microrag: effects [Rand] not in max [IO Process|
+df2df96e microrag rc=1 • register.ail: in function auto_write_with_microrag in register: effect ceiling violation in package sunholo/motoko_ext_microrag: effects [Rand] not in max [IO Process|
+181051d0 omnigraph rc=1 • _smoke.ail: in function main in _smoke: effect ceiling violation in package sunholo/motoko_ext_omnigraph: effects [Rand] not in max [Process FS Env SharedMem IO]|• register.ail: in function register_with_config in register: effect ceiling violation in package sunholo/motoko_ext_omnigraph: effects [Rand] not in max [Process FS En|
+df2df96e omnigraph rc=1 • _smoke.ail: in function main in _smoke: effect ceiling violation in package sunholo/motoko_ext_omnigraph: effects [Rand] not in max [Process FS Env SharedMem IO]|• register.ail: in function omnigraph_tool_handle in register: effect ceiling violation in package sunholo/motoko_ext_omnigraph: effects [AI Net Clock Stream Rand Trace|
+181051d0 progress-contract-guard rc=1 • progress_contract_guard.ail: in function noop_ai_step in progress_contract_guard: effect ceiling violation in package sunholo/motoko_ext_progress_contract_guard: effe|
+df2df96e progress-contract-guard rc=0 

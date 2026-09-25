@@ -5,23 +5,18 @@ import std/option (None)
 import std/string (stringToInt)
 
 import pkg/sunholo/motoko_ext_abi/types (
-  ExtensionHooks,
-  ExtCtx,
-  BudgetPlan,
-  BudgetPatch,
-  ToolHandleDecision,
-  FinalizeDecision,
-  PreStepDecision,
-  PassThrough,
-  Msg
+  ExtRegistration, PromptShaper, ToolPolicy, ToolProvider, SolverJudge,
+  PureCtx, ProviderCtx, ProcessCtx, PromptPatch, ToolCallEnvelope,
+  ToolHandleOutcome, FinalizeOutcome
 )
-import pkg/sunholo/motoko_ext_context_mode/types (CtxConfig)
+import pkg/sunholo/motoko_ext_context_mode/types (CtxConfig, default_ctx_config, ctx_config_json, ctx_config_of, cached_prompt_of)
 import pkg/sunholo/motoko_ext_context_mode/context_mode (
   provided_tools,
   on_build_system_prompt,
   on_tool_policy,
   on_tool_handle,
-  finalize_with_index
+  finalize_with_index,
+  pure_of_process
 )
 import pkg/sunholo/motoko_ext_context_mode/prompts (load_agent_prompt)
 
@@ -32,46 +27,46 @@ func parse_int_or(s: string, fallback: int) -> int {
   }
 }
 
-func no_budget_patch() -> BudgetPatch {
-  {
-    requested_total: None,
-    requested_solver: None,
-    requested_verifier: None
-  }
-}
-
-func budget_hook(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch ! {Env, FS} {
-  no_budget_patch()
-}
-
 func config_from_env() -> CtxConfig ! {Env} {
+  let d = default_ctx_config();
   {
-    bin: getEnvOr("CONTEXT_MODE_BIN", "context-mode"),
-    timeout_ms: parse_int_or(getEnvOr("CONTEXT_MODE_TIMEOUT_MS", "25000"), 25000),
-    max_output_chars: parse_int_or(getEnvOr("CONTEXT_MODE_MAX_OUTPUT_CHARS", "6000"), 6000),
-    snapshot_key_prefix: getEnvOr("CONTEXT_MODE_SNAPSHOT_KEY_PREFIX", "ctxmode:snapshot:")
+    bin: getEnvOr("CONTEXT_MODE_BIN", d.bin),
+    timeout_ms: parse_int_or(getEnvOr("CONTEXT_MODE_TIMEOUT_MS", "25000"), d.timeout_ms),
+    max_output_chars: parse_int_or(getEnvOr("CONTEXT_MODE_MAX_OUTPUT_CHARS", "6000"), d.max_output_chars),
+    snapshot_key_prefix: getEnvOr("CONTEXT_MODE_SNAPSHOT_KEY_PREFIX", d.snapshot_key_prefix)
   }
 }
 
-export func register_with_config(_cfg: a) -> ExtensionHooks ! {Env, FS} {
+-- The payloads: named top-level functions in this module (a payload imported
+-- from another module leaks its row into `register_with_config` on the pin),
+-- each decoding its configuration from `ctx.ext_config`.
+func ctx_prompt(ctx: PureCtx) -> PromptPatch {
+  on_build_system_prompt(cached_prompt_of(ctx.ext_config), ctx)
+}
+
+func ctx_tool_handle(ctx: ProviderCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  on_tool_handle(ctx_config_of(ctx.ext_config), ctx, call)
+}
+
+func ctx_finalize(ctx: ProcessCtx, candidate: string) -> FinalizeOutcome ! {Process} {
+  { decision: finalize_with_index(ctx_config_of(ctx.ext_config), pure_of_process(ctx), candidate),
+    next_state: ctx.world }
+}
+
+-- ABI 8.0 (031 ADR-001 D2): `{ config, caps }`. The one config record and the
+-- cached prompt are encoded once, as `config`, and shared by three callbacks.
+export func register_with_config(_cfg: a) -> ExtRegistration ! {Env, FS} {
   let cfg = config_from_env();
   let cached_prompt = load_agent_prompt(getEnvOr("MOTOKO_WORKDIR", "."));
-  let handle = func(ctx: ExtCtx, call) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
-    on_tool_handle(cfg, ctx, call)
-  };
-  let finalize = func(ctx: ExtCtx, candidate: string) -> FinalizeDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} {
-    finalize_with_index(cfg, ctx, candidate)
-  };
+  -- B8: 6.0 Capability list (canonical atom order); the host stamps the id.
+  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
   {
-    id: "context_mode",
-    provided_tools: provided_tools(),
-    on_describe_tools: \_ . [],
-    on_build_system_prompt: \ctx. on_build_system_prompt(cached_prompt, ctx),
-    on_budget_plan: budget_hook,
-    on_pre_step: func(_ctx: ExtCtx, _msgs: [Msg]) -> PreStepDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream} { PassThrough },
-    on_tool_policy: on_tool_policy,
-    on_tool_handle: handle,
-    on_response_intercept: \_ _ . NoIntercept ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream},
-    on_solver_candidate: finalize
+    config: ctx_config_json(cfg, cached_prompt),
+    caps: [
+      PromptShaper(ctx_prompt),
+      ToolPolicy(on_tool_policy),
+      ToolProvider(provided_tools(), ctx_tool_handle),
+      SolverJudge(ctx_finalize)
+    ]
   }
 }

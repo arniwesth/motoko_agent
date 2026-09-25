@@ -1,0 +1,90 @@
+flowchart TB
+  %% Detail view 2 of 3. Overview: dst-execution-decisions.
+  %% D4's clock set and D5's hermeticity gate: what must be routed, and what can detect a gap.
+  %% Colour = role. Red = an unrouted or under-declared effect at HEAD. Dashed amber = blocked,
+  %% not citable, or rejected. Gray-dashed = a limit the gate must fail closed on.
+  %% Grounded 2026-08-01 at 81b0a899c9338a63a6abfe08172ee6cb15d313ec, after the fourth
+  %% correction pass. Two earlier revisions of obligation 2 were wrong in opposite directions;
+  %% both are drawn, because the reasoning matters more than the conclusion.
+
+  premise["<b>D4 · why routing is all-or-nothing within a profile</b><br/>the pinned runtime supplies no virtual clock, so there is <b>no interval in which a<br/>residual direct std/clock.now read is merely unrecorded-but-deterministic</b> —<br/>such a read is nondeterministic, and is a hermeticity failure like any other<br/>unrouted ambient effect, caught by D5's mechanisms rather than a clock-specific one<br/><br/>a profile may be narrow, but within its declared scope the clock seam is total"]:::clock
+
+  subgraph INV["the repo-wide clock inventory at HEAD — 13 distinct sites, not 4"]
+    direction TB
+    i1["<b>src/core/session.ail driver</b> · 791, 842, 1991, 2089<br/><b>4 sites</b> · reachable <i>always</i>, as driver code<br/>now has a single binding at session.ail:30, so no alias hides a fifth"]:::req
+    i2["<b>src/core/ext/runtime.ail emit_dummy_hook</b> · 190<br/><b>1 site</b> · reachable when the test_dummy hook is installed<br/>a core module present in <i>every</i> profile, behind six call sites all of the<br/>form: if is_test_dummy(h.id) then emit_dummy_hook(...)"]:::req
+    i3["<b>packages/motoko-ext-compose</b> · compose 6, author_tools 1, dispatcher 1<br/><b>8 sites</b> · reachable when compose is installed<br/>an earlier revision qualified this with 'and the model calls Compose' —<br/>an execution-path test, and factually too narrow: the response-intercept<br/>path reads the clock with no Compose tool call at all"]:::req
+    i4["<b>nothing is routed at HEAD.</b> an earlier revision reported 14 sites, added a<br/>conversation_loop_v2 row, and said 'only the first row is routed' — all three<br/>were measured on the spike's surgically-modified driver and imported as HEAD<br/>state. conversation_loop_v2 performs no read of its own, and the path the fifth<br/>row reached for resolves to the already-counted :791 through derive_session_id"]:::fault
+  end
+
+  def["<b>'profile-reachable' is installation-scoped, not a reachability analysis</b><br/>a site or hook is profile-reachable when it is<br/>1 · in the core driver, or<br/>2 · in a module the profile <i>installs</i>, or<br/>3 · in a core code path <b>guarded solely by an installed hook's identity</b><br/><br/>all three are answered by the extension list plus the module inventory, both<br/>enumerable today · the term covers <b>effect sites and hooks alike</b>: a<br/>profile-reachable hook is every hook the profile installs, run or not<br/><br/>it does <b>not</b> mean 'a site some execution path can actually perform' — deciding<br/>that needs the analysis obligation 3 declines to require and nothing here builds ·<br/>the consequence is deliberately conservative: a site in an installed extension<br/>must be routed even if no corpus run reaches it<br/><i>clause 3 is not a technicality — without it, runtime.ail:190 is either always<br/>reachable, making the driver's obligation five sites, or unclassified</i>"]:::rule
+
+  perprofile["<b>13 bounds the work; it describes no profile</b><br/>installing neither compose nor test_dummy — every checked-in configuration<br/>except .motoko/config/ailang — <b>4 sites</b><br/>installing compose but not test_dummy — .motoko/config/ailang — <b>12 sites</b><br/>installing both — <b>13</b>, and no checked-in configuration does<br/><br/>under the default configuration nine of the thirteen are unreachable:<br/>compose is not in its extension order and test_dummy is in no config at all"]:::note
+
+  seamgap["<b>nine of thirteen sit behind an extension hook, not in the driver</b><br/>the seam that would route them already exists — ExtPorts.clock_now in<br/>motoko-ext-abi/types.ail — and it has <b>zero call sites repo-wide</b>, so it has<br/>never been exercised and may not survive first contact unchanged<br/><i>routing the clock is not a core-only task; the plan must budget the<br/>extension-side work and its version surfaces rather than discover them</i>"]:::blocked
+
+  subgraph GATE["D5 · the hermeticity gate is a combination, because capabilities alone are not sufficient"]
+    direction TB
+    g1["broad IO permits both reporting and readLine, and a broad effect row<br/>does not prove which operation was performed"]:::rule
+    g2["the <b>narrowest executable capabilities</b>, generation and reporting separated"]:::gate
+    g3["a <b>source and ABI routing audit</b> for direct ambient calls in every<br/>in-profile module, subject to the structural-first rule"]:::gate
+    g4["a <b>profile-reachable clock audit</b> rooted in the packages the profile<br/>installs — a profile installing compose cannot claim conformance until its<br/>eight reads route through ExtPorts.clock_now; one installing none still<br/>has the four driver reads"]:::gate
+    g5["<b>poison and negative probes</b> per boundary: provider, tool, approval,<br/>environment, clock, random, and reached extension-effect bypasses"]:::gate
+    g6["<b>profile-definition validation and runtime routing that fail closed</b><br/>when an unclassified extension, hook, or adapter is loaded or reached"]:::gate
+  end
+
+  o1["<b>obligation 1 · prefer making the defect unrepresentable</b><br/>where a seam admits a dead dispatch arm, narrow the type instead of auditing it<br/>this is the fix that actually resolved the motivating instance: 89a1d67 retyped<br/>C2LoopState.provider from StepProvider to Ports and deleted the unreachable<br/>LiveAI/Scripted branches, converting a runtime invariant into a compile-time fact<br/><b>strictly stronger than any audit this gate could run</b><br/><i>a profile may not cite an audit where narrowing was available and declined</i>"]:::met
+
+  o2["<b>obligation 2 · a conservative textual inventory, at site granularity</b><br/>ambient-effect imports and call names, per in-profile module, over explicit<br/><b>src and packages</b> roots — including production code under src/core/test/**<br/>any ambient import, or any call name it cannot resolve to a routed seam, is a<br/>fail-closed candidate for manual triage<br/><b>over-approximation is the correct bias</b>: reporting more candidate sites than<br/>exist forces routing work, which fails closed"]:::gate
+
+  o2set["<b>the detection set is enumerated, versioned, and derived from the toolchain</b><br/>the classifier is the pinned toolchain's effect-bearing stdlib and builtin surface,<br/>as <b>module plus exported symbol</b>, from ailang builtins list --by-effect,<br/>constrained by the profile's permitted capabilities<br/>the two available enumerations <i>disagree</i> — 18 effect labels in the v0.26.0<br/>builtin surface against 12 permitted by ailang.toml — so neither alone is a<br/>classifier and a hand-maintained list would silently rot<br/><b>re-deriving it is a required step of every toolchain repin</b>, and the derived<br/>set is recorded with the profile or manifest<br/><br/><b>match on the imported target module, not on bound symbol names</b>: aliased and<br/>qualified forms typecheck on the pin, so a name-matching inventory would miss<br/>them by construction · nothing at HEAD aliases std/clock, which is why this has<br/>cost nothing so far and exactly why it must be specified rather than assumed<br/><br/>effects reached through an ExtPorts or Ports closure are <b>covered</b> — the closure<br/>is written literally at a site inside its defining module, and what the scan<br/>cannot follow is the call edge, which an ambient inventory does not need"]:::gate
+
+  subgraph WRONG["two earlier framings of obligation 2, both wrong, in opposite directions"]
+    direction TB
+    x1["<b>'reachability-aware, not textual'</b> — a property, not a buildable analysis<br/>this repo cannot answer the question it implies: tools/code-graph emits<br/>function-to-function edges only, its parser is a self-described source-parsed<br/>approximation, ctors.csv indexes constructor <i>declarations</i> rather than flow,<br/>and 'can any reachable caller produce the variant this arm consumes' is<br/>unanswerable from those tables"]:::rejected
+    x2["<b>a conservatively over-approximate function-level call-graph audit</b>, justified<br/>by the claim that code-graph drops calls through function-valued seams<br/>the dropped call — _resolve_call discarding ports.model_step(...) because ports is<br/>a local binding — is a <b>routed seam call</b>, precisely what <i>should</i> be absent<br/>from an ambient inventory, and the parser does resolve direct ambient calls<br/>through its bare-import path · <b>that drop never established a fail-open</b>"]:::rejected
+    x3["<b>the real disqualifiers are scope and granularity</b><br/>PROFILES['core'] is ('src/core',) and never contained packages/, so a core-scoped<br/>audit — even with --include-tests — misses every extension-package site,<br/>including the eight compose clock reads the gate makes a precondition<br/>and the emitted rows are <b>not sites</b>: the plain-call path dedups on<br/>(from_slug, std_module, symbol) while the interpolation path carries no seen<br/>check, so N calls in one function may collapse to one row or emit several<br/><i>an audit that cannot count sites cannot certify routing completeness</i>"]:::rejected
+    x4["<b>this is a different use than the one that failed in F2</b><br/>there a textual scan was asked <i>which seam is live</i> — a question<br/>over-approximation answers wrongly — and it certified std/ai.stepWithStream as<br/>the live provider seam when the only hit was an unreachable ADT branch<br/>architecture discovery and hermeticity inventory are not the same detector<br/>and must not share a justification"]:::note
+  end
+
+  subgraph LIMITS["obligation 2's soundness boundary — stated because the gate cites it"]
+    direction TB
+    l1["does <b>not</b> see effects performed outside the scanned AILANG tree —<br/>TypeScript child processes, MCP subprocesses, shelled binaries"]:::absent
+    l2["does <b>not</b> decide reachability · it enumerates sites, and the profile<br/>decides which are in scope (D4)"]:::absent
+    l3["does <b>not</b> reach AILANG source outside the src + packages roots ·<br/>ailang.toml:9 declares sunholo/logging resolved from the registry, so its<br/>source sits under neither · exposure today is nil, but the gate is the point:<br/><b>a profile must extend the roots through the resolved lock graph for every<br/>package it installs, or fail validation closed</b>"]:::absent
+  end
+
+  o3["<b>obligation 3 · constructor-level reachability, if ever genuinely required</b><br/>specify the analysis, its soundness boundary, its profile roots, and its<br/>fail-closed behaviour <i>before</i> naming it as gate evidence<br/><i>nothing in this ADR currently requires it</i>"]:::rule
+
+  backstop["<b>withholding the Clock capability is a coarse run-time backstop</b><br/>an earlier revision called it 'a build-and-profile-level gate, not an<br/>in-execution one'. It is neither. Clock stays in the effect row and AILANG fails<br/>only when a read is actually <i>performed</i>: a function whose row contains Clock<br/>but whose taken branch never calls now() runs to completion with it withheld<br/><br/>verified against the real driver — the deterministic entry point completes with<br/>Clock withheld while the live world on the same driver dies<br/><br/>the correction cuts both ways: <b>stronger</b> than assumed, because it catches<br/>unrouted reads on paths a run actually takes; <b>weaker</b>, because it says nothing<br/>about reachable paths a run did not exercise, so it cannot on its own discharge<br/>the all-or-nothing rule · the source and ABI audit remains the primary detector"]:::clock
+
+  successor["<b>the successor detector: declared-versus-performed effect-row reconciliation</b><br/>compiler-checked, so it cannot silently rot as a textual scan can<br/><b>not available today</b>: agents_md.ail:106 declares walk_agents with no effect row<br/>while calling fileExists — a live FS under-declaration pinned v0.26.0 accepts<br/><i>closing that class of gap, and the reconciliation gate itself, belong to the plan</i>"]:::blocked
+
+  verif["<b>verification gate on obligation 2</b><br/>the text above is a repair the authoring side wrote in response to the two<br/>2026-08-01 delta reviews, which independently converged on it — and which has<br/>not itself been independently verified<br/><b>D5's routing audit is not citable as name-adoption gate evidence until a<br/>reviewer confirms the replacement detector</b><br/><i>no separate non-citability marker is carried elsewhere: D4's clock-detector<br/>sentence was corrected in the same pass rather than left asserting the<br/>withdrawn over-approximation claim</i>"]:::blocked
+
+  premise --> INV
+  INV --> def
+  def --> perprofile
+  perprofile --> seamgap
+  def --> GATE
+  g3 --> o1
+  o1 --> o2
+  o2 --> o2set
+  o2set --> LIMITS
+  o2 -.-> WRONG
+  o2set --> o3
+  g2 --> backstop
+  g4 -.-> backstop
+  o2set -.-> successor
+  o2 -.-> verif
+
+  classDef met fill:#16351f,stroke:#3fb950,color:#c6f0cf;
+  classDef req fill:#16294d,stroke:#7aa2f7,color:#cdd9f5,stroke-width:2px;
+  classDef gate fill:#16294d,stroke:#7aa2f7,color:#cdd9f5,stroke-width:2px;
+  classDef rule fill:#262a30,stroke:#9aa4b0,color:#d6dbe2;
+  classDef clock fill:#123038,stroke:#2ac3de,color:#bdeef5;
+  classDef fault fill:#3a1620,stroke:#f7768e,color:#f7c6cf;
+  classDef blocked fill:#3a3018,stroke:#d29922,color:#f2e0b8,stroke-dasharray:6 4;
+  classDef rejected fill:#3a1620,stroke:#f7768e,color:#f7c6cf,stroke-dasharray:5 5;
+  classDef absent fill:#24262f,stroke:#6e7681,color:#9aa4b2,stroke-dasharray:5 5;
+  classDef note fill:#123038,stroke:#2ac3de,color:#bdeef5;

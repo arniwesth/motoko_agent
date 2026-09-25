@@ -1,0 +1,351 @@
+# RESEARCH: Test and verification axes beyond DST — what exists, what's dormant, what's missing
+
+Date: 2026-08-13
+Status: Research — survey + prioritization (no decision yet)
+Pinned binary: AILANG **v0.33.0** (`ailang.lock`)
+Relates to:
+- `papers/motoko-dst-report/DRAFT.md` (§8 self-diagnosed evaluation gaps, §9 future work)
+- `.agent/projects/007_dst_consolidation/ADR-001-motoko-dst-definition-and-taxonomy.md` (the seeded-axis-is-PBT classification)
+- `.agent/research/DST/motoko-dst-generalized-system.md` (2026-06 "DST Plus Fuzzing" sketch, §290–320)
+- `design_docs/planned/m-motoko-z3-contracts.md` (the unexecuted Z3 plan)
+- AILANG docs MCP: `guides/testing.md` (native `property` + shrinking), `reference/implementation-status.md` (verification component status)
+- `.agent/issues/per-step-trace-fold-exceeds-recursion-depth.md` (2026-08-17 — the first production
+  fault measured against this survey; motivates §3.9, added after the original date)
+
+---
+
+## TL;DR
+
+Motoko already touches every testing axis this note surveys — mostly in ad-hoc, dormant, or
+hand-driven form. The question is not "which new techniques to adopt" but "which existing
+seams to industrialize." Ranked by leverage-per-effort:
+
+1. **Z3 contracts** — toolchain shipped, gate wired (`make verify_core`, advisory), plan
+   written (`m-motoko-z3-contracts.md`, est. 2–3 days), **6 contracts authored**. Execute the plan.
+2. **Program shrinking** — the single most-cited gap (DRAFT §8/§9, SCOPE.md:68, ADR notes).
+   Strict replay already exists, which makes ddmin over `ExecutionProgram` steps nearly free.
+   Note: AILANG's native shrinker does **not** solve this (it shrinks values, not recorded programs).
+3. **Systematic mutation of the SUT** — answers the paper's own top gap: *"no systematic
+   mutation study showing which of the twelve invariant families would catch which classes of
+   incorrect recovery. Reachability is not oracle strength."* Mutant rows today test the test
+   machinery; nothing mutates `session.ail` / `decide` and measures kill rate per family.
+4. **AILANG-native `property` adoption** — the language construct (QuickCheck-style, built-in
+   shrinking, seedable) is documented and **unused anywhere in this repo** (461 inline
+   `tests [` blocks, 0 `property` blocks).
+5. **Boundary fuzzing** — design sketch exists (2026-06), never implemented. Target the parse
+   boundaries the deterministic world cannot see.
+6. **Metamorphic testing + small-scope exhaustive enumeration** — the novel additions; both
+   have natural anchors in the codebase (the pair-of-executions discovery-contract family is
+   already metamorphic; `decide` is pure and enumerable).
+
+Not worth investing in: golden/snapshot tests (ledger + counting-as-oracle already covers
+this, and the repo deliberately avoided them), live chaos testing (excluded from CI by
+policy; the 11-class fault catalogue is the in-world equivalent).
+
+---
+
+## 1. Baseline: what the repo already has, per axis
+
+| Axis | Status at HEAD | Evidence |
+|---|---|---|
+| DST | Shipped, 41-target `make dst` sweep, 12+1 invariant families, ~53 violation constructors, 11-class fault catalogue, discovery/strict-replay split | `src/core/dst_*.ail`, `scripts/dst/`, DRAFT §3 |
+| Property-based | The **named predecessor** of DST here (ADR-001:33: "the seeded axis is property-based testing, not DST"); two codified rules (invariants-only; import policy constants). AILANG-native `property` construct **unused** | `scripts/dst/phase_c_seeded_dst.ail`, `compaction_seeded_dst.ail`, DRAFT §4.4 |
+| Shrinking / minimization | **None.** Failing nightly seeds promoted to corpus by hand | DRAFT.md:780, 808; SCOPE.md:68–69 |
+| Z3 / SMT | Wired (`make verify_core` / `verify_ext` → `ailang verify`, Z3 4.15.4 ships with AILANG), **advisory** in CI, 6 contracts total (`compress.ail:57,69`; `tool_runtime.ail:24,196,277,1007`) | Makefile:2082,2104; `.github/workflows/verify-extensions.yml` |
+| Mutation testing | Practiced, hand-written: inline "mutant rows" in ~19 DST gates; `tools/test_coverage/mutants.py` (14 rows against `derive.py`); 147-site literal-mutation loop recorded once | `scripts/dst/invariants_dst.ail` (62 refs), 009/NOTE-b3:173 |
+| Fuzzing | Design sketch only ("DST Plus Fuzzing", 2026-06): structured, in-world, seed-persisted; boundary list drafted. Never implemented | `.agent/research/DST/motoko-dst-generalized-system.md:290–320` |
+| Golden/snapshot | None in Motoko (deliberate; the 206 `.golden` files are the vendored compiler's own) | — |
+| Unit / inline tests | 461 `tests [` blocks across 43+ files; `make test_coverage` derives + cross-checks them (currently on `DST_KNOWN_RED`) | `tools/test_coverage/derive.py` |
+| Runtime verification | Ledger invariants exist but run only in simulation, never over production ledgers | `src/core/dst_invariants.ail` |
+
+Two standing house caveats worth repeating because they constrain everything below:
+
+- *Mutation testing proves a guard CAN fire and cannot see a guard that fires too much* —
+  stated in four places (Makefile:2355, derive.py:535, seeded_generator_dst.ail:78,
+  invariants_dst.ail:10). Surviving control fixtures are mandatory in any mutation design.
+- *Faults are modeled as outcomes at the typed boundary*, never Buggify-style in-code fault
+  points — production carries no test-only branches (`dst_fault_catalogue.ail`). Any fuzzing
+  or mutation design must not break this.
+
+## 2. What AILANG v0.33.0 offers (verified against docs MCP)
+
+- **`property "name" (x: int, y: int) = expr`** — QuickCheck-style, 100 cases default,
+  conditional properties via `==>`, generators for int/float/bool/string/list/option/result/
+  custom ADTs and records. **Shrinking built in**: binary search toward zero (ints),
+  element/chunk removal (lists/strings), minimal counterexample reported. Reproducible via
+  `AILANG_TEST_SEED`; case count via `AILANG_TEST_RUNS`; size bounds via
+  `AILANG_TEST_MAX_SIZE` / `AILANG_TEST_MIN_INT` / `AILANG_TEST_MAX_INT`.
+- **Contracts** (v0.6.1+): `requires` / `ensures` clauses, SMT backend with Z3, cross-function
+  inlining, Dafny-style bounded recursion unrolling (`--verify-recursive-depth n`),
+  policy mode for redundant verification.
+- AILANG's own CI precedent: golden-file parser tests, per-package coverage gates,
+  `make fuzz-parser` random-input fuzzing.
+
+## 3. The axes, in priority order
+
+### 3.1 Z3 contract expansion (execute the existing plan)
+
+Lowest friction of everything here. The pipeline is proven end-to-end by the 6 existing
+contracts; `m-motoko-z3-contracts.md` already proposes the per-PR rule ("every new
+`pure func` needs a contract or a justification comment") and a candidate table.
+
+What SMT adds over DST: **∀ where DST samples.** Best targets are the pure algebra:
+
+- `decide : StepState → StepDecision` (`step_machine.ail`) — postconditions on decision
+  well-formedness per state class.
+- **The invariant checkers themselves** (`dst_invariants.ail`) — a contract-verified checker
+  hardens the oracle every other axis leans on. This is the highest-value target.
+- `compress.ail` bounds (already started), program serialization round-trip properties.
+
+Path: grow contract count → track proof health as a number the sweep reports → only then
+flip advisory → blocking (consistent with the standing ADR decision in
+007/PLAN-ci-dst-gates.md:64,196 that Z3 stays advisory until proof health is deliberately
+raised).
+
+Open questions: how `--verify-recursive-depth` interacts with the deeply recursive ledger
+folds; whether the two active language bugs (polymorphic arithmetic in lambdas; pattern
+guards not evaluated) block any candidate contract.
+
+### 3.2 Program shrinking (ddmin over `ExecutionProgram`, strict replay as oracle)
+
+The reproduction key is the serialized `ExecutionProgram` (`dst_program.ail`), **not the
+seed** — so AILANG's native value-shrinker is the wrong tool, and nothing off the shelf
+applies. But the expensive half is already built: strict replay (`dst_replay.ail`,
+`strict_replay_dst.ail`) re-executes a program without the generator and compares normalized
+terminal traces. That reduces shrinking to classic delta debugging:
+
+1. Failing discovery run records program P violating invariant constructor V.
+2. ddmin over P's step list (and secondarily over per-step payload fields): candidate P′ →
+   strict replay → keep P′ iff the violation is **the same constructor V** (not merely "some
+   violation" — the one subtle design decision; see below).
+3. Minimized P\* is auto-promoted into the fixed corpus with provenance (nightly run id,
+   original seed, original/minimized step counts).
+
+At ~381 ms/seed replay cost, a 100-probe ddmin run is ~40 s — viable in the nightly job
+itself. This closes both halves of the most-cited gap: no shrinking, and no automatic
+promotion.
+
+Design decision to settle before implementing: **what counts as "same failure."** Same
+constructor is the obvious criterion; but constructors were deliberately made 1:1 with rules
+(~53 of them), so same-constructor may still be too coarse (e.g. pairing violations at
+different steps) or too fine (a shrink that shifts the failure to an adjacent, equally
+interesting constructor gets discarded). Proposal: primary criterion = same constructor;
+record discarded shrinks that failed with a *different* constructor as secondary findings
+rather than dropping them.
+
+Validity constraint: a shrunk program must still be a well-formed program (correlation ids
+pair up, versioned schema intact). Either ddmin operates on a step granularity that
+preserves pairing by construction (remove call+result atomically), or replay's existing
+program validation rejects malformed candidates cheaply — the latter is probably free.
+
+### 3.3 Systematic mutation of the SUT (the oracle-strength study)
+
+DRAFT §8's self-diagnosis, verbatim: *"The evaluation is conformance-heavy and yield-light…
+there is no systematic mutation study showing which of the twelve invariant families would
+catch which classes of incorrect recovery. Reachability is not oracle strength."*
+
+Everything mutation-shaped in the repo today points the arrow at the **test machinery**
+(mutant rows prove a specific guard goes red; mutants.py mutates the coverage deriver). The
+missing study mutates **production**: the recovery branches in `session.ail` and the
+transitions in `decide`, then runs the DST sweep and records, per mutant, which invariant
+family (if any) kills it.
+
+Output = a kill matrix: 11 fault classes × 12 invariant families, with per-family mutation
+score. This is exactly the yield table the paper wants, and it directly tests the fault
+catalogue's claim that each fault class maps to a *named* recovery branch.
+
+Mechanics: no AILANG mutation framework exists. Feasible operators without one:
+- literal swaps (the 147-site cache-cold loop in 009/NOTE-b3:173 is the precedent),
+- comparison/boolean operator flips, branch-arm swaps in `match`, off-by-one on bounds —
+  all implementable as source-text rewrites keyed off the code-graph tooling
+  (`tools/code-graph/`), or via the vendored compiler's AST if text-level proves too noisy.
+
+Scope control: full sweep per mutant is 196 s at -j8; a 100-mutant study is ~5.5 h — a
+nightly/weekly job, not a PR gate. Start with mutants targeted at the 9 reached recovery
+branches rather than exhaustive operator application.
+
+House caveat applies: include surviving-control mutants (changes that *should* be caught by
+nothing, e.g. log-message edits) to detect over-firing invariants, per the four-times-stated
+rule.
+
+### 3.4 AILANG-native `property` adoption (value-level PBT)
+
+Complementary to the seeded axis, not competing with it: the seeded axis is workload-level
+PBT over the whole driver; `property` blocks are value-level PBT over the pure algebra, with
+free shrinking. Zero usages today. Candidates where algebraic laws exist:
+
+- phase vocab / ledger record encode-decode round-trips (`phase_vocab.ail`),
+- ledger normalization idempotence (normalize ∘ normalize = normalize),
+- `ExecutionProgram` serialization round-trip (this also hardens the shrinking work in §3.2),
+- compress bounds and monotonicity, generator-state threading laws in `dst_generator.ail`.
+
+Constraints to respect: the generator modules structurally must not import `std/rand`
+(`world_state` gate) — `property` blocks live in test files, so this should not collide, but
+verify the structural assertion's scope before adding property files under `src/core/`.
+Also decide interaction with `make test_coverage`'s deriver: it counts `tests [` blocks
+syntactically; `property` blocks would be invisible to it (or worse, "phantom") until
+`derive.py` learns the second syntax.
+
+### 3.5 Boundary fuzzing (implement the 2026-06 sketch, narrowed)
+
+DST already *is* structured fuzzing — generator + fault catalogue + strong oracle. The
+genuine delta is **malformed input at parse boundaries**, which the deterministic world
+deliberately never produces. The sketch's boundary list, narrowed to the three highest-value:
+
+1. the parser over model-generated text (tool-call extraction from prose),
+2. the JSONL rpc boundary (`rpc.ail` ↔ TS TUI),
+3. the compose-snippet effect-declaration guard
+   (`compose_guard_semiformal.test.ts` / `env-server.ts`) — TS-side, `fast-check` under
+   jest works today with no new infrastructure.
+
+Keep the sketch's discipline: seed-reproducible, seed persisted in the failure trace, no
+coverage feedback assumed (the AILANG interpreter has none) — generational fuzzing with
+dictionaries derived from the wire schemas. Faults remain modeled at the typed boundary;
+fuzzing malformed *bytes* into a parser does not violate the no-Buggify rule because the
+parser's input domain legitimately includes garbage.
+
+### 3.6 Metamorphic testing (new axis, natural fit)
+
+For an LLM harness there is no ground truth for "correct behavior," only relations between
+runs — which is exactly the metamorphic setting, and the thirteenth invariant family
+(discovery-contract, over a *pair* of executions) is already metamorphic in structure.
+Candidate relations, each checkable with existing scripted-ports machinery:
+
+- Installing a **no-op extension** leaves the ledger unchanged modulo hook events
+  (this would also convert part of the 40-hook vacuity accounting from a static count into a
+  dynamic guarantee).
+- **Compaction on/off** preserves decisions when context fits either way.
+- **Tool registration order permutation** does not change outcomes.
+- Latency scaling below deadline thresholds changes only clock readings, not decisions
+  (the latency-pair gate is halfway to this already).
+
+### 3.7 Small-scope exhaustive enumeration / lightweight model checking
+
+`decide` is pure. For a bounded projection of `StepState`, enumerate **all** states and check
+decision well-formedness exhaustively — strictly stronger than sampling for the step
+machine, and cheap because no world is needed. Related: symbolic execution with the
+already-present Z3 could settle whether the 2 waived fault classes are truly unreachable or
+merely unreached — turning waivers into either proofs or bugs.
+
+### 3.8 Invariants as production monitors (second life of the oracle)
+
+The 12 families are typed, pure, and cheap. Running them over *real* session ledgers (not
+simulated ones) turns the DST oracle into runtime telemetry — the standard FoundationDB
+move. No new invariant code; only a reporting path. Fits the "evals are not regression
+oracles" philosophy since it asserts ledger well-formedness, never model quality.
+
+### 3.9 Resource-growth properties and a declared long-run profile (added 2026-08-17)
+
+> **Both proposals below are SUPERSEDED by `ADR-002-resource-growth-as-a-metamorphic-relation.md`
+> (2026-08-17).** The axis survives; the mechanism does not. (a) needs a raised declared bound to
+> stay legal under D2 and produces an unattributed process exit; (b) caps trace size, which D6.4
+> forbids, and measures the wrong quantity in both directions. ADR-002 keeps the workload inside
+> existing bounds and scales the *resource* down instead — bisecting the minimum viable
+> `--max-recursion-depth` of an out-of-process run, across a pair of runs differing only in
+> records-per-step. Measured separation between a known-good and known-bad driver: 1.3× versus
+> 6.5× over an 8× input. This section is kept as written because the reasoning that produced two
+> wrong mechanisms from a correct axis is the useful part.
+
+**Added after the original survey, and unlike every other subsection it is written against a
+fault that actually happened rather than against a gap someone reasoned toward.** That is its
+whole value: the axis it names was not on the 2026-08-13 list, and would not have been derived
+from the DRAFT's self-diagnosed gaps either.
+
+The case: `.agent/issues/per-step-trace-fold-exceeds-recursion-depth.md` — a live session aborted
+with `RT_REC_003` because the driver re-folds its whole accumulated `LedgerTrace` once per tool
+step, and the trace had reached ~9 900 records. Four reasons none of the twelve families could
+see it, each independently sufficient (the issue record carries the measurements):
+
+1. **Wrong fault class.** All twelve families (`dst_invariants.ail:219-233`) are correctness
+   relations over a trace — pairing, parity, monotonicity, agreement, replay equality. This is a
+   *resource* property: per-step work that is O(accumulated state). The killing trace is
+   perfectly well-formed and merely large. `BoundedProgress` is bounded *retry*, not bounded
+   state.
+2. **The declared bounds cap the exact axis, ~30× below the threshold.**
+   `dst_generator.ail:600-601` draws `bounded_draw(…, 0, 3, "max_chunks_per_interaction", …)`;
+   profiles declare 4 (`canary_bounds`) or 1, `max_interactions` 64–96. Ceiling ~288 stream
+   deltas per program; production produced 8 678 from 63 steps. **Not a sampling gap** — D2 says
+   the generator never exceeds a bound, it takes the bounded alternative and records a generator
+   failure, and `HarnessHygiene` requires those to be zero. More seeds cannot drift toward the
+   failing scale; the ceiling is structural.
+3. **The harness shares the fault's own budget.** DST runs in the same `ailang run` process at
+   the same 10 000-frame default, so a program at that scale aborts *the harness* — a process
+   exit, not a violation — and the harness's own ambient depth moves the threshold between
+   suites, so it would not be a stable repro even then.
+4. **§3.2 does not reach it.** ddmin minimizes a failing program; this fault exists only at
+   maximum scale, so the minimal reproducer is the whole program. Worth stating plainly because
+   shrinking is this project's adopted decision and the instinct will be to reach for it.
+
+**Two proposals, separable:**
+
+**(a) A declared long-run / soak profile.** A `GeneratorBounds` with
+`max_chunks_per_interaction` in the hundreds and a larger `max_interactions`, run rarely
+(nightly, alongside §3.2's ddmin job). Explicitly *not* a bump to the existing bounds — D2's
+"exceeding a bound is a generator/harness failure, not an unbounded test run" is deliberate and
+should stay true of the default profiles. The point of a second profile is that the large scale
+is *declared*, so it stays inside D2 rather than working around it.
+
+**(b) A thirteenth family: resource growth.** Not directly checkable from a trace, since "no
+per-step operation is O(|trace|)" is a property of the code, not of the run. The checkable proxy:
+assert observed `trace.records` against `decision_budget × a declared per-step record ceiling`.
+That converts "the trace grows with token volume rather than with work done" from a live crash
+into a red row, and it is cheap — the counts are already in `ExecutionUnderTest`.
+
+**Constraint that shapes (b), and the reason this belongs in the project rather than only in the
+issue record:** the obvious remedy for the production fault — stop appending stream deltas to the
+trace — is **forbidden by an existing family**. `StreamParityCount` (`dst_invariants.ail:432`)
+requires every projected stream emission to reach the returned trace; D6.4 names streams as the
+one class where a shared append/project transition is impossible and discharges the obligation
+with exactly that parity check, and the WI-C3 header at `:100-121` records that appending them is
+what made the check non-vacuous on a real run. So the trace is *required* to scale with token
+volume, and any resource family has to be stated as a bound on per-step *work*, never as a bound
+on trace size. A family that capped record count would contradict D6.4 outright.
+
+**House caveats.** Both hold, and (b) needs the first one said out loud: a green resource family
+proves the ceiling was not crossed on the trajectories run — **not** that no O(|state|) per-step
+work exists, which is the same "reachability is not oracle strength" caution §3.3 exists to
+answer. On the second: many stream chunks is a legitimate outcome at the typed provider boundary,
+not a test-only in-code branch, so (a) raises a declared bound and injects nothing.
+
+**Relation to §3.8.** Production-ledger monitoring is the one axis where this scale actually
+occurs, and it is where the real trace came from. It would still not have fired, for reason 1 —
+which is the useful thing to notice: §3.8 supplies the *data* for a resource family, and (b)
+supplies the family §3.8 would need to be more than a well-formedness check on bigger inputs. The
+two are worth more together than separately.
+
+**Cost.** (a) is a bounds literal and a make target. (b) is one `InvariantFamily` variant, one
+violation constructor, and a field on `ExecutionUnderTest` — the smallest new family in the set,
+because it needs no new observation. Both are strictly smaller than §3.1–§3.3.
+
+## 4. Explicitly rejected
+
+- **Golden/snapshot tests** — the ledger oracle + counting-as-oracle + pinned digests
+  already occupy this niche; the repo avoided free-floating snapshots deliberately.
+- **Live chaos testing** — no live/network target runs in CI by policy; the fault catalogue
+  is the in-world equivalent; live-provider runs stay manual calibration smokes.
+- **LLM-as-judge / eval-based regression** — excluded by the report's philosophy ("evals are
+  not regression oracles"); nothing here reopens that.
+
+## 5. Open questions
+
+1. Shrinking: is same-violation-constructor the right "same failure" criterion, or does it
+   need a coarser equivalence over constructor families? (§3.2)
+2. Mutation: text-level rewrites vs vendored-compiler AST mutation — which survives AILANG
+   version bumps with less maintenance? (§3.3)
+3. Z3: does `--verify-recursive-depth` reach anything useful on the ledger folds, and do the
+   two active language bugs block any candidate contract? (§3.1)
+4. `derive.py` and `property` blocks: extend the deriver before or after first adoption? (§3.4)
+5. Which axes deserve WI-numbered execution plans vs staying research — proposal: §3.1 and
+   §3.2 go to PLAN documents first; §3.3 needs a small operator-feasibility spike before
+   planning.
+6. ~~Resource growth: is the per-step-work bound expressible as an invariant at all, or is it
+   properly a Z3 contract (§3.1) over the fold sites — and does the soak profile belong in the
+   nightly §3.2 job or on its own cadence?~~ **Answered by ADR-002**: not expressible over a
+   single execution (the quantity is a *read* and the trace records *appends*), and not a Z3
+   contract today — it needs a reachability predicate over an effectful call graph that §3.1
+   neither has nor plans. It is a metamorphic relation over a pair of runs, so it lands in §3.6.
+   The soak-cadence half of the question dissolved with the soak profile. Z3 stays the right
+   long-term home if §3.1 ever reaches that expressiveness. (§3.9)
+7. The ranking above predates §3.9 and is not re-scored here. §3.9 is the only entry motivated
+   by a fault that reached production rather than by survey, which is an argument for weight the
+   original leverage-per-effort axis did not measure. Worth settling before the next PLAN.

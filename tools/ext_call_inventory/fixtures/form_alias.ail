@@ -1,0 +1,30 @@
+module tools/ext_call_inventory/fixtures/form_alias
+
+-- FORM 1 of the four the ADR names: a LOCAL ALIAS -- RE-PINNED at 8.0 (P1.7r).
+--
+-- The port record is bound to a new name with no annotation. Until P1.7r this
+-- tool reported the call UNRESOLVED and this fixture pinned it so, on the
+-- reading that only an ANNOTATION (`let p: ExtPorts = ctx.ports`) makes the
+-- receiver's type readable from the file. That reading was narrower than the
+-- tool's own lookup: `ctx` is a DECLARED parameter and `ExtCtx.ports` a
+-- DECLARED field, so `ctx.ports` has a type this tool already reads -- the
+-- direct call `ctx.ports.ai_step(` two lines down resolves through exactly
+-- those declarations. Binding the alias to that type is the same lookup, one
+-- step earlier, and no inference. 009 ADR-001 D5 names the alias as a LIMIT of
+-- the grep approximation ("not seen") and asks for "a parsed, type-aware
+-- field-call inventory" -- which this is.
+--
+-- And the old pin was not what the tree ran under: with file-wide binders,
+-- every in-tree `let p = ctx.ports` (herdr x4, compose x2, 31 call sites) was
+-- counted RESOLVED through some other function's `p: ExtPorts`. Scoping the
+-- binders (control_scoped_binder) exposed them; this rule resolves them for
+-- the right reason. Pinned now: ONE resolved call, zero unresolved. The alias
+-- that stays form 1 is one of an UNDECLARED source: form_alias_untyped.ail.
+
+import pkg/sunholo/motoko_ext_abi/types (AiStepOutcome, ExtCtx, Msg)
+
+export func summarize(ctx: ExtCtx, model: string, msgs: [Msg])
+  -> AiStepOutcome ! {AI, IO, Trace} {
+  let p = ctx.ports;
+  p.ai_step(ctx.world, model, msgs)
+}

@@ -26,17 +26,17 @@
 - Single Polyglot exercise:
   - `python benchmarks/aider_polyglot.py --language python --exercise hello-world --verbose`
 - Single Polyglot exercise (local OpenAI-compatible endpoint):
-  - `OPENAI_BASE_URL=http://100.79.48.75:8000/v1 python benchmarks/aider_polyglot.py --language python --exercise hello-world --model openai/google/gemma-4-26B-A4B-it --verbose`
+  - `OPENAI_BASE_URL=http://<dgx-host>:8000/v1 python benchmarks/aider_polyglot.py --language python --exercise hello-world --model openai/google/gemma-4-26B-A4B-it --verbose`
 - Single Polyglot exercise (local endpoint + extensions):
-  - `OPENAI_BASE_URL=http://100.79.48.75:8000/v1 CORE_EXT_ORDER=context_mode,exa_search python benchmarks/aider_polyglot.py --language python --exercise hello-world --model openai/google/gemma-4-26B-A4B-it --verbose`
+  - `OPENAI_BASE_URL=http://<dgx-host>:8000/v1 CORE_EXT_ORDER=context_mode,exa_search python benchmarks/aider_polyglot.py --language python --exercise hello-world --model openai/google/gemma-4-26B-A4B-it --verbose`
 - Gemma thinking mode ON (OpenAI-compatible route only):
-  - `OPENAI_BASE_URL=http://100.79.48.75:8000/v1 python benchmarks/aider_polyglot.py --language python --exercise hello-world --model openai/google/gemma-4-26B-A4B-it --thinking on --verbose`
+  - `OPENAI_BASE_URL=http://<dgx-host>:8000/v1 python benchmarks/aider_polyglot.py --language python --exercise hello-world --model openai/google/gemma-4-26B-A4B-it --thinking on --verbose`
 - Gemma thinking mode OFF (explicit):
-  - `OPENAI_BASE_URL=http://100.79.48.75:8000/v1 python benchmarks/aider_polyglot.py --language python --exercise hello-world --model openai/google/gemma-4-26B-A4B-it --thinking off --verbose`
+  - `OPENAI_BASE_URL=http://<dgx-host>:8000/v1 python benchmarks/aider_polyglot.py --language python --exercise hello-world --model openai/google/gemma-4-26B-A4B-it --thinking off --verbose`
 - Gemma thinking mode AUTO (default, omit provider key):
-  - `OPENAI_BASE_URL=http://100.79.48.75:8000/v1 python benchmarks/aider_polyglot.py --language python --exercise hello-world --model openai/google/gemma-4-26B-A4B-it --thinking auto --verbose`
+  - `OPENAI_BASE_URL=http://<dgx-host>:8000/v1 python benchmarks/aider_polyglot.py --language python --exercise hello-world --model openai/google/gemma-4-26B-A4B-it --thinking auto --verbose`
 - Full Python track (local endpoint + extensions):
-  - `OPENAI_BASE_URL=http://100.79.48.75:8000/v1 CORE_EXT_ORDER=context_mode,exa_search python benchmarks/aider_polyglot.py --language python --model openai/google/gemma-4-26B-A4B-it --verbose`
+  - `OPENAI_BASE_URL=http://<dgx-host>:8000/v1 CORE_EXT_ORDER=context_mode,exa_search python benchmarks/aider_polyglot.py --language python --model openai/google/gemma-4-26B-A4B-it --verbose`
 - Status summary:
   - `bash benchmarks/status.sh`
 - Error breakdown:

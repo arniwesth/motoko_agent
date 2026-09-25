@@ -1,0 +1,393 @@
+module sunholo/motoko_ext_conformance/invariants
+
+import std/result (Result, Ok, Err)
+import std/json (Json, jo)
+import std/option (None)
+import pkg/sunholo/motoko_ext_abi/types (
+  Msg, ToolCall, ToolSchema, ToolCallEnvelope,
+  PureCtx, pure_ctx,
+  FinalizeDecision, Accept, ContinueWithFeedback, NoDecision,
+  ToolPolicyDecision, Allow, Deny, NoOpinion, Pending,
+  DecisionPolicyDescriptor, DecisionRequest, DecisionObservation,
+  Unavailable, UnconfiguredBackend,
+  JudgePreparation, JudgeImmediate, JudgeQuery,
+  ToolPreparation, ToolImmediate, ToolQuery
+)
+
+-- B8: the kit (5.0.0) targeted ABI 6.0, the Capability list. 031 P0.5: the kit
+-- (6.0.0) targets ABI 8.0 -- every callback on its row's view, `DescribeTools`
+-- taking the extension's configuration, and the two decision variants.
+export pure func conformance_abi_version() -> string { "8.0" }
+
+-- ============================================================================
+-- THE NO-OP CONSTRUCTORS (031 PLAN-001 P0.5; ADR-001 D2, D6).
+-- ============================================================================
+--
+-- `no_tools` is the neutral `DescribeTools` payload: it takes the configuration
+-- and advertises nothing. The plan writes it `DescribeTools(\_cfg . [])`; it is
+-- a NAMED top-level function here because 8.0's registration boundary (D2)
+-- rejects an inline payload, and a kit that teaches the rejected form is a kit
+-- whose own example fails the gate.
+--
+-- The four decision callbacks are NEUTRAL: the atom exists and changes nothing.
+-- `prepare` answers `JudgeImmediate(NoDecision)` / `ToolImmediate(NoOpinion)` --
+-- an invoked abstention, which the host records and which differs from an absent
+-- guard (D6) -- and NEVER returns a `JudgeQuery`/`ToolQuery`, so a neutral atom
+-- spends no decision-port exchange. `interpret` is unreachable from a neutral
+-- `prepare` and answers the same abstention anyway, so a neutral atom stays
+-- neutral under a host that interprets a recorded observation it did not ask
+-- for (strict replay of a foreign record, the offline re-interpretation run).
+-- Constructor names per Amendment 1.
+export pure func no_tools(_cfg: Json) -> [ToolSchema] { [] }
+
+export pure func neutral_judge_prepare(_ctx: PureCtx, _candidate: string) -> JudgePreparation {
+  JudgeImmediate(NoDecision)
+}
+
+export pure func neutral_judge_interpret(_ctx: PureCtx, _candidate: string,
+    _req: DecisionRequest, _obs: DecisionObservation) -> FinalizeDecision {
+  NoDecision
+}
+
+export pure func neutral_tool_prepare(_ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPreparation {
+  ToolImmediate(NoOpinion)
+}
+
+export pure func neutral_tool_interpret(_ctx: PureCtx, _call: ToolCallEnvelope,
+    _req: DecisionRequest, _obs: DecisionObservation) -> ToolPolicyDecision {
+  NoOpinion
+}
+
+-- A neutral atom's descriptor. `max_interventions: 0` because a neutral atom
+-- never intervenes; the versions name the neutral question and interpretation
+-- so a journal reader can tell a neutral atom from a configured one by data.
+export pure func neutral_descriptor(local_id: string) -> DecisionPolicyDescriptor {
+  {
+    local_id: local_id,
+    question_version: "neutral/1",
+    question_config: jo([]),
+    interpretation_version: "neutral/1",
+    interpretation_config: jo([]),
+    max_interventions: 0
+  }
+}
+
+-- ============================================================================
+-- NEUTRALITY, as predicates over what a callback RETURNS -- so the kit can ask it
+-- of any consumer's atom, and the tests below ask it of the kit's own.
+-- ============================================================================
+
+-- Neutral finalize vote: abstain. `Accept` is NOT neutral: it approves the
+-- candidate and so changes what finalization does.
+export pure func finalize_vote_neutral(d: FinalizeDecision) -> bool {
+  match d { NoDecision => true, Accept => false, ContinueWithFeedback(_) => false }
+}
+
+-- Neutral tool-policy vote: no opinion. `Allow` is NOT neutral: it takes a
+-- position in the priority merge a `NoOpinion` leaves to the other voters.
+export pure func tool_vote_neutral(d: ToolPolicyDecision) -> bool {
+  match d { NoOpinion => true, Allow => false, Deny(_) => false, Pending(_, _) => false }
+}
+
+-- A query is never neutral, whatever it asks: it spends an exchange.
+export pure func judge_preparation_neutral(p: JudgePreparation) -> bool {
+  match p { JudgeImmediate(d) => finalize_vote_neutral(d), JudgeQuery(_) => false }
+}
+
+export pure func tool_preparation_neutral(p: ToolPreparation) -> bool {
+  match p { ToolImmediate(d) => tool_vote_neutral(d), ToolQuery(_) => false }
+}
+
+pure func has_assistant_call(calls: [ToolCall], wanted_id: string) -> bool {
+  match calls {
+    [] => false,
+    c :: rest => if c.id == wanted_id then true else has_assistant_call(rest, wanted_id)
+  }
+}
+
+pure func has_assistant_call_id(msgs: [Msg], wanted_id: string) -> bool {
+  match msgs {
+    [] => false,
+    m :: rest =>
+      if m.role == "assistant" && has_assistant_call(m.tool_calls, wanted_id) then true
+      else has_assistant_call_id(rest, wanted_id)
+  }
+}
+
+pure func has_tool_result_id(msgs: [Msg], wanted_id: string) -> bool {
+  match msgs {
+    [] => false,
+    m :: rest =>
+      if m.role == "tool" && m.tool_call_id == wanted_id then true
+      else has_tool_result_id(rest, wanted_id)
+  }
+}
+
+pure func output_calls_pairing_preserved(input: [Msg], output: [Msg], calls: [ToolCall]) -> bool {
+  match calls {
+    [] => true,
+    c :: rest => {
+      let present_agrees =
+        if has_tool_result_id(input, c.id) then has_tool_result_id(output, c.id)
+        else not has_tool_result_id(output, c.id);
+      if present_agrees then output_calls_pairing_preserved(input, output, rest) else false
+    }
+  }
+}
+
+pure func output_calls_ids_preserved(input: [Msg], calls: [ToolCall]) -> bool {
+  match calls {
+    [] => true,
+    c :: rest => {
+      let known_id = has_assistant_call_id(input, c.id) || has_tool_result_id(input, c.id);
+      if c.id != "" then (if known_id then output_calls_ids_preserved(input, rest) else false) else false
+    }
+  }
+}
+
+pure func validate_output_calls(input: [Msg], output: [Msg], calls: [ToolCall]) -> Result[(), string] {
+  match calls {
+    [] => Ok(()),
+    c :: rest =>
+      if c.id == "" then Err("compactor output contains empty assistant tool_call id")
+      else if not (has_assistant_call_id(input, c.id) || has_tool_result_id(input, c.id)) then Err("compactor output invented assistant tool_call id ${c.id}")
+      else if has_tool_result_id(input, c.id) != has_tool_result_id(output, c.id) then Err("compactor output severed tool_result pair ${c.id}")
+      else validate_output_calls(input, output, rest)
+  }
+}
+
+pure func validate_compactor_output_rec(input: [Msg], all_output: [Msg], remaining: [Msg]) -> Result[(), string] {
+  match remaining {
+    [] => Ok(()),
+    m :: rest =>
+      if m.role == "system" then Err("compactor output contains system message")
+      else if m.role == "tool" && m.tool_call_id == "" then Err("compactor output contains tool message with empty tool_call_id")
+      else {
+        let call_check = validate_output_calls(input, all_output, m.tool_calls);
+        match call_check {
+          Err(e) => Err(e),
+          Ok(_) =>
+            if m.role == "tool" && not has_tool_result_id(input, m.tool_call_id) then
+              Err("compactor output invented tool_result id ${m.tool_call_id}")
+            else if m.role == "tool" && has_assistant_call_id(input, m.tool_call_id) != has_assistant_call_id(all_output, m.tool_call_id) then
+              Err("compactor output severed assistant tool_call pair ${m.tool_call_id}")
+            else if m.role == "assistant" then
+              validate_compactor_output_rec(input, all_output, rest)
+            else validate_compactor_output_rec(input, all_output, rest)
+        }
+      }
+  }
+}
+
+export pure func no_system_in_output(output: [Msg]) -> bool {
+  match output {
+    [] => true,
+    m :: rest => m.role != "system" && no_system_in_output(rest)
+  }
+}
+
+pure func pairing_preserved_rec(input: [Msg], all_output: [Msg], remaining: [Msg]) -> bool {
+  match remaining {
+    [] => true,
+    m :: rest => {
+      let calls_ok = output_calls_pairing_preserved(input, all_output, m.tool_calls);
+      let tool_ok =
+        if m.role == "tool" then {
+          if has_assistant_call_id(input, m.tool_call_id) then has_assistant_call_id(all_output, m.tool_call_id)
+          else not has_assistant_call_id(all_output, m.tool_call_id)
+        } else true;
+      if calls_ok then (if tool_ok then pairing_preserved_rec(input, all_output, rest) else false) else false
+    }
+  }
+}
+
+export pure func pairing_preserved(input: [Msg], output: [Msg]) -> bool {
+  pairing_preserved_rec(input, output, output)
+}
+
+pure func ids_preserved_rec(input: [Msg], remaining: [Msg]) -> bool {
+  match remaining {
+    [] => true,
+    m :: rest => {
+      let calls_ok = output_calls_ids_preserved(input, m.tool_calls);
+      let tool_ok =
+        if m.role == "tool" then {
+          if m.tool_call_id != "" then has_tool_result_id(input, m.tool_call_id) else false
+        } else true;
+      if calls_ok then (if tool_ok then ids_preserved_rec(input, rest) else false) else false
+    }
+  }
+}
+
+export pure func ids_preserved(input: [Msg], output: [Msg]) -> bool {
+  ids_preserved_rec(input, output)
+}
+
+export pure func validate_compactor_output(input: [Msg], output: [Msg]) -> Result[(), string] {
+  validate_compactor_output_rec(input, output, output)
+}
+
+pure func mk_msg_with_call(id: string) -> Msg {
+  { role: "assistant", content: "call", tool_calls: [{ id: id, name: "T", arguments: "{}" }], tool_call_id: "" }
+}
+
+pure func mk_tool_msg(id: string) -> Msg {
+  { role: "tool", content: "result", tool_calls: [], tool_call_id: id }
+}
+
+pure func mk_plain_msg(role: string, content: string) -> Msg {
+  { role: role, content: content, tool_calls: [], tool_call_id: "" }
+}
+
+pure func result_ok(r: Result[(), string]) -> bool {
+  match r { Ok(_) => true, Err(_) => false }
+}
+
+pure func result_err(r: Result[(), string]) -> bool {
+  match r { Ok(_) => false, Err(_) => true }
+}
+
+pure func all_predicates(input: [Msg], output: [Msg]) -> bool {
+  let no_system = no_system_in_output(output);
+  let pairing = pairing_preserved(input, output);
+  let ids = ids_preserved(input, output);
+  if no_system then (if pairing then ids else false) else false
+}
+
+pure func wrapper_ok(input: [Msg], output: [Msg]) -> bool {
+  result_ok(validate_compactor_output(input, output))
+}
+
+pure func equivalence_case(input: [Msg], output: [Msg]) -> bool {
+  let left = wrapper_ok(input, output);
+  let right = all_predicates(input, output);
+  if left then right else not right
+}
+
+pure func test_validate_compactor_output_accepts_identity() -> bool
+  tests [((), true)]
+  {
+    let input = [mk_msg_with_call("tc1"), mk_tool_msg("tc1"), mk_tool_msg("orphan")];
+    result_ok(validate_compactor_output(input, input))
+  }
+
+pure func test_validate_compactor_output_accepts_orphan_identity() -> bool
+  tests [((), true)]
+  {
+    let input = [mk_tool_msg("orphan")];
+    result_ok(validate_compactor_output(input, input))
+  }
+
+pure func test_validate_compactor_output_rejects_bad_shapes() -> bool
+  tests [((), true)]
+  {
+    let input = [mk_msg_with_call("tc1"), mk_tool_msg("tc1"), mk_tool_msg("orphan")];
+    result_err(validate_compactor_output(input, [mk_plain_msg("system", "bad")]))
+      && result_err(validate_compactor_output(input, [{ role: "tool", content: "bad", tool_calls: [], tool_call_id: "" }]))
+      && result_err(validate_compactor_output(input, [mk_tool_msg("new-id")]))
+      && result_err(validate_compactor_output(input, [mk_msg_with_call("tc1")]))
+      && result_err(validate_compactor_output(input, [mk_tool_msg("tc1")]))
+  }
+
+pure func test_named_predicates_partition_bad_shapes() -> bool
+  tests [((), true)]
+  {
+    let input = [mk_msg_with_call("tc1"), mk_tool_msg("tc1"), mk_tool_msg("orphan")];
+    not no_system_in_output([mk_plain_msg("system", "bad")])
+      && not ids_preserved(input, [{ role: "tool", content: "bad", tool_calls: [], tool_call_id: "" }])
+      && not ids_preserved(input, [mk_tool_msg("new-id")])
+      && not pairing_preserved(input, [mk_msg_with_call("tc1")])
+      && not pairing_preserved(input, [mk_tool_msg("tc1")])
+  }
+
+pure func test_dropped_complete_pair_is_accepted() -> bool
+  tests [((), true)]
+  {
+    let input = [mk_plain_msg("user", "before"), mk_msg_with_call("tc1"), mk_tool_msg("tc1"), mk_plain_msg("assistant", "after")];
+    let output = [mk_plain_msg("assistant", "summary")];
+    result_ok(validate_compactor_output(input, output))
+      && no_system_in_output(output)
+      && pairing_preserved(input, output)
+      && ids_preserved(input, output)
+  }
+
+pure func test_wrapper_equivalent_to_named_predicates() -> bool
+  tests [((), true)]
+  {
+    let input = [mk_plain_msg("user", "before"), mk_msg_with_call("tc1"), mk_tool_msg("tc1"), mk_tool_msg("orphan")];
+    equivalence_case(input, input)
+      && equivalence_case(input, [mk_tool_msg("orphan")])
+      && equivalence_case(input, [mk_plain_msg("assistant", "summary")])
+      && equivalence_case(input, [mk_plain_msg("system", "bad")])
+      && equivalence_case(input, [{ role: "tool", content: "bad", tool_calls: [], tool_call_id: "" }])
+      && equivalence_case(input, [mk_tool_msg("new-id")])
+      && equivalence_case(input, [mk_msg_with_call("tc1")])
+      && equivalence_case(input, [mk_tool_msg("tc1")])
+  }
+
+-- ============================================================================
+-- The no-op constructors, asserted neutral (031 P0.5). A probe context, call,
+-- request and observation: the neutral callbacks must ignore all four, and the
+-- observation is an `Unavailable` one so that a callback reading it would have
+-- something to react to.
+-- ============================================================================
+
+export pure func conformance_probe_ctx() -> PureCtx {
+  { pure_ctx(jo([])) | task: "neutral-probe", step: 3 }
+}
+
+export pure func conformance_probe_call() -> ToolCallEnvelope {
+  { id: "probe-call", tool: "bash", arguments: jo([]) }
+}
+
+export pure func conformance_probe_request() -> DecisionRequest {
+  { backend_binding: "probe", state: jo([]), questions: [] }
+}
+
+export pure func conformance_probe_observation() -> DecisionObservation {
+  { result: Unavailable(UnconfiguredBackend),
+    usage: { input_tokens: None, output_tokens: None, cost_millicents: None } }
+}
+
+pure func test_no_tools_advertises_nothing() -> bool
+  tests [((), true)]
+  {
+    match no_tools(jo([])) { [] => true, _ => false }
+  }
+
+pure func test_neutral_judge_is_neutral() -> bool
+  tests [((), true)]
+  {
+    judge_preparation_neutral(neutral_judge_prepare(conformance_probe_ctx(), "candidate"))
+      && finalize_vote_neutral(neutral_judge_interpret(conformance_probe_ctx(), "candidate", conformance_probe_request(), conformance_probe_observation()))
+  }
+
+pure func test_neutral_tool_policy_is_neutral() -> bool
+  tests [((), true)]
+  {
+    tool_preparation_neutral(neutral_tool_prepare(conformance_probe_ctx(), conformance_probe_call()))
+      && tool_vote_neutral(neutral_tool_interpret(conformance_probe_ctx(), conformance_probe_call(), conformance_probe_request(), conformance_probe_observation()))
+  }
+
+-- The predicates are two-sided: every non-neutral answer reads non-neutral, a
+-- query included. Without this a predicate that returned `true` would pass the
+-- two tests above.
+pure func test_neutrality_predicates_reject_every_intervention() -> bool
+  tests [((), true)]
+  {
+    not judge_preparation_neutral(JudgeImmediate(Accept))
+      && not judge_preparation_neutral(JudgeImmediate(ContinueWithFeedback("x")))
+      && not judge_preparation_neutral(JudgeQuery(conformance_probe_request()))
+      && not tool_preparation_neutral(ToolImmediate(Allow))
+      && not tool_preparation_neutral(ToolImmediate(Deny("x")))
+      && not tool_preparation_neutral(ToolQuery(conformance_probe_request()))
+      && judge_preparation_neutral(JudgeImmediate(NoDecision))
+      && tool_preparation_neutral(ToolImmediate(NoOpinion))
+  }
+
+pure func test_neutral_descriptor_never_intervenes() -> bool
+  tests [((), true)]
+  {
+    let d = neutral_descriptor("conformance.neutral");
+    d.max_interventions == 0 && d.local_id == "conformance.neutral"
+  }

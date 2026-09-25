@@ -1,0 +1,11 @@
+-- SHAPE 5/5: the cached row is a row VARIABLE, not a closed row.
+-- `std/list.foldlE` is instantiable at any effect.  A producer that collapsed
+-- "row variable" into "no labels, therefore pure" would clear this, and that is
+-- the fail-open answer the amendment names.
+module fixtures/shape_effect_variable
+
+import std/list (foldlE)
+
+export func emit(s: string) -> () {
+  ()
+}

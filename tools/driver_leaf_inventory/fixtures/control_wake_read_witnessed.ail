@@ -1,0 +1,28 @@
+module tools/driver_leaf_inventory/fixtures/control_wake_read_witnessed
+
+-- CONTROL for PLAN-002 W3 Part 6. The same helped `wake_read` as
+-- `form_wake_read_unwitnessed.ail`, advanced and WITNESSED BEFORE any record
+-- carries the successor. The script reports it clean.
+--
+-- Without it, a scanner that flagged every `wake_read` leaf would pass the
+-- form fixture while being useless.
+--
+-- `advance`/`witness` are local stubs standing in for the P2 helpers.
+
+import src/core/ports (Ports, WorldState, ParkRequest)
+
+export func advance(world: WorldState, cls: string) -> WorldState {
+  world
+}
+
+export func witness(world: WorldState) -> WorldState {
+  world
+}
+
+export func wake_after_park(st: { provider: Ports, world_state: WorldState }, req: ParkRequest) -> string ! {IO} {
+  let got = st.provider.wake_read(st.world_state, req);
+  let w1 = advance(got.next_state, "WakeRead");
+  let seen = witness(w1);
+  let next = { st | world_state: seen };
+  got.wait_id
+}

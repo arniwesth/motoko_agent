@@ -1,0 +1,122 @@
+→ Type checking...
+→ Effect checking...
+✓ Running scripts/dst/driver_plus_no_ops_dst.ail
+driver_plus_no_ops_dst  (driver_plus_no_ops v21)
+  ✓ driver_plus_no_ops v21 LOADS CLEAN at the bound revision, with 4 extensions INSTALLED
+  ✓ the recorded attribution reference is current: (c0fbf10, sha256:0211ac242f677bd392bb317611b03a335d266426ec9d050cd5cce4e96b8f5583)
+  ✓ installed 4 + omitted 14 = every extension in the resolved install set (the partition is checked against ailang.toml by the guard)
+      installed: compaction_structural, decision_framework, empty_stop_guard, progress_contract_guard
+      omitted:   compaction_ai, a2a, agentcli, ailang_docs, compose, context_mode, exa_search, herdr, mcp, microrag, omnigraph, repetition_guard, scratchpad, test_dummy
+INSTALLED compaction_structural sunholo/motoko_ext_compaction_structural 1.1.0 packages/motoko-ext-compaction-structural/register.ail
+INSTALLED decision_framework sunholo/motoko_ext_decision_framework 0.2.2 packages/motoko-ext-decision-framework/register.ail
+INSTALLED empty_stop_guard sunholo/motoko_ext_empty_stop_guard 0.1.0 packages/motoko-ext-empty-stop-guard/register.ail
+INSTALLED progress_contract_guard sunholo/motoko_ext_progress_contract_guard 0.1.0 packages/motoko-ext-progress-contract-guard/register.ail
+OMITTED compaction_ai
+OMITTED a2a
+OMITTED agentcli
+OMITTED ailang_docs
+OMITTED compose
+OMITTED context_mode
+OMITTED exa_search
+OMITTED herdr
+OMITTED mcp
+OMITTED microrag
+OMITTED omnigraph
+OMITTED repetition_guard
+OMITTED scratchpad
+OMITTED test_dummy
+  ================================================================
+  ADR-001 row 3's four INSTALLED-EXTENSION clauses. Every one has
+  been vacuous for the whole project; this is where they bind.
+  ================================================================
+  -- ROW 3 CLAUSE 1: the coverage floor, over 4 installed extension(s) --
+      compaction_structural: 1 hook(s) covered — floor satisfied, non-vacuously
+      decision_framework: 1 hook(s) covered — floor satisfied, non-vacuously
+      empty_stop_guard: 1 hook(s) covered — floor satisfied, non-vacuously
+      progress_contract_guard: 1 hook(s) covered — floor satisfied, non-vacuously
+      ↳ BINDS: the FIRST installed extension covering zero hooks → rejected by [coverage-floor]
+  -- ROW 3 CLAUSE 2: no unconditionally-dispatched hook excluded --
+      every installed extension excludes NOTHING — not even on_tool_handle, the one gated slot this profile could legitimately exclude
+      ↳ BINDS: an installed extension excluding on_pre_step, which is unconditionally dispatched → rejected by [unconditional-hook-excluded]
+  -- ROW 3 CLAUSE 3: no installed extension calls a classifier-2 ExtPorts field --
+      the derived call list is EMPTY at HEAD, so the AILANG rule passes over nothing;
+      what discharges the clause is CLAIM row3c below, re-derived by check_no_op_profile.py
+CLAIM row3c ext_ports_calls_in_installed_closures=0
+      ↳ BINDS: a classifier-2 call ATTRIBUTED to an installed extension → rejected by [classifier-2-extension-installed]
+  -- ROW 3 CLAUSE 4: per-extension covered/excluded hook IDS --
+DISCLOSURE compaction_structural
+      compaction_structural
+        atoms:    compactor[0]
+        covered:  compactor[0]
+        excluded: (none)
+DISCLOSURE decision_framework
+      decision_framework
+        atoms:    prompt_shaper[0]
+        covered:  prompt_shaper[0]
+        excluded: (none)
+DISCLOSURE empty_stop_guard
+      empty_stop_guard
+        atoms:    solver_judge[0]
+        covered:  solver_judge[0]
+        excluded: (none)
+DISCLOSURE progress_contract_guard
+      progress_contract_guard
+        atoms:    solver_judge[0]
+        covered:  solver_judge[0]
+        excluded: (none)
+  -- what each covered hook RESTS ON, per entry --
+CLASSIFICATION compaction_structural compactor[0] world_mediated ext_ambient_inventory measured vacuously vacuously substantively
+CLASSIFICATION decision_framework prompt_shaper[0] effect_free declared_row assumed not_applicable not_applicable not_applicable
+CLASSIFICATION empty_stop_guard solver_judge[0] world_mediated ext_ambient_inventory measured vacuously vacuously substantively
+CLASSIFICATION progress_contract_guard solver_judge[0] world_mediated ext_ambient_inventory measured vacuously vacuously substantively
+      1 hook(s) on criterion 1 (basis: declared_row, ASSUMED — ADR:1415)
+      3 hook(s) on criterion 2 (basis: ext_ambient_inventory, MEASURED — classifier 3)
+      3 of those satisfy criterion 2's port and origin-tag clauses VACUOUSLY
+      0 covered hook(s) mediate the world SUBSTANTIVELY
+  -- THE COVERAGE STATEMENT, computed from the record (not written) --
+STATEMENT extension-model coverage is NON-ZERO and ENTIRELY OF NO-OPS: 4 hook(s) covered across 4 installed extension(s) — 1 on criterion 1 and 3 on criterion 2, of which 3 satisfy criterion 2's port and origin-tag clauses VACUOUSLY, i.e. over an empty set of performed effects. ZERO covered hooks mediate the world substantively, so this coverage exercises NONE of the world-mediation machinery. It is a weaker claim than the number implies and a stronger one than zero.
+      extension-model coverage is NON-ZERO and ENTIRELY OF NO-OPS: 4 hook(s) covered across 4 installed extension(s) — 1 on criterion 1 and 3 on criterion 2, of which 3 satisfy criterion 2's port and origin-tag clauses VACUOUSLY, i.e. over an empty set of performed effects. ZERO covered hooks mediate the world substantively, so this coverage exercises NONE of the world-mediation machinery. It is a weaker claim than the number implies and a stronger one than zero.
+  -- ROW 4: injected faults, and the extension_effect_fault waiver --
+      waives all 2 conditional D3 classes, each condition READ from the catalogue
+      extension_effect_fault: WAIVED, and NOT by construction — this profile installs 4 extensions.
+      The class is delivered by ExtPorts.ai_step; classifier 3 reports 0 ExtPorts field calls
+      in each installed closure, so no installed hook can issue the world request. INAPPLICABLE,
+      measured, rather than inapplicable by emptiness.
+      FINDING: the catalogue's condition text names `driver_only` inside it, and the machinery
+      requires the recorded condition to match verbatim — so this profile records a sentence
+      about a different profile. Reported, not fixed here: it is a catalogue content change.
+CLAIM row4 ext_ports_calls_in_installed_closures=0
+  -- ROW 5: every time-bearing read reachable in the profile is routed --
+      routed-set claim, COMPUTED at the bound revision (nothing recorded):
+        reachable core sites: 7
+        routed:               6
+        declared unrouted:    1
+      installing 4 extensions added NO reachable core site: the table's two attributed rows
+      belong to test_dummy and scratchpad, neither of which is installed
+      and no installed extension reads a clock at all — CLAIM row5, re-derived by the guard.
+      compose's unrouted clock reads are STILL outside reach, and now because compose is not
+      installed rather than because nothing is: WI-C5's profile is not discharged by this one.
+CLAIM row5 ambient_sources_in_installed_closures=0
+  -- ROW 7: the ScratchpadResult exemption, re-earned --
+      the variant is emitted only when a tool named `scratchpad` is served by a hook returning
+      `Handled` with a `cells` key (dst_invariants.parity_gap_reasons). TWO independent facts
+      keep this profile off that path, and either alone would do it:
+        (1) all four installed extensions declare `provided_tools: []`, and on_tool_handle is the
+            ONE gated slot — the dispatch tests contains_tool before calling, so it is never reached;
+        (2) all four bind on_tool_handle to `{ decision: { Delegate }, next_state: ctx.world }`,
+            which is not `Handled` and carries no metadata.
+      Both are re-derived by the guard; neither is the empty install list.
+CLAIM row7 provided_tools_empty_and_tool_handle_delegates
+  ✓ the runtime exclusion check finds NO exclusion in a NON-EMPTY install list: 4 extensions installed, 0 hooks excluded, so no dispatch can violate
+  ✓ the per-run execution manifest validates against the definition it realizes
+      profile:            driver_plus_no_ops/21
+      extension packages: 4, projected from the install list
+      profile rules:      profile-rules/3
+      event vocabulary:   event-vocabulary/1
+  -- NOT CLAIMED for this profile (D10: nothing is inherited from driver_only) --
+      rows 1, 2, 6, 8, 9, 10 and 11 are NOT re-earned here. Running the whole table is
+      WI-C4's shape and a separate item; a row not run is a row not earned, and this
+      profile borrows driver_only's answer to none of them.
+      Also NOT discharged: WI-C5's compose-bearing profile, Route B's world-mediated
+      process and file seams, and criterion 1's evidentiary basis.
+driver_plus_no_ops_dst PASS

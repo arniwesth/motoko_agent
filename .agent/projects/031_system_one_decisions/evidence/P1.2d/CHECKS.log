@@ -1,0 +1,134 @@
+# P1.2d exit checks, 2026-09-21T18:30:54Z, HEAD 1a284115 + P1.2d's working-tree paths; AILANG AILANG v0.33.0
+## 1. own root (p12d_pkgroot.sh)
+p12d: motoko-ext-compose own root ok (max=[IO,AI,Net,Stream,Process,FS,Env,Clock,SharedMem,Rand,Trace])
+p12d: motoko-ext-herdr own root ok (max=[Process,FS,Env,IO,Clock,AI,Net,SharedMem,Stream,Rand,Trace])
+exit 0
+## 1b. same at 181051d0 (7.4): see own_root_at_181051d0.log
+## 3. gate (p12d_ws.sh gate / tree)
+p12d: derive.py --hook-scope --no-provision exit 0 (nonzero expected while other batches are red)
+p12d: gate compose pass
+p12d: gate herdr pass
+exit 0
+p12d: derive.py --hook-scope --no-provision exit 0 (nonzero expected while other batches are red)
+  compose                 UNRESOLVED        HOOK-UNRESOLVED       3
+  herdr                   UNRESOLVED        HOOK-UNRESOLVED       4
+  compose                   3  std/fs.fileExists, std/fs.readFile, std/env.getEnvOr
+  herdr                     4  std/env.getEnvOr, std/fs.isDir, std/fs.listDir, std/fs.readFileResult
+  compose                 config-caps       pass    
+  herdr                   config-caps       pass    
+REGISTRATION SHAPE: pass 18 of 18; fail 0
+  binding rejections      0  (-)  -- ADR D2: red by these on the unmigrated tree
+## check (every module, workspace, own ABI pin)
+p12d: lock packages/motoko-ext-compose ok (ABI pin 8.0)
+p12d: check packages/motoko-ext-compose/author_loop.ail ok
+p12d: check packages/motoko-ext-compose/author_tools.ail ok
+p12d: check packages/motoko-ext-compose/authoring/dispatcher.ail ok
+p12d: check packages/motoko-ext-compose/authoring/render.ail ok
+p12d: check packages/motoko-ext-compose/authoring/state.ail ok
+p12d: check packages/motoko-ext-compose/claimcheck.ail ok
+p12d: check packages/motoko-ext-compose/compose.ail ok
+p12d: check packages/motoko-ext-compose/compose_body.ail ok
+p12d: check packages/motoko-ext-compose/config.ail ok
+p12d: check packages/motoko-ext-compose/guard.ail ok
+p12d: check packages/motoko-ext-compose/ledger.ail ok
+p12d: check packages/motoko-ext-compose/proc.ail ok
+p12d: check packages/motoko-ext-compose/prompts.ail ok
+p12d: check packages/motoko-ext-compose/register.ail ok
+p12d: check packages/motoko-ext-compose/retry.ail ok
+p12d: check packages/motoko-ext-compose/store.ail ok
+p12d: check packages/motoko-ext-compose/telemetry.ail ok
+p12d: check packages/motoko-ext-compose/types.ail ok
+p12d: check packages/motoko-ext-compose/validator.ail ok
+p12d: lock packages/motoko-ext-herdr ok (ABI pin 8.0)
+p12d: check packages/motoko-ext-herdr/dagr.ail ok
+p12d: check packages/motoko-ext-herdr/herdr.ail ok
+p12d: check packages/motoko-ext-herdr/orchestrator.ail ok
+p12d: check packages/motoko-ext-herdr/register.ail ok
+p12d: check packages/motoko-ext-herdr/types.ail ok
+exit 0
+## 2. own tests (p12d_ws.sh test; compose has no inline tests before P1.2d -- config.ail's round-trip is new)
+p12d: test packages/motoko-ext-compose/config.ail ok -- 2 tests: 2 passed, 0 failed, 0 skipped (445.749611ms)
+p12d: test packages/motoko-ext-herdr/herdr.ail ok -- 8 tests: 8 passed, 0 failed, 0 skipped (6.589494647s)
+p12d: test packages/motoko-ext-herdr/orchestrator.ail ok -- 90 tests: 90 passed, 0 failed, 0 skipped (12.215492837s)
+p12d: test packages/motoko-ext-herdr/dagr.ail ok -- 73 tests: 73 passed, 0 failed, 0 skipped (8.480851748s)
+p12d: test packages/motoko-ext-herdr/types.ail ok -- 282 tests: 282 passed, 0 failed, 0 skipped (30.210716699s)
+exit 0
+## channel / provider / registration probes (p12d_channel.ail)
+OK: compose ToolPolicy: mode `off` from ext_config denies Compose
+OK: compose ToolPolicy: mode `subagent` from ext_config allows Compose
+OK: compose ResponseInterceptor: mode `inline` from ext_config handles a fenced response
+OK: compose ResponseInterceptor: the run uses snippet_caps from ext_config (IO,Net)
+OK: compose ResponseInterceptor: mode `subagent` from ext_config does not intercept
+OK: herdr DescribeTools: tools from config advertise two schemas
+OK: herdr DescribeTools: the kind list from config reaches the schema
+OK: herdr PromptShaper: the orchestrator mode from config appends its note
+OK: herdr ToolPolicy: the orchestrator mode from config denies an edit under src/
+OK: herdr ToolProvider: the operator's kind list from config is in the refusal
+OK: herdr ExitIntent: enabled (data position) follows the reap knob
+OK: herdr ExitIntent: renders from this session's run file (pane + session from config)
+OK: herdr WorkInFlight: reads this session's run file (pane + session from config)
+OK: channel
+p12d: channel ok
+exit 0
+{"type":"compose_start","step":0,"compose_id":"c1","intent":"probe","intent_kind":"compute","claimcheck_enabled":false,"author_tools_enabled":false,"structured_authoring_enabled":false,"model":"p12d-sub-model","max_attempts":1}
+p12d: provider ok (model and attempts from ext_config)
+exit 0
+p12d: registration ok (config carries what registration read)
+exit 0
+## 4. masked files: check (p12d_core_check.sh, committed HEAD 1a284115 + P1.2d's paths)
+p12d: registry over 8.0 packages at HEAD + batch D: motoko-ext-a2a motoko-ext-agentcli motoko-ext-ailang-docs motoko-ext-compaction-ai motoko-ext-compaction-structural motoko-ext-compose motoko-ext-context-mode motoko-ext-decision-framework motoko-ext-empty-stop-guard motoko-ext-exa-search motoko-ext-herdr motoko-ext-mcp motoko-ext-microrag motoko-ext-omnigraph motoko-ext-progress-contract-guard motoko-ext-repetition-guard motoko-ext-test-dummy
+p12d: check scripts/dst/compose_live_exec.ail ok
+p12d: check scripts/dst/declared_vs_performed.ail ok
+p12d: check scripts/dst/herdr_graded_dst.ail ok
+p12d: check scripts/verify_delegate_kind_required.ail ok
+p12d: check scripts/verify_exit_intent.ail ok
+p12d: check scripts/verify_herdr_delegate_wait.ail ok
+p12d: check scripts/verify_herdr_orchestrator.ail ok
+p12d: check scripts/verify_mot131_early_answer.ail ok
+p12d: check scripts/verify_mot133_owner_tag.ail ok
+p12d: check scripts/verify_mot136_dagr_producer.ail ok
+p12d: check scripts/verify_mot137_dagr_pane.ail ok
+exit 0
+## 4. masked files: run (p12d_core_check.sh suite)
+p12d: registry over 8.0 packages at HEAD + batch D: motoko-ext-a2a motoko-ext-agentcli motoko-ext-ailang-docs motoko-ext-compaction-ai motoko-ext-compaction-structural motoko-ext-compose motoko-ext-context-mode motoko-ext-decision-framework motoko-ext-empty-stop-guard motoko-ext-exa-search motoko-ex
+p12d: run compose_live_exec ok -- compose_live_exec PASS
+p12d: run herdr_graded_dst ok -- HERDR-GRADED: a ToolProvider dispatch reached the extension:      true
+p12d: run verify_delegate_kind_required ok -- OK: several kinds allowed, no default, no kind on the call: refused before a pane is split
+p12d: run verify_exit_intent ok -- OK: the exit intent is registered whether the knob is on or off
+p12d: run verify_herdr_delegate_wait ok -- OK: motoko Delegate carries wait {id=handle, kind, locator.pane, answer_path, run_key}
+p12d: run verify_mot131_early_answer ok -- OK: answer on disk + agent gone -> answer returned (MOT-131)
+p12d: run verify_mot133_owner_tag ok -- OK: delegate pane is tagged with this session's ownership token
+p12d: run verify_mot136_dagr_producer ok -- OK: Delegate opens one task with one attempt
+p12d: run verify_mot137_dagr_pane ok -- OK: off by default: no view pane, and the result still says how to open one
+p12d: run verify_herdr_orchestrator ok -- OK: atoms are registered in canonical order
+p12d: run verify_herdr_delegate_wait.print_fixtures ok -- FIXTURE delegate_motoko {"tool_call_id":"tc-gate6-1","tool":"Delegate","exit_code":0,"stdout":"Delegate `mot-dlg-1787475025027@w1:pA` is running motoko in pane 
+p12d: run dvp.compose_pre_step ok -- declared_vs_performed[compose_pre_step] REACHED COMPLETION witness=dvp_witness|installed=compose+dvp_witness
+p12d: run dvp.compose_budget ok -- declared_vs_performed[compose_budget] REACHED COMPLETION witness=4242
+p12d: run dvp.compose_solver ok -- declared_vs_performed[compose_solver] REACHED COMPLETION witness=dvp-solver-witness
+p12d: run dvp.compose_intercept_noninline ok -- declared_vs_performed[compose_intercept_noninline] REACHED COMPLETION witness=dvp-intercept-witness
+p12d: run dvp.compose_intercept_inline ok -- declared_vs_performed[compose_intercept_inline] REACHED COMPLETION witness=inline-1
+p12d: run dvp.compose_tool_handle_threading ok -- declared_vs_performed[compose_tool_handle_threading] REACHED COMPLETION witness=clock_now;clock_now;
+p12d: run dvp.compose_intercept_threading ok -- declared_vs_performed[compose_intercept_threading] REACHED COMPLETION witness=clock_now;dir_make(tmp);file_write(tmp/inline_7.ail);path_stat(tmp/inline_7.ail);f
+p12d: run dvp.reg_compose ok -- declared_vs_performed[reg_compose] REACHED COMPLETION witness=4
+p12d: run dvp.budget_compose ok -- declared_vs_performed[budget_compose] REACHED COMPLETION witness=4242
+p12d: run dvp.reg_herdr ok -- declared_vs_performed[reg_herdr] REACHED COMPLETION witness=6
+p12d: run dvp.budget_herdr ok -- declared_vs_performed[budget_herdr] REACHED COMPLETION witness=4242
+exit 0
+## channel probe re-run after the DescribeTools check was re-aimed (mutgate run 1: herdr_capture_describe_cfg vacuous)
+OK: compose ToolPolicy: mode `off` from ext_config denies Compose
+OK: compose ToolPolicy: mode `subagent` from ext_config allows Compose
+OK: compose ResponseInterceptor: mode `inline` from ext_config handles a fenced response
+OK: compose ResponseInterceptor: the run uses snippet_caps from ext_config (IO,Net)
+OK: compose ResponseInterceptor: mode `subagent` from ext_config does not intercept
+OK: herdr DescribeTools: tools from config advertise two schemas
+OK: herdr DescribeTools: the kind list from config reaches the schema
+OK: herdr DescribeTools: no default kind in config makes `kind` required
+OK: herdr PromptShaper: the orchestrator mode from config appends its note
+OK: herdr ToolPolicy: the orchestrator mode from config denies an edit under src/
+OK: herdr ToolProvider: the operator's kind list from config is in the refusal
+OK: herdr ExitIntent: enabled (data position) follows the reap knob
+OK: herdr ExitIntent: renders from this session's run file (pane + session from config)
+OK: herdr WorkInFlight: reads this session's run file (pane + session from config)
+OK: channel
+p12d: channel ok
+exit 0

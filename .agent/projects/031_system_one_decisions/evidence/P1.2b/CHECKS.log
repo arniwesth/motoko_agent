@@ -1,0 +1,114 @@
+# P1.2b exit checks -- 2026-09-21T17:44:20Z, HEAD f21e508d + P1.2b working-tree paths, AILANG v0.33.0
+
+## 1. own root (p12b_pkgroot.sh)
+p12b: motoko-ext-repetition-guard own root ok (max=[IO,Env,AI,Net,FS,Process,SharedMem,Clock,Stream])
+p12b: motoko-ext-test-dummy own root ok (max=[Env,Process])
+p12b: motoko_scratchpad own root ok (max=[IO,Env,AI,Net,FS,Process,SharedMem,Clock,Stream,Rand,Trace]) src/core@HEAD skipped=[ws_loopback.ail]
+p12b: motoko-ext-exa-search own root ok (max=[Process,FS,Env,IO,AI,Net,SharedMem,Clock,Stream,Rand,Trace]) deps@HEAD=[motoko-ext-mcp]
+p12b: motoko-ext-context-mode own root ok (max=[Process,FS,Env,SharedMem,Clock,SharedIndex,IO,AI,Net,Stream,Rand,Trace])
+exit 0
+
+## workspace check, every module, each package's own lock/pin (p12b_ws.sh check)
+p12b: lock packages/motoko-ext-repetition-guard ok (ABI pin 8.0)
+p12b: check packages/motoko-ext-repetition-guard/register.ail ok
+p12b: check packages/motoko-ext-repetition-guard/repetition_guard.ail ok
+p12b: lock packages/motoko-ext-test-dummy ok (ABI pin 8.0)
+p12b: check packages/motoko-ext-test-dummy/register.ail ok
+p12b: lock packages/motoko_scratchpad ok (ABI pin 8.0)
+p12b: check packages/motoko_scratchpad/prompts.ail ok
+p12b: check packages/motoko_scratchpad/register.ail ok
+p12b: check packages/motoko_scratchpad/scratchpad.ail ok
+p12b: check packages/motoko_scratchpad/types.ail ok
+p12b: check packages/motoko_scratchpad/ws_loopback.ail FAILED (exit 1)
+p12b: lock packages/motoko-ext-exa-search ok (ABI pin 8.0)
+p12b: check packages/motoko-ext-exa-search/exa_search.ail ok
+p12b: check packages/motoko-ext-exa-search/prompts.ail ok
+p12b: check packages/motoko-ext-exa-search/register.ail ok
+p12b: check packages/motoko-ext-exa-search/types.ail ok
+p12b: lock packages/motoko-ext-context-mode ok (ABI pin 8.0)
+p12b: check packages/motoko-ext-context-mode/compress.ail ok
+p12b: check packages/motoko-ext-context-mode/context_mode.ail ok
+p12b: check packages/motoko-ext-context-mode/exec.ail ok
+p12b: check packages/motoko-ext-context-mode/prompts.ail ok
+p12b: check packages/motoko-ext-context-mode/register.ail ok
+p12b: check packages/motoko-ext-context-mode/types.ail ok
+exit 1 (ws_loopback: core workspace, section 4)
+
+## 2. own tests (p12b_ws.sh test)
+p12b: test packages/motoko-ext-repetition-guard/repetition_guard.ail ok -- 8 tests: 8 passed, 0 failed, 0 skipped (2.003572443s)
+p12b: known red (pre-existing at 181051d0) mappings_define_expected_canonicals_test_1
+p12b: known red (pre-existing at 181051d0) alias_resolves_to_mcp_tool_test_1
+p12b: test packages/motoko-ext-exa-search/exa_search.ail ok -- 3 tests: 1 passed, 2 failed, 0 skipped (1.404989824s)
+exit 0
+-- exa-search's two known reds at 181051d0 (p12b_exa_test_at_74.sh):
+exa-search tests at 181051d0 (ABI 7.4):
+  ✗ mappings_define_expected_canonicals_test_1 (446.82462ms)
+      test 0: expected true, got false
+  ✗ alias_resolves_to_mcp_tool_test_1 (71.796369ms)
+      test 0: expected true, got false
+  ✓ provided_tools_matches_resolver_flattening_test_1 (97.681848ms)
+✗ Some tests failed
+3 tests: 1 passed, 2 failed, 0 skipped (616.302837ms)
+  ✓ Passed: 1
+  ✗ Failed: 2
+
+## channel probes (p12b_ws.sh probe)
+OK: channel -- both budgets disclosed as config and read back from ext_config only
+p12b: probe rg ok
+exit 0
+OK: channel -- marker, budget, tool decision and finalize disclosed as config and read back from ext_config only
+p12b: probe td ok
+exit 0
+OK: channel -- the cell timeout disclosed as config and read back from ext_config only
+p12b: probe sp ok
+exit 0
+OK: channel -- prompt, timeout and output cap disclosed as config and read back from ext_config only; the key travels as a name
+p12b: probe exa ok
+exit 0
+OK: channel -- prompt, bin, timeout, output cap and snapshot prefix disclosed as config and read back from ext_config only
+p12b: probe cm ok
+exit 0
+
+## 3. gate (derive.py --hook-scope --no-provision) on the SHARED working tree (other batches' uncommitted work included)
+p12b: derive.py --hook-scope --no-provision exit 0 (nonzero is expected while other batches are red)
+p12b: gate repetition_guard pass
+p12b: gate test_dummy pass
+p12b: gate scratchpad pass
+p12b: gate exa_search pass
+p12b: gate context_mode pass
+exit 0
+REGISTRATION SHAPE: pass 18 of 18; fail 0
+  binding rejections      0  (-)  -- ADR D2: red by these on the unmigrated tree
+(HEAD + P1.2b paths only: see mutgate row 'tree' and p12b_mutgate.sh --overlay --measure)
+REGISTRATION SHAPE: pass 11 of 18; fail 7
+  binding rejections     18  (payload-inline-lambda 8, payload-let-bound 10)  -- ADR D2: red by these on the unmigrated tree
+p12b_mutgate: measured at f21e508d + P1.2b paths
+
+## 4. masked file + core-reaching modules (p12b_core_check.sh, src/core from committed HEAD)
+p12b: check scripts/verify_repetition_guard.ail ok
+p12b: check deps/motoko_scratchpad/ws_loopback.ail ok
+p12b: check src/core/tool_phase.ail ok
+p12b: check src/core/ext/registry_generated.ail ok
+p12b: check src/core/ext/runtime.ail ok
+exit 0
+OK: the guard abstains rather than allowing
+OK: a call attached to prose the model has already given twice is denied
+OK: the restatement denial says so rather than blaming the call
+OK: short repeated narration is not restatement
+OK: repeated identical commands with moving output are not a loop
+OK: a restatement budget of 0 disables rule B alone
+OK: an answer given twice before is accepted on the third emission
+OK: a first answer is not a repeat of itself
+OK: a second emission is still allowed to continue
+OK: a blank repeated candidate is left to the empty-stop guard
+OK: budget 0 disables the tool half
+OK: budget 0 disables the answer half
+p12b: run scripts/verify_repetition_guard.ail ok
+exit 0
+
+## observation: imported payload row leak (import_leak_probe/probe.sh)
+ABI at f21e508d; AILANG v0.33.0
+reg_local: ailang check exit 0
+reg_imported: ailang check exit 1
+  Missing effects: AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace
+  Current signature: func register_with_config(...) -> T

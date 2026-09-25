@@ -1,0 +1,79 @@
+-- Configuration types for AI-powered compaction.
+
+module sunholo/motoko_ext_compaction_ai/types
+
+import std/json (Json, jo, kv, js, jint, jb, getString, getInt, getBool, encode)
+import std/option (Some, None)
+
+-- Configuration for AI-powered compaction
+export type CompactionAiConfig = {
+  model: string,         -- Model to use for summarization
+  threshold_pct: int,    -- Context usage % threshold to trigger compaction
+  keep_recent: int,      -- Number of recent turns to keep intact
+  keep_recent_tokens: int, -- Contiguous verbatim tail budget; 0 uses the legacy message count
+  min_relief_pct: int,   -- Minimum projected context relief worth an AI call
+  rate_limit_enabled: bool,
+  min_gap_steps: int,
+  hard_override_pct: int
+}
+
+-- Default configuration
+export func default_config() -> CompactionAiConfig {
+  {
+    model: "openrouter/meta-llama/llama-3.1-8b-instruct",
+    threshold_pct: 75,
+    keep_recent: 6,
+    keep_recent_tokens: 0,
+    min_relief_pct: 5,
+    rate_limit_enabled: false,
+    min_gap_steps: 3,
+    hard_override_pct: 95
+  }
+}
+
+-- ABI 8.0 (031 ADR-001 D2): THE CONFIGURATION CHANNEL. Registration reads the
+-- profile's `compaction_ai.json` and discloses the resolved record as
+-- `ExtRegistration.config`; the Compactor decodes it from `ctx.ext_config` per
+-- call. One codec, both directions, so the file and the channel share a shape:
+-- every key is optional and a missing or mistyped one takes `default_config()`'s
+-- value (so `{}` is the default configuration).
+export func config_of_json(json: Json) -> CompactionAiConfig {
+  let d = default_config();
+  {
+    model: match getString(json, "model") { Some(m) => m, None => d.model },
+    threshold_pct: match getInt(json, "threshold_pct") { Some(t) => t, None => d.threshold_pct },
+    keep_recent: match getInt(json, "keep_recent") { Some(k) => k, None => d.keep_recent },
+    keep_recent_tokens: match getInt(json, "keep_recent_tokens") { Some(k) => k, None => d.keep_recent_tokens },
+    min_relief_pct: match getInt(json, "min_relief_pct") { Some(v) => v, None => d.min_relief_pct },
+    rate_limit_enabled: match getBool(json, "rate_limit_enabled") { Some(v) => v, None => d.rate_limit_enabled },
+    min_gap_steps: match getInt(json, "min_gap_steps") { Some(v) => v, None => d.min_gap_steps },
+    hard_override_pct: match getInt(json, "hard_override_pct") { Some(v) => v, None => d.hard_override_pct }
+  }
+}
+
+export func config_to_json(c: CompactionAiConfig) -> Json {
+  jo([
+    kv("model", js(c.model)),
+    kv("threshold_pct", jint(c.threshold_pct)),
+    kv("keep_recent", jint(c.keep_recent)),
+    kv("keep_recent_tokens", jint(c.keep_recent_tokens)),
+    kv("min_relief_pct", jint(c.min_relief_pct)),
+    kv("rate_limit_enabled", jb(c.rate_limit_enabled)),
+    kv("min_gap_steps", jint(c.min_gap_steps)),
+    kv("hard_override_pct", jint(c.hard_override_pct))
+  ])
+}
+
+pure func config_round_trips() -> bool
+  tests [((), true)]
+  {
+    let c = { default_config() | model: "m-x", threshold_pct: 42, keep_recent_tokens: 120, rate_limit_enabled: true };
+    encode(config_to_json(config_of_json(config_to_json(c)))) == encode(config_to_json(c))
+      && config_of_json(config_to_json(c)).threshold_pct == 42
+  }
+
+pure func empty_config_is_default() -> bool
+  tests [((), true)]
+  {
+    encode(config_to_json(config_of_json(jo([])))) == encode(config_to_json(default_config()))
+  }

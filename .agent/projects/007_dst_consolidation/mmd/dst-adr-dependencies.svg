@@ -1,0 +1,167 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 994.4059125 1305.3000000000002" width="994.4059125" height="1305.3000000000002" style="--bg:#1a1b26;--fg:#a9b1d6;--line:#3d59a1;--accent:#7aa2f7;--muted:#565f89;background:var(--bg)">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          var(--fg);
+    --_text-sec:      var(--muted, color-mix(in srgb, var(--fg) 60%, var(--bg)));
+    --_text-muted:    var(--muted, color-mix(in srgb, var(--fg) 40%, var(--bg)));
+    --_text-faint:    color-mix(in srgb, var(--fg) 25%, var(--bg));
+    --_line:          var(--line, color-mix(in srgb, var(--fg) 50%, var(--bg)));
+    --_arrow:         var(--accent, color-mix(in srgb, var(--fg) 85%, var(--bg)));
+    --_node-fill:     var(--surface, color-mix(in srgb, var(--fg) 3%, var(--bg)));
+    --_node-stroke:   var(--border, color-mix(in srgb, var(--fg) 20%, var(--bg)));
+    --_group-fill:    var(--bg);
+    --_group-hdr:     color-mix(in srgb, var(--fg) 5%, var(--bg));
+    --_inner-stroke:  color-mix(in srgb, var(--fg) 12%, var(--bg));
+    --_key-badge:     color-mix(in srgb, var(--fg) 10%, var(--bg));
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="ADRS" data-label="Decision chain">
+  <rect x="77.5" y="52" width="809.4989999999999" height="550.2" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="77.5" y="52" width="809.4989999999999" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="89.5" y="66" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Decision chain</text>
+</g>
+<g class="subgraph" data-id="BLOCK" data-label="Acceptance blockers as currently written">
+  <rect x="329.4459124999999" y="718.5" width="624.96" height="130.7" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="329.4459124999999" y="718.5" width="624.96" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="341.4459124999999" y="732.5" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Acceptance blockers as currently written</text>
+</g>
+<g class="subgraph" data-id="FIX" data-label="RR1 ruling · re-partition, do not re-own">
+  <rect x="151.23466249999993" y="1015.9000000000001" width="730.031" height="249.40000000000003" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="151.23466249999993" y="1015.9000000000001" width="730.031" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="163.23466249999993" y="1029.9" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">RR1 ruling · re-partition, do not re-own</text>
+</g>
+<polyline class="edge" data-from="a007" data-to="b1" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="blocked on" points="453.55549999999994,586.2 453.55549999999994,602.2 453.55549999999994,638.2 491.64991249999986,638.2 491.6499124999999,718.5 491.6499124999999,762.5" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="b1" data-to="a009" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="owned by" points="442.91524583333324,833.2 442.91524583333324,849.2 442.91524583333324,885.2 67.5,885.2 67.5,40 869.9989999999999,40 869.9989999999999,52 869.9989999999999,259 744.0039666666667,259 744.0039666666667,283" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="a009" data-to="b2" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="blocked on" points="731.4954166666666,353.7 731.4954166666666,365.7 836.2243249999998,365.7 836.2243249999998,602.2 836.2243249999998,638.2 814.9219958333332,638.2 814.9219958333332,706.5 798.1299124999999,706.5 798.1299124999998,718.5 798.1299124999998,762.5" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="b1" data-to="cycle" data-style="dotted" data-arrow-start="false" data-arrow-end="false" points="540.3845791666665,833.2 540.3845791666665,849.2 540.3845791666665,897.2" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" />
+<polyline class="edge" data-from="cycle" data-to="f1" data-style="thick" data-arrow-start="false" data-arrow-end="true" points="540.3845791666665,967.9000000000001 540.3845791666665,1003.9000000000001 711.2811624999998,1003.9000000000001 711.2811624999998,1064.125" fill="none" stroke="var(--_line)" stroke-width="2" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="cycle" data-to="f2" data-style="thick" data-arrow-start="false" data-arrow-end="true" points="540.3845791666665,967.9000000000001 540.3845791666665,1003.9000000000001 348.26566249999985,1003.9000000000001 348.26566249999985,1064.125" fill="none" stroke="var(--_line)" stroke-width="2" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="a001" data-to="a007" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="amended by: definition + naming threshold
+preserved: production code · explicit fakes
+normalized traces · structural invariants" points="212.95233333333329,175.14999999999998 212.95233333333329,462.6 380.63874999999996,462.6 380.63874999999996,498.6" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="a007" data-to="a009" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="delegates: seam design (R1) · trace contract (R2)
+evidence detail (R8) · world design (D4)
+generator encoding · search economics · fault catalogue" points="526.47225,498.6 526.47225,462.6 688.3683249999999,462.6 688.3683249999999,365.7 668.9526666666666,365.7 668.9526666666666,353.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="a001" data-to="a009" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="amended by: implementation architecture" points="332.40466666666657,175.14999999999998 332.40466666666657,259 593.9013666666667,259 593.9013666666667,283" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="a004" data-to="a009" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="amended by: for the generated DST axis" points="560.8529999999998,158.25 560.8529999999998,247 643.9355666666667,247 643.9355666666667,283" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="a005" data-to="a009" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="relates to" points="764.924,158.25 764.9239999999999,247 693.9697666666666,247 693.9697666666666,283" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="a009" data-to="a007" data-style="thick" data-arrow-start="false" data-arrow-end="true" data-label="&lt;b&gt;depends on 007 after disposition AND acceptance&lt;/b&gt;" points="606.4099166666666,353.7 606.4099166666666,365.7 417.55832499999997,365.7 417.55832499999997,462.6 453.55549999999994,462.6 453.55549999999994,498.6" fill="none" stroke="var(--_line)" stroke-width="2" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="f1" data-to="f3" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="711.2811624999998,1151.725 711.2811624999998,1173.6125 529.7734124999998,1173.6125 529.7734124999998,1195.5" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="f2" data-to="f3" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="348.26566249999985,1134.825 348.26566249999985,1173.6125 529.7734124999998,1173.6125 529.7734124999998,1195.5" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="a007" data-to="b1" data-label="blocked on">
+  <rect x="456.64991249999986" y="645.2" width="69.328" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="491.31391249999984" y="660.35" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">blocked on</text>
+</g>
+<g class="edge-label" data-from="b1" data-to="a009" data-label="owned by">
+  <rect x="35.99999999999999" y="847.9000000000001" width="62.2" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="67.1" y="863.0500000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">owned by</text>
+</g>
+<g class="edge-label" data-from="a009" data-to="b2" data-label="blocked on">
+  <rect x="779.9219958333332" y="645.2" width="69.328" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="814.5859958333332" y="660.35" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">blocked on</text>
+</g>
+<g class="edge-label" data-from="a001" data-to="a007" data-label="amended by: definition + naming threshold
+preserved: production code · explicit fakes
+normalized traces · structural invariants">
+  <rect x="102.45233333333327" y="288.90000000000003" width="220.20399999999998" height="58.900000000000006" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="212.55433333333326" y="318.35" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="212.55433333333326" dy="-10.450000000000001">amended by: definition + naming threshold</tspan><tspan x="212.55433333333326" dy="14.3">preserved: production code · explicit fakes</tspan><tspan x="212.55433333333326" dy="14.3">normalized traces · structural invariants</tspan></text>
+</g>
+<g class="edge-label" data-from="a007" data-to="a009" data-label="delegates: seam design (R1) · trace contract (R2)
+evidence detail (R8) · world design (D4)
+generator encoding · search economics · fault catalogue">
+  <rect x="545.8683249999999" y="396.7" width="284.3559999999999" height="58.900000000000006" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="688.0463249999998" y="426.15" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="688.0463249999998" dy="-10.450000000000001">delegates: seam design (R1) · trace contract (R2)</tspan><tspan x="688.0463249999998" dy="14.3">evidence detail (R8) · world design (D4)</tspan><tspan x="688.0463249999998" dy="14.3">generator encoding · search economics · fault catalogue</tspan></text>
+</g>
+<g class="edge-label" data-from="a001" data-to="a009" data-label="amended by: implementation architecture">
+  <rect x="229.40466666666657" y="209.7" width="205.94799999999998" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="332.37866666666656" y="224.85" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">amended by: implementation architecture</text>
+</g>
+<g class="edge-label" data-from="a004" data-to="a009" data-label="amended by: for the generated DST axis">
+  <rect x="459.35299999999984" y="209.7" width="202.97800000000004" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="560.8419999999999" y="224.85" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">amended by: for the generated DST axis</text>
+</g>
+<g class="edge-label" data-from="a005" data-to="a009" data-label="relates to">
+  <rect x="733.9239999999999" y="209.7" width="61.012" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="764.4299999999998" y="224.85" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">relates to</text>
+</g>
+<g class="edge-label" data-from="a009" data-to="a007" data-label="&lt;b&gt;depends on 007 after disposition AND acceptance&lt;/b&gt;">
+  <rect x="292.55832499999997" y="411" width="249.31" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="417.21332499999994" y="426.15" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996"><tspan font-weight="bold">depends on 007 after disposition AND acceptance</tspan></text>
+</g>
+<g class="node" data-id="cycle" data-label="&lt;b&gt;RR1 · the cycle&lt;/b&gt;
+007 waits on 009 · 009 waits on 007 · 009 waits on upstream
+taken literally, neither ADR can ever be accepted" data-shape="rectangle">
+  <rect x="347.8680791666666" y="897.2" width="385.0329999999999" height="70.7" rx="0" ry="0" fill="#3a1620" stroke="#f7768e" stroke-width="2.5px" />
+  <text x="540.3845791666665" y="932.5500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#f7c6cf"><tspan x="540.3845791666665" dy="-12.350000000000001"><tspan font-weight="bold">RR1 · the cycle</tspan></tspan><tspan x="540.3845791666665" dy="16.900000000000002">007 waits on 009 · 009 waits on 007 · 009 waits on upstream</tspan><tspan x="540.3845791666665" dy="16.900000000000002">taken literally, neither ADR can ever be accepted</tspan></text>
+</g>
+<g class="node" data-id="a001" data-label="&lt;b&gt;001_DST / ADR-001&lt;/b&gt;
+deterministic simulation testing architecture
+status: accepted · layered scenario + invariant system" data-shape="rectangle">
+  <rect x="93.5" y="104.45" width="358.3569999999999" height="70.7" rx="0" ry="0" fill="#16351f" stroke="#3fb950" stroke-width="0.75" />
+  <text x="272.6785" y="139.8" text-anchor="middle" font-size="13" font-weight="500" fill="#c6f0cf"><tspan x="272.6785" dy="-12.350000000000001"><tspan font-weight="bold">001_DST / ADR-001</tspan></tspan><tspan x="272.6785" dy="16.900000000000002">deterministic simulation testing architecture</tspan><tspan x="272.6785" dy="16.900000000000002">status: accepted · layered scenario + invariant system</tspan></text>
+</g>
+<g class="node" data-id="a007" data-label="&lt;b&gt;007 / ADR-001&lt;/b&gt; — this ADR
+definition · taxonomy · scope · naming gate
+status: proposed, revised, re-reviewed
+&lt;i&gt;decides no implementation&lt;/i&gt;" data-shape="rectangle">
+  <rect x="307.722" y="498.6" width="291.667" height="87.60000000000001" rx="0" ry="0" fill="#3a2f12" stroke="#e0af68" stroke-width="2.5px" />
+  <text x="453.55549999999994" y="542.4" text-anchor="middle" font-size="13" font-weight="500" fill="#f2e2c2"><tspan x="453.55549999999994" dy="-20.8"><tspan font-weight="bold">007 / ADR-001</tspan> — this ADR</tspan><tspan x="453.55549999999994" dy="16.900000000000002">definition · taxonomy · scope · naming gate</tspan><tspan x="453.55549999999994" dy="16.900000000000002">status: proposed, revised, re-reviewed</tspan><tspan x="453.55549999999994" dy="16.900000000000002"><tspan font-style="italic">decides no implementation</tspan></tspan></text>
+</g>
+<g class="node" data-id="a009" data-label="&lt;b&gt;009 / ADR-001&lt;/b&gt;
+deterministic test-world architecture
+status: proposed · spike complete" data-shape="rectangle">
+  <rect x="543.8671666666667" y="283" width="250.17099999999994" height="70.7" rx="0" ry="0" fill="#2f2145" stroke="#bb9af7" stroke-width="0.75" />
+  <text x="668.9526666666666" y="318.35" text-anchor="middle" font-size="13" font-weight="500" fill="#e5d5fb"><tspan x="668.9526666666666" dy="-12.350000000000001"><tspan font-weight="bold">009 / ADR-001</tspan></tspan><tspan x="668.9526666666666" dy="16.900000000000002">deterministic test-world architecture</tspan><tspan x="668.9526666666666" dy="16.900000000000002">status: proposed · spike complete</tspan></text>
+</g>
+<g class="node" data-id="a004" data-label="004 / ADR-001
+phase-oriented core" data-shape="rectangle">
+  <rect x="479.85699999999986" y="104.45" width="161.99200000000002" height="53.800000000000004" rx="0" ry="0" fill="#1e2a4a" stroke="#7aa2f7" stroke-width="0.75" />
+  <text x="560.8529999999998" y="131.35" text-anchor="middle" font-size="13" font-weight="500" fill="#c8d3f5"><tspan x="560.8529999999998" dy="-3.9000000000000012">004 / ADR-001</tspan><tspan x="560.8529999999998" dy="16.900000000000002">phase-oriented core</tspan></text>
+</g>
+<g class="node" data-id="a005" data-label="005 / ADR-001
+harness policy boundary" data-shape="rectangle">
+  <rect x="669.8489999999999" y="104.45" width="190.15" height="53.800000000000004" rx="0" ry="0" fill="#1e2a4a" stroke="#7aa2f7" stroke-width="0.75" />
+  <text x="764.924" y="131.35" text-anchor="middle" font-size="13" font-weight="500" fill="#c8d3f5"><tspan x="764.924" dy="-3.9000000000000012">005 / ADR-001</tspan><tspan x="764.924" dy="16.900000000000002">harness policy boundary</tspan></text>
+</g>
+<g class="node" data-id="b1" data-label="007 residual item 3
+preventive hermeticity rule
+filed as &lt;b&gt;blocking acceptance&lt;/b&gt;, owned by 009" data-shape="rectangle">
+  <rect x="345.4459124999999" y="762.5" width="292.40799999999996" height="70.7" rx="0" ry="0" fill="#3a1620" stroke="#f7768e" stroke-width="2.5px" />
+  <text x="491.6499124999999" y="797.85" text-anchor="middle" font-size="13" font-weight="500" fill="#f7c6cf"><tspan x="491.6499124999999" dy="-12.350000000000001">007 residual item 3</tspan><tspan x="491.6499124999999" dy="16.900000000000002">preventive hermeticity rule</tspan><tspan x="491.6499124999999" dy="16.900000000000002">filed as <tspan font-weight="bold">blocking acceptance</tspan>, owned by 009</tspan></text>
+</g>
+<g class="node" data-id="b2" data-label="009 cannot be accepted until an upstream
+AILANG recorded-stream API lands
+(third-party, unblocked by neither ADR)" data-shape="rectangle">
+  <rect x="657.8539124999999" y="762.5" width="280.552" height="70.7" rx="0" ry="0" fill="#24262f" stroke="#6e7681" stroke-width="0.75" />
+  <text x="798.1299124999998" y="797.85" text-anchor="middle" font-size="13" font-weight="500" fill="#9aa4b2"><tspan x="798.1299124999998" dy="-12.350000000000001">009 cannot be accepted until an upstream</tspan><tspan x="798.1299124999998" dy="16.900000000000002">AILANG recorded-stream API lands</tspan><tspan x="798.1299124999998" dy="16.900000000000002">(third-party, unblocked by neither ADR)</tspan></text>
+</g>
+<g class="node" data-id="f1" data-label="forward half — the D2 evidence-6 gate
+&lt;b&gt;already decided&lt;/b&gt; in 009 D5
+capability floor · routing audit · poison probes
+&amp;rarr; not a 007 blocker" data-shape="rectangle">
+  <rect x="557.2966624999998" y="1064.125" width="307.969" height="87.60000000000001" rx="0" ry="0" fill="#123038" stroke="#2ac3de" stroke-width="2px" />
+  <text x="711.2811624999998" y="1107.925" text-anchor="middle" font-size="13" font-weight="500" fill="#bdeef5"><tspan x="711.2811624999998" dy="-20.8">forward half — the D2 evidence-6 gate</tspan><tspan x="711.2811624999998" dy="16.900000000000002"><tspan font-weight="bold">already decided</tspan> in 009 D5</tspan><tspan x="711.2811624999998" dy="16.900000000000002">capability floor · routing audit · poison probes</tspan><tspan x="711.2811624999998" dy="16.900000000000002">&amp;rarr; not a 007 blocker</tspan></text>
+</g>
+<g class="node" data-id="f2" data-label="HEAD half — protect today's pillar-1 claim
+no new input-bearing IO/Env on dst_seeded entrypoints
+&amp;rarr; &lt;b&gt;007-owned, tracked&lt;/b&gt;, not blocking" data-shape="rectangle">
+  <rect x="167.23466249999993" y="1064.125" width="362.0619999999999" height="70.7" rx="0" ry="0" fill="#3a3018" stroke="#d29922" stroke-width="0.75" />
+  <text x="348.26566249999985" y="1099.475" text-anchor="middle" font-size="13" font-weight="500" fill="#f2e0b8"><tspan x="348.26566249999985" dy="-12.350000000000001">HEAD half — protect today&#39;s pillar-1 claim</tspan><tspan x="348.26566249999985" dy="16.900000000000002">no new input-bearing IO/Env on dst_seeded entrypoints</tspan><tspan x="348.26566249999985" dy="16.900000000000002">&amp;rarr; <tspan font-weight="bold">007-owned, tracked</tspan>, not blocking</tspan></text>
+</g>
+<g class="node" data-id="f3" data-label="blocking list becomes empty
+&amp;rarr; accept 007 · 009 stays blocked only on upstream" data-shape="rectangle">
+  <rect x="347.6309124999999" y="1195.5" width="364.2849999999999" height="53.800000000000004" rx="0" ry="0" fill="#16351f" stroke="#3fb950" stroke-width="0.75" />
+  <text x="529.7734124999998" y="1222.4" text-anchor="middle" font-size="13" font-weight="500" fill="#c6f0cf"><tspan x="529.7734124999998" dy="-3.9000000000000012">blocking list becomes empty</tspan><tspan x="529.7734124999998" dy="16.900000000000002">&amp;rarr; accept 007 · 009 stays blocked only on upstream</tspan></text>
+</g>
+</svg>

@@ -1,7 +1,7 @@
 # Local OpenAI Endpoint: API Key Relaxation (2026-05-03)
 
 ## Symptom
-`make run` with local profile (`openai/google/gemma-4-26B-A4B-it` + `OPENAI_BASE_URL=http://100.79.48.75:8000/v1`) failed:
+`make run` with local profile (`openai/google/gemma-4-26B-A4B-it` + `OPENAI_BASE_URL=http://<dgx-host>:8000/v1`) failed:
 ```
 Error: OPENAI_API_KEY environment variable required
 ```

@@ -8,6 +8,20 @@ cd deploy/clickstack
 docker compose up -d
 ```
 
+**Ports are bound to `127.0.0.1` by default.** ClickHouse on `8123` is unauthenticated (default user,
+empty password), so the published ports are loopback-only out of the box and unreachable from any other
+machine — including over a VPN or a mesh/overlay network the host is attached to. Everything below (the `localhost`
+URLs, a browser on this machine) works unchanged. To expose the stack on a server on purpose, set the
+bind address explicitly and give ClickHouse a real password first:
+
+```bash
+export CLICKSTACK_BIND=0.0.0.0   # or a specific interface IP
+docker compose up -d
+```
+
+`0.0.0.0` with an empty ClickHouse password is the combination the loopback default exists to prevent —
+do not run it on a shared network.
+
 Open HyperDX at http://localhost:8081. The collector accepts OTLP on:
 
 - `http://localhost:4318` for OTLP HTTP

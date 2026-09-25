@@ -1,0 +1,66 @@
+flowchart TB
+  %% ADR-001 (017) — the CURRENT ABI, sunholo/motoko_ext_abi 5.0 (packages/motoko-ext-abi/ailang.toml).
+  %% ExtensionHooks record (types.ail:702-958), each slot's CLOSED effect row, and the host
+  %% dispatcher's per-slot merge in src/core/ext/runtime.ail. Colour = role: blue the record ·
+  %% teal no-row slots · purple rowed slots · amber dispatch semantics · green default_hooks identity.
+  %% Grounded 2026-08-26 at 366193c (2026-08-24); default_hooks is an uncommitted +35-line hunk
+  %% at types.ail:964-993. Rows read from types.ail:705-957; dispatch from runtime.ail line refs below.
+
+  subgraph REC["ExtensionHooks · types.ail:702 — one record, every label written by every extension"]
+    direction TB
+    reg["register_with_config(cfg) -> ExtensionHooks<br/>exported by every motoko-ext-*/register · 16 extensions<br/>discovered statically: registry_generated.ail"]:::rec
+    idf["id: string · provided_tools: [string]<br/>(the tool-name set on_tool_handle is matched against)"]:::rec
+    reg --> idf
+  end
+
+  subgraph SLOTS["Eight hook slots — record-field rows are CLOSED: an implementation must equal the row exactly"]
+    direction TB
+    s1["on_describe_tools<br/>() -> [ToolSchema]<br/>row: none"]:::plain
+    s2["on_build_system_prompt<br/>(ExtCtx) -> PromptPatch<br/>row: none"]:::plain
+    s3["on_budget_plan<br/>(ExtCtx, BudgetPlan) -> BudgetPatch<br/>row: none — narrowed WI-D6 from {Env, FS}"]:::plain
+    s4["on_pre_step<br/>(ExtCtx, [Msg]) -> PreStepOutcome<br/>! {AI, IO, Trace}"]:::rowed
+    s5["on_tool_policy<br/>(ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision<br/>row: none"]:::plain
+    s6["on_tool_handle<br/>(ExtCtx, ToolCallEnvelope) -> ToolHandleOutcome<br/>! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} — widest"]:::rowed
+    s7["on_response_intercept<br/>(ExtCtx, string) -> ResponseInterceptOutcome<br/>! {IO, Process, FS, Clock}"]:::rowed
+    s8["on_solver_candidate<br/>(ExtCtx, string) -> FinalizeOutcome<br/>! {Process}"]:::rowed
+  end
+  idf --> SLOTS
+
+  subgraph DISPATCH["Host dispatch — src/core/ext/runtime.ail, registry order, the only exhaustive consumer"]
+    direction TB
+    d1["concatenated per extension<br/>tool_catalog.hook_schemas:107 — declared schemas,<br/>else synthesized from provided_tools"]:::disp
+    d2["patches folded in registry order<br/>fold_prompt_hooks:210 · apply_prompt_patch:174"]:::disp
+    d3["patches folded, last Some wins per field<br/>fold_budget_hooks:225 · apply_budget_patch:188"]:::disp
+    d4["CHAINED: each stage sees the previous valid output<br/>Compacted output validated; invalid stage → StageRejected,<br/>world still threaded · fold_pre_step_chain_rec:253"]:::disp
+    d5["collected from all, merged by PRIORITY<br/><b>Deny > Pending > Allow > NoOpinion</b><br/>Deny short-circuits · merge_tool_decisions:357"]:::disp
+    d6["FIRST MATCH on provided_tools; Delegate falls through,<br/>Handled stops · un-invoked hooks do not touch the world<br/>first_handle:400"]:::disp
+    d7["FIRST INTERCEPT wins; every hook invoked until one<br/>intercepts, each threads its successor<br/>first_intercept:428"]:::disp
+    d8["collected from all (every hook runs), merged by PRIORITY<br/><b>ContinueWithFeedback > Accept > NoDecision</b><br/>merge_finalize_decisions:509"]:::disp
+  end
+
+  s1 --> d1
+  s2 --> d2
+  s3 --> d3
+  s4 --> d4
+  s5 --> d5
+  s6 --> d6
+  s7 --> d7
+  s8 --> d8
+
+  stamp[["World-threading slots (pre_step · tool_handle · response_intercept · solver_candidate):<br/>host re-seats ctx.world with the holder stamp per hook (WI-D24) and clears it on the way out;<br/>the hook returns next_state"]]:::note
+  DISPATCH --- stamp
+
+  subgraph DEF["default_hooks(id) · types.ail:964 — the identity for each dispatcher (uncommitted at HEAD)"]
+    direction TB
+    dfl["provided_tools [] · describe [] · prompt { prepend: [], append: [] }<br/>budget all None · pre_step PassThrough · policy NoOpinion<br/>tool_handle Delegate · intercept NoIntercept · solver NoDecision<br/>world-threading slots return ctx.world"]:::dflt
+    use["{ default_hooks('empty_stop_guard') | on_solver_candidate: finalize }<br/>motoko-ext-empty-stop-guard/register.ail — the first record-update migration"]:::dflt
+    dfl --> use
+  end
+  SLOTS -.->|"one binding per slot per extension — guaranteed by the record"| DEF
+
+  classDef rec fill:#16294d,stroke:#7aa2f7,color:#cdd9f5,stroke-width:2px;
+  classDef plain fill:#123038,stroke:#2ac3de,color:#bdeef5;
+  classDef rowed fill:#2f2145,stroke:#bb9af7,color:#e5d5fb;
+  classDef disp fill:#3a2f12,stroke:#e0af68,color:#f2e2c2;
+  classDef dflt fill:#16351f,stroke:#3fb950,color:#c6f0cf;
+  classDef note fill:#24262f,stroke:#6e7681,color:#9aa4b2;

@@ -1,0 +1,7 @@
+module scripts/dst/fixtures/adr001_boundary/fs_smuggle_norow
+import std/io (println)
+import scripts/dst/fixtures/adr001_boundary/types (FsCtx, FsSlot, Fs)
+type W = { f: (FsCtx) -> int ! {FS} }
+func build() -> FsSlot { let w: W = { f: func(ctx: FsCtx) -> int ! {FS} { let _ = println(ctx.name); 1 } }; Fs(w.f) }
+func invoke(s: FsSlot, ctx: FsCtx) -> int ! {FS} { match s { Fs(f) => f(ctx) } }
+export func main() -> () ! {IO, FS} { let ctx: FsCtx = { name: "IO OUTSIDE FS VIEW", world: 0, ports: {file_read: func(w: int, path: string) -> string ! {FS} { "" } } }; println("result=${show(invoke(build(), ctx))}") }

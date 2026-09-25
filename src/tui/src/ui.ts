@@ -23,7 +23,8 @@ import chalk from "chalk";
 import { TUI, Text, Markdown, Editor, type EditorTheme, Box, Image, SelectList, ProcessTerminal, type OverlayHandle, type SelectItem, type MarkdownTheme, matchesKey } from "@mariozechner/pi-tui";
 import type { AgentEvent } from "./runtime-process.js";
 import type { DelegatedCall, DelegatedResult, NativeToolResult } from "./runtime-process.js";
-import type { RuntimeProcess } from "./runtime-process.js";
+import type { RuntimeProcess, SuspendedChild } from "./runtime-process.js";
+import type { WakeReply } from "./wake-waiter.js";
 import { resolveDelegatedExec } from "./runtime-process.js";
 import { fetchDynamicModelsFromEnv } from "./models.js";
 import { type SlashCommandHandlerCtx, parseSlashCommand, createCommandAutocompleteProvider } from "./commands.js";
@@ -43,6 +44,8 @@ import type {
 } from "./scratchpad/frames.js";
 import { type ScratchpadSegment, scratchpadImageCapabilityLabel, scratchpadImageExitSequence, makeImageSegment } from "./scratchpad/image-segment.js";
 import { execSync } from "child_process";
+import { reportRunState as reportRunStateToHerdr } from "./herdr-agent-state.js";
+import { MemorySampler, formatProcessMemory } from "./process-memory.js";
 // NOTE: The ASCII-art banner is printed unconditionally in main() before the 
 // TUI starts here — ANSI escapes in Text children corrupt the layout system.
 
@@ -786,7 +789,22 @@ function formatTimestamp(now: Date = new Date()): string {
   return `${hh}:${mm}:${ss}.${mmm}`;
 }
 
-export type RunState = "idle" | "thinking" | "tools_wait" | "tools_run" | "error";
+/**
+ * ADR-003 v6.1 D2 adds `suspended`: a run that reached its step budget stopped, but it is holding
+ * the exhausted turn's history and the operator's next line CONTINUES it. It is deliberately
+ * neither `idle` (which means nothing is held and the next line starts a fresh run) nor `error`
+ * (ADR-003's whole point is that the budget is no longer a failure), and it is not an
+ * `isWaitingState` — nothing is running, so there is no spinner and nothing for ESC to abort.
+ */
+/**
+ * PLAN-003 P4 Part 6 (ADR-003 D7) adds the durable park's three named states, from the table in
+ * `runtime-process.ts` (`abortSuspendedChild`'s header): `parked` — the live child is blocked on its
+ * open waits; `suspended_child` — the child exited on that park under `--park-exits` and the host
+ * holds it (the plan's `suspended-child`); `resuming` — the `wake` is written and the `--resume`
+ * respawn is up, until its `session_resumed`. They are distinct from `suspended` (ADR-003 D2's step
+ * budget): a parked run holds nothing exhausted, and its next line answers the park, not the run.
+ */
+export type RunState = "idle" | "thinking" | "tools_wait" | "tools_run" | "error" | "suspended" | "done" | "parked" | "suspended_child" | "resuming";
 type HintPhase = "thinking" | "tools";
 type ToolRowStatus = "queued" | "running" | "done" | "failed";
 type PlannedToolStatus = "planned" | "running" | "done" | "error" | "planned_unexecuted" | "runtime_only" | "filtered";
@@ -1783,7 +1801,8 @@ interface ThinkBlock {
 }
 
 function isWaitingState(state: RunState): boolean {
-  return state === "thinking" || state === "tools_wait" || state === "tools_run";
+  // `resuming` spins: a respawned child is folding the journal. A park does not: nothing runs here.
+  return state === "thinking" || state === "tools_wait" || state === "tools_run" || state === "resuming";
 }
 
 export function shouldLockPlainInput(
@@ -1792,6 +1811,32 @@ export function shouldLockPlainInput(
   value: string,
 ): boolean {
   return !awaitingTask && !taskDone && value.length > 0 && !value.startsWith("/");
+}
+
+/**
+ * Where a non-slash line goes. `wake_reply` first (PLAN-002 W4 Part 5's parked input route): while
+ * a `wake_request` is outstanding, plain input answers it as `operator_input` and bypasses
+ * `shouldLockPlainInput`. The other routes are handleCommand's existing branches, in their order.
+ */
+export type PlainInputRoute = "wake_reply" | "initial_task" | "follow_up" | "locked" | "other";
+
+export function plainInputRoute(
+  awaitingTask: boolean,
+  taskDone: boolean,
+  parkedRequestId: string | null,
+  value: string,
+): PlainInputRoute {
+  const plain = value.length > 0 && !value.startsWith("/");
+  if (parkedRequestId !== null && plain) return "wake_reply";
+  if (awaitingTask && plain) return "initial_task";
+  if (taskDone && plain) return "follow_up";
+  if (shouldLockPlainInput(awaitingTask, taskDone, value)) return "locked";
+  return "other";
+}
+
+/** The `wake_reply` an operator's line becomes while parked. */
+export function operatorInputReply(requestId: string, content: string): WakeReply {
+  return { request_id: requestId, wait_id: "", outcome: "operator_input", detail: content };
 }
 
 function initialExtensionsFromEnv(): string {
@@ -2043,6 +2088,12 @@ export class AgentUI {
 
   /** The AILANG runtime process, or undefined once it has exited. */
   runtimeProcess: RuntimeProcess | undefined;
+  /**
+   * PLAN-003 P4 Part 4: the park whose child has exited under `--park-exits`, while the session
+   * waits for its wake with no child alive. Set by index.ts's exit callback, cleared by the next
+   * spawn. It is what keeps the parked input route open after the exit.
+   */
+  suspendedChild: SuspendedChild | undefined;
 
   /** True when waiting for the user to type the initial task via cmdInput. */
   private awaitingTask = false;
@@ -2137,7 +2188,19 @@ export class AgentUI {
       }
       // ESC while a task is running: kill the runtime process immediately.
       // Do NOT consume ESC when idle — let Editor handle it (e.g. cancel autocomplete).
-      if (matchesKey(data, "escape") && this.runtimeProcess && !this.taskDone) {
+      // waitState is the honest test for "a task is running". `!taskDone` used to
+      // stand in for it because a runtimeProcess only existed once a task had
+      // started; the runtime is now pre-spawned at TUI boot and sits idle waiting
+      // for the first prompt, so ESC has to keep falling through to the Editor.
+      // A parked runtime (W4 Part 5) is a running task whatever the spinner says; index.ts's
+      // onInterrupt aborts it over stdin rather than killing it. A suspended-child (PLAN-003 P4
+      // Part 6, the ESC row) has no runtime at all, and ESC cancels its park in the journal.
+      if (
+        matchesKey(data, "escape") &&
+        (this.suspendedChild !== undefined ||
+          (this.runtimeProcess &&
+            (this.runtimeProcess.isParked || (!this.taskDone && this.waitState.state !== "idle"))))
+      ) {
         this.appendHistoryStyled("Task interrupted", chalk.yellow);
         this.tui.requestRender();
         this.onInterrupt?.();
@@ -2269,6 +2332,12 @@ export class AgentUI {
     const nextIsTools = next === "tools_wait" || next === "tools_run";
     if (nextIsTools && !prevWasTools) this.runStateHintsShown.delete("tools");
     this.addActivity(`state -> ${next}`);
+    // Mirror the transition to herdr, when Motoko is running in a herdr pane. Inert otherwise, and
+    // fire-and-forget when not: see herdr-agent-state.ts. This is the only place a TRANSITION is
+    // reported, because setRunState is the only place waitState changes — which is what makes the
+    // sidebar's view and the status line's view the same fact rather than two that can drift.
+    // (initHerdrReporter also reports an initial idle at startup, before any transition exists.)
+    reportRunStateToHerdr(next);
   }
 
   private maybeEmitSlowHint(): void {
@@ -2285,6 +2354,16 @@ export class AgentUI {
       this.lastUpdateMs = Date.now();
     }
   }
+
+  /**
+   * ADR-003 v6.1 D6's resumed TUI (PLAN-003 P3 Part 5). A `--resume` child emits, in order,
+   * `session_resumed`, the resume seed (`history_seeded` carrying the resumed history) and
+   * `session_resume_view`; the history is printed from the SEED, so the marker event carries no
+   * messages and the JSONL log gains no second copy of the conversation. Only the seed that follows
+   * a `session_resumed` is captured — every traced run seeds too, and those are not for display.
+   */
+  private resumePending = false;
+  private resumeSeedMessages: unknown[] | null = null;
 
   handleEvent(event: AgentEvent): void {
     this.lastUpdateMs = Date.now();
@@ -2727,7 +2806,10 @@ export class AgentUI {
           }
         }
         this.composeFooterStatus = "";
-        this.setRunState("idle");
+        // ADR-002 D1.1: `done`, not `idle` — the task finished, where `idle` also means "has not
+        // begun". Left on the next input: the follow-up and first-task branches of `handleCommand`
+        // both move to `thinking`, and `setAwaitingTask(true)` to `idle`.
+        this.setRunState("done");
         // Mark task done so plain-text input routes to the runtime process as follow-ups.
         this.taskDone = true;
         // Return keyboard focus to input once the task is complete.
@@ -2746,6 +2828,76 @@ export class AgentUI {
         // plain-text input routes to sendUserMessage in the live process.
         this.taskDone = true;
         this.tui.setFocus(this.cmdInput);
+        this.updateStatus();
+        break;
+
+      // ADR-003 v6.1 D2 / PLAN-003 P1 Part 6. The run reached its step budget and SUSPENDED: the
+      // runtime is alive and is holding the exhausted turn's continuation, so the operator's next
+      // line resumes that run with its history rather than starting a fresh one.
+      //
+      // The three lines after the message are the same three `done` and `error` run, and for the
+      // same reason in each case: the run is over (`setRunState` off the waiting states, which
+      // stops the spinner and releases ESC), `taskDone = true` so `shouldLockPlainInput` admits
+      // the next plain line and routes it to `sendUserMessage` in the LIVE process, and focus
+      // returns to the input so that line can be typed without a click. Without `taskDone` the
+      // operator would be locked out of the very turn the suspension exists to allow, and the only
+      // way forward would be a `/restart` — which is the bug ADR-003 was written to remove.
+      //
+      // `run_suspended` arrives immediately BEFORE `run_summary` (session.ail's `c2_suspend`
+      // appends and emits it before `c2_finalize`), and no `error` follows it outside headless.
+      case "session_resumed":
+        this.resumePending = true;
+        this.resumeSeedMessages = null;
+        // PLAN-003 P4 Part 6: `resuming` is left on the resumed child's `session_resumed`. The child
+        // is about to consume the wake as its next step (Part 3) and its events drive the state on.
+        if (this.waitState.state === "resuming") this.setRunState("thinking");
+        break;
+      case "history_seeded":
+        if (this.resumePending && this.resumeSeedMessages === null) {
+          this.resumeSeedMessages = Array.isArray(event.messages) ? event.messages : [];
+        }
+        break;
+      case "session_resume_view": {
+        const lines = formatResumedHistory(this.resumeSeedMessages ?? [], event);
+        for (const line of lines.history) this.appendHistoryStyled(line.text, line.dim ? chalk.dim : (s: string) => s);
+        this.appendHistoryStyled(lines.marker, chalk.cyanBright);
+        this.resumePending = false;
+        this.resumeSeedMessages = null;
+        this.setRunState("idle");
+        this.tui.setFocus(this.cmdInput);
+        this.updateStatus();
+        break;
+      }
+      case "session_resume_refused":
+        this.resumePending = false;
+        this.resumeSeedMessages = null;
+        this.appendHistoryStyled(
+          `Resume refused (${event.refusal}): ${event.message} The next prompt starts a fresh run in this session.`,
+          chalk.redBright,
+        );
+        break;
+      case "run_suspended":
+        this.composeFooterStatus = "";
+        this.setRunState("suspended");
+        this.appendHistoryStyled(
+          `Run suspended: ${event.reason} at step ${event.step}. Send a message ("continue") to resume this run with its history.`,
+          chalk.yellowBright,
+        );
+        this.taskDone = true;
+        this.tui.setFocus(this.cmdInput);
+        this.updateStatus();
+        break;
+      // PLAN-003 P4 Part 6: `parked` is entered on `wake_request` while the child is alive, and left
+      // on `wake_received` (the run continues on the wake's message), on a park-ending event (each has
+      // its own arm above) or on the child's exit (`showSuspendedChild`, or the exit handler's other
+      // branches). An `aborted` wake ends the run with neither `done` nor `error`, and the child's
+      // exit follows it; the exit handler decides the state then.
+      case "wake_request":
+        this.setRunState("parked");
+        this.updateStatus();
+        break;
+      case "wake_received":
+        if (event.outcome !== "aborted") this.setRunState("thinking");
         this.updateStatus();
         break;
       case "tool_calls":
@@ -3984,6 +4136,39 @@ export class AgentUI {
     this.updateStatus();
   }
 
+  /**
+   * PLAN-003 P4 Part 4: the child exited on its park under `--park-exits`. The run state is left
+   * where the park left it — a live park shows the same, and `awaitingTask` is NOT set, so a plain
+   * line is not a new task — and the parked input route stays open through `suspendedChild`, so a
+   * plain line still answers the park as operator input.
+   */
+  showSuspendedChild(suspended: SuspendedChild): void {
+    this.suspendedChild = suspended;
+    // PLAN-003 P4 Part 6: the second named state. Left on a waiter reply or a typed line
+    // (`showResuming`), on ESC or `restart` (`setAwaitingTask`), or with the process (quit, a signal).
+    this.setRunState("suspended_child");
+    const n = suspended.request.waits.length;
+    this.appendHistoryStyled(
+      `Parked (${suspended.request.request_id}) on ${n} open wait${n === 1 ? "" : "s"}: the runtime exited and the park ` +
+        "is in the journal. The session resumes on the wake; a line typed here answers the park as operator input.",
+      chalk.cyan,
+    );
+    this.tui.setFocus(this.cmdInput);
+    this.updateStatus();
+    this.tui.requestRender();
+  }
+
+  /**
+   * PLAN-003 P4 Part 6: the third named state. The suspended-child's `wake` is written and the host
+   * is respawning with `--resume`; the resumed child's `session_resumed` leaves it (`handleEvent`).
+   */
+  showResuming(): void {
+    this.suspendedChild = undefined;
+    this.setRunState("resuming");
+    this.updateStatus();
+    this.tui.requestRender();
+  }
+
   // ---------------------------------------------------------------------------
   // Command parsing
   // ---------------------------------------------------------------------------
@@ -3996,17 +4181,55 @@ export class AgentUI {
       return;
     }
 
-    // Before any task has started, treat the first plain-text submission as the task.
-    if (this.awaitingTask && value && !value.startsWith("/")) {
-      this.awaitingTask = false;
-      this.appendHistoryStyled(`> ${value}`, chalk.cyan);
+    // The park a plain line answers: the live child's outstanding request, or — after the child
+    // exited on it under `--park-exits` (PLAN-003 P4 Part 4) — the one the suspended-child owner holds.
+    const parkedRequestId = this.runtimeProcess?.wakeRequest?.request_id ?? this.suspendedChild?.request.request_id ?? null;
+    const route = plainInputRoute(this.awaitingTask, this.taskDone, parkedRequestId, value);
+
+    // PLAN-002 W4 Part 5: the parked input route. The runtime is blocked on its open waits, and an
+    // operator line is one of the things that wakes it.
+    if (route === "wake_reply") {
+      const req = this.runtimeProcess?.wakeRequest;
+      const suspended = this.suspendedChild;
+      if (req && this.runtimeProcess?.sendWakeReply(operatorInputReply(req.request_id, value))) {
+        this.appendHistoryStyled(`> ${value}`, chalk.cyan);
+      } else if (suspended && suspended.deliver(operatorInputReply(suspended.request.request_id, value))) {
+        // P4 Part 4: no child to send it to. The owner holds the line as the park's one reply; what
+        // it does with a reply is Part 5's (the `wake` entry, the `--resume` respawn).
+        this.appendHistoryStyled(`> ${value}`, chalk.cyan);
+      } else {
+        this.appendHistoryStyled("The park this line answered has already resolved; the line was not sent.", chalk.dim);
+      }
       this.tui.requestRender();
+      return;
+    }
+
+    // Before any task has started, treat the first plain-text submission as the task.
+    if (route === "initial_task") {
+      this.awaitingTask = false;
+      // A completed task leaves `taskDone` set, and `/restart` puts the session
+      // back into awaitingTask — so this branch IS reachable with it still true.
+      // Clearing it here is what the follow-up branch below has always done:
+      // left set, the ESC guard refuses to interrupt this turn, a second plain
+      // line is sent mid-task as a follow-up, and the runtime's session_start
+      // forces the status line back to idle while the task runs.
+      this.taskDone = false;
+      this.appendHistoryStyled(`> ${value}`, chalk.cyan);
       this.onInitialTask?.(value);
+      // Go non-idle here rather than waiting for the runtime's first event. Even
+      // with the boot pre-spawn that event is ~100ms away, and on the fallback
+      // path (pre-spawned process died, so this spawns a fresh one) it is 1.2s
+      // warm and ~20s with a cold AILANG module cache. Leaving the status line
+      // on "idle" across that window reads as a hang. The follow-up branch below
+      // has always done this.
+      this.setRunState("thinking");
+      this.appendHistoryStyled("Runtime is reasoning...", chalk.dim);
+      this.tui.requestRender();
       return;
     }
 
     // After task completion, plain text (not starting with '/') is a follow-up.
-    if (this.taskDone && value && !value.startsWith("/")) {
+    if (route === "follow_up") {
       this.appendHistoryStyled(`> ${value}`, chalk.cyan);
       this.onUserMessage?.(value);
       // Reset taskDone — runtime process is now processing again; next done re-enables it.
@@ -4017,7 +4240,7 @@ export class AgentUI {
       return;
     }
 
-    if (shouldLockPlainInput(this.awaitingTask, this.taskDone, value)) {
+    if (route === "locked") {
       this.appendHistoryStyled("Input locked: task still running. Use /abort to stop.", chalk.dim);
       this.tui.requestRender();
       return;
@@ -4180,6 +4403,9 @@ export class AgentUI {
   // Status bar
   // ---------------------------------------------------------------------------
 
+  /** The AILANG child's memory, sampled every 2 s off the 150 ms status tick (`process-memory.ts`). */
+  private readonly runtimeMemory = new MemorySampler();
+
   private updateStatus(): void {
     const previewWidth = this.toolPreviewWidth();
     if (previewWidth !== this.lastToolPreviewWidth) {
@@ -4197,13 +4423,23 @@ export class AgentUI {
       : "";
     const spinnerPrefix = spinner ? `${spinner} ` : "";
     const composeText = this.composeFooterStatus !== "" ? ` | ${this.composeFooterStatus}` : "";
-    const line1 = `[λ] ${spinnerPrefix}state: ${this.waitState.state} | step ${this.step} | elapsed: ${elapsedSec}s | last update: ${sinceUpdateSec}s ago | at: ${lastUpdateTs}${toolsText}${composeText}`;
+    const memory = this.runtimeMemory.poll(this.runtimeProcess?.pid);
+    const memoryText = memory ? ` | ${formatProcessMemory(memory)}` : "";
+    const line1 = `[λ] ${spinnerPrefix}state: ${this.waitState.state} | step ${this.step}${memoryText} | elapsed:${elapsedSec}s | last update: ${sinceUpdateSec}s ago | at: ${lastUpdateTs}${toolsText}${composeText}`;
     const extPart = this.loadedExtensions !== "" ? ` | ext: ${this.loadedExtensions}` : "";
     const line2Base = `    profile: ${this.profile} | model: ${this.model || "—"}${this.branch ? ` | branch: ${this.branch}` : ""}${extPart}`;
     const stateColor =
       this.waitState.state === "thinking" ? ((s: string) => chalk.blueBright.bold(s)) :
       (this.waitState.state === "tools_wait" || this.waitState.state === "tools_run") ? chalk.yellow :
       this.waitState.state === "error" ? chalk.red :
+      // Suspended is yellow, with `tools_wait`: both mean "stopped, waiting on someone else".
+      // The fall-through below is the IDLE green, which would show a run holding an unfinished
+      // turn in the same colour as one holding nothing.
+      this.waitState.state === "suspended" ? chalk.yellow :
+      // A park, live or with its child gone, is the same "waiting on someone else" yellow; the
+      // resume in between is the cyan the resume marker line uses.
+      (this.waitState.state === "parked" || this.waitState.state === "suspended_child") ? chalk.yellow :
+      this.waitState.state === "resuming" ? chalk.cyan :
       ((s: string) => chalk.greenBright.bold(s));
     let line2 = stateColor(line2Base);
     if (this.latestContextUsage) {
@@ -4231,4 +4467,59 @@ export class AgentUI {
     this.overlayHandle?.hide();
     this.tui.stop();
   }
+}
+
+type ResumeView = Extract<AgentEvent, { type: "session_resume_view" }>;
+
+function clip(text: string, max: number): string {
+  const one = text.replace(/\s+/g, " ").trim();
+  return one.length <= max ? one : `${one.slice(0, max - 1)}…`;
+}
+
+/**
+ * The folded history and D6's marker line, as text (PLAN-003 P3 Part 5). Pure so it is testable
+ * without a terminal. The marker names what ADR-003 D6 says the TUI names: the resume count, the
+ * last boundary's reason, both profiles on a switch, and the dangling tool calls a crash left — plus
+ * the provider calls carried, which is the step count continuing across the process.
+ *
+ * The system prompt is summarised, not printed: it is the profile's, it can be thousands of lines,
+ * and the operator did not write it. Tool results are one clipped line each.
+ */
+export function formatResumedHistory(
+  messages: unknown[],
+  view: ResumeView,
+): { history: Array<{ text: string; dim: boolean }>; marker: string } {
+  const history: Array<{ text: string; dim: boolean }> = [];
+  for (const raw of messages) {
+    if (!raw || typeof raw !== "object") continue;
+    const m = raw as Record<string, unknown>;
+    const role = typeof m.role === "string" ? m.role : "";
+    const content = typeof m.content === "string" ? m.content : "";
+    if (role === "system") {
+      history.push({ text: `[system prompt, ${content.length} chars]`, dim: true });
+    } else if (role === "user") {
+      history.push({ text: `> ${clip(content, 400)}`, dim: false });
+    } else if (role === "assistant") {
+      if (content.trim() !== "") history.push({ text: clip(content, 400), dim: false });
+      const calls = Array.isArray(m.tool_calls) ? (m.tool_calls as Array<Record<string, unknown>>) : [];
+      for (const c of calls) {
+        const name = typeof c.name === "string" ? c.name : "?";
+        const args = typeof c.arguments === "string" ? c.arguments : "";
+        history.push({ text: `→ ${name}(${clip(args, 120)})`, dim: true });
+      }
+    } else if (role === "tool") {
+      history.push({ text: `  ${clip(content, 160)}`, dim: true });
+    }
+  }
+  const parts = [`── resumed session #${view.resume_count}`, `last boundary: ${view.boundary_detail}`];
+  if (view.profile_from !== view.profile_to) parts.push(`profile ${view.profile_from} → ${view.profile_to}`);
+  if (view.head_replaced) parts.push("system prompt replaced");
+  if (view.forced) parts.push("forced");
+  if (view.profile_from !== view.profile_to && view.ext_artifacts_empty) parts.push("extension artifacts reset");
+  if (view.dangling.length > 0) {
+    parts.push(`stripped ${view.dangling.length} dangling tool call(s): ${view.dangling.join(", ")}`);
+  }
+  parts.push(`${view.messages} messages, ${view.provider_calls_completed} provider call(s) carried`);
+  parts.push(view.suspended ? "the suspended run is held — send a message to continue it" : "send a message to continue");
+  return { history, marker: `${parts.join(" · ")} ──` };
 }

@@ -1,0 +1,21 @@
+# P1.5r mutgate spec — manifest ABI pins at 8.0, the named fixture exemption, the two ABI text probes.
+# Each row breaks THE BEHAVIOUR ITS ROW NAMES and must turn that row's test red.
+#
+# Tests, and whether they compile AILANG:
+#   check_fixtures.py --abi-pins      rule 2 of check_abi_version alone (the pin sweep). Python, no AILANG.
+#   evidence/P1.5r/run_abi_probes.sh  the two probe blocks sliced out of the COMMITTED
+#                                     run_declared_vs_performed.sh by marker. grep, no AILANG.
+#   evidence/P1.1/p11_core_check.sh   `ailang test` of admission.ail in a THROWAWAY WORKSPACE built from the
+#                                     cwd's src/ and ABI package; it never reads ailang.lock, so a clone does
+#                                     not resolve the primary checkout's packages (the ailang.lock trap).
+#
+# NO PIPES IN A test_cmd (mutgate.sh's `set -o pipefail` + `grep -q` = exit 141, a baseline red). Each row
+# writes a log and greps the FILE.
+# fix_id	target_file	sed_expr	test_cmd
+p15r_exemption_removed	tools/profile_definition/check_fixtures.py	/("src\/eval\/journal\/admission.ail", "A9b:AbiVersionDiffers",/,+1d	python3 tools/profile_definition/check_fixtures.py --abi-pins > /tmp/p15r_exemption_removed.log 2>&1; grep -qF "✓ exempted, a fixture literal built to differ: src/eval/journal/admission.ail:993" /tmp/p15r_exemption_removed.log
+p15r_exemption_stale	tools/profile_definition/check_fixtures.py	s/"A9b:AbiVersionDiffers",$/"A9b:NoSuchFinding",/	python3 tools/profile_definition/check_fixtures.py --abi-pins > /tmp/p15r_exemption_stale.log 2>&1; grep -qF "✓ exempted, a fixture literal built to differ" /tmp/p15r_exemption_stale.log
+p15r_fixture_equal_guard	src/eval/journal/admission.ail	s/{ i | abi_version: "7.3" }/{ i | abi_version: "8.0" }/	python3 tools/profile_definition/check_fixtures.py --abi-pins > /tmp/p15r_fixture_equal_guard.log 2>&1; grep -qF "✓ exempted, a fixture literal built to differ" /tmp/p15r_fixture_equal_guard.log
+p15r_fixture_equal_a9b	src/eval/journal/admission.ail	s/{ i | abi_version: "7.3" }/{ i | abi_version: "8.0" }/	bash .agent/projects/031_system_one_decisions/evidence/P1.1/p11_core_check.sh test src/eval/journal/admission.ail > /tmp/p15r_fixture_equal_a9b.log 2>&1; grep -qF "p11: test src/eval/journal/admission.ail ok" /tmp/p15r_fixture_equal_a9b.log
+p15r_pin_reverted	scripts/dst/driver_only_dst.ail	s/driver_only_manifest("HEAD", "ailang 0.33.0", "8.0"/driver_only_manifest("HEAD", "ailang 0.33.0", "7.4"/	python3 tools/profile_definition/check_fixtures.py --abi-pins > /tmp/p15r_pin_reverted.log 2>&1; grep -qF "✓ every manifest ABI pin in the tree is the declared one: 8.0" /tmp/p15r_pin_reverted.log
+p15r_budgetshaper_widened	packages/motoko-ext-abi/types.ail	s/| BudgetShaper((PureCtx, BudgetPlan) -> BudgetPatch)$/| BudgetShaper((PureCtx, BudgetPlan) -> BudgetPatch ! {Env, FS})/	bash .agent/projects/031_system_one_decisions/evidence/P1.5r/run_abi_probes.sh > /tmp/p15r_budgetshaper_widened.log 2>&1; grep -qF "✓ ABI declares the BudgetShaper payload" /tmp/p15r_budgetshaper_widened.log
+p15r_compactor_widened	packages/motoko-ext-abi/types.ail	s/| Compactor((AiCtx, \[Msg\]) -> PreStepOutcome ! {AI, IO, Trace})$/| Compactor((AiCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace, Env})/	bash .agent/projects/031_system_one_decisions/evidence/P1.5r/run_abi_probes.sh > /tmp/p15r_compactor_widened.log 2>&1; grep -qF "✓ Capability.Compactor" /tmp/p15r_compactor_widened.log

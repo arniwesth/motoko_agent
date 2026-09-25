@@ -1,0 +1,11 @@
+-- PLAN-001 (031) P0.2b. Reconstructed from shape, not quoted source.
+-- Review 5 (REVIEW-adr001-v0.5-verdicts-claude-fable-5-1.md) §A.3 table row, verbatim:
+-- | `q_named_sumpayload_named` | local `type S = K((string) -> () ! {})`; `match K(println) { K(g) => g(…) }` | 1 | — | rejected: eff(body) |
+module scripts/dst/fixtures/adr001_boundary/reconstructed/q_named_sumpayload_named
+import std/io (println)
+import scripts/dst/fixtures/adr001_boundary/types (PureCtx, Slot, Pure)
+type S = K((string) -> () ! {})
+func body(ctx: PureCtx) -> int { let _ = match K(println) { K(g) => g(ctx.name) }; 1 }
+func build() -> Slot { Pure(body) }
+func invoke(s: Slot, ctx: PureCtx) -> int { match s { Pure(f) => f(ctx) } }
+export func main() -> () ! {IO} { println("result=${show(invoke(build(), {name: "EFFECT WITH NO PORTS OR WORLD"}))}") }

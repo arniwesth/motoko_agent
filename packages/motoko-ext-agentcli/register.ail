@@ -1,0 +1,90 @@
+module sunholo/motoko_ext_agentcli/register
+
+import std/env (getEnvOr)
+import std/json (Json)
+import std/string (stringToInt)
+import std/option (Some, None)
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtRegistration, DescribeTools, ToolProvider,
+  ProviderCtx, ToolCallEnvelope, ToolHandleOutcome, ToolSchema
+)
+import pkg/sunholo/motoko_ext_agentcli/providers (Provider, all_providers, tool_names)
+import pkg/sunholo/motoko_ext_agentcli/agentcli (
+  AgentCliConfig, agentcli_config_json, agentcli_config_of, describe_tools, on_tool_handle
+)
+
+func parse_int_or(s: string, fallback: int) -> int {
+  match stringToInt(s) {
+    Some(n) => n,
+    None    => fallback
+  }
+}
+
+-- THE PERMISSION BYPASS IS THE DEFAULT (Arni, 2026-08-16: "codex --yolo should
+-- be default"), and it now applies to every provider in the table:
+-- `--dangerously-bypass-approvals-and-sandbox` for codex,
+-- `--dangerously-skip-permissions` for claude.
+--
+-- WHAT IT MEANS, stated once because the default carries it: the delegate runs
+-- unsandboxed with no approval prompts, in motoko's own working directory — the
+-- tree motoko is itself editing. Two agents, one worktree, and afterwards the
+-- delegate's writes are indistinguishable from motoko's. Both CLIs describe
+-- their flag as dangerous and intended for externally sandboxed environments,
+-- which this dev container is.
+--
+-- TO PUT THE SANDBOX BACK for one provider, set its variable to empty:
+--   CODEX_EXTRA_FLAGS=  CLAUDE_EXTRA_FLAGS=  motoko …
+-- One knob per provider rather than a parsed list, so whatever is set reads like
+-- the decision it is at the call site that sets it.
+func flags_of(raw: string) -> [string] {
+  if raw == "" then [] else [raw]
+}
+
+func resolve(ps: [Provider]) -> [Provider] ! {Env} {
+  match ps {
+    [] => [],
+    p :: rest => {
+      let resolved = { p |
+        model: getEnvOr(p.model_env, p.model),
+        extra_flags: flags_of(getEnvOr(p.flags_env, p.default_flags))
+      };
+      resolved :: resolve(rest)
+    }
+  }
+}
+
+-- ABI 8.0 (031 ADR-001 D2): every payload a named top-level function bound
+-- directly, in this module (an imported one charges its row to
+-- `register_with_config` on the pin -- 031 P1.2c `import_leak_probe/`). Both
+-- read the resolved configuration back from `ext_config` (`agentcli.ail`,
+-- "THE CONFIGURATION CHANNEL"), never by capture.
+
+-- The catalog is a function of the configuration: one tool per configured
+-- provider, none for `{}`.
+func agentcli_describe_tools(cfg: Json) -> [ToolSchema] {
+  describe_tools(agentcli_config_of(cfg).providers)
+}
+
+func agentcli_tool_handle(ctx: ProviderCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  on_tool_handle(agentcli_config_of(ctx.ext_config), ctx, call)
+}
+
+-- Registration resolves the environment once, as in 7.4, and discloses the
+-- result (ADR-001 Amendment 3: non-credential values, environment values
+-- included, go through `config`).
+export func register_with_config(_cfg: a) -> ExtRegistration ! {Env} {
+  let profile_dir = getEnvOr("MOTOKO_PROFILE_DIR", ".");
+  let cfg: AgentCliConfig = {
+    providers: resolve(all_providers()),
+    lock_path: "${profile_dir}/agentcli-exec.lock",
+    max_output_chars: parse_int_or(getEnvOr("AGENTCLI_MAX_OUTPUT_CHARS", "8000"), 8000)
+  };
+  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
+  {
+    config: agentcli_config_json(cfg),
+    caps: [
+      DescribeTools(agentcli_describe_tools),
+      ToolProvider(tool_names(cfg.providers), agentcli_tool_handle)
+    ]
+  }
+}

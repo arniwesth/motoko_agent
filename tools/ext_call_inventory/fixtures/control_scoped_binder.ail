@@ -1,0 +1,31 @@
+module tools/ext_call_inventory/fixtures/control_scoped_binder
+
+-- CONTROL (8.0): a binder is read from ITS function, not from the file.
+--
+-- Before P1.7r an identifier's declared type was the FIRST declaration of that
+-- name anywhere in the file. In agentcli the first `p:` is `p: Provider` and
+-- `lock_held(p: ExtPorts, ...)` came out "resolves to Provider, not an ABI port
+-- type"; in compose the first `ctx:` is a `PureCtx` (no `ports`) and
+-- `handle_compose_tool(ctx: ProviderCtx, ...)`'s `ctx.ports.clock_now(` came
+-- out "resolves to None". The same slip cut the other way: an unannotated
+-- `let p = ctx.ports` in one function was "resolved" through another
+-- function's `p: ExtPorts`.
+--
+-- Here the first `p` and the first `ctx` are deliberately NOT port types.
+-- Both port calls must resolve: TWO resolved, zero unresolved.
+
+import pkg/sunholo/motoko_ext_abi/types (ExtPorts, ExtWorld, ProviderCtx, PureCtx, ExtPathStat, ExtClockReading)
+
+type Provider = { name: string }
+
+export func describe(p: Provider) -> string { p.name }
+
+export func stat(p: ExtPorts, w: ExtWorld, path: string) -> ExtPathStat ! {FS} {
+  p.path_stat(w, path)
+}
+
+export func label(ctx: PureCtx) -> string { ctx.model }
+
+export func started(ctx: ProviderCtx, w: ExtWorld) -> ExtClockReading ! {Clock} {
+  ctx.ports.clock_now(w)
+}

@@ -6,7 +6,7 @@ import std/option (Option, Some, None)
 import std/sem (make_frame_at, store_frame, load_frame)
 import std/string (toLower, trim, contains, startsWith)
 
-import pkg/sunholo/motoko_ext_abi/types (ToolCallEnvelope, ExtCtx, PromptPatch, BudgetPlan, BudgetPatch, ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision)
+import pkg/sunholo/motoko_ext_abi/types (ToolHandleOutcome, ToolCallEnvelope, PureCtx, ProviderCtx, ProcessCtx, pure_ctx, PromptPatch, BudgetPlan, BudgetPatch, ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision)
 import pkg/sunholo/motoko_ext_context_mode/types (CtxConfig)
 import pkg/sunholo/motoko_ext_context_mode/exec (run_context_mode, run_context_mode_fire_and_forget)
 import pkg/sunholo/motoko_ext_context_mode/prompts (build_prompt_patch)
@@ -77,7 +77,7 @@ func denied_bash_reason(call: ToolCallEnvelope) -> Option[string] {
   }
 }
 
-export func on_tool_policy(_ctx: ExtCtx, call: ToolCallEnvelope) -> ToolPolicyDecision {
+export func on_tool_policy(_ctx: PureCtx, call: ToolCallEnvelope) -> ToolPolicyDecision {
   match denied_bash_reason(call) {
     Some(msg) => Deny(msg),
     None => NoOpinion
@@ -111,7 +111,7 @@ func action_name(canonical: string) -> string {
   else ""
 }
 
-func bridge_args_for(cfg: CtxConfig, ctx: ExtCtx, tool_name: string, args: Json) -> [string] {
+func bridge_args_for(cfg: CtxConfig, ctx: PureCtx, tool_name: string, args: Json) -> [string] {
   [
     "${ctx.workdir}/scripts/context-mode-mcp-call.mjs",
     "--context-mode-bin", cfg.bin,
@@ -121,7 +121,7 @@ func bridge_args_for(cfg: CtxConfig, ctx: ExtCtx, tool_name: string, args: Json)
   ]
 }
 
-func ensure_context_mode_ready(cfg: CtxConfig, ctx: ExtCtx, tool_name: string) -> bool ! {Process, SharedMem} {
+func ensure_context_mode_ready(cfg: CtxConfig, ctx: PureCtx, tool_name: string) -> bool ! {Process, SharedMem} {
   if tool_name == "ctx_doctor" then true
   else if is_ready(cfg.snapshot_key_prefix, ctx.state_key) then true
   else {
@@ -156,11 +156,68 @@ export func provided_tools() -> [string] {
   ]
 }
 
-export func on_build_system_prompt(cached_prompt: string, _ctx: ExtCtx) -> PromptPatch {
+export func on_build_system_prompt(cached_prompt: string, _ctx: PureCtx) -> PromptPatch {
   build_prompt_patch(cached_prompt, "")
 }
 
-export func on_tool_handle(cfg: CtxConfig, ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {Process, SharedMem} {
+-- THE SHARED HELPERS TAKE `PureCtx` (031 ADR-001 D2): `bridge_args_for` is
+-- called from both the provider (`ProviderCtx`) and the judge (`ProcessCtx`),
+-- and reads data only. Each callback projects its view once, by constructor
+-- plus record update (the 8.x rule's form).
+export pure func pure_of_provider(ctx: ProviderCtx) -> PureCtx {
+  { pure_ctx(ctx.ext_config) |
+    task: ctx.task,
+    step: ctx.step,
+    model: ctx.model,
+    cwd: ctx.cwd,
+    hybrid_tools: ctx.hybrid_tools,
+    budget: ctx.budget,
+    mode: ctx.mode,
+    workdir: ctx.workdir,
+    env_server_url: ctx.env_server_url,
+    budget_remaining: ctx.budget_remaining,
+    history_slice: ctx.history_slice,
+    state_key: ctx.state_key,
+    context_limit: ctx.context_limit,
+    finish_reason: ctx.finish_reason,
+    work_in_flight: ctx.work_in_flight,
+    open_waits: ctx.open_waits,
+    artifacts: ctx.artifacts,
+    telemetry: ctx.telemetry,
+    verification: ctx.verification,
+    tool_evidence: ctx.tool_evidence,
+    decision_state: ctx.decision_state
+  }
+}
+
+export pure func pure_of_process(ctx: ProcessCtx) -> PureCtx {
+  { pure_ctx(ctx.ext_config) |
+    task: ctx.task,
+    step: ctx.step,
+    model: ctx.model,
+    cwd: ctx.cwd,
+    hybrid_tools: ctx.hybrid_tools,
+    budget: ctx.budget,
+    mode: ctx.mode,
+    workdir: ctx.workdir,
+    env_server_url: ctx.env_server_url,
+    budget_remaining: ctx.budget_remaining,
+    history_slice: ctx.history_slice,
+    state_key: ctx.state_key,
+    context_limit: ctx.context_limit,
+    finish_reason: ctx.finish_reason,
+    work_in_flight: ctx.work_in_flight,
+    open_waits: ctx.open_waits,
+    artifacts: ctx.artifacts,
+    telemetry: ctx.telemetry,
+    verification: ctx.verification,
+    tool_evidence: ctx.tool_evidence,
+    decision_state: ctx.decision_state
+  }
+}
+
+export func on_tool_handle(cfg: CtxConfig, pctx: ProviderCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {Process, SharedMem}  { { decision: {
+  let ctx = pure_of_provider(pctx);
   let canonical = canonical_tool_name(call.tool);
   if canonical == "" then Delegate
   else {
@@ -174,9 +231,9 @@ export func on_tool_handle(cfg: CtxConfig, ctx: ExtCtx, call: ToolCallEnvelope) 
       }
     }
   }
-}
+}, next_state: pctx.world } }
 
-export func finalize_with_index(cfg: CtxConfig, ctx: ExtCtx, candidate: string) -> FinalizeDecision ! {Process} {
+export func finalize_with_index(cfg: CtxConfig, ctx: PureCtx, candidate: string) -> FinalizeDecision ! {Process}  {
   let idx_args = jo([
     kv("content", js(candidate)),
     kv("source", js("motoko:final_output")),

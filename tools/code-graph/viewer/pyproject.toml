@@ -1,0 +1,41 @@
+# Viewer dependency set for project 010 (ADR-001 D7 + D10).
+#
+# This file is the single source of truth for every environment that runs viewer
+# code. Per D10 the viewer is a **host-side** program: the devcontainer has no
+# GPU access and will not get it, so nothing here is installed in the container.
+# `install_host.sh` builds the venv from this file on the host machine.
+#
+# Q5 (user decision, 2026-08-08): a standalone fastplotlib app — native glfw
+# window, imgui for GUI inputs where needed. Deliberately **no Jupyter
+# dependencies**: the canvas is not notebook-hosted. marimo keeps its existing
+# analysis-notebook role and never hosts the canvas.
+#
+# Pinning notes, verified against PyPI 2026-08-08:
+#   fastplotlib 0.6.1 pins pygfx==0.15.3 itself.
+#   fastplotlib[imgui] -> wgpu[imgui] -> imgui-bundle>=1.92,<2. This resolves the
+#   plan's flagged assumption that a built-in imgui integration exists at the
+#   pinned version: it does, and it arrives through wgpu rather than fastplotlib.
+#   wgpu 0.32 gets its windowing from `rendercanvas`; the glfw backend needs the
+#   `glfw` package, which is not a default dependency, so it is named explicitly.
+# Exact transitive versions are frozen in `uv.lock` beside this file.
+
+[project]
+name = "motoko-code-graph-viewer"
+version = "0.1.0"
+description = "Zoomable architecture map and DST trace overlay for Motoko (project 010)"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "fastplotlib[imgui]==0.6.1",
+    "glfw==2.10.2",
+    "numpy>=1.23.0",
+]
+
+[project.optional-dependencies]
+# D8 says the viewer and the agent read the same tables through the same access
+# layer. chdb is a heavyweight native wheel, so it is an extra rather than a hard
+# dependency: `install_host.sh` attempts it and reports the outcome instead of
+# letting a chdb wheel problem block the D7 gate, which is about rendering.
+query = ["chdb>=4.2.1"]
+
+[tool.uv]
+package = false

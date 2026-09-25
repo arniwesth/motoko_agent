@@ -1,0 +1,19 @@
+-- WRONG ARITY: `ToolProvider` takes (names, handle) and is applied to one
+-- argument.  Whichever argument was meant, the binding position is ambiguous
+-- and the tool must not guess.  Fail closed.
+-- P1.7r (031 ADR-001 D2): MIGRATED onto the 8.0 head, the handle named on
+-- `ProviderCtx`.  The head is right and the payload is a name; the ARITY alone
+-- fails the result (`list-not-enumerable`), which is the one thing this
+-- fixture is for.  (Does not type-check on 8.0 by design: the arity.)
+module fixture/reject_capability_list_arity
+
+import std/json (jo)
+import pkg/sunholo/motoko_ext_abi/types (ProviderCtx, ToolCallEnvelope, ToolHandleOutcome, ExtRegistration, ToolProvider, Delegate)
+
+func handle(ctx: ProviderCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  { decision: Delegate, next_state: ctx.world }
+}
+
+export func register_with_config(_cfg: a) -> ExtRegistration {
+  { config: jo([]), caps: [ToolProvider(handle)] }
+}
