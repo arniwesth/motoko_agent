@@ -1,0 +1,9 @@
+-- Control: the same policy reading the budget VALUE from ext_config (the channel) checks clean.
+module local/@V@/@V@
+import std/json (getInt)
+import std/option (Some, None)
+import pkg/sunholo/motoko_ext_abi/types (Capability, ToolPolicy, PureCtx, ToolCallEnvelope, ToolPolicyDecision, NoOpinion, Deny)
+func policy(ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+  match getInt(ctx.ext_config, "calls") { Some(n) => if n <= 0 then NoOpinion else Deny("x"), None => NoOpinion }
+}
+export func caps() -> [Capability] { [ToolPolicy(policy)] }

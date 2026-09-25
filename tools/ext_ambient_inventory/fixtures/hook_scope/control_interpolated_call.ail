@@ -3,20 +3,60 @@
 -- import-granular parent never had to care -- but a CALL-granular reader that
 -- inherits that lid cannot see this at all, and would report the fixture clean.
 -- Must resolve AMBIENT.  B8: eight-atom list, the call in `PromptShaper`.
+-- P1.7r (031 ADR-001 D2): MIGRATED onto the 8.0 head -- eight NAMED payloads on
+-- their views; the interpolated `now()` sits in the named `PromptShaper` body.
+-- (`Clock` on a rowless `PureCtx` slot does not type-check on 8.0; the walk is
+-- the layer under test and the compile is never asserted.)
 module fixture/control_interpolated_call
 
 import std/clock (now)
-import pkg/sunholo/motoko_ext_abi/types (ExtCtx, Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome)
+import std/json (Json, jo)
+import std/option (None)
+import pkg/sunholo/motoko_ext_abi/types (
+  PureCtx, AiCtx, ProcessCtx, ProviderCtx, InterceptCtx, ExtRegistration,
+  DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge,
+  Msg, ToolSchema, PromptPatch, BudgetPlan, BudgetPatch, ToolCallEnvelope, ToolPolicyDecision,
+  PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome,
+  PassThrough, NoOpinion, Delegate, NoIntercept, NoDecision
+)
 
-export func register_with_config(_cfg: a) -> [Capability] {
-  [
-    DescribeTools(\_ . []),
-    PromptShaper(\_ctx. { prepend: [], append: ["t=${now()}"] }),
-    BudgetShaper(\_ctx _plan. { requested_total: None, requested_solver: None, requested_verifier: None }),
-    Compactor(func(ctx: ExtCtx, _m) -> PreStepOutcome ! {AI, IO, Trace} { { decision: { PassThrough }, next_state: ctx.world } }),
-    ToolPolicy(\_ctx _call. NoOpinion),
-    ToolProvider([], func(ctx: ExtCtx, _c) -> ToolHandleOutcome ! {IO, Process} { { decision: { Delegate }, next_state: ctx.world } }),
-    ResponseInterceptor(func(ctx: ExtCtx, _r) -> ResponseInterceptOutcome ! {IO, Clock} { { decision: { NoIntercept }, next_state: ctx.world } }),
-    SolverJudge(func(ctx: ExtCtx, _c) -> FinalizeOutcome ! {Process} { { decision: { NoDecision }, next_state: ctx.world } })
-  ]
+func describe(_cfg: Json) -> [ToolSchema] { [] }
+
+func shape(_ctx: PureCtx) -> PromptPatch {
+  { prepend: [], append: ["t=${now()}"] }
+}
+
+func budget(_ctx: PureCtx, _plan: BudgetPlan) -> BudgetPatch {
+  { requested_total: None, requested_solver: None, requested_verifier: None }
+}
+
+func compact(ctx: AiCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} {
+  { decision: PassThrough, next_state: ctx.world }
+}
+
+func policy(_ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { NoOpinion }
+
+func handle(ctx: ProviderCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  { decision: Delegate, next_state: ctx.world }
+}
+
+func intercept(ctx: InterceptCtx, _response: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
+  { decision: NoIntercept, next_state: ctx.world }
+}
+
+func judge(ctx: ProcessCtx, _candidate: string) -> FinalizeOutcome ! {Process} {
+  { decision: NoDecision, next_state: ctx.world }
+}
+
+export func register_with_config(_cfg: a) -> ExtRegistration {
+  { config: jo([]), caps: [
+    DescribeTools(describe),
+    PromptShaper(shape),
+    BudgetShaper(budget),
+    Compactor(compact),
+    ToolPolicy(policy),
+    ToolProvider([], handle),
+    ResponseInterceptor(intercept),
+    SolverJudge(judge)
+  ] }
 }

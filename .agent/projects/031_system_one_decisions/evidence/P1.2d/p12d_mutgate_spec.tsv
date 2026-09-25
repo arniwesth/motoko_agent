@@ -1,0 +1,68 @@
+# 031 PLAN-001 P1.2d mutgate spec (013 GATE-mutation-red-submission-precondition.md).
+# fix_id <TAB> target_file <TAB> sed_expr <TAB> test_cmd. Run through p12d_mutgate.sh, never in a checkout anyone
+# is using. Every test_cmd builds its own workspace from the throwaway's files: p12d_ws.sh / p12d_pkgroot.sh copy the
+# ABI and batch D's packages; p12d_core_check.sh archives the clone's committed HEAD and overlays only P1.2d's paths.
+# Rows assert BATCH D'S OWN results only (compose's and herdr's shape rows, their own probes, their own own-root
+# checks) -- never the whole-tree gate totals, which move as other batches land.
+# No `cmd | grep -q` anywhere (pipefail/SIGPIPE): the helpers log to a file, then grep it.
+#
+# --- the registration boundary: re-inline a payload -> batch D's own shape row fails -> red
+compose_inline_policy	packages/motoko-ext-compose/compose.ail	s/    ToolPolicy(on_tool_policy),/    ToolPolicy(\\ctx call. on_tool_policy(ctx, call)),/	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_ws.sh gate compose
+compose_inline_intercept	packages/motoko-ext-compose/compose.ail	s/    ResponseInterceptor(compose_intercept)/    ResponseInterceptor(\\ctx t. compose_intercept(ctx, t))/	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_ws.sh gate compose
+herdr_inline_prompt	packages/motoko-ext-herdr/herdr.ail	s/      PromptShaper(herdr_prompt),/      PromptShaper(\\ctx. herdr_prompt(ctx)),/	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_ws.sh gate herdr
+herdr_inline_exit	packages/motoko-ext-herdr/herdr.ail	s/      ExitIntent("delegate-panes", exit_enabled, herdr_exit),/      ExitIntent("delegate-panes", exit_enabled, \\ctx. herdr_exit(ctx)),/	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_ws.sh gate herdr
+herdr_head_delegated	packages/motoko-ext-herdr/register.ail	s/  { config: herdr_config_json(cfg, tools, orch), caps: herdr_caps(tools, cfg.reap_on_exit || cfg.settle_on_exit) }/  make_hooks_with(cfg, tools, orch)/	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_ws.sh gate herdr
+#
+# --- each capture read from a constant instead of ext_config -> the channel/provider probe -> red
+compose_capture_mode_policy	packages/motoko-ext-compose/compose.ail	s/  on_tool_policy_with_mode(composition_mode_of(ctx.ext_config), ctx, call)/  on_tool_policy_with_mode(composition_mode_of(jo([])), ctx, call)/	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_ws.sh channel
+compose_capture_mode_intercept	packages/motoko-ext-compose/compose.ail	s/on_response_intercept(ctx, response_text, composition_mode_of(ctx.ext_config),/on_response_intercept(ctx, response_text, composition_mode_of(jo([])),/	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_ws.sh channel
+compose_capture_snippet_caps	packages/motoko-ext-compose/compose.ail	s/join_csv(snippet_caps_of(ctx.ext_config))/join_csv(snippet_caps_of(jo([])))/	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_ws.sh channel
+compose_capture_runtime_cfg	packages/motoko-ext-compose/compose.ail	s/  let runtime_cfg = host_config_of(ctx.ext_config);/  let runtime_cfg = host_config_of(jo([]));/	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_ws.sh provider
+# The first run was 43/44 and refused: herdr_capture_describe_cfg was VACUOUS -- the probe looked for "codex",
+# which the schema's fixed `model` text names whatever the config says. The probe now checks "permits claude,codex"
+# and `"required":["prompt","kind"]`, which only the config's kind list and empty default produce.
+herdr_capture_describe_cfg	packages/motoko-ext-herdr/herdr.ail	s/  let cfg = herdr_cfg_of(config);/  let cfg = herdr_cfg_of(jo([]));/	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_ws.sh channel
+herdr_capture_describe_tools	packages/motoko-ext-herdr/herdr.ail	s/  match herdr_tools_of(config) {/  match herdr_tools_of(jo([])) {/	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_ws.sh channel
+herdr_capture_orch_prompt	packages/motoko-ext-herdr/herdr.ail	s/  prompt_patch(herdr_orch_of(ctx.ext_config))/  prompt_patch(herdr_orch_of(jo([])))/	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_ws.sh channel
+herdr_capture_orch_policy	packages/motoko-ext-herdr/herdr.ail	s/  decide(herdr_orch_of(ctx.ext_config),/  decide(herdr_orch_of(jo([])),/	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_ws.sh channel
+herdr_capture_cfg_provider	packages/motoko-ext-herdr/herdr.ail	s/  on_tool_handle(herdr_cfg_of(ctx.ext_config), ctx, call)/  on_tool_handle(herdr_cfg_of(jo([])), ctx, call)/	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_ws.sh channel
+herdr_capture_cfg_exit	packages/motoko-ext-herdr/herdr.ail	s/  exit_actions(herdr_cfg_of(ctx.ext_config), ctx)/  exit_actions(herdr_cfg_of(jo([])), ctx)/	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_ws.sh channel
+herdr_capture_cfg_waiting	packages/motoko-ext-herdr/herdr.ail	s/  work_in_flight(herdr_cfg_of(ctx.ext_config), ctx)/  work_in_flight(herdr_cfg_of(jo([])), ctx)/	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_ws.sh channel
+herdr_exit_enabled_data	packages/motoko-ext-herdr/herdr.ail	s/caps: herdr_caps(tools, cfg.reap_on_exit || cfg.settle_on_exit) }/caps: herdr_caps(tools, false) }/	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_ws.sh channel
+# registration withholds what it read (ADR-001 Amendment 3: environment values go through config) -> red
+herdr_register_withholds_pane	packages/motoko-ext-herdr/register.ail	s/  { config: herdr_config_json(cfg, tools, orch),/  { config: herdr_config_json({ cfg | own_pane: "" }, tools, orch),/	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_ws.sh registration
+compose_register_withholds_profile	packages/motoko-ext-compose/register.ail	s/  { config: host_config_json(host_cfg), caps: compose_caps() }/  { config: host_config_json(read_compose_host_config(".")), caps: compose_caps() }/	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_ws.sh registration
+#
+# --- the channel's codecs: their round-trip tests (the packages' own tests) go red on a dropped field
+compose_codec_field	packages/motoko-ext-compose/config.ail	s/    kv("author_tools_budget", int_json(a.author_tools_budget)),/    kv("author_tools_budget", int_json(25)),/	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_ws.sh test packages/motoko-ext-compose/config.ail
+herdr_codec_field	packages/motoko-ext-herdr/herdr.ail	s/    depth: i_at(j, "depth"), max_depth: i_at(j, "max_depth"),/    depth: 0, max_depth: i_at(j, "max_depth"),/	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_ws.sh test packages/motoko-ext-herdr/herdr.ail
+herdr_orch_codec_field	packages/motoko-ext-herdr/orchestrator.ail	s/      pane: str_or(getString(j, "pane")),/      pane: "",/	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_ws.sh test packages/motoko-ext-herdr/orchestrator.ail
+#
+# --- the narrowed ports records (compose's helpers): remove_if_file skips its remove -> the dvp threading witness -> red
+compose_remove_ports	packages/motoko-ext-compose/compose.ail	s/    ExtPathFile    => p.file_remove(stat.next_state, path),/    ExtPathFile    => { ok: true, error: "", next_state: stat.next_state },/	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_core_check.sh suite dvp.compose_intercept_threading
+#
+# --- each widened ceiling (ADR-001 Amendment 2): drop the added effect -> the package's own-root check -> red
+compose_ceiling_Rand	packages/motoko-ext-compose/ailang.toml	/^max/s/, "Rand"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_pkgroot.sh motoko-ext-compose
+compose_ceiling_Trace	packages/motoko-ext-compose/ailang.toml	/^max/s/, "Trace"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_pkgroot.sh motoko-ext-compose
+herdr_ceiling_AI	packages/motoko-ext-herdr/ailang.toml	/^max/s/, "AI"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_pkgroot.sh motoko-ext-herdr
+herdr_ceiling_Net	packages/motoko-ext-herdr/ailang.toml	/^max/s/, "Net"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_pkgroot.sh motoko-ext-herdr
+herdr_ceiling_SharedMem	packages/motoko-ext-herdr/ailang.toml	/^max/s/, "SharedMem"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_pkgroot.sh motoko-ext-herdr
+herdr_ceiling_Stream	packages/motoko-ext-herdr/ailang.toml	/^max/s/, "Stream"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_pkgroot.sh motoko-ext-herdr
+herdr_ceiling_Rand	packages/motoko-ext-herdr/ailang.toml	/^max/s/, "Rand"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_pkgroot.sh motoko-ext-herdr
+herdr_ceiling_Trace	packages/motoko-ext-herdr/ailang.toml	/^max/s/, "Trace"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_pkgroot.sh motoko-ext-herdr
+# the ABI pin: 8.0 -> 7.4 -> the package's own lock refuses it -> red
+compose_pin_8_0	packages/motoko-ext-compose/ailang.toml	s/version = "8.0"/version = "7.4"/	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_pkgroot.sh motoko-ext-compose
+herdr_pin_8_0	packages/motoko-ext-herdr/ailang.toml	s/version = "8.0"/version = "7.4"/	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_pkgroot.sh motoko-ext-herdr
+#
+# --- masked files (one row each): undo the file's 8.0 change -> its own run (committed HEAD + P1.2d's paths) -> red
+masked_compose_live_exec	scripts/dst/compose_live_exec.ail	s/config: reg.config, caps: reg.caps/config: jo([]), caps: reg.caps/	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_core_check.sh suite compose_live_exec
+masked_declared_vs_performed	scripts/dst/declared_vs_performed.ail	s/ContinueWithFeedback(solver_sentinel())/ContinueWithFeedback("dvp-other")/	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_core_check.sh suite dvp.compose_solver
+masked_herdr_graded_dst	scripts/dst/herdr_graded_dst.ail	s/config: r.config, caps: r.caps/config: jo([]), caps: r.caps/	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_core_check.sh suite herdr_graded_dst
+masked_verify_exit_intent	scripts/verify_exit_intent.ail	s/config: r.config, caps: r.caps/config: jo([]), caps: r.caps/	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_core_check.sh suite verify_exit_intent
+masked_verify_herdr_orchestrator	scripts/verify_herdr_orchestrator.ail	s/  patch_in(r.caps, pure_ctx_of(ctx, r.config))/  patch_in(r.caps, pure_ctx_of(ctx, jo([])))/	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_core_check.sh suite verify_herdr_orchestrator
+masked_verify_delegate_kind_required	scripts/verify_delegate_kind_required.ail	s/  provider_ctx(pure_ctx_of(c, jo(\[\])), c.ports, c.world)/  provider_ctx(pure_ctx_of(c, jo([])), noop_ext_ports(), c.world)/	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_core_check.sh suite verify_delegate_kind_required
+masked_verify_herdr_delegate_wait	scripts/verify_herdr_delegate_wait.ail	s/  provider_ctx(pure_ctx_of(c, jo(\[\])), c.ports, c.world)/  provider_ctx(pure_ctx_of(c, jo([])), noop_ext_ports(), c.world)/	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_core_check.sh suite verify_herdr_delegate_wait
+masked_verify_mot131_early_answer	scripts/verify_mot131_early_answer.ail	s/  provider_ctx(pure_ctx_of(c, jo(\[\])), c.ports, c.world)/  provider_ctx(pure_ctx_of(c, jo([])), noop_ext_ports(), c.world)/	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_core_check.sh suite verify_mot131_early_answer
+masked_verify_mot133_owner_tag	scripts/verify_mot133_owner_tag.ail	s/  provider_ctx(pure_ctx_of(c, jo(\[\])), c.ports, c.world)/  provider_ctx(pure_ctx_of(c, jo([])), noop_ext_ports(), c.world)/	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_core_check.sh suite verify_mot133_owner_tag
+masked_verify_mot136_dagr_producer	scripts/verify_mot136_dagr_producer.ail	s/  provider_ctx(pure_ctx_of(c, jo(\[\])), c.ports, c.world)/  provider_ctx(pure_ctx_of(c, jo([])), noop_ext_ports(), c.world)/	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_core_check.sh suite verify_mot136_dagr_producer
+masked_verify_mot137_dagr_pane	scripts/verify_mot137_dagr_pane.ail	s/  provider_ctx(pure_ctx_of(c, jo(\[\])), c.ports, c.world)/  provider_ctx(pure_ctx_of(c, jo([])), noop_ext_ports(), c.world)/	bash .agent/projects/031_system_one_decisions/evidence/P1.2d/p12d_core_check.sh suite verify_mot137_dagr_pane

@@ -21,6 +21,8 @@ module src/core/tool_catalog
 import std/ai (ToolSchema)
 import std/list as List (length)
 import std/string (contains)
+import std/json (Json, jo, kv, js, getString)
+import std/option (Some, None)
 import src/core/config (VerificationConfig)
 import pkg/sunholo/motoko_ext_abi/types (ExtRuntime, ExtEntry, Capability, DescribeTools, ToolProvider)
 
@@ -104,11 +106,16 @@ pure func collect_hook_schemas(names: [string]) -> [ToolSchema] {
 }
 
 -- B8: an entry's DescribeTools atoms, concatenated in list order.
-pure func declared_schemas(caps: [Capability]) -> [ToolSchema] {
+-- 8.0 (031 ADR-001 D2, N49): each catalog receives the ENTRY'S `config` -- the
+-- registration's disclosed configuration -- where it was called with `()`. A
+-- catalog whose schemas are fixed ignores the argument; the four in-tree
+-- catalogs that used to capture discovered schemas or a provider list at
+-- registration read them from here instead.
+pure func declared_schemas(config: Json, caps: [Capability]) -> [ToolSchema] {
   match caps {
     [] => [],
-    DescribeTools(f) :: rest => f() ++ declared_schemas(rest),
-    _ :: rest => declared_schemas(rest)
+    DescribeTools(f) :: rest => f(config) ++ declared_schemas(config, rest),
+    _ :: rest => declared_schemas(config, rest)
   }
 }
 
@@ -123,7 +130,7 @@ pure func provided_names(caps: [Capability]) -> [string] {
 
 -- Prefer hook-declared schemas when available; fall back to name-only synthesis.
 pure func hook_schemas(e: ExtEntry) -> [ToolSchema] {
-  let declared = declared_schemas(e.caps);
+  let declared = declared_schemas(e.config, e.caps);
   match declared {
     [] => collect_hook_schemas(provided_names(e.caps)),
     _ => declared
@@ -156,6 +163,37 @@ pure func test_no_extensions_returns_base_tools() -> bool
     let v: VerificationConfig = { enabled: false, command: "make check_core" };
     let rt: ExtRuntime = { registry: { entries: [] }, strict_mode: false, verification: v };
     List.length(tools_with_extensions(rt)) == 7
+  }
+
+-- 8.0: a catalog that differs between a configured and an empty tool set,
+-- read through the entry's `config`. NAMED, as the registration boundary
+-- requires of a payload.
+pure func configured_catalog(cfg: Json) -> [ToolSchema] {
+  match getString(cfg, "tool") {
+    Some(name) => [ext_tool_schema(name)],
+    None => []
+  }
+}
+
+pure func catalog_rt(config: Json) -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "make check_core" };
+  { registry: { entries: [{ id: "cat#0", config: config, caps: [DescribeTools(configured_catalog)] }] }, strict_mode: false, verification: v }
+}
+
+pure func last_name(xs: [ToolSchema]) -> string {
+  match xs {
+    [] => "",
+    x :: [] => x.name,
+    _ :: rest => last_name(rest)
+  }
+}
+
+pure func test_describe_tools_receives_the_entry_config() -> bool
+  tests [((), true)]
+  {
+    let configured = tools_with_extensions(catalog_rt(jo([kv("tool", js("Configured"))])));
+    let empty = tools_with_extensions(catalog_rt(jo([])));
+    List.length(configured) == 8 && last_name(configured) == "Configured" && List.length(empty) == 7
   }
 
 pure func test_ext_schema_synthesised_name() -> bool

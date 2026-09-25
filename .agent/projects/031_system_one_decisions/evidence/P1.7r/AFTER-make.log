@@ -1,0 +1,329 @@
+== after P1.7r (fixtures + both classifiers), primary checkout as make runs them, HEAD 6d668fdd, 2026-09-21T20:39:36Z
+
+== make ext_hook_scope_selftest
+  ok  control_capability_list_empty      HOOK-PORT-MEDIATED   shape=pass 8.0: `caps: []` resolves with ZERO atoms, pinned (D7 is B3's question, not the reader's)  atoms=0
+  ok  control_capability_list_inline     HOOK-PORT-MEDIATED   shape=fail KEPT 7.4 (P1.7r): the per-atom split over INLINE lambdas with commas -- a form 8.0 forbids; the gate pins payload-inline-lambda + return-shape-unsupported on it  atoms=3
+  ok  control_capability_list_named_wide HOOK-AMBIENT         shape=pass 8.0: a wide-rowed NAMED atom on ProcessCtx is scanned, not trusted -- it reaches std/env (the compiler, not the gate, refuses the row)  atoms=1
+  ok  control_capability_list_same_kind  HOOK-PORT-MEDIATED   shape=pass 8.0: N>1 of one kind enumerated per index, ToolProvider(names, handle), delegated at `caps`, every payload named  atoms=4
+  ok  control_ext_ports_call             HOOK-PORT-MEDIATED   shape=pass 8.0: property 1's positive half -- AiPorts.ai_step on the Compactor's AiCtx is admitted, not rejected  atoms=8
+  ok  control_hook_reaches_env           HOOK-AMBIENT         shape=pass 8.0: TWO-SIDED twin of the above -- the same call, in the NAMED hook body  atoms=8
+  ok  control_interpolated_call          HOOK-AMBIENT         shape=pass 8.0: door 4 -- the effectful call exists only inside a string interpolation, in a named payload  atoms=8
+  ok  control_named_hook_in_register     HOOK-AMBIENT         shape=pass 8.0: the microrag shape -- a named ToolProvider handle on ProviderCtx reaching std/fs  atoms=8
+  ok  control_registration_only          HOOK-PORT-MEDIATED   shape=pass 8.0: registration reads Env and discloses it through `config`; the named hook decodes `ext_config` (the WI-D6 shape under Amendment 3)  atoms=8
+  ok  reject_applied_local               HOOK-UNRESOLVED      shape=fail KEPT 7.4 (P1.7r): a hook APPLIES a value closed over at registration (door 6's corner) -- a capture 8.0's named payloads cannot express; the gate pins payload-inline-lambda + return-shape-unsupported on it  atoms=8
+  ok  reject_binding_unresolvable        HOOK-UNRESOLVED      shape=fail 8.0: an atom bound to a bare name that resolves nowhere (the gate: payload-unresolved)  atoms=8
+  ok  reject_capability_list_arity       HOOK-UNRESOLVED      shape=fail 8.0: ToolProvider applied to one argument -- the binding position is a guess
+  ok  reject_capability_list_computed    HOOK-UNRESOLVED      shape=fail 8.0: `caps` is built by `[..] ++ extra(cfg)` -- literal lists only (caps-computed, the `xs ++ ys` case)
+  ok  reject_capability_list_element     HOOK-UNRESOLVED      shape=fail 8.0: one element is a call returning an atom -- a computed element
+  ok  reject_capability_list_juxtaposed  HOOK-UNRESOLVED      shape=fail 8.0: `A(f) ++ B(g)` INSIDE the list -- one element, two constructor heads
+  ok  reject_capability_list_unknown_kind HOOK-UNRESOLVED      shape=fail 8.0: `Judge(..)` is not a known constructor; plus a trailing comma (count discipline)
+  ok  reject_unknown_callee              HOOK-UNRESOLVED      shape=pass 8.0: door 3 -- `show` applied in a named payload; the shape PASSES beside the walk's rejection  atoms=8
+  ok  reading control            registration=HOOK-PORT-MEDIATED, hook=HOOK-AMBIENT -- they DISAGREE
+  ok  arity BudgetShaper           1 arg(s), binding(s) at [0]
+  ok  arity Compactor              1 arg(s), binding(s) at [0]
+  ok  arity DecisionSolverJudge    3 arg(s), binding(s) at [1, 2]
+  ok  arity DecisionToolPolicy     3 arg(s), binding(s) at [1, 2]
+  ok  arity DescribeTools          1 arg(s), binding(s) at [0]
+  ok  arity ExitIntent             3 arg(s), binding(s) at [2]
+  ok  arity PromptShaper           1 arg(s), binding(s) at [0]
+  ok  arity ResponseInterceptor    1 arg(s), binding(s) at [0]
+  ok  arity SolverJudge            1 arg(s), binding(s) at [0]
+  ok  arity ToolPolicy             1 arg(s), binding(s) at [0]
+  ok  arity ToolProvider           2 arg(s), binding(s) at [1]
+  ok  arity WorkInFlight           2 arg(s), binding(s) at [1]
+  ok  fx_computed                    fail  caps-computed                                        computed_list: `caps: if .. then [ToolPolicy(..)] else []`
+  ok  fx_delegate_import_shadow      fail  delegation-let-bound                                 v7_delegate_import_shadow: local `let make_hooks` over an IMPORTED `make_hooks`; the import runs (N62)
+  ok  fx_delegate_param              fail  delegation-parameter-bound                           v7_delegate_param: `build_with(mk: ..)` delegates to its PARAMETER under a top-level func's name
+  ok  fx_delegate_shadow             fail  delegation-let-bound                                 fact 6 / delegate_shadow: local `let make_hooks` over top-level `func make_hooks`
+  ok  fx_delegate_unresolved         fail  delegation-unresolved                                `caps: make_hooks(cfg)` with no such function anywhere
+  ok  fx_delegated_record            fail  return-shape-unsupported                             `register_with_config(cfg) = make_reg(cfg)` -- the record only BEHIND a delegation; the rule admits delegation at `caps`
+  ok  fx_empty                       pass  -                                                    8.0 head; `caps: []` -- a recognised empty list passes (ADR D2 'The gate')  walk=HOOK-PORT-MEDIATED
+  ok  fx_form_delegated_let          fail  payload-let-bound, return-shape-unsupported          IN-TREE FORM (a2a, agentcli, ailang-docs, exa-search, mcp, scratchpad, compose, herdr): `make_hooks(cfg)` let-binding its payloads
+  ok  fx_form_describe_inline        fail  payload-inline-lambda, return-shape-unsupported      IN-TREE FORM (a2a, agentcli, ailang-docs, scratchpad): `DescribeTools(\_ . schemas)` capturing discovered schemas
+  ok  fx_form_inline_backslash       fail  payload-inline-lambda, return-shape-unsupported      IN-TREE FORM (context-mode, omnigraph, scratchpad PromptShaper; test-dummy): 7.4 list, `\ctx. f(captured, ctx)`
+  ok  fx_form_inline_func            fail  payload-inline-lambda, return-shape-unsupported      IN-TREE FORM (progress-contract-guard, omnigraph ToolProvider, compaction-ai): 7.4 list, inline `func(..) { .. }`
+  ok  fx_form_let_lambda             fail  payload-let-bound, return-shape-unsupported          IN-TREE FORM (repetition-guard, context-mode): 7.4 list, `let policy = func(..)` capturing a registration value
+  ok  fx_form_named_list             fail  return-shape-unsupported                             IN-TREE FORM (batch A: compaction-structural, decision-framework, empty-stop-guard, microrag): 7.4 bare list, named payload -- the head alone fails
+  ok  fx_import_ok                   pass  -                                                    8.0 head; the payload resolves through the home module's IMPORT to a sibling's top-level func  walk=HOOK-PORT-MEDIATED
+  ok  fx_import_shadow               fail  payload-let-bound                                    v7_import_shadow: local `let body` over an IMPORTED `body`; the pinned compiler runs the import (N62)
+  ok  fx_inline_lambda               fail  payload-inline-lambda                                8.0 head; `ToolPolicy(func(ctx) { apply(ctx, w) })` -- facts 1 and 4's construction
+  ok  fx_list_not_enumerable         fail  list-not-enumerable                                  `[ToolPolicy(body), Judge(body)]` -- an unknown constructor; the list cannot be enumerated atom by atom
+  ok  fx_match                       fail  caps-match-selected                                  `caps: match cfg { 0 => [], _ => [ToolPolicy(..)] }`
+  ok  fx_named_delegated_ok          pass  -                                                    8.0 head; `caps: make_hooks(cfg)` delegated to a named top-level function returning a literal list  walk=HOOK-PORT-MEDIATED
+  ok  fx_named_ok                    pass  -                                                    8.0 head; three named top-level payloads, DescribeTools taking Json (N49)  walk=HOOK-PORT-MEDIATED
+  ok  fx_no_register                 fail  registration-missing                                 a module with no `register_with_config` at all
+  ok  fx_not_a_name                  fail  payload-not-a-name                                   `ToolPolicy(w.f)` -- a field read is neither a bare name nor an inline function
+  ok  fx_param_shadow                fail  payload-parameter-bound                              v7_param_shadow: `make_hooks(body: (Ctx) -> int)` binds its PARAMETER under a top-level func's name
+  ok  fx_partial                     fail  payload-partial-application                          q_named_partial: `ToolPolicy(apply_w(w))` -- a function value built at registration
+  ok  fx_payload_unresolved          fail  payload-unresolved                                   `ToolPolicy(nowhere)` -- a bare name that resolves to nothing
+  ok  fx_record_extra_field          fail  return-shape-unsupported                             `{ config, caps, extra }` -- the head is exactly two fields
+  ok  fx_residue                     pass  -                                                    named callback applying `show` -- door-3 walk residue beside a PASSING shape: distinct, never hidden  walk=HOOK-UNRESOLVED
+  ok  fx_shadow                      fail  payload-let-bound                                    fact 5 / q_named_shadow: local `let body = func(..)` over top-level `func body`
+  ok  fx_unknown                     fail  caps-unknown                                         `let hooks = [..]; caps: hooks` -- a list the reader cannot resolve to a literal or a named func
+  ok  yield HOOK-PORT-MEDIATED   6 of 18: decision_framework, empty_stop_guard, mcp, progress_contract_guard, repetition_guard, test_dummy
+  ok  yield HOOK-AMBIENT         3 of 18: a2a, agentcli, scratchpad
+  ok  capability-list atoms         45 atom(s) over 18 of 18 extension(s)
+  ok  registration heads          18 on `{ config, caps }`, 0 on the 7.4 list
+  ok  registration shape          pass 18 of 18
+  ok  shape binding rejections    0 ()
+  ok  door-3 residue              intToFloat, show
+  ok  shipped closure verdict    unmoved, 4 of 15
+
+hook-scope self-test: 0 failure(s)
+exit=0
+
+== make ext_ambient_inventory_selftest
+  ok  control_ambient_builtin.ail        CONTROL ambient builtin    ['AMBIENT']
+  ok  control_ambient_import.ail         CONTROL ambient import     ['AMBIENT']
+  ok  control_multiline_import.ail       CONTROL wrapped symbol list ['AMBIENT']
+  ok  control_prose_only.ail             CONTROL prose and literals [] (resolved clean)
+  ok  control_pure_builtin.ail           CONTROL builtin, proven pure [] (resolved clean)
+  ok  control_pure_unannotated.ail       CONTROL closed empty row   [] (resolved clean)
+  ok  control_renamed_symbol.ail         CONTROL symbol rename      ['AMBIENT']
+  ok  control_type_in_effect_module.ail  CONTROL type, effectful mod [] (resolved clean)
+  ok  shape_bare_module.ail              computed/unqualified access ['bare-module']
+  ok  shape_effect_variable.ail          effect-variable row        ['effect-variable']
+  ok  shape_module_alias.ail             alias (whole module)       ['module-alias']
+  ok  shape_no_cached_interface.ail      producer gap (precondition) ['no-cached-interface']
+  ok  shape_symbol_not_in_interface.ail  re-export / wrapper        ['symbol-not-in-interface']
+  ok  shape_unknown_builtin.ail          builtin, effects unknown   ['unknown-builtin']
+  ok  cache precondition      18/18 std modules resolved
+  ok  yield 4 of 18      compaction_structural, decision_framework, empty_stop_guard, progress_contract_guard
+  ok  resolution asserted    18 package directories, member by member
+
+self-test: 0 failure(s)
+exit=0
+
+== make ext_call_inventory_selftest
+  ok  control_resolved.ail             control: typed path, must resolve  (0 unresolved, 1 resolved)
+  ok  control_scoped_binder.ail        8.0 control: binders read from THEIR function (first `p`/`ctx` in the file are not ports)  (0 unresolved, 2 resolved)
+  ok  control_view_projection.ail      8.0 control: same-named projection into a (local) view, then a call through it  (0 unresolved, 1 resolved, 1 projection(s))
+  ok  control_view_receiver.ail        8.0 control: calls through AiPorts / FsPorts views resolve  (0 unresolved, 2 resolved)
+  ok  form_alias.ail                   RE-PINNED 8.0 (P1.7r): alias of a DECLARED-typed path resolves in scope, no inference  (0 unresolved, 1 resolved)
+  ok  form_alias_untyped.ail           form 1 as it survives: alias of an UNDECLARED source stays unresolved  (1 unresolved, 0 resolved)
+  ok  form_computed.ail                computed receiver (shares form 2's detector on this pin)  (1 unresolved, 0 resolved)
+  ok  form_projection_not_a_view.ail   form 3 still: forwarded under another name / into a non-view record  (2 unresolved, 0 resolved)
+  ok  form_reexport.ail                re-export (receiver is an accessor result)  (1 unresolved, 0 resolved)
+  ok  form_wrapper.ail                 wrapper (field escapes as a value, call site elsewhere)  (1 unresolved, 0 resolved)
+  ok  membership ai_step      returns-it  seam=Ports.model_step
+  ok  membership tool_handle  returns-it  seam=Ports.ext_effect_exec
+  ok  membership file_read    returns-it  seam=Ports.file_read
+  ok  membership file_write   returns-it  seam=Ports.file_write
+  ok  membership file_remove  returns-it  seam=Ports.file_remove
+  ok  membership path_stat    returns-it  seam=Ports.path_stat
+  ok  membership dir_list     returns-it  seam=Ports.dir_list
+  ok  membership dir_make     returns-it  seam=Ports.dir_make
+  ok  membership env_get      member      seam=Ports.env_get
+  ok  membership clock_now    returns-it  seam=Ports.clock_now
+  ok  reachability      10 ExtPorts field(s) derived, 10 pinned, sets identical
+  ok  view AiPorts          1 field(s): ai_step
+  ok  view FsPorts          6 field(s): dir_list, dir_make, file_read, file_remove, file_write, path_stat
+  ok  view InterceptPorts   8 field(s): clock_now, dir_list, dir_make, file_read, file_remove, file_write, path_stat, tool_handle
+
+self-test: 0 failure(s)
+exit=0
+
+== make ext_call_inventory
+source revision    6d668fdda1292bd1c4105cc383fe7be47de2d154
+scan roots         src,packages
+ExtPorts fields    10: ai_step, tool_handle, file_read, file_write, file_remove, path_stat, dir_list, dir_make, clock_now, env_get
+
+membership (derived from D5's criterion, not from its enumeration):
+  ai_step      returns-it  fronts Ports.model_step and ExtPorts.ai_step's AiStepOutcome carries next_state -- nothing dropped
+  tool_handle  returns-it  fronts Ports.ext_effect_exec and ExtPorts.tool_handle's ExtProcOutcome carries next_state -- nothing dropped
+  file_read    returns-it  fronts Ports.file_read and ExtPorts.file_read's ExtFileRead carries next_state -- nothing dropped
+  file_write   returns-it  fronts Ports.file_write and ExtPorts.file_write's ExtFileMutation carries next_state -- nothing dropped
+  file_remove  returns-it  fronts Ports.file_remove and ExtPorts.file_remove's ExtFileMutation carries next_state -- nothing dropped
+  path_stat    returns-it  fronts Ports.path_stat and ExtPorts.path_stat's ExtPathStat carries next_state -- nothing dropped
+  dir_list     returns-it  fronts Ports.dir_list and ExtPorts.dir_list's ExtDirListing carries next_state -- nothing dropped
+  dir_make     returns-it  fronts Ports.dir_make and ExtPorts.dir_make's ExtFileMutation carries next_state -- nothing dropped
+  clock_now    returns-it  fronts Ports.clock_now and ExtPorts.clock_now's ExtClockReading carries next_state -- nothing dropped
+  env_get      member      fronts Ports.env_get, whose EnvRead threads next_state; ExtPorts.env_get returns string and cannot carry it
+
+CLASSIFIER-2 SET (1): env_get
+ExtPorts VIEWS (5, derived by structure -- 8.0): AiPorts (1 field(s)), FsPorts (6 field(s)), InterceptPorts (8 field(s)), RemovePorts (2 field(s), packages/motoko-ext-compose/compose.ail), SnippetExecPorts (1 field(s), packages/motoko-ext-compose/compose.ail)
+
+member call sites (0):
+
+non-member port calls (91), recorded not gated:
+  packages/motoko-ext-herdr/herdr.ail:396  p.tool_handle
+  packages/motoko-ext-herdr/herdr.ail:551  p.dir_make
+  packages/motoko-ext-herdr/herdr.ail:552  p.file_write
+  packages/motoko-ext-herdr/herdr.ail:571  p.file_remove
+  packages/motoko-ext-herdr/herdr.ail:580  p.file_remove
+  packages/motoko-ext-herdr/herdr.ail:596  p.file_write
+  packages/motoko-ext-herdr/herdr.ail:624  p.file_read
+  packages/motoko-ext-herdr/herdr.ail:672  p.dir_make
+  packages/motoko-ext-herdr/herdr.ail:675  p.file_write
+  packages/motoko-ext-herdr/herdr.ail:696  p.file_read
+  packages/motoko-ext-herdr/herdr.ail:699  p.file_read
+  packages/motoko-ext-herdr/herdr.ail:704  p.dir_make
+  packages/motoko-ext-herdr/herdr.ail:705  p.file_write
+  packages/motoko-ext-herdr/herdr.ail:720  p.file_read
+  packages/motoko-ext-herdr/herdr.ail:988  p.file_read
+  packages/motoko-ext-herdr/herdr.ail:1007  p.file_read
+  packages/motoko-ext-herdr/herdr.ail:1035  p.dir_make
+  packages/motoko-ext-herdr/herdr.ail:1036  p.file_write
+  packages/motoko-ext-herdr/herdr.ail:1053  p.file_write
+  packages/motoko-ext-herdr/herdr.ail:1106  p.file_remove
+  packages/motoko-ext-herdr/herdr.ail:1117  p.file_write
+  packages/motoko-ext-herdr/herdr.ail:1121  p.file_remove
+  packages/motoko-ext-herdr/herdr.ail:1136  p.file_read
+  packages/motoko-ext-herdr/herdr.ail:1179  p.dir_list
+  packages/motoko-ext-herdr/herdr.ail:1223  p.file_read
+  packages/motoko-ext-herdr/herdr.ail:1226  p.dir_make
+  packages/motoko-ext-herdr/herdr.ail:1227  p.file_write
+  packages/motoko-ext-herdr/herdr.ail:1248  p.clock_now
+  packages/motoko-ext-herdr/herdr.ail:1346  p.clock_now
+  packages/motoko-ext-herdr/herdr.ail:1359  p.dir_make
+  packages/motoko-ext-herdr/herdr.ail:1362  p.file_write
+  packages/motoko-ext-herdr/herdr.ail:1393  p.clock_now
+  packages/motoko-ext-herdr/herdr.ail:1411  p.clock_now
+  packages/motoko-ext-herdr/herdr.ail:1426  p.clock_now
+  packages/motoko-ext-herdr/herdr.ail:1452  p.clock_now
+  packages/motoko-ext-herdr/herdr.ail:1469  p.clock_now
+  packages/motoko-ext-herdr/herdr.ail:1493  p.clock_now
+  packages/motoko-ext-herdr/herdr.ail:1508  p.clock_now
+  packages/motoko-ext-herdr/herdr.ail:1574  p.clock_now
+  packages/motoko-ext-herdr/herdr.ail:1578  p.file_read
+  packages/motoko-ext-herdr/herdr.ail:1604  p.file_read
+  packages/motoko-ext-herdr/herdr.ail:1632  p.clock_now
+  packages/motoko-ext-herdr/herdr.ail:1634  p.file_read
+  packages/motoko-ext-herdr/herdr.ail:1703  p.clock_now
+  packages/motoko-ext-herdr/herdr.ail:1705  p.file_read
+  packages/motoko-ext-herdr/herdr.ail:1738  p.clock_now
+  packages/motoko-ext-herdr/herdr.ail:1740  p.clock_now
+  packages/motoko-ext-herdr/herdr.ail:1780  p.file_read
+  packages/motoko-ext-herdr/herdr.ail:2022  ctx.ports.file_read
+  packages/motoko-ext-herdr/herdr.ail:2076  ctx.ports.file_read
+  packages/motoko-ext-compaction-ai/compaction_ai.ail:138  ctx.ports.ai_step
+  packages/motoko_ext_conformance/fixtures/reject_fixtures.ail:113  ctx.ports.ai_step
+  packages/motoko-ext-compose/author_tools.ail:131  p.clock_now
+  packages/motoko-ext-compose/author_tools.ail:185  p.path_stat
+  packages/motoko-ext-compose/author_tools.ail:219  p.path_stat
+  packages/motoko-ext-compose/author_tools.ail:224  p.file_read
+  packages/motoko-ext-compose/author_tools.ail:264  p.path_stat
+  packages/motoko-ext-compose/author_tools.ail:269  p.dir_list
+  packages/motoko-ext-compose/author_tools.ail:332  p.file_read
+  packages/motoko-ext-compose/author_tools.ail:362  p.path_stat
+  packages/motoko-ext-compose/author_tools.ail:367  p.file_read
+  packages/motoko-ext-compose/author_tools.ail:481  p.tool_handle
+  packages/motoko-ext-compose/compose.ail:341  p.tool_handle
+  packages/motoko-ext-compose/compose.ail:359  p.tool_handle
+  packages/motoko-ext-compose/compose.ail:455  p.clock_now
+  packages/motoko-ext-compose/compose.ail:627  p.dir_make
+  packages/motoko-ext-compose/compose.ail:628  p.clock_now
+  packages/motoko-ext-compose/compose.ail:633  p.file_write
+  packages/motoko-ext-compose/compose.ail:721  p.clock_now
+  packages/motoko-ext-compose/compose.ail:784  ctx.ports.clock_now
+  packages/motoko-ext-compose/compose.ail:824  ctx.ports.clock_now
+  packages/motoko-ext-compose/compose.ail:950  p.path_stat
+  packages/motoko-ext-compose/compose.ail:952  p.file_remove
+  packages/motoko-ext-compose/compose.ail:1053  p.clock_now
+  packages/motoko-ext-compose/compose.ail:1081  p.dir_make
+  packages/motoko-ext-compose/compose.ail:1083  p.file_write
+  packages/motoko-ext-compose/store.ail:33  p.dir_make
+  packages/motoko-ext-compose/store.ail:35  p.file_write
+  packages/motoko-ext-compose/store.ail:61  p.dir_make
+  packages/motoko-ext-compose/store.ail:64  p.file_write
+  packages/motoko-ext-compose/store.ail:70  p.dir_make
+  packages/motoko-ext-compose/store.ail:79  p.file_write
+  packages/motoko-ext-compose/store.ail:80  p.file_write
+  packages/motoko-ext-compose/authoring/dispatcher.ail:263  p.dir_make
+  packages/motoko-ext-compose/authoring/dispatcher.ail:264  p.clock_now
+  packages/motoko-ext-compose/authoring/dispatcher.ail:267  p.file_write
+  packages/motoko-ext-compose/authoring/dispatcher.ail:268  p.tool_handle
+  packages/motoko-ext-compose/authoring/dispatcher.ail:275  p.file_remove
+  packages/motoko-ext-agentcli/agentcli.ail:164  p.path_stat
+  packages/motoko-ext-agentcli/agentcli.ail:216  ports.file_write
+  packages/motoko-ext-agentcli/agentcli.ail:223  ports.file_remove
+
+port-view projections (21), resolved -- a port forwarded under its own name into a view record:
+  packages/motoko-ext-abi/types.ail:1249  p.ai_step -> AiPorts
+  packages/motoko-ext-abi/types.ail:1253  p.tool_handle -> InterceptPorts
+  packages/motoko-ext-abi/types.ail:1240  p.file_read -> FsPorts
+  packages/motoko-ext-abi/types.ail:1254  p.file_read -> InterceptPorts
+  packages/motoko-ext-abi/types.ail:1241  p.file_write -> FsPorts
+  packages/motoko-ext-abi/types.ail:1255  p.file_write -> InterceptPorts
+  packages/motoko-ext-abi/types.ail:1242  p.file_remove -> FsPorts
+  packages/motoko-ext-abi/types.ail:1256  p.file_remove -> InterceptPorts
+  packages/motoko-ext-abi/types.ail:1243  p.path_stat -> FsPorts
+  packages/motoko-ext-abi/types.ail:1257  p.path_stat -> InterceptPorts
+  packages/motoko-ext-abi/types.ail:1244  p.dir_list -> FsPorts
+  packages/motoko-ext-abi/types.ail:1258  p.dir_list -> InterceptPorts
+  packages/motoko-ext-abi/types.ail:1245  p.dir_make -> FsPorts
+  packages/motoko-ext-abi/types.ail:1259  p.dir_make -> InterceptPorts
+  packages/motoko-ext-abi/types.ail:1260  p.clock_now -> InterceptPorts
+  packages/motoko-ext-compose/compose.ail:332  p.tool_handle -> SnippetExecPorts
+  packages/motoko-ext-compose/compose.ail:334  p.tool_handle -> SnippetExecPorts
+  packages/motoko-ext-compose/compose.ail:336  p.file_remove -> RemovePorts
+  packages/motoko-ext-compose/compose.ail:338  p.file_remove -> RemovePorts
+  packages/motoko-ext-compose/compose.ail:336  p.path_stat -> RemovePorts
+  packages/motoko-ext-compose/compose.ail:338  p.path_stat -> RemovePorts
+exit=0
+
+== make ext_ambient_inventory
+      packages/motoko-ext-herdr/register.ail:31  std/fs.listDir  {FS}
+      packages/motoko-ext-herdr/register.ail:31  std/fs.isDir  {FS}
+      packages/motoko-ext-herdr/register.ail:31  std/fs.readFileResult  {FS}
+  mcp -- 3 ambient source(s), 0 ExtPorts field call(s) in closure, 15 port-view projection(s)
+      packages/motoko-ext-mcp/mcp.ail:3  std/fs.fileExists  {FS}
+      packages/motoko-ext-mcp/mcp.ail:3  std/fs.readFile  {FS}
+      packages/motoko-ext-mcp/register.ail:3  std/env.getEnvOr  {Env}
+  microrag -- 2 ambient source(s), 0 ExtPorts field call(s) in closure, 15 port-view projection(s)
+      packages/motoko-ext-microrag/register.ail:31  std/process.exec  {Process}
+      packages/motoko-ext-microrag/register.ail:32  std/fs.writeFile  {FS}
+  omnigraph -- 5 ambient source(s), 0 ExtPorts field call(s) in closure, 15 port-view projection(s)
+      packages/motoko-ext-omnigraph/exec.ail:5  std/process.exec  {Process}
+      packages/motoko-ext-omnigraph/prompts.ail:3  std/fs.fileExists  {FS}
+      packages/motoko-ext-omnigraph/prompts.ail:3  std/fs.readFile  {FS}
+      packages/motoko-ext-omnigraph/register.ail:3  std/env.getEnvOr  {Env}
+      packages/motoko-ext-omnigraph/register.ail:4  std/extension.requireWorkdirFile  {FS}
+  repetition_guard -- 1 ambient source(s), 0 ExtPorts field call(s) in closure, 15 port-view projection(s)
+      packages/motoko-ext-repetition-guard/register.ail:16  std/env.getEnvOr  {Env}
+  scratchpad -- 2 ambient source(s), 0 ExtPorts field call(s) in closure, 15 port-view projection(s)
+      packages/motoko_scratchpad/register.ail:3  std/env.getEnvOr  {Env}
+      src/core/env_client.ail:21  std/net.httpPost  {Net}
+  test_dummy -- 1 ambient source(s), 0 ExtPorts field call(s) in closure, 15 port-view projection(s)
+      packages/motoko-ext-test-dummy/register.ail:16  std/env.getEnvOr  {Env}
+
+RESULT: PASS -- 18/18 extensions resolved, 18/18 std modules resolved, 0 unresolved symbols.
+exit=0
+
+== make ext_hook_scope
+  agentcli                config-caps       pass    
+  ailang_docs             config-caps       pass    
+  compaction_ai           config-caps       pass    
+  compaction_structural   config-caps       pass    
+  compose                 config-caps       pass    
+  context_mode            config-caps       pass    
+  decision_framework      config-caps       pass    
+  empty_stop_guard        config-caps       pass    
+  exa_search              config-caps       pass    
+  herdr                   config-caps       pass    
+  mcp                     config-caps       pass    
+  microrag                config-caps       pass    
+  omnigraph               config-caps       pass    
+  progress_contract_guard config-caps       pass    
+  repetition_guard        config-caps       pass    
+  scratchpad              config-caps       pass    
+  test_dummy              config-caps       pass    
+
+REGISTRATION SHAPE: pass 18 of 18; fail 0
+  binding rejections      0  (-)  -- ADR D2: red by these on the unmigrated tree
+  head rejections         0  (return-shape-unsupported: the 7.4 bare list, or a record not at the registration tail)
+  delegation rejections   0
+  caps rejections         0
+  enumeration             0  (list-not-enumerable)
+GATE: GREEN -- every installable extension has a total, passing registration-shape result.
+exit=0
+
+== re-run at HEAD 3fec575e (the commit's parent), 2026-09-21T21:10:41Z
+== make ext_hook_scope_selftest
+exit=0
+== make ext_ambient_inventory_selftest
+exit=0
+== make ext_call_inventory_selftest
+exit=0
+== make ext_call_inventory
+exit=0

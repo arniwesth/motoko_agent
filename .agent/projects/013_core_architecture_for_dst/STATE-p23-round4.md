@@ -4,20 +4,21 @@
 Measured: sessions open by `cat`-ing the predecessor's 20 KB answer file plus ~5 git/sha
 calls — ~36 KB and 6 tool calls before any work. Point the brief here instead.
 
-Last updated 2026-09-19 after P2.3·a18. Regenerate the row table with
+Last updated **2026-09-20** (observer session close; a37/a6). Regenerate the row table with
 `bash LEDGER-p23-part1-rows.sh > LEDGER-p23-part1-rows.tsv`.
 
 ## Identity
 
 | | value |
 |---|---|
-| A (eval worktree) | `/workspaces/motoko_agent-eval`, HEAD `20626054e8015ebd8623459789d8de8bb6c260d2`, detached |
+| **E (current)** | `562acadc…` (G2), then re-pinned again — `P2.2.unblock` cites **`5b839496`**; confirm against the run file before use |
+| A (eval worktree) | `/workspaces/motoko_agent-eval`, HEAD = **E**, detached |
 | A working tree | 14 files changed, +1804/−205, + `entry_config.py` and `p23_collector.py` untracked |
 | $T (sweep root) | `/workspaces/p23-sweep-r4` |
 | C (sweep clone) | `$T/clone` |
 | X6 | `20a78579e5eaef34bfdad10cc81d9f2f2e61d753` / tree `ec46735ce9715b1eba59f0d04de15679066296c9` |
-| **X7 (current)** | `9ed0d3895d541738fb205e970dc1848b32a12a84` / tree `f75099f9af2137096ebef983f5f9b268d77d6086` |
-| E record | `$T/erecord-x7.json` (X6-era: `$T/erecord-x6.json`) |
+| X7 (history) | `9ed0d3895d541738fb205e970dc1848b32a12a84` / tree `f75099f9af2137096ebef983f5f9b268d77d6086` |
+| E record | `.motoko/eval-corpus/_g2/e-record-562acadc.json`; sweep-era records under `$T/erecord-x*.json` |
 | Toolchain | AILANG v0.33.0 `ae36986c…`, binary `bfd1c3db…`, archived at `/workspaces/ailang-pins/` |
 
 Rebuilding the binary invalidates the freeze — restart if you do.
@@ -87,3 +88,26 @@ P2.3 is `blocked` in the graph pending **the round-4 review**, which has never r
 P2.3R's four attempts cover rounds 1–3 and the decisions review, none has seen X7.
 The two reviewable-now claims are the 2-file scope and the carry-over; both are frozen
 and checkable without any delta result.
+
+## Awaiting operator (restored 2026-09-20 — see the handoff, which is self-sufficient)
+
+This section was lost when a bulk commit (`5f6d4a6c`) landed a pre-session copy of this file.
+**`HANDOFF-2026-09-20-observer-session-close.md` carries the authoritative list**; it does not
+depend on this file. Open at close: ruling **D** (`candidate.py` `lock_root`) — blocks P2.2;
+adjudication of the 14 ruled-class regen failures at the new E; 1.16 teardown (unblocked, operator
+only); `evidence/` committed at the repo root instead of under this project dir; ADR-001
+(`021_herdr_delegation`) v0.1 unreviewed; `P2.3R·a6` has a receipt but no `progress`.
+
+## Detector candidates
+
+1. ~~`done` against an incomplete row table~~ — **BUILT**: `detect-settle.py`. Caught a 5th
+   instance (`P2.3·a37` at 9/18) on first run. Run it before every settle; exit 1 refuses.
+2. **A claimed launch with no process and no log** — 2 instances (`a26`). A launch claim must name
+   a pid that exists or a log that was written; `evidence: reported` is not enough.
+3. **A receipt digest that does not match its file** — 2 instances. `LEDGER-p23-part1-rows.sh`
+   already recomputes every digest; run it at settle.
+4. **Leg scripts whose `rc` is not derived from the work** — 5 of 6 at one point. Grep for the
+   template markers (`RC=97`, `on_signal`, `trap finish EXIT`, `timeout`) and refuse reuse without.
+
+**This file has more than one writer.** It was overwritten once today. Treat the handoff as the
+durable record and re-derive this file rather than trusting it.

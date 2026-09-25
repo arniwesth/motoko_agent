@@ -158,7 +158,12 @@ def check_omission_basis(profile_src, required):
     # B8: the 5.x `ExtensionHooks.on_budget_plan` field is gone; the same fact
     # now lives in the `BudgetShaper((ExtCtx, BudgetPlan) -> BudgetPatch ...)`
     # payload of the 6.0 `Capability` sum.
-    m = re.search(r"BudgetShaper\(\(ExtCtx,\s*BudgetPlan\)\s*->\s*(\w+)\s*(!\s*\{([^}]*)\})?",
+    # 031 P1.5r-a3: 8.0 takes the payload's context from `ExtCtx` to `PureCtx`
+    # (ADR-001 D2's views), as `run_declared_vs_performed.sh:128` already reads it.
+    # The anchor follows the 8.0 text; the assertions are unchanged — the return
+    # type (no successor) and the ROW (absent). A re-signed context is a changed
+    # payload (a major bump), so it is not matched loosely.
+    m = re.search(r"BudgetShaper\(\(PureCtx,\s*BudgetPlan\)\s*->\s*(\w+)\s*(!\s*\{([^}]*)\})?",
                   abi, re.M)
     if not m:
         fail("could not read `Capability.BudgetShaper`'s payload in "
@@ -320,9 +325,15 @@ def check_barrier_count(abi, disp):
     # criterion 1; see the docstring), so this widening was taken deliberately
     # and the two profile records that carry the count in PROSE moved with it.
     # `check_barrier_prose` below is what stops them drifting apart again.
-    slots = ["budget_shaper", "compactor", "tool_provider",
-             "response_interceptor", "solver_judge",
-             "exit_intent", "work_in_flight"]
+    #
+    # WIDENED AGAIN AT 8.0 (031 P0.5): the list is now `CAPABILITY_KINDS`'s
+    # "derived" rows, and it gained the two decision kinds. They declare no row,
+    # so they land in `covered` and the barrier count does not move; what moves
+    # is that the derivation DECIDES them, with the basis the coverage artifact
+    # records (`capability_purity_basis`: the views plus the boundary, ADR D2),
+    # instead of never looking.
+    purity = check_capability_kinds(abi, disp)
+    slots = [k for k, role in CAPABILITY_KINDS.items() if role == "derived"]
     payloads = capability_payloads(abi)
 
     slot_barriers, covered, gated = [], [], []
@@ -363,7 +374,9 @@ def check_barrier_count(abi, disp):
         print(f"      BARRIER  {slot}: {how}, declares ! {{{row}}}"
               f"  (outcome returns world state: {'yes' if returns_world[slot] else 'NO'})")
     for slot in covered:
-        print(f"      coverable {slot}: unconditionally dispatched, declares NO row")
+        basis = ("pure on the views plus the boundary (ADR-001 (031) D2), not on a declared row"
+                 if purity.get(slot) == "ViewsPlusBoundary" else "declares NO row")
+        print(f"      coverable {slot}: unconditionally dispatched, {basis}")
     for slot in gated:
         print(f"      gated     {slot}: excludable, so not a barrier")
 
@@ -434,6 +447,93 @@ def check_barrier_prose(barrier_slots):
 
 
 COVERAGE = REPO / "src/core/dst_profile_coverage.ail"
+
+
+#: EVERY capability kind, by kind id, and the part it plays in the slot-level
+#: barrier derivation (`check_barrier_count`). Held here rather than derived --
+#: the discipline `CAPABILITY_KINDS` carries in the hook-scope tool -- so that a
+#: kind the ABI and the coverage artifact gain and this list lacks is a FAIL
+#: (`check_capability_kinds`), never a kind the derivation silently skips.
+#:
+#:   "derived"  the derivation classifies it: barrier, coverable or gated.
+#:   "outside"  not a subject of the derivation, as since B8: `describe_tools`,
+#:              `prompt_shaper` and `tool_policy` are named here so that their
+#:              absence from the derivation is a recorded decision, and
+#:              `check_barrier_prose` refuses a record that calls one a barrier.
+#:
+#: 12 at ABI 8.0 (031 P0.5): the two decision kinds are "derived".
+CAPABILITY_KINDS = {
+    "describe_tools": "outside",
+    "prompt_shaper": "outside",
+    "tool_policy": "outside",
+    "budget_shaper": "derived",
+    "compactor": "derived",
+    "tool_provider": "derived",
+    "response_interceptor": "derived",
+    "solver_judge": "derived",
+    "exit_intent": "derived",
+    "work_in_flight": "derived",
+    "decision_solver_judge": "derived",
+    "decision_tool_policy": "derived",
+}
+
+#: The purity bases the coverage artifact may name (`PurityBasis`, 031 P0.5).
+PURITY_BASES = ("EffectRow", "DeclaredEmptyRow", "ViewsPlusBoundary")
+
+
+def purity_basis(disp, kind_id):
+    """The purity basis of a kind, read from `capability_purity_basis`'s
+    `XKind => EffectRow|DeclaredEmptyRow|ViewsPlusBoundary` arms."""
+    block = re.search(r"func capability_purity_basis\(.*?\n\}", disp, re.S)
+    if not block:
+        fail("could not find `capability_purity_basis` in dst_profile_coverage.ail; the basis a "
+             "rowless kind is covered on cannot be read")
+    m = re.search(re.escape(kind_ctor(kind_id)) + r"\s*=>\s*(" + "|".join(PURITY_BASES) + r")\b",
+                  block.group(0))
+    if not m:
+        fail(f"`{kind_ctor(kind_id)}` has no arm in `capability_purity_basis` naming one of "
+             f"{PURITY_BASES}")
+    return m.group(1)
+
+
+def check_capability_kinds(abi=None, disp=None):
+    """031 P0.5. `CAPABILITY_KINDS` against its two producers, both directions,
+    and the coverage artifact's purity classification against the ABI's rows:
+
+      1. the kind ids equal the coverage artifact's (`capability_kind_id`) and
+         the ABI's `Capability` variants, so a kind dropped from this list, or
+         added to the ABI and not here, is red;
+      2. per kind, a NON-EMPTY declared row is exactly an `EffectRow` basis; a
+         rowless kind is `DeclaredEmptyRow` or `ViewsPlusBoundary`, and which
+         one is the coverage artifact's decision (ADR D2), pinned by its tests.
+
+    Returns kind id -> basis for the caller's report."""
+    abi = ABI_TYPES.read_text() if abi is None else abi
+    disp = COVERAGE.read_text() if disp is None else disp
+    listed = set(CAPABILITY_KINDS)
+    table = set(capability_kind_ids(disp))
+    payloads = capability_payloads(abi)
+    if listed != table or listed != set(payloads):
+        fail(f"check_fixtures.CAPABILITY_KINDS {sorted(listed)} disagrees with the coverage "
+             f"artifact's kind table {sorted(table)} or the ABI's `Capability` variants "
+             f"{sorted(payloads)}: missing here {sorted((table | set(payloads)) - listed)}, "
+             f"unknown here {sorted(listed - (table & set(payloads)))}. A kind must be DECIDED "
+             "into this list (derived or outside), never inherited or skipped.")
+    bad = [role for role in CAPABILITY_KINDS.values() if role not in ("derived", "outside")]
+    if bad:
+        fail(f"CAPABILITY_KINDS names roles {bad}; the roles are 'derived' and 'outside'")
+    out = {}
+    for kid in sorted(listed):
+        row = payloads[kid][0]
+        basis = purity_basis(disp, kid)
+        if bool(row) != (basis == "EffectRow"):
+            fail(f"`{kid}` declares row {{{row}}} in the ABI and is classified {basis} in "
+                 "dst_profile_coverage.ail; a non-empty row is exactly `EffectRow`")
+        out[kid] = basis
+    views = sorted(k for k, b in out.items() if b == "ViewsPlusBoundary")
+    print(f"  ✓ CAPABILITY_KINDS: {len(listed)} kinds agree with the ABI and the coverage artifact; "
+          f"rowless on the views plus the boundary: {views}")
+    return out
 
 
 def kind_of(hook_id):
@@ -818,12 +918,12 @@ def check_abi_version():
     artifact class it had not been pointed at. The version is a fact declared in
     `packages/motoko-ext-abi/ailang.toml`, so it is read from there.
     """
-    m = re.search(r'^version\s*=\s*"([^"]+)"', ABI_TOML.read_text(), re.M)
-    if not m:
-        fail(f"could not read the ABI version from {ABI_TOML.relative_to(REPO)}; a profile's "
-             "recorded abi_version cannot be checked against the package that declares it")
-    live = m.group(1)
+    live = live_abi_version()
+    check_abi_prose(live)
+    check_abi_pins(live)
 
+
+def check_abi_prose(live):
     # ---- rule 1: PROSE, in profile records only ---------------------------
     #
     # EVERY profile, not only `driver_only`. One fact deserves one guard, and a
@@ -875,6 +975,37 @@ def check_abi_version():
           f"declares: {live} ({seen} site(s) across "
           f"{len([p for p in subjects if p.exists()])} file(s))")
 
+
+def live_abi_version():
+    m = re.search(r'^version\s*=\s*"([^"]+)"', ABI_TOML.read_text(), re.M)
+    if not m:
+        fail(f"could not read the ABI version from {ABI_TOML.relative_to(REPO)}; a profile's "
+             "recorded abi_version cannot be checked against the package that declares it")
+    return m.group(1)
+
+
+# FIXTURE LITERALS BUILT TO DIFFER — the one named exemption from rule 2.
+#
+# 031 P1.5r, under the operator's `Q-SWEEP` ruling (2026-09-20). Rule 2 cannot
+# tell a stale manifest pin from a test fixture that constructs a DIFFERING ABI
+# version on purpose, to exercise a version-mismatch finding. `SWEEP` flagged
+# exactly that: `admission.ail`'s A9b fixture, whose `"7.3"` exists so that
+# `a9b_abi` fires `A9b:AbiVersionDiffers`. Setting it to the live version — the
+# repair this rule used to recommend — makes that fixture assert nothing.
+#
+# This is an EXEMPTION, NOT A LOOSENING. Each entry is (file, anchor, reason):
+# the anchor is text on the literal's own line (the finding the fixture
+# expects), so the exemption follows the fixture if it moves and names nothing
+# else. Each entry must match EXACTLY ONE pin, and that pin must still DIFFER
+# from the live version; either failing is red. The `pins == 0` and `< 50
+# files` guards below count and fire exactly as before.
+ABI_PIN_EXEMPTIONS = [
+    ("src/eval/journal/admission.ail", "A9b:AbiVersionDiffers",
+     "the A9b fixture: a differing abi_version is what makes a9b_abi fire A9b:AbiVersionDiffers"),
+]
+
+
+def check_abi_pins(live):
     # ---- rule 2: PINS, wherever they are ----------------------------------
     #
     # WHY THIS EXISTS SEPARATELY, 2026-09-08. Rule 1 was written for a manifest
@@ -895,7 +1026,15 @@ def check_abi_version():
     #     `driver_only_manifest`'s signature — `source_revision` ("HEAD") and
     #     `toolchain` ("ailang 0.33.0") are never bare version literals.
     #   * an `abi_version: "..."` record field.
-    # Both are claims about the ABI this tree HAS. Prose is a claim about when
+    #   * the body of a function named `*abi_version()` returning a bare
+    #     version literal (031 P1.5r-a2). `dst_driver_plus_herdr.ail`'s
+    #     `herdr_abi_version()` fed `herdr_graded_dst.ail`'s manifest its
+    #     `abi_version` through a CALL, so the first pattern never saw a
+    #     literal there, and it said 7.4 at ABI 8.0 until P1.5r reported it.
+    #     The source is read at the definition, where the literal is, rather
+    #     than at each call site; `conformance_abi_version()` is the other
+    #     member of the class.
+    # All three are claims about the ABI this tree HAS. Prose is a claim about when
     # something landed, and rule 1 says why that must not be swept.
     #
     # THE DEEPER HOLE THIS DOES NOT CLOSE, stated because a gate that hides its
@@ -918,16 +1057,39 @@ def check_abi_version():
              "looking at almost nothing.")
     pins = 0
     drifted = []
+    exempted = {i: [] for i in range(len(ABI_PIN_EXEMPTIONS))}
     for path in pin_files:
         if not path.exists():
             continue
         text = path.read_text()
-        found = re.findall(r'_manifest\([^)]*?"([0-9]+\.[0-9]+)"', text, re.S) \
-            + re.findall(r'abi_version:\s*"([0-9]+\.[0-9]+)"', text)
-        for arg in found:
+        rel = str(path.relative_to(REPO))
+        found = [m.start(1) for m in re.finditer(r'_manifest\([^)]*?"([0-9]+\.[0-9]+)"', text, re.S)] \
+            + [m.start(1) for m in re.finditer(r'abi_version:\s*"([0-9]+\.[0-9]+)"', text)] \
+            + [m.start(1) for m in re.finditer(
+                r'func\s+\w*abi_version\(\)\s*->\s*string\s*\{\s*"([0-9]+\.[0-9]+)"', text)]
+        for pos in found:
+            arg = re.match(r'[0-9]+\.[0-9]+', text[pos:]).group(0)
+            lineno = text.count("\n", 0, pos) + 1
+            line = text.splitlines()[lineno - 1]
+            hit = [i for i, (f, anchor, _) in enumerate(ABI_PIN_EXEMPTIONS)
+                   if f == rel and anchor in line]
+            if hit:
+                exempted[hit[0]].append((f"{rel}:{lineno}", arg))
+                continue
             pins += 1
             if arg != live:
-                drifted.append(f"{path.relative_to(REPO)}: pinned '{arg}'")
+                drifted.append(f"{rel}:{lineno}: pinned '{arg}'")
+    for i, (f, anchor, reason) in enumerate(ABI_PIN_EXEMPTIONS):
+        sites = exempted[i]
+        if len(sites) != 1:
+            fail(f"the ABI-pin exemption ({f}, '{anchor}') matched {len(sites)} pin(s), not exactly "
+                 "one. An exemption that names nothing is stale, and one that names several "
+                 "exempts pins nobody reviewed: " + ", ".join(s for s, _ in sites))
+        site, arg = sites[0]
+        if arg == live:
+            fail(f"{site} is exempted as a fixture literal built to DIFFER ({reason}), but it reads "
+                 f"'{arg}', the live ABI version. Equal, the fixture asserts nothing — a vacuous "
+                 "test. Restore a differing version.")
     if pins == 0:
         fail("the pin sweep found no manifest `abi_version` pin anywhere in the tree, so it "
              "re-derived nothing. An assertion with no subject cannot be told from one that "
@@ -936,12 +1098,31 @@ def check_abi_version():
         fail(f"{ABI_TOML.relative_to(REPO)} declares ABI {live}, and these pin something else:\n  "
              + "\n  ".join(drifted)
              + f"\n\nA manifest whose whole job is exact reproducibility pins a contract this "
-               f"tree does not have. These are inert metadata strings — no assertion reads them "
-               f"and no digest covers them (`trajectory_key` digests interactions only) — so the "
-               f"repair is to set each to {live}.")
+               f"tree does not have. A manifest pin is inert metadata — no digest covers it "
+               f"(`trajectory_key` digests interactions only) — and is repaired by setting it to "
+               f"{live}. A literal BUILT TO DIFFER is not a pin: a fixture exercising a "
+               f"version-mismatch finding asserts nothing once it equals {live}, so do NOT set "
+               f"it; name it in ABI_PIN_EXEMPTIONS with the finding it exercises.")
     print(f"  ✓ every manifest ABI pin in the tree is the declared one: {live} "
           f"({pins} pin(s) across {len(pin_files)} tracked .ail file(s))")
+    for i, (f, anchor, reason) in enumerate(ABI_PIN_EXEMPTIONS):
+        site, arg = exempted[i][0]
+        print(f"  ✓ exempted, a fixture literal built to differ: {site} pins '{arg}' != {live} "
+              f"— {reason}")
 
 
 if __name__ == "__main__":
-    main()
+    if sys.argv[1:] == ["--capability-kinds"]:
+        # 031 P0.5: the kind list alone, without the producers the full run
+        # provisions (classifier 3 compiles every extension).
+        check_capability_kinds()
+    elif sys.argv[1:] == ["--abi-prose"]:
+        # 031 P1.5r-a2: rule 1 of check_abi_version alone (profile-record
+        # prose), without `derive()`, for the same reason as `--abi-pins`.
+        check_abi_prose(live_abi_version())
+    elif sys.argv[1:] == ["--abi-pins"]:
+        # 031 P1.5r: rule 2 of check_abi_version alone (the pin sweep), without
+        # `derive()`, which exits 1 on the tree while P1.2 is open.
+        check_abi_pins(live_abi_version())
+    else:
+        main()

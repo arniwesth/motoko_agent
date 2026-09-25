@@ -1,0 +1,9 @@
+module scripts/dst/fixtures/adr001_boundary/named_tuple_lambda
+import std/io (println)
+import scripts/dst/fixtures/adr001_boundary/boundary_types (Ctx, Capability, ToolPolicy)
+type W = { f: (Ctx) -> int }
+func apply(ctx: Ctx, w: W) -> int { w.f(ctx) }
+func body(ctx: Ctx) -> int { let pair = (func(c: Ctx) -> int ! {} { let _ = println(c.name); 1 }, 0); match pair { (f,n) => f(ctx) } }
+export func register_with_config(_cfg: int) -> [Capability] ! {IO} { [ToolPolicy(body)] }
+func invoke(cs: [Capability], ctx: Ctx) -> int { match cs { ToolPolicy(f) :: _ => f(ctx), [] => 0 } }
+export func main() -> () ! {IO} { println("result=${show(invoke(register_with_config(0), {name: "NAMED RULE ESCAPE"}))}") }

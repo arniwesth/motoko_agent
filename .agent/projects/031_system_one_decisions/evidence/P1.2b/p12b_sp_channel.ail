@@ -1,0 +1,48 @@
+-- 031 PLAN-001 P1.2b: scratchpad's one capture (the cell timeout) goes through the
+-- configuration channel. Run by `p12b_ws.sh probe sp`, which sets
+-- MOTOKO_SCRATCHPAD_TIMEOUT_SECS=7 (synthetic; default 30) and starts a loopback stand-in for
+-- the environment server (p12b_echo_server.py) that answers with the request body. The
+-- ToolProvider, invoked on a ProviderCtx stamped with the disclosed config, must send
+-- timeout 7; on an EMPTY config, 30. The probe's ports are core's no-op ports -- a harness
+-- value, never extension code (the scratchpad handler calls no port).
+module p12b_sp_channel
+
+import std/io (println)
+import std/env (getEnvOr)
+import std/string (contains)
+import std/json (Json, jo, ja, kv, encode, getInt)
+import std/option (Some, None)
+import pkg/sunholo/motoko_ext_abi/types (
+  Capability, ToolProvider, Handled, pure_ctx, provider_ctx, empty_ext_world
+)
+import pkg/sunholo/motoko_ext_scratchpad/register (register_with_config)
+import src/core/ext/ctx_defaults (noop_ext_ports)
+
+func sent(caps: [Capability], cfg: Json, url: string) -> string ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  match caps {
+    [] => "<no provider>",
+    c :: rest => match c {
+      ToolProvider(_, f) => {
+        let ctx = provider_ctx({ pure_ctx(cfg) | env_server_url: url, state_key: "p12b" }, noop_ext_ports(), empty_ext_world());
+        match f(ctx, { id: "c1", tool: "scratchpad", arguments: jo([kv("cells", ja([]))]) }).decision {
+          Handled(r) => if r.stdout == "" then "<stderr> ${r.stderr}" else r.stdout,
+          _ => "<delegated>"
+        }
+      },
+      _ => sent(rest, cfg, url)
+    }
+  }
+}
+
+export func main() -> () ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  let url = getEnvOr("P12B_ENV_URL", "");
+  let reg = register_with_config(0);
+  let cfg = reg.config;
+  let with_cfg = sent(reg.caps, cfg, url);
+  let with_empty = sent(reg.caps, jo([]), url);
+  let t = match getInt(cfg, "timeout_secs") { Some(n) => n, None => -1 };
+  if t != 7 then println("FAIL: registration did not disclose the timeout: ${encode(cfg)}")
+  else if not contains(with_cfg, "\"timeout\":7") then println("FAIL: the provider on the disclosed config sent: ${with_cfg}")
+  else if not contains(with_empty, "\"timeout\":30") then println("FAIL: the provider on an EMPTY config sent: ${with_empty} -- the timeout is not coming from ext_config")
+  else println("OK: channel -- the cell timeout disclosed as config and read back from ext_config only")
+}

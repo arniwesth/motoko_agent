@@ -1,0 +1,9 @@
+module local/probe/r2
+import std/json (jo)
+import pkg/sunholo/motoko_ext_abi/types (ExtRegistration, ToolProvider, ProviderCtx, ToolCallEnvelope, ToolHandleOutcome, ToolHandleDecision)
+func handle(ctx: ProviderCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  { decision: Delegate, next_state: ctx.world }
+}
+export func register_with_config(_cfg: a) -> ExtRegistration {
+  { config: jo([]), caps: [ToolProvider([], handle)] }
+}

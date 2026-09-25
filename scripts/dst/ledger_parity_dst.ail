@@ -61,7 +61,7 @@ import std/result (Result, Ok, Err)
 import std/ai (Message)
 import src/core/config (CostRates)
 import pkg/sunholo/motoko_ext_abi/types (
-  BudgetPlan, ExtRuntime, ExtCtx, VerificationConfig,
+  BudgetPlan, ExtRuntime, PureCtx, AiCtx, ProviderCtx, InterceptCtx, ProcessCtx, VerificationConfig,
   ToolCallEnvelope, ToolPolicyDecision, Allow, Deny, Pending, DenyAfterTimeout,
   ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, PreStepOutcome,
   PromptPatch, BudgetPatch, Msg, Delegate, Handled, NoIntercept, NoDecision, PassThrough
@@ -184,36 +184,37 @@ pure func no_verification() -> VerificationConfig {
   { enabled: false, command: "" }
 }
 
-func base_hooks(id: string, policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision) -> FixtureHooks {
+func base_hooks(id: string, policy: (PureCtx, ToolCallEnvelope) -> ToolPolicyDecision) -> FixtureHooks {
   fixture_hooks(id, base_overrides(policy))
 }
 
 -- B7: the overrides as a value, updated by KIND below (no slot names).
-func base_overrides(policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision) -> FixtureOverrides {
+func base_overrides(policy: (PureCtx, ToolCallEnvelope) -> ToolPolicyDecision) -> FixtureOverrides {
   {
+    config: jo([]),
     tools: [],
     describe: \_ . [],
-    prompt: func(_ctx: ExtCtx) -> PromptPatch { { prepend: [], append: [] } },
-    budget: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
+    prompt: func(_ctx: PureCtx) -> PromptPatch { { prepend: [], append: [] } },
+    budget: func(_ctx: PureCtx, _plan: BudgetPlan) -> BudgetPatch {
       { requested_total: None, requested_solver: None, requested_verifier: None }
     },
-    compact: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} {
+    compact: func(ctx: AiCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} {
       { decision: PassThrough, next_state: ctx.world }
     },
     policy: policy,
-    provide: func(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+    provide: func(ctx: ProviderCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
       { decision: Delegate, next_state: ctx.world }
     },
-    intercept: func(ctx: ExtCtx, _text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
+    intercept: func(ctx: InterceptCtx, _text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
       { decision: NoIntercept, next_state: ctx.world }
     },
-    judge: func(ctx: ExtCtx, _text: string) -> FinalizeOutcome ! {Process} {
+    judge: func(ctx: ProcessCtx, _text: string) -> FinalizeOutcome ! {Process} {
       { decision: NoDecision, next_state: ctx.world }
     }
   }
 }
 
-func rt_with(id: string, policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision) -> ExtRuntime {
+func rt_with(id: string, policy: (PureCtx, ToolCallEnvelope) -> ToolPolicyDecision) -> ExtRuntime {
   { registry: { entries: [base_hooks(id, policy)] }, strict_mode: false, verification: no_verification() }
 }
 
@@ -236,7 +237,7 @@ func handled_rt() -> ExtRuntime {
   let hooks = fixture_hooks("d2_handled", {
     base_overrides(\_ctx _call. Allow) |
     tools: ["BashExec"],
-    provide: func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+    provide: func(ctx: ProviderCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
       {
         decision: Handled({
           tool_call_id: call.id,
@@ -262,7 +263,7 @@ func parked_rt() -> ExtRuntime {
   let hooks = fixture_hooks("w4_parked", {
     base_overrides(\_ctx _call. Allow) |
     tools: ["Delegate", "DelegateCheck"],
-    provide: func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+    provide: func(ctx: ProviderCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
       if call.tool == "Delegate" then
         { decision: Handled({ tool_call_id: call.id, tool: call.tool, exit_code: 0, stdout: "delegated lp-h1", stderr: "",
             metadata: jo([kv("wait", jo([kv("id", js("lp-h1")), kv("delegate_kind", js("claude")), kv("locator", jo([kv("pane", js("pane-lp"))])),

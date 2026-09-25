@@ -61,10 +61,11 @@ module sunholo/motoko_ext_repetition_guard/repetition_guard
 -- That trade is an operator's to make, not this guard's.
 
 import std/string (trim, intToStr, length)
-import std/json (encode, decode)
+import std/json (Json, encode, decode, jo, kv, jint, getInt)
+import std/option (Some, None)
 import std/result (Ok, Err)
 import pkg/sunholo/motoko_ext_abi/types (
-  ExtCtx, Msg, ToolCall, ToolCallEnvelope,
+  PureCtx, Msg, ToolCall, ToolCallEnvelope,
   ToolPolicyDecision, Deny, NoOpinion,
   FinalizeDecision, Accept, NoDecision
 )
@@ -93,6 +94,24 @@ export pure func call_budget() -> int
 export pure func answer_budget() -> int
   tests [((), 2)]
   { 2 }
+
+-- THE BUDGETS CROSS INTO THE CALLBACKS AS CONFIGURATION (ABI 8.0, 031 ADR-001
+-- D2 and Amendment 3). `register` resolves them once, from the operator's
+-- environment, and discloses the result as `{"calls": n, "answers": n}`; the
+-- host stamps it as `ext_config` on every view it builds for this extension.
+-- Encoded once here, decoded per call by both halves. A key that is absent
+-- reads as the default budget, so an empty configuration is the stock guard.
+export pure func budget_config(calls: int, answers: int) -> Json {
+  jo([kv("calls", jint(calls)), kv("answers", jint(answers))])
+}
+
+export pure func call_budget_of(cfg: Json) -> int {
+  match getInt(cfg, "calls") { Some(n) => n, None => call_budget() }
+}
+
+export pure func answer_budget_of(cfg: Json) -> int {
+  match getInt(cfg, "answers") { Some(n) => n, None => answer_budget() }
+}
 
 -- HOW LONG A REPEATED TEXT MUST BE TO COUNT AS RESTATEMENT AT ALL.
 --
@@ -202,7 +221,7 @@ pure func max_for_sig(all: [Seen], xs: [Seen], sig: string) -> int {
 -- Grouping by the pair rather than by the call alone is what keeps a moving poll
 -- out of the count: eight `DelegateCheck`s reporting eight different elapsed
 -- times are eight distinct pairs, and none of them reaches the budget.
-export pure func worst_repeat(ctx: ExtCtx, sig: string) -> int {
+export pure func worst_repeat(ctx: PureCtx, sig: string) -> int {
   let seen = calls_of(ctx.history_slice, ctx.history_slice);
   max_for_sig(seen, seen, sig)
 }
@@ -226,7 +245,7 @@ pure func last_assistant(msgs: [Msg], best: string) -> string {
   }
 }
 
-export pure func restating(ctx: ExtCtx, budget: int, min_chars: int) -> int {
+export pure func restating(ctx: PureCtx, budget: int, min_chars: int) -> int {
   let text = trim(last_assistant(ctx.history_slice, ""));
   if length(text) < min_chars then 0
   else {
@@ -244,11 +263,11 @@ export pure func restating(ctx: ExtCtx, budget: int, min_chars: int) -> int {
 -- and is covered by the same gate as everything else. An operator reproducing a
 -- loop needs the guard inert, and inert is not the same as absent: the atom
 -- still registers and still abstains, so nothing downstream changes shape.
-export pure func decide_call_with_budget(ctx: ExtCtx, call: ToolCallEnvelope, budget: int) -> ToolPolicyDecision {
+export pure func decide_call_with_budget(ctx: PureCtx, call: ToolCallEnvelope, budget: int) -> ToolPolicyDecision {
   decide_call_full(ctx, call, budget, answer_budget(), restate_min_chars())
 }
 
-export pure func decide_call_full(ctx: ExtCtx, call: ToolCallEnvelope,
+export pure func decide_call_full(ctx: PureCtx, call: ToolCallEnvelope,
                                   budget: int, restate_budget: int, min_chars: int) -> ToolPolicyDecision {
   if budget <= 0 then NoOpinion
   else {
@@ -264,7 +283,7 @@ export pure func decide_call_full(ctx: ExtCtx, call: ToolCallEnvelope,
   }
 }
 
-export pure func decide_call(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolPolicyDecision
+export pure func decide_call(ctx: PureCtx, call: ToolCallEnvelope) -> ToolPolicyDecision
   { decide_call_with_budget(ctx, call, call_budget()) }
 
 -- ---------------------------------------------------------------------------
@@ -292,7 +311,7 @@ pure func count_answer(msgs: [Msg], text: string) -> int {
   }
 }
 
-export pure func prior_answers(ctx: ExtCtx, candidate: string) -> int
+export pure func prior_answers(ctx: PureCtx, candidate: string) -> int
   { count_answer(drop_last(ctx.history_slice), trim(candidate)) }
 
 -- ACCEPT, NOT FEEDBACK. A model that has said the same thing three times is not
@@ -304,11 +323,11 @@ export pure func prior_answers(ctx: ExtCtx, candidate: string) -> int
 -- A BLANK CANDIDATE IS NOT THIS GUARD'S. `empty_stop_guard` asks for more on
 -- exactly that message; accepting nothing would contradict it on the same
 -- message, and between the two the one that asks for a real answer is right.
-export pure func decide_answer_with_budget(ctx: ExtCtx, candidate: string, budget: int) -> FinalizeDecision {
+export pure func decide_answer_with_budget(ctx: PureCtx, candidate: string, budget: int) -> FinalizeDecision {
   if budget <= 0 || trim(candidate) == "" then NoDecision
-  else if prior_answers(ctx, candidate) >= budget then Accept(candidate)
+  else if prior_answers(ctx, candidate) >= budget then Accept
   else NoDecision
 }
 
-export pure func decide_answer(ctx: ExtCtx, candidate: string) -> FinalizeDecision
+export pure func decide_answer(ctx: PureCtx, candidate: string) -> FinalizeDecision
   { decide_answer_with_budget(ctx, candidate, answer_budget()) }

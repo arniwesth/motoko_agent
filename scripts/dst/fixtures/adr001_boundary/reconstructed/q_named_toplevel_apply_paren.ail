@@ -1,0 +1,13 @@
+-- PLAN-001 (031) P0.2b. Reconstructed from shape, not quoted source.
+-- Review 5 (REVIEW-adr001-v0.5-verdicts-claude-fable-5-1.md) §A.3 table row, verbatim:
+-- | `q_named_toplevel_apply_paren` | same, `(w.f)(ctx)` | 1 | — | rejected: eff(w) |
+module scripts/dst/fixtures/adr001_boundary/reconstructed/q_named_toplevel_apply_paren
+import std/io (println)
+import scripts/dst/fixtures/adr001_boundary/types (PureCtx, Slot, Pure)
+type W = { f: (PureCtx) -> int }
+let w: W = { f: func(c: PureCtx) -> int ! {} { let _ = println(c.name); 1 } }
+func apply(ctx: PureCtx, w: W) -> int { (w.f)(ctx) }
+func body(ctx: PureCtx) -> int { apply(ctx, w) }
+func build() -> Slot { Pure(body) }
+func invoke(s: Slot, ctx: PureCtx) -> int { match s { Pure(f) => f(ctx) } }
+export func main() -> () ! {IO} { println("result=${show(invoke(build(), {name: "EFFECT WITH NO PORTS OR WORLD"}))}") }

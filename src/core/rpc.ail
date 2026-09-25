@@ -28,9 +28,9 @@ import src/core/prompts (with_agents_context)
 import src/core/phase_vocab (msgs_to_messages, system_prefix_digest_for)
 import src/core/journal (fold_journal, journal_leaf, parse_journal_text, plan_resume, refusal_id, refusal_message, Refusal, Header, ResumePlan, ResumeInvocation)
 import src/core/config  (RuntimeConfig, InvocationConfig, load_runtime_config, load_invocation_config, CostRates)
-import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, BudgetPlan, ExtRuntime)
+import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, BudgetPlan, ExtRuntime, NotReached)
 import src/core/ext/runtime (init_runtime_with_config, loaded_extension_names, ext_set_digest, dispatch_build_system_prompt, dispatch_budget_plan)
-import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
+import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry, empty_tool_evidence)
 
 -- RunSettings carries the agent's runtime knobs from RuntimeConfig into
 -- compute_budget_plan and the v2 entry point. Preserved post-M10 because
@@ -147,7 +147,7 @@ func compute_budget_plan(
 	    context_limit: context_limit,
 	    ports: noop_ext_ports(),
 	    artifacts: empty_ext_artifacts(),
-	    telemetry: zero_token_telemetry(), world: empty_ext_world()
+	    telemetry: zero_token_telemetry(), verification: NotReached, tool_evidence: empty_tool_evidence(), decision_state: None, world: empty_ext_world() -- 8.0 (D3): truthful defaults; an INLINE literal the name search missed (P1.1 attempt 2)
 	  };
   let patched = dispatch_budget_plan(ext_runtime, ctx, base);
   clamp_budget_plan(patched, max_steps)
@@ -380,7 +380,7 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
 	    context_limit: context_limit,
 	    ports: noop_ext_ports(),
 	    artifacts: empty_ext_artifacts(),
-	    telemetry: zero_token_telemetry(), world: empty_ext_world()
+	    telemetry: zero_token_telemetry(), verification: NotReached, tool_evidence: empty_tool_evidence(), decision_state: None, world: empty_ext_world() -- 8.0 (D3): truthful defaults; an INLINE literal the name search missed (P1.1 attempt 2)
 	  };
   let system = dispatch_build_system_prompt(ext_runtime, system_ctx, system_with_agents);
 
@@ -489,7 +489,7 @@ func build_system_msg(ext_runtime: ExtRuntime, raw_system: string, task: string,
     context_limit: context_limit,
     ports: noop_ext_ports(),
     artifacts: empty_ext_artifacts(),
-    telemetry: zero_token_telemetry(), world: empty_ext_world()
+    telemetry: zero_token_telemetry(), verification: NotReached, tool_evidence: empty_tool_evidence(), decision_state: None, world: empty_ext_world() -- 8.0 (D3): truthful defaults; an INLINE literal the name search missed (P1.1 attempt 2)
   };
   let system = dispatch_build_system_prompt(ext_runtime, system_ctx, system_with_agents);
   { role: "system", content: system, tool_calls: [], tool_call_id: "" }

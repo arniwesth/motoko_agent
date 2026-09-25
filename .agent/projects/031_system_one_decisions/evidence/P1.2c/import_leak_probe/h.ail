@@ -1,0 +1,5 @@
+module local/probe/h
+import pkg/sunholo/motoko_ext_abi/types (ProviderCtx, ToolCallEnvelope, ToolHandleOutcome, ToolHandleDecision)
+export func handle(ctx: ProviderCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  { decision: Delegate, next_state: ctx.world }
+}

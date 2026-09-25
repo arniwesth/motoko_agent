@@ -89,8 +89,8 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
     expect_reject_prefix()
     + expect_reject_pair()
     + expect_reject_nocache()
-    + expect_accept("compaction_ai", ai)
-    + expect_accept("compaction_structural", structural);
+    + expect_accept("compaction_ai", ai.caps)
+    + expect_accept("compaction_structural", structural.caps);
   if failures == 0 then println("conformance self-test PASS")
   else {
     let _ = println("conformance self-test FAIL count=${show(failures)}");

@@ -1,0 +1,53 @@
+# 031 PLAN-001 P1.1 mutgate spec. fix_id <TAB> target_file <TAB> sed_expr <TAB> test_cmd
+# Every test_cmd is the workspace helper (evidence/P1.1/p11_core_check.sh), which
+# copies the repo's src/core, so a mutation applied to the clone's file is what
+# gets tested; nothing resolves to the primary checkout (see the helper header).
+#
+# --- the brief's four named rows -------------------------------------------
+# a legacy + new variant in one vote family ACCEPTED -> red (both families)
+vote_family_finalize	src/core/ext/registry_normalize.ail	s/    DecisionSolverJudge(_, _, _) => Some("finalize"),/    DecisionSolverJudge(_, _, _) => None,/	bash .agent/projects/031_system_one_decisions/evidence/P1.1/p11_core_check.sh test src/core/ext/registry_normalize.ail
+vote_family_tool_policy	src/core/ext/registry_normalize.ail	s/    DecisionToolPolicy(_, _, _) => Some("tool-policy"),/    DecisionToolPolicy(_, _, _) => None,/	bash .agent/projects/031_system_one_decisions/evidence/P1.1/p11_core_check.sh test src/core/ext/registry_normalize.ail
+# ext_set_digest made to include config -> red
+ext_set_digest_kind_only	src/core/ext/runtime.ail	s/"${e.id}\[/"${e.id}${encode(e.config)}[/	bash .agent/projects/031_system_one_decisions/evidence/P1.1/p11_core_check.sh test src/core/ext/runtime.ail
+# the config digest omitting a constructor data position -> red, one row per position
+config_digest_tool_names	src/core/ext/registry_normalize.ail	s/    ToolProvider(names, _) => jo(\[kind, kv("tools", ja(strings_json(names)))\]),/    ToolProvider(_, _) => jo([kind]),/	bash .agent/projects/031_system_one_decisions/evidence/P1.1/p11_core_check.sh test src/core/ext/registry_normalize.ail
+config_digest_exit_label	src/core/ext/registry_normalize.ail	s/    ExitIntent(label, enabled, _) => jo(\[kind, kv("label", js(label)), kv("enabled", jb(enabled))\]),/    ExitIntent(_, enabled, _) => jo([kind, kv("enabled", jb(enabled))]),/	bash .agent/projects/031_system_one_decisions/evidence/P1.1/p11_core_check.sh test src/core/ext/registry_normalize.ail
+config_digest_exit_enabled	src/core/ext/registry_normalize.ail	s/    ExitIntent(label, enabled, _) => jo(\[kind, kv("label", js(label)), kv("enabled", jb(enabled))\]),/    ExitIntent(label, _, _) => jo([kind, kv("label", js(label))]),/	bash .agent/projects/031_system_one_decisions/evidence/P1.1/p11_core_check.sh test src/core/ext/registry_normalize.ail
+config_digest_work_label	src/core/ext/registry_normalize.ail	s/    WorkInFlight(label, _) => jo(\[kind, kv("label", js(label))\]),/    WorkInFlight(_, _) => jo([kind]),/	bash .agent/projects/031_system_one_decisions/evidence/P1.1/p11_core_check.sh test src/core/ext/registry_normalize.ail
+# DescribeTools passed {} instead of e.config -> red
+describe_tools_config	src/core/tool_catalog.ail	s/    DescribeTools(f) :: rest => f(config) ++ declared_schemas(config, rest),/    DescribeTools(f) :: rest => f(jo([])) ++ declared_schemas(config, rest),/	bash .agent/projects/031_system_one_decisions/evidence/P1.1/p11_core_check.sh test src/core/tool_catalog.ail
+#
+# --- the rest of what P1.1 adds ---------------------------------------------
+# the two families are independent (one finalize + one tool-policy coexist)
+vote_families_independent	src/core/ext/registry_normalize.ail	s/Some("finalize")/Some("tool-policy")/g	bash .agent/projects/031_system_one_decisions/evidence/P1.1/p11_core_check.sh test src/core/ext/registry_normalize.ail
+# config carried onto the entry unchanged
+config_carried_unchanged	src/core/ext/registry_normalize.ail	s/    Ok(_) => Ok({ id: id, config: config, caps: caps })/    Ok(_) => Ok({ id: id, config: jo([]), caps: caps })/	bash .agent/projects/031_system_one_decisions/evidence/P1.1/p11_core_check.sh test src/core/ext/registry_normalize.ail
+# the config digest covers config at all
+config_digest_config	src/core/ext/registry_normalize.ail	s/  jo(\[kv("config", config), kv("atoms", ja(atoms_data(caps)))\])/  jo([kv("atoms", ja(atoms_data(caps)))])/	bash .agent/projects/031_system_one_decisions/evidence/P1.1/p11_core_check.sh test src/core/ext/registry_normalize.ail
+# the digest is over CANONICAL json (sorted keys)
+config_digest_canonical	src/core/ext/registry_normalize.ail	s/    JObject(kvs) => JObject(sort_kvs(canonical_kvs(kvs))),/    JObject(kvs) => JObject(kvs),/	bash .agent/projects/031_system_one_decisions/evidence/P1.1/p11_core_check.sh test src/core/ext/registry_normalize.ail
+# the kind enumeration names the decision variants
+kind_name_decision	src/core/ext/registry_normalize.ail	s/    DecisionSolverJudge(_, _, _) => "DecisionSolverJudge",/    DecisionSolverJudge(_, _, _) => "SolverJudge",/	bash .agent/projects/031_system_one_decisions/evidence/P1.1/p11_core_check.sh test src/core/ext/registry_normalize.ail
+ext_set_digest_decision_kind	src/core/ext/runtime.ail	s/    DecisionSolverJudge(_, _, _) => "decision_solver_judge",/    DecisionSolverJudge(_, _, _) => "solver_judge",/	bash .agent/projects/031_system_one_decisions/evidence/P1.1/p11_core_check.sh test src/core/ext/runtime.ail
+#
+# --- ext_config stamped on every view, one row per dispatcher ----------------
+stamp_prompt_shaper	src/core/ext/runtime.ail	s/fold_prompt_atoms(e.id, e.caps, 0, entry_base(ctx, e), base)/fold_prompt_atoms(e.id, e.caps, 0, pure_ctx_of(ctx, jo([])), base)/	bash .agent/projects/031_system_one_decisions/evidence/P1.1/p11_core_check.sh test src/core/ext/runtime.ail
+stamp_budget_shaper	src/core/ext/runtime.ail	s/fold_budget_atoms(e.id, e.caps, 0, entry_base(ctx, e), plan)/fold_budget_atoms(e.id, e.caps, 0, pure_ctx_of(ctx, jo([])), plan)/	bash .agent/projects/031_system_one_decisions/evidence/P1.1/p11_core_check.sh test src/core/ext/runtime.ail
+stamp_compactor	src/core/ext/runtime.ail	s/fold_pre_step_atoms(e.id, e.caps, 0, entry_base(ctx, e), ports, msgs, artifacts, world)/fold_pre_step_atoms(e.id, e.caps, 0, pure_ctx_of(ctx, jo([])), ports, msgs, artifacts, world)/	bash .agent/projects/031_system_one_decisions/evidence/P1.1/p11_core_check.sh test src/core/ext/runtime.ail
+stamp_tool_policy	src/core/ext/runtime.ail	s/collect_policy_atoms(e.id, e.caps, 0, entry_base(ctx, e), call)/collect_policy_atoms(e.id, e.caps, 0, pure_ctx_of(ctx, jo([])), call)/	bash .agent/projects/031_system_one_decisions/evidence/P1.1/p11_core_check.sh test src/core/ext/runtime.ail
+stamp_tool_provider	src/core/ext/runtime.ail	s/first_handle_atoms(e.id, e.caps, entry_base(ctx, e), ports, call, name, world)/first_handle_atoms(e.id, e.caps, pure_ctx_of(ctx, jo([])), ports, call, name, world)/	bash .agent/projects/031_system_one_decisions/evidence/P1.1/p11_core_check.sh test src/core/ext/runtime.ail
+stamp_response_interceptor	src/core/ext/runtime.ail	s/first_intercept_atoms(e.id, e.caps, entry_base(ctx, e), ports, response_text, world)/first_intercept_atoms(e.id, e.caps, pure_ctx_of(ctx, jo([])), ports, response_text, world)/	bash .agent/projects/031_system_one_decisions/evidence/P1.1/p11_core_check.sh test src/core/ext/runtime.ail
+stamp_exit_intent	src/core/ext/runtime.ail	s/render_intent_atoms(e.id, e.caps, entry_base(ctx, e), ports, world)/render_intent_atoms(e.id, e.caps, pure_ctx_of(ctx, jo([])), ports, world)/	bash .agent/projects/031_system_one_decisions/evidence/P1.1/p11_core_check.sh test src/core/ext/runtime.ail
+stamp_work_in_flight	src/core/ext/runtime.ail	s/work_atoms(e.id, e.caps, entry_base(ctx, e), ports, world)/work_atoms(e.id, e.caps, pure_ctx_of(ctx, jo([])), ports, world)/	bash .agent/projects/031_system_one_decisions/evidence/P1.1/p11_core_check.sh test src/core/ext/runtime.ail
+stamp_solver_judge	src/core/ext/runtime.ail	s/collect_finalize_atoms(e.id, e.caps, 0, entry_base(ctx, e), candidate, world)/collect_finalize_atoms(e.id, e.caps, 0, pure_ctx_of(ctx, jo([])), candidate, world)/	bash .agent/projects/031_system_one_decisions/evidence/P1.1/p11_core_check.sh test src/core/ext/runtime.ail
+# the 7.3 bootstrap rule survives the projection
+work_in_flight_bootstrap	src/core/ext/runtime.ail	s/f(fs_ctx({ base | work_in_flight: \[\] }, ports, stamp_holder(world, id)))/f(fs_ctx(base, ports, stamp_holder(world, id)))/	bash .agent/projects/031_system_one_decisions/evidence/P1.1/p11_core_check.sh test src/core/ext/runtime.ail
+#
+# --- precedence unchanged --------------------------------------------------
+precedence_tool_policy	src/core/ext/runtime.ail	s/        Deny(msg) => Deny(msg),/        Deny(_) => merge_tool_decisions(rest, seen_allow, seen_pending),/	bash .agent/projects/031_system_one_decisions/evidence/P1.1/p11_core_check.sh test src/core/ext/runtime.ail
+precedence_finalize	src/core/ext/runtime.ail	s/    ContinueWithFeedback(msg) :: _ => Some(msg),/    ContinueWithFeedback(_) :: rest => first_continue(rest),/	bash .agent/projects/031_system_one_decisions/evidence/P1.1/p11_core_check.sh test src/core/ext/runtime.ail
+#
+# --- attempt 2: the inline literal the name search missed --------------------
+# rpc.ail builds the budget-plan ExtCtx inline; drop the three D3 fields -> the
+# 20-field literal no longer matches 8.0's 23-field ExtCtx -> `ailang check` red
+rpc_inline_ext_ctx_literal	src/core/rpc.ail	s/verification: NotReached, tool_evidence: empty_tool_evidence(), decision_state: None, //	bash .agent/projects/031_system_one_decisions/evidence/P1.1/p11_core_check.sh check src/core/rpc.ail

@@ -1,0 +1,180 @@
+# P1.6r CHECKS -- AILANG v0.33.0. Workspace: git archive 6d81fbce (HEAD when checked; P1.3r follow-up landed
+# during this part) + this part's 18 paths only, root lock dropped and regenerated inside the workspace
+# (~/.cache/p16r/ws; not under /tmp -- the inventory harnesses refuse /tmp). First pass was on d83b8d63 (see README).
+
+## Exit 2 -- R-G targets these files feed, and the scripts' own targets
+
+### make registry_gen_check -> exit 0
+  ✓ src/core/ext/registry_generated.ail matches the generator
+
+### make driver_plus_no_ops -> exit 2
+  ✓ the recorded attribution reference is current: (c0fbf10, sha256:0211ac242f677bd392bb317611b03a335d266426ec9d050cd5cce4e96b8f5583)
+  ✓ installed 4 + omitted 14 = every extension in the resolved install set (the partition is checked against ailang.toml by the guard)
+  ✓ the runtime exclusion check finds NO exclusion in a NON-EMPTY install list: 4 extensions installed, 0 hooks excluded, so no dispatch can violate
+  ✓ the per-run execution manifest validates against the definition it realizes
+driver_plus_no_ops_dst PASS
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['/usr/bin/python3', '/home/motoko/.cache/p16r/ws/tools/ext_ambient_inventory/derive.py', '--json']' returned non-zero exit status 1.
+make: *** [Makefile:1374: driver_plus_no_ops] Error 1
+
+### make profile_definition -> exit 2
+  ✓ dispatch reaching an EXCLUDED hook returns a typed HarnessFailure (routing_violation)
+  ✓ dispatch reaching a COVERED hook proceeds (the guard is not fail-closed on everything)
+  ✓ an empty install list cannot violate: vacuous for driver_only, binding from C5
+profile_definition_dst PASS
+  ✓ ProfileDefinition declares all 15 fields (D5's ten as 12, plus A10's three)
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['/usr/bin/python3', '/home/motoko/.cache/p16r/ws/tools/ext_call_inventory/derive.py', '--json']' returned non-zero exit status 1.
+make: *** [Makefile:833: profile_definition] Error 1
+
+### make driver_only -> exit 2
+  ✓ routed-set claim, COMPUTED at the bound revision (nothing recorded):
+  ✓ decision 1: every unrouted reachable core site is DECLARED and INSTRUMENTED
+  ✓ the runtime exclusion check is VACUOUS for driver_only: nothing installed, nothing excluded, no dispatch can violate (binding from WI-C5)
+  ✓ the per-run execution manifest validates against the definition it realizes
+driver_only_dst PASS
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['/usr/bin/python3', '/home/motoko/.cache/p16r/ws/tools/ext_call_inventory/derive.py', '--json']' returned non-zero exit status 1.
+make: *** [Makefile:1344: driver_only] Error 1
+
+### make world_state -> exit 0
+  ✓ deterministic world completes with Env withheld (WI-D3; all 8 resolve_context_limit sites routed)
+  ✓ live world dies with Env withheld
+  ✓ deterministic world completes with FS withheld (WI-D3's file class)
+  ✓ live world dies with FS withheld
+  ✓ fully-seeded world completes with Process withheld (no real dispatch)
+  ✓ unseeded tool world dies with Process withheld
+  ✓ no driver module (src/core/*.ail) reaches std/rand
+  ✓ every run above completed without the Rand capability ever being granted
+
+### make compaction_dst -> exit 0
+compaction_policy_dst PASS count=3
+✓ Running scripts/dst/compaction_catalog_dst.ail
+✓ Running scripts/dst/runtime_status_tool_dst.ail
+runtime_status_tool_dst PASS count=5
+✓ Running scripts/dst/scripted_cursor_probe.ail
+scripted_cursor_probe PASS — the script index advanced under folding compaction
+✓ Running scripts/dst/long_qwen_compaction_dst.ail
+long_qwen_compaction_dst PASS count=12
+
+### make hook_guard -> exit 0
+✓ Running scripts/dst/hook_guard_dst.ail
+
+### make registry_multiplicity -> exit 0
+  ✓ one ToolProvider advertising 'Alpha' twice: [duplicate-tool-name] extension 'prov#4' advertises tool 'Alpha' twice, the second time in the ToolProvider at list position 1; provider names must be disjoint within an extension (D3)
+  ✓ second Compactor (fold kind): D4 SIGNED (fold_kind_repeats_allowed = true) -- second Compactor passes through at position 11, 12 atoms in order
+  ✓ a third ExitIntent reusing the label 'panes': [duplicate-exit-label] extension 'exit#5' registers a second ExitIntent labelled 'panes' at list position 11; intent labels must be disjoint within an extension (7.0)
+  ✓ registry of good + empty + bad: one bad extension rejects the WHOLE build -- [second-vote-atom] extension 'bad#2' registers a SolverJudge at list position 11 in a vote family that already has an atom; at most one of SolverJudge/DecisionSolverJudge and on
+  ✓ registry of good + empty + bad: D7 RECOMMENDED reading (empty_registration_omits = true) -- 'empty#1' omitted from the effective registry and NAMED in omitted_empty (B3 rejects it in a profile as installed-with-no-capabilities)
+  ✓ control: the boundary both accepts and rejects
+registry_multiplicity_dst PASS
+  ✓ src/core/ext/registry_normalize.ail
+
+### make ledger_parity -> exit 0
+  ✓ ToolPending: projected 1, returned 1
+  ✓ V2ToolDispatchComplete: projected 1, returned 1
+  ✓ V2ToolDispatchStart: projected 1, returned 1
+  ✓ WakeReceived: projected 1, returned 1
+  ✓ WorldRequest: projected 175, returned 175
+  witnessed=25 unwitnessed: CheckpointTaken CompactionExhausted EmptyStopFinalize ErrorEvent ExtInterceptHandled ExtSolverFeedback HistoryReplaced HybridBashExtracted PersistNudge SessionResumed StreamErrorRetry ToolArgumentsUndecodable
+  ✓ the fixture witnesses at least 17 required variants on both channels
+ledger_parity wire gate PASS
+
+### make park_resume -> exit 0
+  ✓ abort/dropped: no error event in either frame
+  ✓ resume_twice_started: nothing park-shaped on the wire — no wake_request, wake_received, park_entered or session_start
+  ✓ resume_twice_started: exactly one session_resumed on the wire, and no error
+  ✓ resume_twice_finished: nothing park-shaped on the wire — no wake_request, wake_received, park_entered or session_start
+  ✓ resume_twice_finished: exactly one session_resumed on the wire, and no error
+  ✓ resume_twice_parked: exactly one wake_received, for w4.r2.0.p0 on h2, and one session_start for w4.r2.0; none for w4.r1.0.p0; no wake_request
+  ✓ resume_twice_parked: exactly once, on the wire — wake_received(w4.r2.0.p0) precedes session_start(w4.r2.0); no error
+park_resume gate PASS
+
+### make ext_hook_scope_selftest -> exit 2
+  FAIL YIELD registration heads: expected {'a2a': 'capability-list', 'agentcli': 'capability-list', 'ailang_docs': 'capability-list', 'compaction_ai': 'capability-list', 'compaction_structural': 'capability-list', 'compose': 'capability-list', 'context_mode': 
+  FAIL YIELD registration shape: expected {'a2a': 'fail', 'agentcli': 'fail', 'ailang_docs': 'fail', 'compaction_ai': 'fail', 'compaction_structural': 'fail', 'compose': 'fail', 'context_mode': 'fail', 'decision_framework': 'fail', 'empty_stop_guard': 'fail', 
+  FAIL YIELD shape binding rejections: expected 35, measured 0 ({}). ADR D2 states the unmigrated tree is red by 35 bindings; this pin is the MEASURED number and moves only with a P1.2 batch or a recorded finding.
+  FAIL SHIPPED VERDICT MOVED: closure PORT-MEDIATED is [], expected ['compaction_structural', 'decision_framework', 'empty_stop_guard', 'progress_contract_guard']. WI-D15 measures a second reading and must not change the first.
+make: *** [Makefile:3218: ext_hook_scope_selftest] Error 1
+
+### make ext_call_inventory_selftest -> exit 0
+
+### ext_ambient_inventory/derive.py --json -> exit 1 (why driver_plus_no_ops stops after its acceptance script PASSes)
+  UNRESOLVED 18 of 18; unresolved_receivers per extension: [15, 16, 23]
+  every closure contains packages/motoko-ext-abi/types.ail, whose 8.0 projections (fs_ports/ai_ports/intercept_ports, :1238-1260)
+  take 15 ExtPorts fields as VALUES: 'ExtPorts field taken as a VALUE, not called: the function escapes'
+
+### ext_call_inventory/derive.py --json -> exit 1 (why profile_definition and driver_only stop after their acceptance scripts PASS)
+  UNRESOLVED 24: {'packages/motoko-ext-abi/types.ail': 15, 'packages/motoko-ext-agentcli/agentcli.ail': 1, 'packages/motoko-ext-compose/compose.ail': 8} -- same classifier-2 reading (escaped ExtPorts values)
+
+## Scripts run (ailang run, --ai-stub, workspace above)
+  run smoke_v2_handle -> exit 0: --- M5 handle smoke PASS: BashExec correctly delegated to native ---
+  run smoke_v2_policy_denial -> exit 0: Denial payload: {"error":"true","denied_by_policy":"true","tool":"BashExec","reason":"synthetic-deny-all: blocked for M4 smoke test"}
+  run smoke_v2_pending -> exit 0: done
+  run smoke_v2_compaction_chain -> exit 0: smoke_v2_compaction_chain PASS
+  run smoke_v2_pending_full_loop -> exit 0: smoke_v2_pending_full_loop PASS
+
+## Examples (D), workspace above
+  ailang test examples/smoke_a2a_delegate.ail -> 3 tests: 3 passed, 0 failed (first pass, d83b8d63 + these paths; mutgate row p16r_example_a2a_make_hooks baseline at 6d81fbce)
+  ailang run --entry main examples/smoke_registry_roundtrip.ail -> ✓ a2a registers capabilities / ✓ mcp registers capabilities
+  ailang test examples/smoke_registry_roundtrip.ail -> 4 tests: 2 passed, 2 failed -- the two UNTOUCHED mcp parse rows:
+    'harness evaluation failed: intToFloat: expected IntValue for arg 0, got *eval.TaggedValue' inside std/json decode under
+    ailang test; the same decode+parse_mcp_config under ailang run returns name=local transport=stdio. AILANG test-harness, not ABI.
+
+## Exit 4 -- the root lock
+ailang.lock regenerated with `ailang lock` at the repo root (AILANG v0.33.0, generator ailang lock v0.33.0)
+sunholo/logging                               0.4.0    source=registry (registry; not a path package)
+sunholo/motoko_ext_a2a                        lock 0.2.2   packages/motoko-ext-a2a/ailang.toml 0.2.2   OK
+sunholo/motoko_ext_abi                        lock 8.0     packages/motoko-ext-abi/ailang.toml 8.0     OK
+sunholo/motoko_ext_agentcli                   lock 0.1.0   packages/motoko-ext-agentcli/ailang.toml 0.1.0   OK
+sunholo/motoko_ext_ai_compat                  lock 0.2.1   packages/motoko-ext-ai-compat/ailang.toml 0.2.1   OK
+sunholo/motoko_ext_ailang_docs                lock 0.1.4   packages/motoko-ext-ailang-docs/ailang.toml 0.1.4   OK
+sunholo/motoko_ext_compaction_ai              lock 0.3.0   packages/motoko-ext-compaction-ai/ailang.toml 0.3.0   OK
+sunholo/motoko_ext_compaction_structural      lock 1.1.0   packages/motoko-ext-compaction-structural/ailang.toml 1.1.0   OK
+sunholo/motoko_ext_compose                    lock 0.2.4   packages/motoko-ext-compose/ailang.toml 0.2.4   OK
+sunholo/motoko_ext_conformance                lock 6.0.0   packages/motoko_ext_conformance/ailang.toml 6.0.0   OK
+sunholo/motoko_ext_context_mode               lock 0.2.2   packages/motoko-ext-context-mode/ailang.toml 0.2.2   OK
+sunholo/motoko_ext_decision_framework         lock 0.2.2   packages/motoko-ext-decision-framework/ailang.toml 0.2.2   OK
+sunholo/motoko_ext_empty_stop_guard           lock 0.1.0   packages/motoko-ext-empty-stop-guard/ailang.toml 0.1.0   OK
+sunholo/motoko_ext_exa_search                 lock 0.2.7   packages/motoko-ext-exa-search/ailang.toml 0.2.7   OK
+sunholo/motoko_ext_herdr                      lock 0.1.0   packages/motoko-ext-herdr/ailang.toml 0.1.0   OK
+sunholo/motoko_ext_mcp                        lock 0.2.7   packages/motoko-ext-mcp/ailang.toml 0.2.7   OK
+sunholo/motoko_ext_microrag                   lock 0.4.2   packages/motoko-ext-microrag/ailang.toml 0.4.2   OK
+sunholo/motoko_ext_omnigraph                  lock 0.2.3   packages/motoko-ext-omnigraph/ailang.toml 0.2.3   OK
+sunholo/motoko_ext_progress_contract_guard    lock 0.1.0   packages/motoko-ext-progress-contract-guard/ailang.toml 0.1.0   OK
+sunholo/motoko_ext_repetition_guard           lock 0.1.0   packages/motoko-ext-repetition-guard/ailang.toml 0.1.0   OK
+sunholo/motoko_ext_scratchpad                 lock 0.1.0   packages/motoko_scratchpad/ailang.toml 0.1.0   OK
+sunholo/motoko_ext_test_dummy                 lock 0.2.2   packages/motoko-ext-test-dummy/ailang.toml 0.2.2   OK
+ABI entry: {"name": "sunholo/motoko_ext_abi", "version": "8.0", "source": "path", "content_hash": "sha256:7804bdc524d4f36e780267bd1717e18b2cbb53fad7516601a64663e8fe692e2e", "interface_hash": "sha256:b7c7cb6f878bbe2719481a152e21eb27e699dafaf007bf0093397e7c10580f92"}
+entries 22, mismatches 0
+  primary checkout, root lock regenerated: ailang check examples/smoke_a2a_delegate.ail -> exit 0 (No errors found)
+  p16r_lock_check.py: regenerated lock GREEN; d83b8d63's lock RED (lock_abi_version ['7.4'] != '8.0'; conformance 5.0.0 != 6.0.0; stray sunholo/motoko_core)
+  NOTE: ailang check does NOT read a lock entry's version (measured: ABI entry set to 7.4 still checks clean) -- hence p16r_lock_check.py
+
+## B -- pinned data gates
+  scripts/dst/fixtures/adr001_boundary/gate/expected.json: every fx_* row 'ok' in make ext_hook_scope_selftest (its 4 failures are elsewhere, above)
+  tools/ext_call_inventory/fixtures/expected.json: make ext_call_inventory_selftest -> exit 0
+  tools/eval_protected/manifest-A.json: selftest.py --only committed_manifest_current --skip-crosscheck -> pass
+    (without --skip-crosscheck: 'parser cross-check FAILED: StepProvider@src/core/test/stub_step.ail' -- gen --at A reads commit 65003110, independent of HEAD)
+
+## Exit 1 -- every changed .ail checks on 8.0 (committed 6d81fbce + this part's paths, fresh lock-free workspace per run)
+# = each mutgate row's BASELINE and RESTORED runs (p16r_ws.sh; the row's test greps the 'p16r: ... ok' line), both exit 0:
+  examples/smoke_a2a_delegate.ail               baseline GREEN  restored GREEN   (row p16r_example_a2a_make_hooks)
+  examples/smoke_registry_roundtrip.ail         baseline GREEN  restored GREEN   (row p16r_example_roundtrip_make_hooks)
+  scripts/dst/hook_guard_dst.ail                baseline GREEN  restored GREEN   (row p16r_hook_guard_literal)
+  scripts/dst/ledger_parity_dst.ail             baseline GREEN  restored GREEN   (row p16r_ledger_parity_config)
+  scripts/dst/park_resume_dst.ail               baseline GREEN  restored GREEN   (row p16r_park_resume_config)
+  scripts/dst/registry_multiplicity_dst.ail     baseline GREEN  restored GREEN   (row p16r_registry_multiplicity_describe)
+  scripts/dst/runtime_status_tool_dst.ail       baseline GREEN  restored GREEN   (row p16r_runtime_status_describe)
+  scripts/dst/scripted_cursor_probe.ail         baseline GREEN  restored GREEN   (row p16r_scripted_cursor_config)
+  scripts/dst/world_state_poison.ail            baseline GREEN  restored GREEN   (row p16r_world_state_poison_config)
+  scripts/dst/world_state_probe.ail             baseline GREEN  restored GREEN   (row p16r_world_state_probe_aiports)
+  scripts/smoke_v2_compaction_chain.ail         baseline GREEN  restored GREEN   (row p16r_compaction_chain_literal)
+  scripts/smoke_v2_handle.ail                   baseline GREEN  restored GREEN   (row p16r_handle_trace_row)
+  scripts/smoke_v2_pending.ail                  baseline GREEN  restored GREEN   (row p16r_pending_literal)
+  scripts/smoke_v2_pending_full_loop.ail        baseline GREEN  restored GREEN   (row p16r_pending_full_loop_config)
+  scripts/smoke_v2_policy_denial.ail            baseline GREEN  restored GREEN   (row p16r_policy_denial_literal)
+# test kind: check for the 13 scripts' rows except registry_multiplicity_dst (ailang run IO main, 'registry_multiplicity_dst PASS'),
+# smoke_a2a_delegate (ailang test, 3/3), smoke_registry_roundtrip (ailang run IO,Env,FS main).
+
+## Exit 5 -- mutgate: 17/17 discriminate (9/9 + 8/8, two fresh clones at 6d81fbce + this part's paths); record mutgate-result.tsv

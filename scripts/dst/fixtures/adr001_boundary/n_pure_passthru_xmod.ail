@@ -1,0 +1,7 @@
+module scripts/dst/fixtures/adr001_boundary/n_pure_passthru_xmod
+import std/io (println)
+import scripts/dst/fixtures/adr001_boundary/types (PureCtx, Slot, Pure)
+import scripts/dst/fixtures/adr001_boundary/helpers (W, apply)
+func build() -> Slot { let w: W = { f: func(c: PureCtx) -> int ! {} { let _ = println(c.name); 1 } }; Pure(func(ctx: PureCtx) -> int { apply(ctx, w) }) }
+func invoke(s: Slot, ctx: PureCtx) -> int { match s { Pure(f) => f(ctx) } }
+export func main() -> () ! {IO} { println("result=${show(invoke(build(), {name: "EFFECT WITH NO PORTS OR WORLD"}))}") }

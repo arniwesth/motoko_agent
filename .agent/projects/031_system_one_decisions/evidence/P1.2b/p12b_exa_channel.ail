@@ -1,0 +1,66 @@
+-- 031 PLAN-001 P1.2b: exa-search's captures (the cached prompt, and the MCP timeout and output
+-- cap) go through the configuration channel; its credential does not. Run by
+-- `p12b_ws.sh probe exa`, which writes a synthetic AGENT.md under the scratch workdir, sets
+-- EXA_TIMEOUT_MS=7000, EXA_MAX_OUTPUT_CHARS=600 and a synthetic EXA_API_KEY, and replaces
+-- the MCP bridge asset with p12b_fake_bridge.mjs (it echoes its argv plus 3000 padding
+-- characters and talks to nothing). On the disclosed config the PromptShaper returns the
+-- prompt and the ToolProvider passes `--timeout-ms 7000` and truncates to ~600 characters;
+-- on an EMPTY config, no prompt, 30000 and the 8000 cap. The config carries the key's NAME
+-- only (in the bridge argv), never its value, and not the workdir.
+module p12b_exa_channel
+
+import std/io (println)
+import std/env (getEnvOr)
+import std/string (contains, length)
+import std/json (Json, jo, kv, js, encode)
+import pkg/sunholo/motoko_ext_abi/types (
+  Capability, PromptShaper, ToolProvider, Handled, pure_ctx, provider_ctx, empty_ext_world
+)
+import pkg/sunholo/motoko_ext_exa_search/register (register_with_config)
+import src/core/ext/ctx_defaults (noop_ext_ports)
+
+func prompt(caps: [Capability], cfg: Json) -> string {
+  match caps {
+    [] => "<none>",
+    c :: rest => match c {
+      PromptShaper(f) => match f(pure_ctx(cfg)).append { [p] => p, [] => "", _ => "<many>" },
+      _ => prompt(rest, cfg)
+    }
+  }
+}
+
+func handled(caps: [Capability], cfg: Json, wd: string) -> string ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  match caps {
+    [] => "<no provider>",
+    c :: rest => match c {
+      ToolProvider(_, f) => {
+        let ctx = provider_ctx({ pure_ctx(cfg) | workdir: wd, cwd: wd }, noop_ext_ports(), empty_ext_world());
+        match f(ctx, { id: "c1", tool: "ExaSearch", arguments: jo([kv("query", js("p12b"))]) }).decision {
+          Handled(r) => if r.stdout == "" then "<stderr> ${r.stderr}" else r.stdout,
+          _ => "<delegated>"
+        }
+      },
+      _ => handled(rest, cfg, wd)
+    }
+  }
+}
+
+export func main() -> () ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  let wd = getEnvOr("P12B_WORKDIR", "");
+  let key = getEnvOr("EXA_API_KEY", "");
+  let reg = register_with_config(0);
+  let cfg = reg.config;
+  let disclosed = encode(cfg);
+  let out1 = handled(reg.caps, cfg, wd);
+  let out0 = handled(reg.caps, jo([]), wd);
+  if prompt(reg.caps, cfg) != "P12B-EXA-PROMPT\n" then println("FAIL: prompt on the disclosed config: ${prompt(reg.caps, cfg)} (config ${disclosed})")
+  else if prompt(reg.caps, jo([])) != "" then println("FAIL: prompt on an EMPTY config -- not from ext_config")
+  else if not contains(out1, "--timeout-ms 7000") then println("FAIL: provider on the disclosed config did not pass the timeout: ${out1}")
+  else if length(out1) > 1000 then println("FAIL: provider on the disclosed config did not apply max_output_chars=600 (length ${show(length(out1))})")
+  else if not contains(out0, "--timeout-ms 30000") then println("FAIL: provider on an EMPTY config: ${out0} -- the timeout is not coming from ext_config")
+  else if length(out0) < 3000 then println("FAIL: provider on an EMPTY config truncated to ${show(length(out0))} -- the output cap is not coming from ext_config")
+  else if not contains(out1, "--auth-env-var EXA_API_KEY") then println("FAIL: the credential's NAME is not what reaches the bridge")
+  else if key != "" && contains(disclosed, key) then println("FAIL: the disclosed config carries the credential value")
+  else if wd != "" && contains(disclosed, wd) then println("FAIL: the disclosed config carries the workdir value")
+  else println("OK: channel -- prompt, timeout and output cap disclosed as config and read back from ext_config only; the key travels as a name")
+}

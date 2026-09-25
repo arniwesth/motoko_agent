@@ -1,0 +1,4 @@
+module scripts/dst/fixtures/adr001_boundary/gate/fx_form_let_lambda
+import scripts/dst/fixtures/adr001_boundary/gate/gate_abi (Ctx, Capability, ToolPolicy)
+func decide_with(_ctx: Ctx, _budget: int) -> int { 1 }
+export func register_with_config(cfg: int) -> [Capability] { let budget = cfg; let policy = func(ctx: Ctx) -> int { decide_with(ctx, budget) }; [ToolPolicy(policy)] }

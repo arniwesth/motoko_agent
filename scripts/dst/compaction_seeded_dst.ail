@@ -5,7 +5,7 @@
 
 module scripts/dst/compaction_seeded_dst
 
-import std/json (ja)
+import std/json (jo)
 import std/ai (ToolCall)
 import std/env (getEnvOr)
 import std/io (println, exit)
@@ -14,7 +14,7 @@ import std/option (Some, None)
 import std/rand (rand_seed, rand_int)
 import std/result (Result, Ok, Err)
 import std/string (repeat, stringToInt)
-import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, ExtCtx, Msg, PreStepDecision, PassThrough, Compacted)
+import pkg/sunholo/motoko_ext_abi/types (PureCtx, pure_ctx, Msg, PreStepDecision, PassThrough, Compacted)
 import pkg/sunholo/motoko_ext_compaction_structural/compaction_structural (
   compact_for_pre_step,
   estimate_tokens_messages,
@@ -24,7 +24,6 @@ import pkg/sunholo/motoko_ext_compaction_structural/compaction_structural (
   emergency_pct
 )
 import pkg/sunholo/motoko_ext_conformance/invariants (validate_compactor_output)
-import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
 import src/core/test/dst_gen (pick_int)
 import src/core/test/dst_harness (
   ScenarioFailure,
@@ -49,27 +48,20 @@ func call(id: string, name: string) -> ToolCall {
   { id: id, name: name, arguments: "{\"ok\":true}" }
 }
 
-func ctx(limit: int) -> ExtCtx {
-  {
+-- ABI 8.0 (031 PLAN-001 P1.2a): `compact_for_pre_step` takes `PureCtx` -- the
+-- structural policy reads data only -- so the context is built through the
+-- ABI's `pure_ctx` (no ports, no world). Values as before.
+func ctx(limit: int) -> PureCtx {
+  { pure_ctx(jo([])) |
     task: "t",
-    step: 0,
     model: "ollama/qwen3.6:35b-a3b-mxfp8",
     context_limit: limit,
     cwd: ".",
-    hybrid_tools: false,
     budget: { total: 1, solver: 1, verifier: 0 },
     mode: "default",
     workdir: ".",
-    env_server_url: "",
     budget_remaining: 1,
-    history_slice: [],
-    state_key: "k",
-    finish_reason: "",
-    work_in_flight: [],
-    open_waits: ja([]),
-    ports: noop_ext_ports(),
-    artifacts: empty_ext_artifacts(),
-    telemetry: zero_token_telemetry(), world: empty_ext_world()
+    state_key: "k"
   }
 }
 

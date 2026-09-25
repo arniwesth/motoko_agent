@@ -246,7 +246,8 @@ func graded_world() -> WorldState {
 -- discloses its own — so the runner sets them.
 func herdr_rt() -> ExtRuntime ! {Env, FS, AI, Clock, IO, Process, Rand} {
   let v: VerificationConfig = { enabled: false, command: "" };
-  { registry: { entries: [{ id: "herdr", caps: Herdr.register_with_config(()) }] },
+  let r = Herdr.register_with_config(());
+  { registry: { entries: [{ id: "herdr", config: r.config, caps: r.caps }] },
     strict_mode: false, verification: v }
 }
 

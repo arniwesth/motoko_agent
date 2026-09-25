@@ -55,8 +55,10 @@ import src/core/ports (empty_world_state)
 import src/core/ext_world (world_to_token)
 import src/core/test/stub_step (live_ports)
 import src/core/ext/runtime as Rt (dispatch_response_intercept)
+import src/core/ext/ctx_defaults (empty_tool_evidence)
+import std/option (None)
 import pkg/sunholo/motoko_ext_abi/types (
-  ExtCtx, ExtRuntime, BudgetPlan,
+  ExtCtx, ExtRuntime, BudgetPlan, NotReached,
   ResponseInterceptDecision, InterceptHandled, NoIntercept, TokenTelemetry
 )
 import pkg/sunholo/motoko_ext_compose/types (ComposeHostConfig)
@@ -98,7 +100,8 @@ func cfg() -> ComposeHostConfig {
 
 func rt() -> ExtRuntime ! {Env, FS, AI, Clock, IO, Process, Rand} {
   let v: VerificationConfig = { enabled: false, command: "" };
-  { registry: { entries: [{ id: "compose", caps: Compose.register_with_config(cfg()) }] },
+  let reg = Compose.register_with_config(cfg());
+  { registry: { entries: [{ id: "compose", config: reg.config, caps: reg.caps }] },
     strict_mode: false, verification: v }
 }
 
@@ -125,7 +128,7 @@ func live_ctx(r: ExtRuntime) -> ExtCtx ! {AI, Clock, Env, FS, IO, Net, Process, 
     ports: Session.ext_ports_of(live_ports(r), w, ""),
     artifacts: jo([]),
     telemetry: zero_telemetry(),
-    world: world_to_token(w) }
+    verification: NotReached, tool_evidence: empty_tool_evidence(), decision_state: None, world: world_to_token(w) }
 }
 
 func fenced() -> string {

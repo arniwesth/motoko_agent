@@ -1,0 +1,53 @@
+# 031 PLAN-001 P1.2a mutgate spec (013 GATE-mutation-red-submission-precondition.md).
+# fix_id <TAB> target_file <TAB> sed_expr <TAB> test_cmd. Run through p12a_mutgate.sh, never in
+# a checkout anyone is using. Every test_cmd builds its own workspace from the throwaway's files
+# (p12a_ws.sh / p12a_core_check.sh), so the mutated file is what gets checked -- never the
+# primary's through a tracked ailang.lock. No `cmd | grep -q` anywhere (pipefail/SIGPIPE).
+#
+# --- the registration boundary: re-inline one payload per package -> the gate rejects -> red
+cs_inline	packages/motoko-ext-compaction-structural/register.ail	s/      Compactor(pre_step)/      Compactor(\\ctx msgs. pre_step(ctx, msgs))/	bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_ws.sh gate compaction_structural
+df_inline	packages/motoko-ext-decision-framework/register.ail	s/      PromptShaper(conditional_prompt_patch)/      PromptShaper(\\ctx. conditional_prompt_patch(ctx))/	bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_ws.sh gate decision_framework
+esg_inline	packages/motoko-ext-empty-stop-guard/register.ail	s/      SolverJudge(finalize)/      SolverJudge(func(ctx: ProcessCtx, c: string) -> FinalizeOutcome ! {Process} { finalize(ctx, c) })/	bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_ws.sh gate empty_stop_guard
+mr_inline	packages/motoko-ext-microrag/register.ail	s/      DescribeTools(microrag_describe_tools),/      DescribeTools(\\cfg. microrag_describe_tools(cfg)),/	bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_ws.sh gate microrag
+og_inline	packages/motoko-ext-omnigraph/register.ail	s/      ToolProvider(tools, omnigraph_tool_handle)/      ToolProvider(tools, func(ctx: ProviderCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} { on_tool_handle(ctx, call) })/	bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_ws.sh gate omnigraph
+pcg_inline	packages/motoko-ext-progress-contract-guard/register.ail	s/      SolverJudge(finalize)/      SolverJudge(\\ctx c. finalize(ctx, c))/	bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_ws.sh gate progress_contract_guard
+# the tree reading the brief names: shape pass 6 of 18, binding rejections 32
+tree_6_32	packages/motoko-ext-omnigraph/register.ail	s/      PromptShaper(omnigraph_prompt),/      PromptShaper(\\ctx. omnigraph_prompt(ctx)),/	bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_ws.sh tree 6 32
+#
+# --- omnigraph's one capture goes through the channel
+# the shaper reads a module value instead of ext_config -> the channel probe (empty config) -> red
+og_capture_module	packages/motoko-ext-omnigraph/register.ail	s/^func omnigraph_prompt(ctx: PureCtx) -> PromptPatch {$/pure func captured_prompt() -> string { "P12A-SYNTHETIC-PROMPT line one\\nline two\\n" }\n\nfunc omnigraph_prompt(ctx: PureCtx) -> PromptPatch {/;s/on_build_system_prompt(cached_prompt_of(ctx.ext_config), ctx)/on_build_system_prompt(captured_prompt(), ctx)/	bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_ws.sh channel
+# registration withholds the prompt from config -> red
+og_config_withheld	packages/motoko-ext-omnigraph/register.ail	s/    config: prompt_config(cached_prompt),/    config: prompt_config(""),/	bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_ws.sh channel
+#
+# --- the manifest pin: back to 7.4 -> the package's own lock fails -> red
+pin_8_0	packages/motoko-ext-microrag/ailang.toml	s/version = "8.0" }/version = "7.4" }/	bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_ws.sh check motoko-ext-microrag
+#
+# --- the repaired test contexts (built through pure_ctx / process_ctx) discriminate
+esg_view_test	packages/motoko-ext-empty-stop-guard/empty_stop_guard.ail	s/  ctx.finish_reason == "length"/  ctx.finish_reason == "lengthX"/	bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_ws.sh test packages/motoko-ext-empty-stop-guard/empty_stop_guard.ail
+pcg_view_test	packages/motoko-ext-progress-contract-guard/progress_contract_guard.ail	s/  match ctx.work_in_flight { \[\] => false, _ => true }/  match ctx.work_in_flight { [] => false, _ => false }/	bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_ws.sh test packages/motoko-ext-progress-contract-guard/progress_contract_guard.ail
+cs_view_test	packages/motoko-ext-compaction-structural/compaction_structural.ail	s/  if candidate_fits(ctx, msgs) then PassThrough/  if true then PassThrough/	P12A_KNOWN_RED=test_oversized_recent_tool_result_is_capped_under_pressure_test_1 bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_ws.sh test packages/motoko-ext-compaction-structural/compaction_structural.ail
+# the Compactor's AiCtx -> PureCtx projection, through the real runtime (smoke full loop)
+cs_projection	packages/motoko-ext-compaction-structural/register.ail	s/    context_limit: ctx.context_limit,/    context_limit: 100000000,/	P11_RELAX=1 bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_core_check.sh run scripts/smoke_v2_compaction_full_loop.ail IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace < /dev/null
+#
+# --- the masked files (operator ruling, PLAN-001 §3 P1.2 at 68791469), each on 8.0.
+# First run: integ_tests (elide_tier_pct 70->99) and seeded_dst_ctx (context_limit huge) were
+# VACUOUS -- the tests assert the >=95% exhaustion path and "below the elide tier passes
+# through", which those mutations cannot break. Re-aimed at what each test asserts.
+integ_tests	packages/motoko-ext-compaction-structural/compaction_structural.ail	s/^export pure func emergency_pct() -> int { 95 }/export pure func emergency_pct() -> int { 99 }/	P11_RELAX=1 bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_core_check.sh test src/core/test/integration_tests.ail
+policy_dst_ctx	scripts/dst/compaction_policy_dst.ail	s/    context_limit: limit,/    context_limit: 100000000,/	P11_RELAX=1 bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_core_check.sh run scripts/dst/compaction_policy_dst.ail IO
+seeded_dst_ctx	scripts/dst/compaction_seeded_dst.ail	s/    context_limit: limit,/    context_limit: 1,/	P11_RELAX=1 bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_core_check.sh run scripts/dst/compaction_seeded_dst.ail IO,Env,Rand
+full_loop_entry	scripts/smoke_v2_compaction_full_loop.ail	s/config: reg.config, caps: reg.caps }/config: reg.config, caps: [] }/	P11_RELAX=1 bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_core_check.sh run scripts/smoke_v2_compaction_full_loop.ail IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace < /dev/null
+c2_guard_budget	scripts/dst/phase_c2_wiring_scenarios.ail	s/  decide_with_budget(ctx, text, 2)/  decide_with_budget(ctx, text, 0)/	P11_RELAX=1 bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_core_check.sh run scripts/dst/phase_c2_wiring_scenarios.ail IO,Env,Clock,FS,Process,Trace < /dev/null
+#
+# --- attempt 2 (ADR-001 Amendment 2): each package's own [effects].max, checked as its own root
+# (p12a_pkgroot.sh). One row per effect this follow-up added: drop it -> the own-root check -> red.
+ceiling_cs_Trace	packages/motoko-ext-compaction-structural/ailang.toml	/^max = /s/, "Trace"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_pkgroot.sh motoko-ext-compaction-structural
+ceiling_mr_Rand	packages/motoko-ext-microrag/ailang.toml	/^max = /s/, "Rand"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_pkgroot.sh motoko-ext-microrag
+ceiling_mr_Trace	packages/motoko-ext-microrag/ailang.toml	/^max = /s/, "Trace"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_pkgroot.sh motoko-ext-microrag
+ceiling_og_AI	packages/motoko-ext-omnigraph/ailang.toml	/^max = /s/, "AI"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_pkgroot.sh motoko-ext-omnigraph
+ceiling_og_Net	packages/motoko-ext-omnigraph/ailang.toml	/^max = /s/, "Net"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_pkgroot.sh motoko-ext-omnigraph
+ceiling_og_Clock	packages/motoko-ext-omnigraph/ailang.toml	/^max = /s/, "Clock"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_pkgroot.sh motoko-ext-omnigraph
+ceiling_og_Stream	packages/motoko-ext-omnigraph/ailang.toml	/^max = /s/, "Stream"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_pkgroot.sh motoko-ext-omnigraph
+ceiling_og_Rand	packages/motoko-ext-omnigraph/ailang.toml	/^max = /s/, "Rand"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_pkgroot.sh motoko-ext-omnigraph
+ceiling_og_Trace	packages/motoko-ext-omnigraph/ailang.toml	/^max = /s/, "Trace"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2a/p12a_pkgroot.sh motoko-ext-omnigraph

@@ -1,9 +1,102 @@
 module sunholo/motoko_ext_conformance/invariants
 
 import std/result (Result, Ok, Err)
-import pkg/sunholo/motoko_ext_abi/types (Msg, ToolCall)
+import std/json (Json, jo)
+import std/option (None)
+import pkg/sunholo/motoko_ext_abi/types (
+  Msg, ToolCall, ToolSchema, ToolCallEnvelope,
+  PureCtx, pure_ctx,
+  FinalizeDecision, Accept, ContinueWithFeedback, NoDecision,
+  ToolPolicyDecision, Allow, Deny, NoOpinion, Pending,
+  DecisionPolicyDescriptor, DecisionRequest, DecisionObservation,
+  Unavailable, UnconfiguredBackend,
+  JudgePreparation, JudgeImmediate, JudgeQuery,
+  ToolPreparation, ToolImmediate, ToolQuery
+)
 
-export pure func conformance_abi_version() -> string { "6.0" }  -- B8: the kit (5.0.0) targets ABI 6.0, the Capability list
+-- B8: the kit (5.0.0) targeted ABI 6.0, the Capability list. 031 P0.5: the kit
+-- (6.0.0) targets ABI 8.0 -- every callback on its row's view, `DescribeTools`
+-- taking the extension's configuration, and the two decision variants.
+export pure func conformance_abi_version() -> string { "8.0" }
+
+-- ============================================================================
+-- THE NO-OP CONSTRUCTORS (031 PLAN-001 P0.5; ADR-001 D2, D6).
+-- ============================================================================
+--
+-- `no_tools` is the neutral `DescribeTools` payload: it takes the configuration
+-- and advertises nothing. The plan writes it `DescribeTools(\_cfg . [])`; it is
+-- a NAMED top-level function here because 8.0's registration boundary (D2)
+-- rejects an inline payload, and a kit that teaches the rejected form is a kit
+-- whose own example fails the gate.
+--
+-- The four decision callbacks are NEUTRAL: the atom exists and changes nothing.
+-- `prepare` answers `JudgeImmediate(NoDecision)` / `ToolImmediate(NoOpinion)` --
+-- an invoked abstention, which the host records and which differs from an absent
+-- guard (D6) -- and NEVER returns a `JudgeQuery`/`ToolQuery`, so a neutral atom
+-- spends no decision-port exchange. `interpret` is unreachable from a neutral
+-- `prepare` and answers the same abstention anyway, so a neutral atom stays
+-- neutral under a host that interprets a recorded observation it did not ask
+-- for (strict replay of a foreign record, the offline re-interpretation run).
+-- Constructor names per Amendment 1.
+export pure func no_tools(_cfg: Json) -> [ToolSchema] { [] }
+
+export pure func neutral_judge_prepare(_ctx: PureCtx, _candidate: string) -> JudgePreparation {
+  JudgeImmediate(NoDecision)
+}
+
+export pure func neutral_judge_interpret(_ctx: PureCtx, _candidate: string,
+    _req: DecisionRequest, _obs: DecisionObservation) -> FinalizeDecision {
+  NoDecision
+}
+
+export pure func neutral_tool_prepare(_ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPreparation {
+  ToolImmediate(NoOpinion)
+}
+
+export pure func neutral_tool_interpret(_ctx: PureCtx, _call: ToolCallEnvelope,
+    _req: DecisionRequest, _obs: DecisionObservation) -> ToolPolicyDecision {
+  NoOpinion
+}
+
+-- A neutral atom's descriptor. `max_interventions: 0` because a neutral atom
+-- never intervenes; the versions name the neutral question and interpretation
+-- so a journal reader can tell a neutral atom from a configured one by data.
+export pure func neutral_descriptor(local_id: string) -> DecisionPolicyDescriptor {
+  {
+    local_id: local_id,
+    question_version: "neutral/1",
+    question_config: jo([]),
+    interpretation_version: "neutral/1",
+    interpretation_config: jo([]),
+    max_interventions: 0
+  }
+}
+
+-- ============================================================================
+-- NEUTRALITY, as predicates over what a callback RETURNS -- so the kit can ask it
+-- of any consumer's atom, and the tests below ask it of the kit's own.
+-- ============================================================================
+
+-- Neutral finalize vote: abstain. `Accept` is NOT neutral: it approves the
+-- candidate and so changes what finalization does.
+export pure func finalize_vote_neutral(d: FinalizeDecision) -> bool {
+  match d { NoDecision => true, Accept => false, ContinueWithFeedback(_) => false }
+}
+
+-- Neutral tool-policy vote: no opinion. `Allow` is NOT neutral: it takes a
+-- position in the priority merge a `NoOpinion` leaves to the other voters.
+export pure func tool_vote_neutral(d: ToolPolicyDecision) -> bool {
+  match d { NoOpinion => true, Allow => false, Deny(_) => false, Pending(_, _) => false }
+}
+
+-- A query is never neutral, whatever it asks: it spends an exchange.
+export pure func judge_preparation_neutral(p: JudgePreparation) -> bool {
+  match p { JudgeImmediate(d) => finalize_vote_neutral(d), JudgeQuery(_) => false }
+}
+
+export pure func tool_preparation_neutral(p: ToolPreparation) -> bool {
+  match p { ToolImmediate(d) => tool_vote_neutral(d), ToolQuery(_) => false }
+}
 
 pure func has_assistant_call(calls: [ToolCall], wanted_id: string) -> bool {
   match calls {
@@ -230,4 +323,71 @@ pure func test_wrapper_equivalent_to_named_predicates() -> bool
       && equivalence_case(input, [mk_tool_msg("new-id")])
       && equivalence_case(input, [mk_msg_with_call("tc1")])
       && equivalence_case(input, [mk_tool_msg("tc1")])
+  }
+
+-- ============================================================================
+-- The no-op constructors, asserted neutral (031 P0.5). A probe context, call,
+-- request and observation: the neutral callbacks must ignore all four, and the
+-- observation is an `Unavailable` one so that a callback reading it would have
+-- something to react to.
+-- ============================================================================
+
+export pure func conformance_probe_ctx() -> PureCtx {
+  { pure_ctx(jo([])) | task: "neutral-probe", step: 3 }
+}
+
+export pure func conformance_probe_call() -> ToolCallEnvelope {
+  { id: "probe-call", tool: "bash", arguments: jo([]) }
+}
+
+export pure func conformance_probe_request() -> DecisionRequest {
+  { backend_binding: "probe", state: jo([]), questions: [] }
+}
+
+export pure func conformance_probe_observation() -> DecisionObservation {
+  { result: Unavailable(UnconfiguredBackend),
+    usage: { input_tokens: None, output_tokens: None, cost_millicents: None } }
+}
+
+pure func test_no_tools_advertises_nothing() -> bool
+  tests [((), true)]
+  {
+    match no_tools(jo([])) { [] => true, _ => false }
+  }
+
+pure func test_neutral_judge_is_neutral() -> bool
+  tests [((), true)]
+  {
+    judge_preparation_neutral(neutral_judge_prepare(conformance_probe_ctx(), "candidate"))
+      && finalize_vote_neutral(neutral_judge_interpret(conformance_probe_ctx(), "candidate", conformance_probe_request(), conformance_probe_observation()))
+  }
+
+pure func test_neutral_tool_policy_is_neutral() -> bool
+  tests [((), true)]
+  {
+    tool_preparation_neutral(neutral_tool_prepare(conformance_probe_ctx(), conformance_probe_call()))
+      && tool_vote_neutral(neutral_tool_interpret(conformance_probe_ctx(), conformance_probe_call(), conformance_probe_request(), conformance_probe_observation()))
+  }
+
+-- The predicates are two-sided: every non-neutral answer reads non-neutral, a
+-- query included. Without this a predicate that returned `true` would pass the
+-- two tests above.
+pure func test_neutrality_predicates_reject_every_intervention() -> bool
+  tests [((), true)]
+  {
+    not judge_preparation_neutral(JudgeImmediate(Accept))
+      && not judge_preparation_neutral(JudgeImmediate(ContinueWithFeedback("x")))
+      && not judge_preparation_neutral(JudgeQuery(conformance_probe_request()))
+      && not tool_preparation_neutral(ToolImmediate(Allow))
+      && not tool_preparation_neutral(ToolImmediate(Deny("x")))
+      && not tool_preparation_neutral(ToolQuery(conformance_probe_request()))
+      && judge_preparation_neutral(JudgeImmediate(NoDecision))
+      && tool_preparation_neutral(ToolImmediate(NoOpinion))
+  }
+
+pure func test_neutral_descriptor_never_intervenes() -> bool
+  tests [((), true)]
+  {
+    let d = neutral_descriptor("conformance.neutral");
+    d.max_interventions == 0 && d.local_id == "conformance.neutral"
   }

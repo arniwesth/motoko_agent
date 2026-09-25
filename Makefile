@@ -508,7 +508,7 @@ DST_TARGETS := test_coverage declared_vs_performed terminal_trace smoke_parity \
   profile_definition smoke_driver corpus_pr strict_replay world_state \
   corpus_rotating driver_plus_compose driver_plus_herdr driver_only seeded_generator \
   event_vocabulary phase_c_l1 recorded_stream driver_plus_no_ops \
-  ext_hook_scope_selftest invariants run_report discovery program_persistence \
+  ext_hook_scope_selftest ext_hook_scope invariants run_report discovery program_persistence \
   compaction_dst fault_catalogue ext_ambient_inventory_selftest \
   ext_ambient_inventory ext_call_inventory ext_call_inventory_selftest \
   conformance stream_parity latency_pair test_coverage_selftest \
@@ -770,7 +770,62 @@ profile_coverage:
 	else \
 		echo "  ✓ all_capability_kinds() enumerates all $$n ABI capability kinds ($$producer)"; \
 	fi; \
-	ailang test src/core/dst_profile_coverage.ail > /dev/null && echo "  ✓ src/core/dst_profile_coverage.ail"
+	: ; \
+	: '031 line R: this file'"'"'s two contracts (capability_purity_basis,'; \
+	: 'purity_name) are PROPERTIES to `ailang test`, and their parameters are'; \
+	: 'ADTs. The pinned toolchain (v0.33.0, ae36986c5) derives generators for'; \
+	: 'scalars, records, tuples and aliases but NOT for ADTs, so both properties'; \
+	: 'report "no generator" and never run -- and `ailang test` exits 1 whenever'; \
+	: 'anything was skipped. A bare `ailang test ... &&` therefore reds this'; \
+	: 'target for a reason that is not a defect.'; \
+	: ; \
+	: '--allow-skips is NOT the fix: it means "exit 0 even if ALL tests were'; \
+	: 'skipped", which would pass this target when nothing ran at all. So the'; \
+	: 'skips are pinned BY IDENTITY instead -- exactly these two property names,'; \
+	: 'no more and no others. A third skip, or a different property going quiet,'; \
+	: 'fails here; a real test failure always fails here.'; \
+	: ; \
+	: 'SELF-RETIRING. ADT generator derivation landed upstream in 03ab3e7de'; \
+	: '(2026-08-11), one week AFTER v0.33.0 (2026-08-04). Measured against a'; \
+	: 'build of that source, all four of line R'"'"'s contracts run 100 cases and'; \
+	: 'pass. So when the toolchain moves past it the skipped set becomes EMPTY,'; \
+	: 'which is accepted and announced rather than red: good news must not read'; \
+	: 'as a regression. Delete this block and restore the one-liner then.'; \
+	want="capability_purity_basis_property_1 purity_name_property_1"; \
+	out="$$(ailang test src/core/dst_profile_coverage.ail 2>&1 | sed 's/\x1b\[[0-9;]*m//g')"; \
+	nums="$$(printf '%s\n' "$$out" | sed -n 's/^[0-9][0-9]* tests:.*, \([0-9][0-9]*\) failed, \([0-9][0-9]*\) skipped.*/\1 \2/p' | tail -1)"; \
+	if [ -z "$$nums" ]; then \
+		echo "FAIL: could not parse ailang test's summary for"; \
+		echo "      src/core/dst_profile_coverage.ail. The output shape changed;"; \
+		echo "      this gate fails closed rather than guess that it passed."; \
+		printf '%s\n' "$$out" | tail -20 | sed 's/^/      /'; \
+		exit 1; \
+	fi; \
+	failed="$${nums% *}"; skipped="$${nums#* }"; \
+	: 'The trailing " (" matters: it keeps the per-property lines and drops'; \
+	: 'the summary tally "  ⊘ Skipped: 2", which otherwise parses as a name.'; \
+	got="$$(printf '%s\n' "$$out" | sed -n 's/^  ⊘ \([A-Za-z0-9_][A-Za-z0-9_]*\) (.*/\1/p' | sort | tr '\n' ' ')"; \
+	got="$${got% }"; \
+	if [ "$$failed" -ne 0 ]; then \
+		echo "FAIL: $$failed test(s) failed in src/core/dst_profile_coverage.ail."; \
+		printf '%s\n' "$$out" | sed -n '/✗/p' | head -10 | sed 's/^/      /'; \
+		exit 1; \
+	fi; \
+	if [ "$$skipped" -eq 0 ]; then \
+		echo "  ✓ src/core/dst_profile_coverage.ail (0 skipped -- the toolchain"; \
+		echo "      now derives ADT generators, so the skip pin in this recipe has"; \
+		echo "      expired and can go back to a plain \`ailang test ... &&\`)"; \
+	elif [ "$$got" = "$$want" ]; then \
+		echo "  ✓ src/core/dst_profile_coverage.ail (2 contract properties skipped,"; \
+		echo "      pinned by name: no ADT generator on the pinned toolchain)"; \
+	else \
+		echo "FAIL: the skipped set in src/core/dst_profile_coverage.ail is not the"; \
+		echo "      pinned one. A property stopped running, or a new one went quiet,"; \
+		echo "      and a count alone would not have noticed."; \
+		echo "        want: $$want"; \
+		echo "        got:  $$got"; \
+		exit 1; \
+	fi
 
 # ADR-001 Phase B, B4: multiplicity validation at the registration boundary.
 # `src/core/ext/registry_normalize.ail` is the ONE host-owned place the D3
@@ -2389,13 +2444,47 @@ dst_seeded:
 	ailang run --caps IO,Env,Rand --entry main scripts/dst/compaction_seeded_dst.ail
 	ailang run --caps IO,Env,Rand --entry main scripts/dst/phase_c_seeded_dst.ail
 
+# Each of the five lines is also its own target, so CI can give each script
+# its own step, time limit and name (LEG-CI-COMPACTION: the target ran past 20
+# minutes in CI against 59 s locally, and a five-line step cannot say which
+# line). The parts share compaction_dst's cache lane and compaction_dst keeps
+# its serial recipe, so `make compaction_dst` and `make dst` are unchanged.
+COMPACTION_DST_POLICY         = ailang run --caps IO --entry main scripts/dst/compaction_policy_dst.ail
+COMPACTION_DST_CATALOG        = ailang run --caps IO,Env,FS --entry main scripts/dst/compaction_catalog_dst.ail
+COMPACTION_DST_RUNTIME_STATUS = ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry main scripts/dst/runtime_status_tool_dst.ail < /dev/null
+COMPACTION_DST_CURSOR_PROBE   = ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry main scripts/dst/scripted_cursor_probe.ail < /dev/null
+COMPACTION_DST_LONG_QWEN      = set -o pipefail; \
+  ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry main \
+  scripts/dst/long_qwen_compaction_dst.ail < /dev/null | scripts/line_guard.sh 4096
+COMPACTION_DST_PARTS := compaction_dst_policy compaction_dst_catalog compaction_dst_runtime_status \
+  compaction_dst_cursor_probe compaction_dst_long_qwen
+
+# THE long_qwen LINE IS CUT, AND THAT IS THE FIX FOR THE CI HANG. Its scenarios
+# carry megabyte messages and the session prints each `history_seeded` event
+# whole: single lines of 838 KB, 1.05 MB and 2 x 200 KB. The GitHub runner
+# spends time quadratic in a line's length (256 KB: 104 s; 1 MB: past 30 min)
+# and services no timeout meanwhile, so `DST gates (rest)` ran past every limit
+# it had and died "cancelled" with no log -- while the script itself passes in
+# CI in 7 s once its output is off the runner's pipe (run 36018119963). The
+# verdicts are short `scenario=` lines; the events keep their first 4096
+# characters, which carry their type and ids. bash for `pipefail`, so ailang's
+# status and not the filter's decides the target.
+compaction_dst compaction_dst_long_qwen: SHELL := /bin/bash
+
 compaction_dst:
-	ailang run --caps IO --entry main scripts/dst/compaction_policy_dst.ail
-	ailang run --caps IO,Env,FS --entry main scripts/dst/compaction_catalog_dst.ail
-	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry main scripts/dst/runtime_status_tool_dst.ail < /dev/null
-	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry main scripts/dst/scripted_cursor_probe.ail < /dev/null
-	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry main \
-	  scripts/dst/long_qwen_compaction_dst.ail < /dev/null
+	$(COMPACTION_DST_POLICY)
+	$(COMPACTION_DST_CATALOG)
+	$(COMPACTION_DST_RUNTIME_STATUS)
+	$(COMPACTION_DST_CURSOR_PROBE)
+	$(COMPACTION_DST_LONG_QWEN)
+
+.PHONY: $(COMPACTION_DST_PARTS)
+$(COMPACTION_DST_PARTS): export AILANG_CACHE_DIR = $(CURDIR)/.ailang/lane/compaction_dst
+compaction_dst_policy:         ; $(COMPACTION_DST_POLICY)
+compaction_dst_catalog:        ; $(COMPACTION_DST_CATALOG)
+compaction_dst_runtime_status: ; $(COMPACTION_DST_RUNTIME_STATUS)
+compaction_dst_cursor_probe:   ; $(COMPACTION_DST_CURSOR_PROBE)
+compaction_dst_long_qwen:      ; $(COMPACTION_DST_LONG_QWEN)
 
 conformance:
 	AILANG_RELAX_MODULES=1 ailang check packages/motoko_ext_conformance/invariants.ail
@@ -2907,7 +2996,11 @@ verify_classify_check:
 # ADR-001 §4: every NEW `pure func` in src/core/ carries a contract or a
 # `-- contracts: ...` line saying what blocks one -- and the excuse is checked by
 # synthesising a trivial contract and confirming the verifier really rejects the
-# function. Keyed on the diff: ~1545 declarations predate the rule.
+# function. Keyed on the diff: ~1545 declarations predate the rule. A declaration
+# reachable ONLY from a `tests [...]` block is out of scope (027's ruling of
+# 2026-09-24), computed from the module's reference graph, never from a name or a
+# path; test_new_contract_policy.py is its mutation gate, run by
+# verify_classify_check.
 #
 # BASE here is the development trunk, NOT the Makefile-wide BASE (line 83), which
 # is `make pr`'s target branch. main is a release mirror that main_dst is merged
@@ -3262,7 +3355,28 @@ ext_hook_scope_selftest:
 # how fast `make dst` can finish however many cores it is given. Its workers
 # each take a private compile-cache lane (see lane_env() in derive.py), which is
 # what makes --jobs pay: 207s at --jobs 1, 93s at --jobs 6, findings identical.
-TEST_COVERAGE_JOBS ?= 6
+#
+# Six on a machine with at least six cores, one per core below that. A fixed 6
+# on a 4-vCPU CI runner oversubscribes it and every file's wall time stretches
+# with its neighbours while its CPU does not (LEG-CI-COVERAGE-CAP, probe run
+# 36029843520, three runners): tool_phase 114-122 s at --jobs 6 against 66-67 s
+# at --jobs 4, session.ail 363-371 s against 338-343 s, and the whole walk
+# 527-532 s against 513-517 s -- more parallelism, a slower walk. The per-file
+# cap in derive.py is measured in wall time, so this is what keeps its margin a
+# property of the file rather than of the job count. `nproc` honours affinity.
+#
+# SCOPE: deterministic on a DEDICATED runner, advisory on a shared one. `nproc`
+# counts cores, not idle ones, so on the dev box, shared with other sessions'
+# ailang runs, a walk can be starved past the per-file cap and go red with
+# nothing wrong in the tree. A local `unrunnable` is read by the cores figure it
+# carries (derive.py, at --timeout, says how). Re-run when the box is quiet, or
+# with fewer workers: `make test_coverage TEST_COVERAGE_JOBS=2`.
+# Jobs are deliberately NOT derived from load. A sampled input makes two runs
+# on one machine behave differently. On this box the load has also arrived
+# mid-walk (6.5 at the start of one run, a mean of 28 across it), after a
+# start-time sample would have said go. And the load average of a VM kernel
+# shared between containers is not idle cores anyway: 28 there, with 4.8 of 8 busy.
+TEST_COVERAGE_JOBS ?= $(shell n=$$(nproc 2>/dev/null || echo 1); [ $$n -lt 6 ] && echo $$n || echo 6)
 
 .PHONY: test_coverage test_coverage_selftest
 test_coverage:

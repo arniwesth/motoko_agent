@@ -1,0 +1,8 @@
+module scripts/dst/fixtures/adr001_boundary/q_named_partial
+import std/io (println)
+import scripts/dst/fixtures/adr001_boundary/types (PureCtx, Slot, Pure)
+type W = { f: (PureCtx) -> int }
+func apply_w(w: W) -> (PureCtx) -> int { func(ctx: PureCtx) -> int { w.f(ctx) } }
+func build() -> Slot ! {IO} { let w: W = { f: func(c: PureCtx) -> int ! {} { let _ = println(c.name); 1 } }; Pure(apply_w(w)) }
+func invoke(s: Slot, ctx: PureCtx) -> int { match s { Pure(f) => f(ctx) } }
+export func main() -> () ! {IO} { println("result=${show(invoke(build(), {name: "EFFECT WITH NO PORTS OR WORLD"}))}") }

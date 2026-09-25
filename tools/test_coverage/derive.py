@@ -109,7 +109,9 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -181,6 +183,11 @@ class FileResult:
     harness_error: str = ""
     failures: list[str] = field(default_factory=list)
     skips: list[tuple[str, str]] = field(default_factory=list)
+    # The child's own seconds, so a run's margin against the cap is printed
+    # rather than inferred, and wall/CPU can tell a costly file from a starved one.
+    wall: float = 0.0
+    cpu: float = 0.0
+    timed_out: bool = False
 
 
 def syntactic_forms(text: str) -> list[str]:
@@ -228,6 +235,55 @@ def lane_env() -> dict[str, str]:
                 AILANG_CACHE_DIR=str(Path.cwd() / ".ailang" / "tclane" / f"w{lane}"))
 
 
+@dataclass
+class Timed:
+    stdout: str
+    stderr: str
+    wall: float
+    cpu: float
+
+
+class CapExceeded(subprocess.TimeoutExpired):
+    """The cap fired. Carries the CPU the child had used when it was killed,
+    because a timed-out file's cores figure is what says who to blame."""
+
+    def __init__(self, cmd: list[str], timeout: float, cpu: float) -> None:
+        super().__init__(cmd, timeout)
+        self.cpu = cpu
+
+
+def run_timed(argv: list[str], timeout: float, env: dict[str, str]) -> Timed:
+    """`subprocess.run(capture_output, timeout)`, plus the child's own wall and CPU.
+
+    CPU is read from `os.wait4` on this child alone, so one worker's figure is
+    not mixed with its neighbours' as RUSAGE_CHILDREN would be. The ratio is the
+    point: a file whose wall time is several times its CPU was starved by the
+    machine, while a file whose CPU is as large as its wall time is expensive in
+    itself. LEG-CI-COVERAGE-CAP needed exactly that ratio and had to build a
+    probe to get it.
+    """
+    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+        start = time.monotonic()
+        proc = subprocess.Popen(argv, stdout=out, stderr=err,
+                                stdin=subprocess.DEVNULL, env=env)
+        while True:
+            pid, status, usage = os.wait4(proc.pid, os.WNOHANG)
+            if pid:
+                break
+            if time.monotonic() - start >= timeout:
+                proc.kill()
+                _, _, usage = os.wait4(proc.pid, 0)
+                proc.returncode = -9  # reaped here; Popen must not wait on it again
+                raise CapExceeded(argv, timeout, usage.ru_utime + usage.ru_stime)
+            time.sleep(0.2)
+        proc.returncode = os.waitstatus_to_exitcode(status)
+        wall = time.monotonic() - start
+        out.seek(0)
+        err.seek(0)
+        return Timed(out.read().decode(errors="replace"), err.read().decode(errors="replace"),
+                     wall, usage.ru_utime + usage.ru_stime)
+
+
 def run_file(path: Path, timeout: int) -> FileResult:
     res = FileResult(path=path)
     try:
@@ -238,17 +294,18 @@ def run_file(path: Path, timeout: int) -> FileResult:
     res.syntactic = bool(res.forms)
 
     try:
-        proc = subprocess.run(
-            ["ailang", "test", "--format", "json", str(path)],
-            capture_output=True, text=True, stdin=subprocess.DEVNULL,
-            timeout=timeout, env=lane_env(),
-        )
-    except subprocess.TimeoutExpired:
-        res.harness_error = f"`ailang test` did not finish within {timeout}s"
+        proc = run_timed(["ailang", "test", "--format", "json", str(path)],
+                         timeout, lane_env())
+    except CapExceeded as exc:
+        res.timed_out, res.wall, res.cpu = True, float(timeout), exc.cpu
+        res.harness_error = (f"`ailang test` did not finish within {timeout}s, having used "
+                             f"{exc.cpu:.0f} CPU-s = {exc.cpu / timeout:.1f} cores "
+                             f"(how to read that: derive.py, at --timeout)")
         return res
     except FileNotFoundError:
         res.harness_error = "`ailang` is not on PATH"
         return res
+    res.wall, res.cpu = proc.wall, proc.cpu
 
     report = parse_report(proc.stdout)
     if report is None:
@@ -492,7 +549,8 @@ def run_inventory(root: Path, records: list[dict], jobs: int,
     return results, classify(results, records)
 
 
-def report(results: list[FileResult], findings: list[Finding], root: Path) -> None:
+def report(results: list[FileResult], findings: list[Finding], root: Path,
+           timeout: int) -> None:
     with_tests = [r for r in results if r.total > 0]
     total = sum(r.total for r in results)
     ran = sum(r.passed for r in results)
@@ -506,6 +564,18 @@ def report(results: list[FileResult], findings: list[Finding], root: Path) -> No
     print()
     print(f"{root}: {len(results)} .ail files discovered, {len(with_tests)} carry "
           f"tests, {total} tests, {ran} passed, {skipped} skipped")
+
+    # The margin, printed on every run, green or red. A cap that is only ever
+    # read when it trips is how session.ail reached 89% of the old one unseen.
+    # "cores" is CPU over wall: near or above 1 is a file expensive in itself,
+    # well below 1 is a file the machine starved.
+    slowest = sorted((r for r in results if r.wall), key=lambda r: -r.wall)[:3]
+    if slowest:
+        print(f"slowest against the {timeout}s per-file cap: " + "; ".join(
+            f"{r.path} {r.wall:.0f}s = {r.wall / timeout:.0%}"
+            + (", timed out" if r.timed_out else "")
+            + f", {r.cpu:.0f} CPU-s, {r.cpu / r.wall:.1f} cores"
+            for r in slowest))
 
     if findings:
         print()
@@ -714,6 +784,28 @@ def _constructed_rows() -> list[str]:
     else:
         print("  \u2713 a `$(MAKE)` recipe invocation is recognised")
 
+    # The per-file cap, both directions (LEG-CI-COVERAGE-CAP). The mutant is one
+    # naive fib(30), ~21 s, against a 5 s cap: it must be reported `unrunnable`
+    # FOR THE TIMEOUT, and killed at the cap -- a cap that waits for its child
+    # has no teeth on a hang. The survivor is the same file at fib(15), ~0.3 s,
+    # under the same cap, so the row cannot pass by firing on everything. Both
+    # live outside fixtures/ so the fixture walk never runs the mutant uncapped.
+    cap = 5
+    started = time.monotonic()
+    slow = run_file(Path("tools/test_coverage/timeout_fixtures/slow.ail"), cap)
+    took = time.monotonic() - started
+    row("a file over the per-file cap fires unrunnable", classify([slow], []), {"unrunnable"})
+    if "did not finish within" not in slow.harness_error:
+        fails.append(f"the capped file was unrunnable for another reason: {slow.harness_error!r}")
+    elif took > cap + 5:
+        fails.append(f"the capped file was reported after {took:.0f}s against a {cap}s cap: "
+                     f"the child was waited for, not killed")
+    else:
+        print(f"  \u2713 the capped file was killed at the cap ({took:.0f}s), not waited for")
+    row("a file under the same cap survives",
+        classify([run_file(Path("tools/test_coverage/timeout_fixtures/quick.ail"), cap)], []),
+        set())
+
     # stale_skip_record, both dispositions.
     always = [{"prefix": "Never Happens", "expected": "always"}]
     sometimes = [{"prefix": "Never Happens", "expected": "sometimes"}]
@@ -752,8 +844,53 @@ def main() -> int:
     # a single-process walk; `make test_coverage` passes --jobs explicitly.
     ap.add_argument("--jobs", type=int, default=1,
                     help="parallel `ailang test` processes, each with its own compile-cache lane")
-    ap.add_argument("--timeout", type=int, default=300,
-                    help="per-file timeout in seconds")
+    # The cap is a HANG BACKSTOP: its finding is `unrunnable`, "could not
+    # execute the file at all". It is not a performance budget, and it stopped
+    # working as a backstop once it became a limit on how many tests the largest
+    # module may carry.
+    #
+    # WAS: 300 s, set with this tool on 2026-08-04 with no measurement, when
+    # session.ail carried 21 tests. It went red on 9 of 11 CI runs of the 031
+    # branch, every time on session.ail alone.
+    #
+    # WHY session.ail sits near any flat cap: `ailang test` (v0.33.0) re-runs
+    # the whole compile pipeline on the file TWICE PER TEST CASE
+    # (internal/testing/runner.go:67 ExtractFunctionBinding, :78
+    # ExtractPureClusterForFunction), so a file costs cases x its elaboration
+    # time. session.ail is the largest module in src/core and carries 41 cases:
+    # 40% of this walk's CPU. Moving its tests to a companion module does not
+    # help -- measured, a companion's case costs 7.3 CPU-s against 8.1 inline,
+    # because the import is re-elaborated per case too -- and it would need 45
+    # private functions exported. Upstream: NOTE-002 in
+    # .agent/projects/031_system_one_decisions/.
+    #
+    # IS MEASURED, CI (4 vCPU EPYC 7763, three runners, probe run 36029843520):
+    # session.ail ALONE 262-267 s wall, 392-410 CPU-s -- 88% of the old cap with
+    # no contention at all. Inside the walk: 338-343 s at --jobs 4, 363-371 s at
+    # --jobs 6; its CPU is flat across all three (the cost is its own), its wall
+    # stretches with neighbours. The red runs are this population: killed
+    # at 300 s after starting ~165 s in, the step ends at ~465 s, as they did.
+    #
+    # 600 s is bounded on both sides. BELOW: 1.75x the worst session.ail
+    # measured at the recipe's --jobs, 257 s of margin. ABOVE: a hang must be
+    # REPORTED BY THIS TOOL, naming the file, before the CI job's 25-minute
+    # timeout kills the job with no attribution. The last file starts ~314 s in
+    # and the job's other steps take <= 289 s, so a hang in it is named at ~20
+    # minutes. Re-derive both bounds if the walk, the job, or the pin changes.
+    # The margin is printed by report() on every run.
+    #
+    # THE BOUNDS ARE A DEDICATED RUNNER'S. On a machine shared with other
+    # sessions the walk can be starved past the cap: on the 8-core dev box,
+    # session.ail alone took 330 s / 475 CPU-s and the same walk went red twice,
+    # with ext/runtime.ail and session.ail both at 600 s. Read a timeout by the
+    # cores figure it now carries (CPU over the 600 s): at or above the file's
+    # usual rate (session.ail runs at 1.2-1.5, most files at 1.0-1.1) the file
+    # got more expensive, which is what the cap exists to catch; well under it
+    # but not near zero, the machine starved it, so re-run when the box is quiet
+    # before hunting a regression; near zero, it blocked, which is a hang.
+    # Determinism is claimed for CI only; see TEST_COVERAGE_JOBS in the Makefile.
+    ap.add_argument("--timeout", type=int, default=600,
+                    help="per-file timeout in seconds (a hang backstop; see the derivation above)")
     ap.add_argument("--self-test", action="store_true",
                     help="run the fixture suite instead of the inventory")
     args = ap.parse_args()
@@ -776,7 +913,7 @@ def main() -> int:
     findings += check_reachability(args.target, Path(".github/workflows"),
                                    Path("Makefile"))
     findings += check_sealing_probe(SEALING_PROBE)
-    report(results, findings, root)
+    report(results, findings, root, args.timeout)
     return 1 if findings else 0
 
 

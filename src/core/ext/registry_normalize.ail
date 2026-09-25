@@ -14,11 +14,29 @@
 -- was built and DST'd against a LOCAL sketch of `Capability`; B8 moved that
 -- declaration into the ABI and this module imports it.
 --
+-- 8.0 (031 ADR-001 D2) ADDS TWO THINGS AT THIS BOUNDARY, and nothing moves
+-- elsewhere:
+--
+--   * `register_with_config` returns `ExtRegistration = { config, caps }`, and
+--     the entry keeps `config` UNCHANGED. `normalize_registration` takes it as
+--     its second argument (the generated registry calls it three-argument from
+--     P0.5 on) and carries it onto `ExtEntry.config`, which is the value the
+--     dispatchers stamp as `ext_config` on every view they build and the value
+--     `ext_config_digest` below hashes. Nothing downstream fills it in.
+--   * VOTE FAMILIES. The two decision variants join the two legacy vote kinds
+--     in two families -- finalize: `SolverJudge` / `DecisionSolverJudge`;
+--     tool-policy: `ToolPolicy` / `DecisionToolPolicy` -- and an extension
+--     registers AT MOST ONE atom per family. A legacy and a new variant in one
+--     family is the `SecondVote` rejection exactly as two legacy atoms are. One
+--     finalize atom and one tool-policy atom coexist.
+--
 -- THE RULES, and their status:
 --
 --   D3 (DECIDED)   a second `ToolPolicy` atom is rejected; a second
 --                  `SolverJudge` atom is rejected. Both are VOTES in a priority
 --                  merge, and one extension does not get two positions.
+--                  8.0: the rule is per FAMILY (above), so the second position
+--                  is refused whichever variant tries to take it.
 --   D3 (DECIDED)   `ToolProvider` N>1 only with DISJOINT advertised names:
 --                  a per-extension tool-name set is built across ALL provider
 --                  atoms and a duplicate anywhere -- across two atoms or inside
@@ -65,12 +83,20 @@ module src/core/ext/registry_normalize
 import std/list as List (length)
 import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
+import std/crypto (sha256Hex)
+import std/string (charAt, charCode, length as string_length)
+import std/json (Json, JObject, JArray, encode, jo, ja, kv, js, jb)
 import pkg/sunholo/motoko_ext_abi/types (
-  ExtCtx,
+  PureCtx,
+  ProcessCtx,
+  FsCtx,
+  ProviderCtx,
   PromptPatch,
   ToolCallEnvelope,
   ToolPolicyDecision,
   ToolHandleOutcome,
+  FinalizeOutcome,
+  FinalizeDecision,
   Capability,
   ExtEntry,
   DescribeTools,
@@ -83,13 +109,23 @@ import pkg/sunholo/motoko_ext_abi/types (
   SolverJudge,
   ExitIntent,
   WorkInFlight,
+  DecisionSolverJudge,
+  DecisionToolPolicy,
+  DecisionPolicyDescriptor,
+  DecisionRequest,
+  DecisionObservation,
+  JudgePreparation,
+  JudgeImmediate,
+  ToolPreparation,
+  ToolImmediate,
   ExitAction,
-  ExitIntentOutcome
+  ExitIntentOutcome,
+  WorkOutcome
 )
 
--- `Capability` (the 6.0 sum, eight kinds) and `ExtEntry` (D5's owner-bearing
--- `{ id, caps }`) are the ABI's from B8; the local sketch this module carried
--- through B4..B7 was moved there verbatim.
+-- `Capability` (the 8.0 sum, twelve kinds) and `ExtEntry` (D5's owner-bearing
+-- `{ id, config, caps }`) are the ABI's from B8; the local sketch this module
+-- carried through B4..B7 was moved there verbatim.
 
 
 -- ============================================================================
@@ -109,7 +145,7 @@ export pure func empty_registration_omits() -> bool { true }
 -- Rejections: id, variant, and the list position of the duplicate atom.
 -- ============================================================================
 export type RegistrationRejection
-  = SecondVote(string, string, int)          -- id, kind, position of the 2nd atom
+  = SecondVote(string, string, int)          -- id, kind of the 2nd atom in its vote family, its position
   | FoldKindRepeated(string, string, int)    -- id, kind, position (D4 off)
   | DuplicateToolName(string, string, int)   -- id, tool name, position of the atom
   | DuplicateExitLabel(string, string, int)  -- id, intent label, position of the atom
@@ -138,7 +174,7 @@ export pure func rejection_extension(r: RegistrationRejection) -> string {
 export pure func rejection_message(r: RegistrationRejection) -> string {
   match r {
     SecondVote(e, k, p) =>
-      "[second-vote-atom] extension '${e}' registers a second ${k} at list position ${show(p)}; a vote kind admits one atom per extension (D3)",
+      "[second-vote-atom] extension '${e}' registers a ${k} at list position ${show(p)} in a vote family that already has an atom; at most one of SolverJudge/DecisionSolverJudge and one of ToolPolicy/DecisionToolPolicy per extension (D3; 031 ADR-001 D2)",
     FoldKindRepeated(e, k, p) =>
       "[fold-kind-repeated] extension '${e}' registers a second ${k} at list position ${show(p)}; N>1 for this kind is admitted only once D4 is signed off (fold_kind_repeats_allowed)",
     DuplicateToolName(e, n, p) =>
@@ -161,15 +197,33 @@ export pure func kind_name(c: Capability) -> string {
     ResponseInterceptor(_) => "ResponseInterceptor",
     SolverJudge(_) => "SolverJudge",
     ExitIntent(_, _, _) => "ExitIntent",
-    WorkInFlight(_, _) => "WorkInFlight"
+    WorkInFlight(_, _) => "WorkInFlight",
+    DecisionSolverJudge(_, _, _) => "DecisionSolverJudge",
+    DecisionToolPolicy(_, _, _) => "DecisionToolPolicy"
   }
 }
 
-pure func is_vote_kind(c: Capability) -> bool {
+-- 8.0: the vote FAMILY an atom votes in, or `None` for a kind that is not a
+-- vote. The two families are 031 ADR-001 D2's: at most one of
+-- `SolverJudge`/`DecisionSolverJudge` and at most one of
+-- `ToolPolicy`/`DecisionToolPolicy` per extension. Kind names are NOT the
+-- family key -- that is exactly what let a legacy and a new variant pass as
+-- "different kinds" -- so the walk below tracks families beside kinds.
+-- contracts: SKIPPED — the fragment cannot declare `Capability`'s sorts: "sort
+-- "Record_key_value" referenced in declaration of "Json" is not declared". The
+-- property worth stating is that these four kinds fall into exactly TWO families,
+-- so no vote kind is quietly its own family and D2's at-most-one is per family
+-- rather than per kind; tried as
+-- `result == None || result == Some("tool-policy") || result == Some("finalize")`
+-- and skipped on the same unresolved sort. The rule it serves is checked by the
+-- three one-family fixtures below.
+export pure func vote_family(c: Capability) -> Option[string] {
   match c {
-    ToolPolicy(_) => true,
-    SolverJudge(_) => true,
-    _ => false
+    ToolPolicy(_) => Some("tool-policy"),
+    DecisionToolPolicy(_, _, _) => Some("tool-policy"),
+    SolverJudge(_) => Some("finalize"),
+    DecisionSolverJudge(_, _, _) => Some("finalize"),
+    _ => None
   }
 }
 
@@ -193,6 +247,7 @@ pure func add_names(id: string, pos: int, names: [string], seen: [string]) -> Re
 }
 
 -- One pass, in list order. `seen_kinds` are the kind names already admitted;
+-- `seen_families` the vote families already holding an atom (8.0);
 -- `seen_tools` the tool-name set so far; `seen_labels` the ExitIntent labels.
 -- Every atom is either admitted in place or is the FIRST rejection -- never
 -- skipped.
@@ -201,12 +256,20 @@ pure func add_names(id: string, pos: int, names: [string], seen: [string]) -> Re
 -- `ToolProvider` is: its multiplicity rule is its own (disjoint labels), so
 -- flipping D4 to `false` must not silently turn a legal second intent into a
 -- `fold-kind-repeated`.
-pure func walk(id: string, caps: [Capability], pos: int, seen_kinds: [string], seen_tools: [string], seen_labels: [string]) -> Result[(), RegistrationRejection] {
+pure func walk(id: string, caps: [Capability], pos: int, seen_kinds: [string], seen_families: [string], seen_tools: [string], seen_labels: [string]) -> Result[(), RegistrationRejection] {
   match caps {
     [] => Ok(()),
     c :: rest => {
       let k = kind_name(c);
       let repeated = contains_str(seen_kinds, k);
+      -- 8.0: THE FAMILY GATE comes first and subsumes the 7.x "repeated vote
+      -- kind" test -- a repeated vote kind is, a fortiori, a second atom in a
+      -- family that already has one.
+      let family = vote_family(c);
+      let family_taken = match family {
+        Some(f) => contains_str(seen_families, f),
+        None => false
+      };
       -- INLINE, and not a helper. A
       -- `pure func` taking a `Capability` VERIFIES a trivial contract, so
       -- ADR-001 §4 requires a real one; an `ensures` over an ADT parameter has
@@ -228,9 +291,13 @@ pure func walk(id: string, caps: [Capability], pos: int, seen_kinds: [string], s
         WorkInFlight(_, _) => true,
         _ => false
       };
-      if repeated && is_vote_kind(c) then Err(SecondVote(id, k, pos))
+      if family_taken then Err(SecondVote(id, k, pos))
       else if repeated && not repeat_exempt && not fold_kind_repeats_allowed() then Err(FoldKindRepeated(id, k, pos))
       else {
+        let seen_families2 = match family {
+          Some(f) => f :: seen_families,
+          None => seen_families
+        };
         let tools = match c {
           ToolProvider(names, _) => add_names(id, pos, names, seen_tools),
           _ => Ok(seen_tools)
@@ -246,7 +313,7 @@ pure func walk(id: string, caps: [Capability], pos: int, seen_kinds: [string], s
             };
             match labels {
               Err(e) => Err(e),
-              Ok(seen_labels2) => walk(id, rest, pos + 1, k :: seen_kinds, seen_tools2, seen_labels2)
+              Ok(seen_labels2) => walk(id, rest, pos + 1, k :: seen_kinds, seen_families2, seen_tools2, seen_labels2)
             }
           }
         }
@@ -256,12 +323,15 @@ pure func walk(id: string, caps: [Capability], pos: int, seen_kinds: [string], s
 }
 
 -- THE BOUNDARY. `caps` passes through UNCHANGED on acceptance -- list order is
--- the order every dispatcher sees.
-export pure func normalize_registration(id: string, caps: [Capability]) -> Result[ExtEntry, RegistrationRejection] {
+-- the order every dispatcher sees -- and so does `config` (8.0): the entry's
+-- `config` IS the registration's, byte for byte, which is what makes the
+-- stamped `ext_config` and the digest below statements about what the
+-- extension returned.
+export pure func normalize_registration(id: string, config: Json, caps: [Capability]) -> Result[ExtEntry, RegistrationRejection] {
   if List.length(caps) == 0 && not empty_registration_omits() then Err(EmptyRegistration(id))
-  else match walk(id, caps, 0, [], [], []) {
+  else match walk(id, caps, 0, [], [], [], []) {
     Err(e) => Err(e),
-    Ok(_) => Ok({ id: id, caps: caps })
+    Ok(_) => Ok({ id: id, config: config, caps: caps })
   }
 }
 
@@ -276,7 +346,7 @@ export pure func normalize_registry(regs: [ExtEntry]) -> Result[NormalizedRegist
   match regs {
     [] => Ok({ entries: [], omitted_empty: [] }),
     r :: rest =>
-      match normalize_registration(r.id, r.caps) {
+      match normalize_registration(r.id, r.config, r.caps) {
         Err(e) => Err(e),
         Ok(entry) =>
           match normalize_registry(rest) {
@@ -291,21 +361,239 @@ export pure func normalize_registry(regs: [ExtEntry]) -> Result[NormalizedRegist
 }
 
 -- ============================================================================
--- Inline tests. The fixture REGISTRATIONS live in
--- scripts/dst/registry_multiplicity_dst.ail (`make registry_multiplicity`).
+-- 8.0 (031 ADR-001 D2, N58): THE CONFIG DIGEST, per extension, per policy epoch.
+--
+-- WHAT IT COVERS. The entry's `config` -- what `register_with_config` returned
+-- and the host stamps as `ext_config` -- PLUS the constructor DATA POSITIONS of
+-- every atom, in list order: `ToolProvider`'s advertised names, `ExitIntent`'s
+-- label and `enabled` flag, `WorkInFlight`'s label. Those three carry
+-- registration-time state the host acts on WITHOUT invoking a callback (the
+-- catalog advertises the names; the exit machinery reads the flag; the ABI
+-- says `enabled` is "resolved and captured at registration"), so a change to
+-- them on resume is the same event as a config change and must move the same
+-- digest. Each atom is projected as one JSON object naming its kind, so a
+-- position is unambiguous in the epoch snapshot the journal records beside
+-- `config`; kinds carrying no data project to the bare kind object.
+--
+-- WHAT IT DOES NOT COVER, and why. (i) Callbacks: closures cannot be hashed
+-- and are identified by the extension's version, not here. (ii) The decision
+-- variants' `DecisionPolicyDescriptor`: its two config projections and limit
+-- have their OWN resume row with their own refusal semantics (D6's `Descriptor`
+-- row; strict replay compares "the full config epoch as well as the two
+-- descriptor projections"), and N58's enumeration of data positions is the
+-- three above. Folding the descriptor in here would make one edit two events.
+-- (iii) Kinds and ids as a SET: that is `runtime.ext_set_digest`, which stays
+-- kind-only for the `ExtSet` resume row and must not learn about `config`.
+--
+-- CANONICAL. `std/json.encode` preserves object key order, so two equal
+-- configurations written in different key order would hash differently. The
+-- material is canonicalised first: object keys sorted by byte value,
+-- recursively; arrays keep their order (a tool-name list IS ordered).
 -- ============================================================================
 
-pure func p_shape(_ctx: ExtCtx) -> PromptPatch { { prepend: [], append: [] } }
-pure func p_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { NoOpinion }
-pure func p_handle(ctx: ExtCtx, _call: ToolCallEnvelope)
-  -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+-- The data positions of one atom, as the epoch snapshot records them.
+-- contracts: SKIPPED — builds `Json`: "calls user function "js" that is not
+-- SMT-encodable in this context". `result != jo([])` -- every atom discloses at
+-- least its kind, so no atom hashes as the empty object -- skips on the same call.
+-- Which positions are disclosed is asserted by the four `test_config_digest_sees_*`
+-- cases below, each of which moves one position and requires the digest to move.
+export pure func capability_data(c: Capability) -> Json {
+  let kind = kv("kind", js(kind_name(c)));
+  match c {
+    ToolProvider(names, _) => jo([kind, kv("tools", ja(strings_json(names)))]),
+    ExitIntent(label, enabled, _) => jo([kind, kv("label", js(label)), kv("enabled", jb(enabled))]),
+    WorkInFlight(label, _) => jo([kind, kv("label", js(label))]),
+    _ => jo([kind])
+  }
+}
+
+-- contracts: BLOCKED — RECURSIVE over the name list. `length(result) == length(xs)`
+-- -- a provider's advertised names are neither dropped nor duplicated on the way
+-- into the digest material -- ERRORS rather than skipping: "unrolling recursive
+-- function: ... unsupported pattern type *core.ListPattern in SMT encoding". The
+-- fragment cannot unroll a cons pattern at all, so no contract reaches the solver.
+pure func strings_json(xs: [string]) -> [Json] {
+  match xs {
+    [] => [],
+    x :: rest => js(x) :: strings_json(rest)
+  }
+}
+
+-- contracts: BLOCKED — RECURSIVE; see `strings_json`. `length(result) ==
+-- length(caps)` -- one data position per atom, list order preserved, which is what
+-- makes the digest sensitive to atom ORDER and not just to atom content -- ERRORS on
+-- the same ListPattern unrolling.
+pure func atoms_data(caps: [Capability]) -> [Json] {
+  match caps {
+    [] => [],
+    c :: rest => capability_data(c) :: atoms_data(rest)
+  }
+}
+
+-- The value the digest is taken over, before canonicalisation: `config` beside
+-- the atoms' data positions in list order.
+-- contracts: SKIPPED — builds `Json`: "calls user function "kv" that is not
+-- SMT-encodable in this context". The property is ADR-001 (031) N58's and it is the
+-- reason this function exists: the material carries `config` AND the atoms' data
+-- positions, so a digest cannot be blind to either half. `result != jo([])` skips on
+-- the same call. `test_config_digest_covers_config` holds the atoms fixed and moves
+-- the config; the four `sees` cases hold the config fixed and move a position.
+export pure func config_digest_material(config: Json, caps: [Capability]) -> Json {
+  jo([kv("config", config), kv("atoms", ja(atoms_data(caps)))])
+}
+
+-- Byte-order string comparison (no `<` on strings at the pin): -1, 0, 1.
+-- contracts: SKIPPED — uses an unencodable builtin: std/string.charAt. Tried as
+-- `result == -1 || result == 0 || result == 1`, the ordering's three-valued range,
+-- and the builtin is refused before the contract is considered ("Z3 has no SMT-LIB
+-- encoding for std/string.charAt"). That this is a TOTAL order -- antisymmetric, so
+-- `sort_kvs` cannot depend on input order -- is what
+-- `test_config_digest_ignores_callbacks_and_is_canonical` reads through the digest.
+pure func compare_bytes(a: string, b: string, i: int) -> int {
+  if i >= string_length(a) then (if i >= string_length(b) then 0 else -1)
+  else if i >= string_length(b) then 1
+  else {
+    let ac = charCode(charAt(a, i));
+    let bc = charCode(charAt(b, i));
+    if ac < bc then -1 else if ac > bc then 1 else compare_bytes(a, b, i + 1)
+  }
+}
+
+-- contracts: BLOCKED — RECURSIVE over the sorted list. `length(result) ==
+-- length(sorted) + 1` -- insertion adds exactly one key and drops none, so sorting
+-- cannot silently deduplicate two equal keys into one -- ERRORS: "unrolling recursive
+-- function: ... unsupported pattern type *core.ListPattern in SMT encoding".
+pure func insert_kv(p: { key: string, value: Json }, sorted: [{ key: string, value: Json }]) -> [{ key: string, value: Json }] {
+  match sorted {
+    [] => [p],
+    q :: rest => if compare_bytes(p.key, q.key, 0) <= 0 then p :: sorted else q :: insert_kv(p, rest)
+  }
+}
+
+-- contracts: BLOCKED — RECURSIVE; see `insert_kv`. `length(result) == length(kvs)`
+-- -- the sort is a PERMUTATION and not a filter, which is what makes canonicalisation
+-- order-only and the digest lossless -- ERRORS on the same ListPattern unrolling.
+pure func sort_kvs(kvs: [{ key: string, value: Json }]) -> [{ key: string, value: Json }] {
+  match kvs {
+    [] => [],
+    p :: rest => insert_kv(p, sort_kvs(rest))
+  }
+}
+
+-- contracts: BLOCKED — MUTUALLY RECURSIVE with `canonical`: "circular function call
+-- detected: canonical_list → canonical → canonical_list". `length(result) ==
+-- length(kvs)` -- recursing into the values rewrites no key and loses no pair --
+-- fails to encode for the cycle, not for want of a property.
+pure func canonical_kvs(kvs: [{ key: string, value: Json }]) -> [{ key: string, value: Json }] {
+  match kvs {
+    [] => [],
+    p :: rest => {
+      let q: { key: string, value: Json } = { key: p.key, value: canonical(p.value) };
+      q :: canonical_kvs(rest)
+    }
+  }
+}
+
+-- contracts: BLOCKED — MUTUALLY RECURSIVE; the verifier names the other arc of the
+-- same cycle: "circular function call detected: canonical → canonical_kvs →
+-- canonical". `length(result) == length(xs)` -- ARRAY ORDER IS PRESERVED, the half of
+-- canonicalisation that must NOT sort, since a tool-name list is ordered -- ERRORS
+-- there.
+pure func canonical_list(xs: [Json]) -> [Json] {
+  match xs {
+    [] => [],
+    x :: rest => canonical(x) :: canonical_list(rest)
+  }
+}
+
+-- Object keys sorted by byte value at every depth; everything else unchanged.
+-- contracts: SKIPPED — "calls user function "canonical_kvs" that is not
+-- SMT-encodable in this context", that callee being blocked by the cycle above. The
+-- property is the comment's: key ORDER is the only thing canonicalisation changes.
+-- `result != JNull` skips on the same callee. Checked through the digest by
+-- `test_config_digest_ignores_callbacks_and_is_canonical`, which writes one config
+-- in two key orders and requires one digest.
+export pure func canonical(j: Json) -> Json {
+  match j {
+    JObject(kvs) => JObject(sort_kvs(canonical_kvs(kvs))),
+    JArray(xs) => JArray(canonical_list(xs)),
+    other => other
+  }
+}
+
+-- contracts: BLOCKED — the `canonical` cycle again: "circular function call
+-- detected: canonical_list → canonical → canonical_kvs → canonical". Even
+-- `result != ""` ERRORS. Determinism for equal inputs -- the property this function
+-- exists for -- relates TWO calls, which the single-result `ensures` form cannot
+-- state even where the fragment reaches; the digest fixtures below compare two calls
+-- directly, which is the shape the claim actually has.
+export pure func canonical_json(j: Json) -> string {
+  encode(canonical(j))
+}
+
+-- The digest: `sha256:` over the canonical JSON of the material.
+-- contracts: SKIPPED — uses an unencodable builtin: show, from the `"sha256:${...}"`
+-- interpolation ("Z3 has no SMT-LIB encoding for show"). `result != ""` was tried and
+-- skips on the same builtin. What the digest must depend on -- the config AND the
+-- constructor data positions, ADR-001 (031) N58 -- is a statement about how the
+-- result MOVES when an input moves, so it needs two calls: the four
+-- `test_config_digest_sees_*` cases each move one position and require a different
+-- digest, and `test_config_digest_ignores_callbacks_and_is_canonical` moves a
+-- callback and requires the same one.
+export pure func ext_config_digest(e: ExtEntry) -> string {
+  "sha256:${sha256Hex(canonical_json(config_digest_material(e.config, e.caps)))}"
+}
+
+-- Every entry's digest, registry order -- the per-epoch snapshot's row list.
+export type ExtConfigDigest = { id: string, digest: string }
+
+-- contracts: BLOCKED — RECURSIVE, and through `ext_config_digest` it inherits the
+-- `canonical` cycle besides: "circular function call detected: canonical_json →
+-- canonical → canonical_list → canonical". `length(result) == length(entries)` --
+-- one row per entry in registry order, so a snapshot cannot silently omit an
+-- extension -- ERRORS for that reason.
+export pure func ext_config_digests(entries: [ExtEntry]) -> [ExtConfigDigest] {
+  match entries {
+    [] => [],
+    e :: rest => {
+      -- bound first: the pin's parser reads `{ ... } :: xs` in arm position as a pattern
+      let row: ExtConfigDigest = { id: e.id, digest: ext_config_digest(e) };
+      row :: ext_config_digests(rest)
+    }
+  }
+}
+
+-- ============================================================================
+-- Inline tests. The fixture REGISTRATIONS live in
+-- scripts/dst/registry_multiplicity_dst.ail (`make registry_multiplicity`).
+-- 8.0: every payload takes its row's VIEW; nothing here receives `ExtCtx`.
+-- ============================================================================
+
+pure func p_shape(_ctx: PureCtx) -> PromptPatch { { prepend: [], append: [] } }
+pure func p_policy(_ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { NoOpinion }
+pure func p_handle(ctx: ProviderCtx, _call: ToolCallEnvelope)
+  -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   { decision: Delegate, next_state: ctx.world }
 }
+pure func p_judge(ctx: ProcessCtx, _c: string) -> FinalizeOutcome ! {Process} {
+  { decision: NoDecision, next_state: ctx.world }
+}
+
+-- The decision variants' neutral payloads: never query, never vote.
+pure func p_desc(local_id: string) -> DecisionPolicyDescriptor {
+  { local_id: local_id, question_version: "1", question_config: jo([]), interpretation_version: "1", interpretation_config: jo([]), max_interventions: 0 }
+}
+pure func p_prepare_judge(_ctx: PureCtx, _c: string) -> JudgePreparation { JudgeImmediate(NoDecision) }
+pure func p_interpret_judge(_ctx: PureCtx, _c: string, _r: DecisionRequest, _o: DecisionObservation) -> FinalizeDecision { NoDecision }
+pure func p_prepare_tool(_ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPreparation { ToolImmediate(NoOpinion) }
+pure func p_interpret_tool(_ctx: PureCtx, _call: ToolCallEnvelope, _r: DecisionRequest, _o: DecisionObservation) -> ToolPolicyDecision { NoOpinion }
+
+pure func no_cfg() -> Json { jo([]) }
 
 pure func test_clean_registration_passes_in_order() -> bool
   tests [((), true)]
   {
-    match normalize_registration("clean", [PromptShaper(p_shape), ToolPolicy(p_policy), ToolProvider(["A", "B"], p_handle)]) {
+    match normalize_registration("clean", no_cfg(), [PromptShaper(p_shape), ToolPolicy(p_policy), ToolProvider(["A", "B"], p_handle)]) {
       Ok(e) => e.id == "clean" && List.length(e.caps) == 3 && kind_name(first(e.caps)) == "PromptShaper",
       Err(_) => false
     }
@@ -321,20 +609,90 @@ pure func first(cs: [Capability]) -> Capability {
 pure func test_second_policy_is_rejected_by_position() -> bool
   tests [((), true)]
   {
-    match normalize_registration("twice", [ToolPolicy(p_policy), PromptShaper(p_shape), ToolPolicy(p_policy)]) {
+    match normalize_registration("twice", no_cfg(), [ToolPolicy(p_policy), PromptShaper(p_shape), ToolPolicy(p_policy)]) {
       Err(SecondVote(e, k, p)) => e == "twice" && k == "ToolPolicy" && p == 2,
       _ => false
+    }
+  }
+
+-- 8.0: a legacy and a new variant in ONE vote family is the same rejection as
+-- two legacy atoms, in either order, and the rejection names the SECOND atom.
+pure func test_legacy_and_new_finalize_votes_in_one_family_are_rejected() -> bool
+  tests [((), true)]
+  {
+    let legacy_first = match normalize_registration("fam", no_cfg(), [SolverJudge(p_judge), DecisionSolverJudge(p_desc("j"), p_prepare_judge, p_interpret_judge)]) {
+      Err(SecondVote(e, k, p)) => e == "fam" && k == "DecisionSolverJudge" && p == 1,
+      _ => false
+    };
+    let new_first = match normalize_registration("fam", no_cfg(), [DecisionSolverJudge(p_desc("j"), p_prepare_judge, p_interpret_judge), PromptShaper(p_shape), SolverJudge(p_judge)]) {
+      Err(SecondVote(e, k, p)) => e == "fam" && k == "SolverJudge" && p == 2,
+      _ => false
+    };
+    legacy_first && new_first
+  }
+
+pure func test_legacy_and_new_tool_policy_votes_in_one_family_are_rejected() -> bool
+  tests [((), true)]
+  {
+    let legacy_first = match normalize_registration("fam", no_cfg(), [ToolPolicy(p_policy), DecisionToolPolicy(p_desc("t"), p_prepare_tool, p_interpret_tool)]) {
+      Err(SecondVote(e, k, p)) => e == "fam" && k == "DecisionToolPolicy" && p == 1,
+      _ => false
+    };
+    let new_first = match normalize_registration("fam", no_cfg(), [DecisionToolPolicy(p_desc("t"), p_prepare_tool, p_interpret_tool), ToolPolicy(p_policy)]) {
+      Err(SecondVote(e, k, p)) => e == "fam" && k == "ToolPolicy" && p == 1,
+      _ => false
+    };
+    let two_new = match normalize_registration("fam", no_cfg(), [DecisionToolPolicy(p_desc("t"), p_prepare_tool, p_interpret_tool), DecisionToolPolicy(p_desc("u"), p_prepare_tool, p_interpret_tool)]) {
+      Err(SecondVote(_, k, p)) => k == "DecisionToolPolicy" && p == 1,
+      _ => false
+    };
+    legacy_first && new_first && two_new
+  }
+
+-- 8.0: the two families are independent -- one finalize atom and one
+-- tool-policy atom coexist, whichever variant each is.
+pure func test_one_finalize_and_one_tool_policy_atom_coexist() -> bool
+  tests [((), true)]
+  {
+    let both_new = match normalize_registration("co", no_cfg(), [DecisionSolverJudge(p_desc("j"), p_prepare_judge, p_interpret_judge), DecisionToolPolicy(p_desc("t"), p_prepare_tool, p_interpret_tool)]) {
+      Ok(e) => List.length(e.caps) == 2,
+      Err(_) => false
+    };
+    let mixed = match normalize_registration("co", no_cfg(), [SolverJudge(p_judge), DecisionToolPolicy(p_desc("t"), p_prepare_tool, p_interpret_tool), PromptShaper(p_shape)]) {
+      Ok(e) => List.length(e.caps) == 3,
+      Err(_) => false
+    };
+    both_new && mixed
+  }
+
+pure func test_kind_name_covers_the_decision_variants() -> bool
+  tests [((), true)]
+  {
+    kind_name(DecisionSolverJudge(p_desc("j"), p_prepare_judge, p_interpret_judge)) == "DecisionSolverJudge"
+      && kind_name(DecisionToolPolicy(p_desc("t"), p_prepare_tool, p_interpret_tool)) == "DecisionToolPolicy"
+      && (match vote_family(PromptShaper(p_shape)) { None => true, Some(_) => false })
+      && (match vote_family(SolverJudge(p_judge)) { Some(f) => f == "finalize", None => false })
+  }
+
+-- 8.0: the entry's `config` is the registration's, unchanged.
+pure func test_config_is_carried_unchanged_onto_the_entry() -> bool
+  tests [((), true)]
+  {
+    let cfg = jo([kv("model", js("m")), kv("limit", jb(true))]);
+    match normalize_registration("cfg", cfg, [PromptShaper(p_shape)]) {
+      Ok(e) => encode(e.config) == encode(cfg),
+      Err(_) => false
     }
   }
 
 pure func test_overlapping_provider_names_are_rejected() -> bool
   tests [((), true)]
   {
-    let across = match normalize_registration("ov", [ToolProvider(["A"], p_handle), ToolProvider(["B", "A"], p_handle)]) {
+    let across = match normalize_registration("ov", no_cfg(), [ToolProvider(["A"], p_handle), ToolProvider(["B", "A"], p_handle)]) {
       Err(DuplicateToolName(_, n, p)) => n == "A" && p == 1,
       _ => false
     };
-    let within = match normalize_registration("in", [ToolProvider(["A", "A"], p_handle)]) {
+    let within = match normalize_registration("in", no_cfg(), [ToolProvider(["A", "A"], p_handle)]) {
       Err(DuplicateToolName(_, n, p)) => n == "A" && p == 0,
       _ => false
     };
@@ -343,11 +701,14 @@ pure func test_overlapping_provider_names_are_rejected() -> bool
 
 -- contracts: SKIPPED — "SMT declaration closure could not resolve a required
 -- sort ... "Record_key_value" referenced in declaration of "Json" is not
--- declared". `ExtCtx` reaches `Json` through its artifacts, so every fixture
+-- declared". `FsCtx` reaches `Json` through its artifacts, so every fixture
 -- taking one is blocked here; it is a neutral payload for the multiplicity tests
 -- and carries no property worth stating anyway.
-pure func p_exit(ctx: ExtCtx) -> ExitIntentOutcome ! {FS}
+pure func p_exit(ctx: FsCtx) -> ExitIntentOutcome ! {FS}
   { { actions: [], next_state: ctx.world } }
+
+pure func p_work(ctx: FsCtx) -> WorkOutcome ! {FS}
+  { { items: [], next_state: ctx.world } }
 
 -- 7.0. Two intents pass in list order; two intents ANSWERING TO ONE LABEL do
 -- not. The second half is the rule that matters: the label is the manifest's
@@ -358,11 +719,11 @@ pure func p_exit(ctx: ExtCtx) -> ExitIntentOutcome ! {FS}
 pure func test_exit_intents_repeat_but_labels_must_be_disjoint() -> bool
   tests [((), true)]
   {
-    let two = match normalize_registration("two", [ExitIntent("panes", true, p_exit), ExitIntent("run-file", false, p_exit)]) {
+    let two = match normalize_registration("two", no_cfg(), [ExitIntent("panes", true, p_exit), ExitIntent("run-file", false, p_exit)]) {
       Ok(e) => List.length(e.caps) == 2,
       Err(_) => false
     };
-    let dup = match normalize_registration("dup", [ExitIntent("panes", true, p_exit), ToolPolicy(p_policy), ExitIntent("panes", true, p_exit)]) {
+    let dup = match normalize_registration("dup", no_cfg(), [ExitIntent("panes", true, p_exit), ToolPolicy(p_policy), ExitIntent("panes", true, p_exit)]) {
       Err(DuplicateExitLabel(e, l, p)) => e == "dup" && l == "panes" && p == 2,
       _ => false
     };
@@ -375,7 +736,7 @@ pure func test_exit_intents_repeat_but_labels_must_be_disjoint() -> bool
 pure func test_fold_kind_repeat_follows_the_d4_constant() -> bool
   tests [((), true)]
   {
-    let r = normalize_registration("fold", [PromptShaper(p_shape), PromptShaper(p_shape)]);
+    let r = normalize_registration("fold", no_cfg(), [PromptShaper(p_shape), PromptShaper(p_shape)]);
     match r {
       Err(FoldKindRepeated(_, k, p)) => k == "PromptShaper" && p == 1 && not fold_kind_repeats_allowed(),
       Ok(e) => List.length(e.caps) == 2 && fold_kind_repeats_allowed(),
@@ -386,9 +747,9 @@ pure func test_fold_kind_repeat_follows_the_d4_constant() -> bool
 pure func test_one_bad_extension_rejects_the_build_and_empties_are_named() -> bool
   tests [((), true)]
   {
-    let good: ExtEntry = { id: "good", caps: [ToolPolicy(p_policy)] };
-    let empty: ExtEntry = { id: "empty", caps: [] };
-    let bad: ExtEntry = { id: "bad", caps: [SolverJudge(\ctx _c. { decision: NoDecision, next_state: ctx.world } ! {Process}), SolverJudge(\ctx _c. { decision: NoDecision, next_state: ctx.world } ! {Process})] };
+    let good: ExtEntry = { id: "good", config: no_cfg(), caps: [ToolPolicy(p_policy)] };
+    let empty: ExtEntry = { id: "empty", config: no_cfg(), caps: [] };
+    let bad: ExtEntry = { id: "bad", config: no_cfg(), caps: [SolverJudge(p_judge), SolverJudge(p_judge)] };
     let whole = match normalize_registry([good, empty, bad]) {
       Err(SecondVote(e, k, p)) => e == "bad" && k == "SolverJudge" && p == 1,
       _ => false
@@ -399,4 +760,70 @@ pure func test_one_bad_extension_rejects_the_build_and_empties_are_named() -> bo
       Err(_) => false
     };
     whole && named
+  }
+
+-- ----------------------------------------------------------------------------
+-- The config digest. Each data position has its own test so that a projection
+-- dropping ONE of them is caught by name (the mutgate rows under
+-- evidence/P1.1 mutate `capability_data` one position at a time).
+-- ----------------------------------------------------------------------------
+
+pure func digest_of(config: Json, caps: [Capability]) -> string {
+  ext_config_digest({ id: "d#0", config: config, caps: caps })
+}
+
+pure func data_caps(tools: [string], label: string, enabled: bool, work: string) -> [Capability] {
+  [ToolProvider(tools, p_handle), ExitIntent(label, enabled, p_exit), WorkInFlight(work, p_work)]
+}
+
+pure func test_config_digest_covers_config() -> bool
+  tests [((), true)]
+  {
+    let caps = [PromptShaper(p_shape), ToolPolicy(p_policy)];
+    let a = digest_of(jo([kv("k", js("a"))]), caps);
+    let b = digest_of(jo([kv("k", js("b"))]), caps);
+    let a2 = digest_of(jo([kv("k", js("a"))]), caps);
+    a != b && a == a2
+  }
+
+pure func test_config_digest_sees_tool_provider_names() -> bool
+  tests [((), true)]
+  {
+    digest_of(no_cfg(), data_caps(["A"], "l", true, "w")) != digest_of(no_cfg(), data_caps(["B"], "l", true, "w"))
+      && digest_of(no_cfg(), data_caps(["A", "B"], "l", true, "w")) != digest_of(no_cfg(), data_caps(["B", "A"], "l", true, "w"))
+  }
+
+pure func test_config_digest_sees_exit_intent_label() -> bool
+  tests [((), true)]
+  {
+    digest_of(no_cfg(), data_caps(["A"], "panes", true, "w")) != digest_of(no_cfg(), data_caps(["A"], "run-file", true, "w"))
+  }
+
+pure func test_config_digest_sees_exit_intent_enabled() -> bool
+  tests [((), true)]
+  {
+    digest_of(no_cfg(), data_caps(["A"], "l", true, "w")) != digest_of(no_cfg(), data_caps(["A"], "l", false, "w"))
+  }
+
+pure func test_config_digest_sees_work_in_flight_label() -> bool
+  tests [((), true)]
+  {
+    digest_of(no_cfg(), data_caps(["A"], "l", true, "delegate")) != digest_of(no_cfg(), data_caps(["A"], "l", true, "review"))
+  }
+
+-- Equal data, different callback bodies: the same digest. Equal configuration
+-- in a different key order, at two depths: the same digest. A kind that carries
+-- no data still occupies its position.
+pure func p_shape2(_ctx: PureCtx) -> PromptPatch { { prepend: ["other body"], append: [] } }
+
+pure func test_config_digest_ignores_callbacks_and_is_canonical() -> bool
+  tests [((), true)]
+  {
+    let bodies = digest_of(no_cfg(), [PromptShaper(p_shape)]) == digest_of(no_cfg(), [PromptShaper(p_shape2)]);
+    let ordered = jo([kv("a", jo([kv("y", js("1")), kv("x", js("2"))])), kv("b", ja([js("q")]))]);
+    let shuffled = jo([kv("b", ja([js("q")])), kv("a", jo([kv("x", js("2")), kv("y", js("1"))]))]);
+    let keys = digest_of(ordered, []) == digest_of(shuffled, []);
+    let canon = canonical_json(shuffled) == "{\"a\":{\"x\":\"2\",\"y\":\"1\"},\"b\":[\"q\"]}";
+    let positions = digest_of(no_cfg(), [PromptShaper(p_shape), ToolProvider(["A"], p_handle)]) != digest_of(no_cfg(), [ToolProvider(["A"], p_handle), PromptShaper(p_shape)]);
+    bodies && keys && canon && positions
   }

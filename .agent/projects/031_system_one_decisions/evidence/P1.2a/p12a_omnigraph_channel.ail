@@ -1,0 +1,54 @@
+-- 031 PLAN-001 P1.2a: omnigraph's one capture goes through the configuration
+-- channel. Run by p12a_ws.sh channel, which writes a synthetic
+-- omnigraph/AGENT_PROMPT.md into a scratch workdir and points MOTOKO_WORKDIR at
+-- it. Registration must DISCLOSE the prompt as `config`, and the PromptShaper,
+-- invoked the way the host invokes it -- on a PureCtx stamped with that config
+-- and nothing else -- must return exactly that prompt. A shaper that reads the
+-- prompt from anywhere but `ext_config` (a captured or module-level value), or a
+-- registration that withholds it, fails here. Names, not values: the disclosed
+-- config must not carry the workdir.
+module p12a_omnigraph_channel
+
+import std/io (println)
+import std/env (getEnvOr)
+import std/string (contains)
+import std/json (Json, jo, encode)
+import pkg/sunholo/motoko_ext_abi/types (Capability, PromptShaper, PromptPatch, pure_ctx)
+import pkg/sunholo/motoko_ext_omnigraph/register (register_with_config)
+
+pure func only(xs: [string], want: string) -> bool {
+  match xs { [x] => x == want, _ => false }
+}
+
+pure func is_empty(xs: [string]) -> bool {
+  match xs { [] => true, _ => false }
+}
+
+func shaper_output(caps: [Capability], cfg: Json) -> Option[PromptPatch] {
+  match caps {
+    [] => None,
+    c :: rest => match c {
+      PromptShaper(f) => Some(f(pure_ctx(cfg))),
+      _ => shaper_output(rest, cfg)
+    }
+  }
+}
+
+export func main() -> () ! {Env, FS, IO, Process, Rand} {
+  let reg = register_with_config(0);
+  let wd = getEnvOr("P12A_WORKDIR", "");
+  let want = "P12A-SYNTHETIC-PROMPT line one\nline two\n";
+  let disclosed = encode(reg.config);
+  let appended = match shaper_output(reg.caps, reg.config) {
+    Some(p) => p.append,
+    None => []
+  };
+  let empty_cfg = match shaper_output(reg.caps, jo([])) {
+    Some(p) => p.append,
+    None => ["<no shaper>"]
+  };
+  if not only(appended, want) then println("FAIL: shaper on the disclosed config returned ${show(appended)}")
+  else if not is_empty(empty_cfg) then println("FAIL: shaper on an EMPTY config still returned ${show(empty_cfg)} -- the prompt is not coming from ext_config")
+  else if wd != "" && contains(disclosed, wd) then println("FAIL: the disclosed config carries the workdir value")
+  else println("OK: channel -- prompt disclosed as config and read back from ext_config only")
+}

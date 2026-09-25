@@ -1,0 +1,8 @@
+-- Registration binds the IMPORTED payload; it performs nothing itself (row {}).
+module local/@V@/reg_imported
+import std/json (jo)
+import pkg/sunholo/motoko_ext_abi/types (ExtRegistration, ToolProvider)
+import pkg/local/@V@/handler (handle)
+export func register_with_config(_cfg: a) -> ExtRegistration {
+  { config: jo([]), caps: [ToolProvider(["T"], handle)] }
+}

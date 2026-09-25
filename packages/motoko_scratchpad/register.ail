@@ -3,8 +3,14 @@ module sunholo/motoko_ext_scratchpad/register
 import std/env (getEnvOr)
 import std/string (stringToInt)
 import std/option (Some, None)
-import pkg/sunholo/motoko_ext_abi/types (Capability)
-import pkg/sunholo/motoko_ext_scratchpad/scratchpad (make_hooks)
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtRegistration, DescribeTools, PromptShaper, ToolPolicy, ToolProvider,
+  ProviderCtx, ToolCallEnvelope, ToolHandleOutcome
+)
+import pkg/sunholo/motoko_ext_scratchpad/scratchpad (
+  provided_tools, on_describe_tools, scratchpad_prompt, on_tool_policy, on_tool_handle,
+  default_timeout_secs, timeout_config, timeout_secs_of
+)
 
 func parse_int_or(s: string, fallback: int) -> int {
   match stringToInt(s) {
@@ -13,7 +19,27 @@ func parse_int_or(s: string, fallback: int) -> int {
   }
 }
 
-export func register_with_config(_cfg: a) -> [Capability] ! {Env, Net, Rand} {
-  let timeout_secs = parse_int_or(getEnvOr("MOTOKO_SCRATCHPAD_TIMEOUT_SECS", "30"), 30);
-  make_hooks(timeout_secs)
+-- The provider payload: named, in this module, carrying the slot's whole row.
+-- It lives here rather than in `scratchpad`: on the pin, a payload imported
+-- from another module leaks its row into `register_with_config`'s inferred
+-- effects (omnigraph's wrapper sits in its `register` for the same reason).
+func scratchpad_tool_handle(ctx: ProviderCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  on_tool_handle(ctx, call, timeout_secs_of(ctx.ext_config))
+}
+
+-- ABI 8.0 (031 ADR-001 D2): `{ config, caps }`, every payload a named
+-- top-level function bound directly. The one registration value, the cell
+-- timeout, is disclosed as `config` (Amendment 3), not captured.
+export func register_with_config(_cfg: a) -> ExtRegistration ! {Env} {
+  let timeout_secs = parse_int_or(getEnvOr("MOTOKO_SCRATCHPAD_TIMEOUT_SECS", "30"), default_timeout_secs());
+  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
+  {
+    config: timeout_config(timeout_secs),
+    caps: [
+      DescribeTools(on_describe_tools),
+      PromptShaper(scratchpad_prompt),
+      ToolPolicy(on_tool_policy),
+      ToolProvider(provided_tools(), scratchpad_tool_handle)
+    ]
+  }
 }

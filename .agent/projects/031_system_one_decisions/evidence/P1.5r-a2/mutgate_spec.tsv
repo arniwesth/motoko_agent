@@ -1,0 +1,18 @@
+# P1.5r-a2 mutgate spec — rule-1 profile prose and herdr_abi_version() at ABI 8.0.
+# Each row breaks THE BEHAVIOUR ITS ROW NAMES and must turn that row's test red.
+#
+# Tests, and whether they compile AILANG: none does.
+#   check_fixtures.py --abi-prose   rule 1 of check_abi_version alone (profile-record prose). Python.
+#   check_fixtures.py --abi-pins    rule 2 alone (the pin sweep, now with the `*abi_version()` class). Python.
+# Neither reads ailang.lock, so the ailang.lock trap cannot reach a clone. The AILANG side of this part
+# (the four touched src/core modules check and test on 8.0) is in CHECKS.log, run through P1.1's
+# lock-free p11_core_check.sh; it is not a mutgate row, because a note or a string constant at 7.4
+# type-checks exactly as well as one at 8.0, which is the whole reason the Python guards exist.
+#
+# NO PIPES IN A test_cmd (mutgate.sh's `set -o pipefail` + `grep -q` = exit 141). Each row writes a log
+# and greps the FILE.
+# fix_id	target_file	sed_expr	test_cmd
+p15ra2_note_reverted_driver_only	src/core/dst_driver_only.ail	s/hook surface, ABI 8.0 (/hook surface, ABI 7.4 (/	python3 tools/profile_definition/check_fixtures.py --abi-prose > /tmp/p15ra2_note_reverted_driver_only.log 2>&1; grep -qF "✓ the ABI version every profile record's prose names is the one the package declares: 8.0" /tmp/p15ra2_note_reverted_driver_only.log
+p15ra2_note_reverted_herdr	src/core/dst_driver_plus_herdr.ail	s/hook surface at ABI 8.0 (/hook surface at ABI 7.4 (/	python3 tools/profile_definition/check_fixtures.py --abi-prose > /tmp/p15ra2_note_reverted_herdr.log 2>&1; grep -qF "✓ the ABI version every profile record's prose names is the one the package declares: 8.0" /tmp/p15ra2_note_reverted_herdr.log
+p15ra2_herdr_fn_reverted	src/core/dst_driver_plus_herdr.ail	s/herdr_abi_version() -> string { "8.0" }/herdr_abi_version() -> string { "7.4" }/	python3 tools/profile_definition/check_fixtures.py --abi-pins > /tmp/p15ra2_herdr_fn_reverted.log 2>&1; grep -qF "✓ every manifest ABI pin in the tree is the declared one: 8.0" /tmp/p15ra2_herdr_fn_reverted.log
+p15ra2_sweep_blind_to_calls	tools/profile_definition/check_fixtures.py	s/r'func\\s+/r'fnx\\s+/	python3 tools/profile_definition/check_fixtures.py --abi-pins > /tmp/p15ra2_sweep_blind_to_calls.log 2>&1; grep -qF "✓ every manifest ABI pin in the tree is the declared one: 8.0 (33 pin(s)" /tmp/p15ra2_sweep_blind_to_calls.log

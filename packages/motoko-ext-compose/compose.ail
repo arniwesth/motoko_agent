@@ -35,6 +35,7 @@ import std/string (trim, split, startsWith, contains, toLower)
 import std/option (None)
 
 import pkg/sunholo/motoko_ext_compose/types (ToolResultMeta, ComposeHostConfig)
+import pkg/sunholo/motoko_ext_compose/config (host_config_json, host_config_of, composition_mode_of, snippet_caps_of)
 -- WI-D26. The routed subprocess request and the streams that come back. Its
 -- header carries the item's central measurement: `BashExec` reaches
 -- `exec(cmd, args)` directly and `bash -lc` is only the fallback for a request
@@ -42,7 +43,8 @@ import pkg/sunholo/motoko_ext_compose/types (ToolResultMeta, ComposeHostConfig)
 import pkg/sunholo/motoko_ext_compose/proc (bash_exec_tool, bash_exec_args, decode_bash_result, message_of)
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
   ToolCallEnvelope, ToolResultEnvelope,
-  ExtCtx, Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, PromptPatch, BudgetPlan, BudgetPatch,
+  PureCtx, ProviderCtx, InterceptCtx, InterceptPorts, ExtRegistration, ExtProcOutcome, ExtPathStat,
+  Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, PromptPatch, BudgetPlan, BudgetPatch,
   -- WI-D19: the routed half of `on_response_intercept`. `ExtPathKind`'s three
   -- constructors are imported by name because `remove_if_file` matches on them
   -- exhaustively rather than defaulting — see that function.
@@ -93,11 +95,11 @@ func compose_main_prompt_card() -> string {
   "- Prefer Compose for multi-step repo reasoning (3+ operations), especially architecture, tracing, and analysis tasks.\n- Compose call shape: {\"tool\":\"Compose\",\"intent\":\"...\",\"intent_kind\":\"analyze\",\"expected_output\":\"...\"}\n"
 }
 
-export func on_build_system_prompt(_ctx: ExtCtx) -> PromptPatch {
+export func on_build_system_prompt(_ctx: PureCtx) -> PromptPatch {
   { prepend: [], append: [compose_main_prompt_card()] }
 }
 
-func current_composition_mode(ctx: ExtCtx, raw: string) -> string {
+func current_composition_mode(ctx: PureCtx, raw: string) -> string {
   let mode =
     if raw == "inline" then "inline"
     else if raw == "off" then "off"
@@ -110,7 +112,7 @@ func is_compose_tool_name(name: string) -> bool {
   name == "Compose" || name == "compose"
 }
 
-func on_tool_policy_with_mode(raw_mode: string, ctx: ExtCtx, call: ToolCallEnvelope) -> ToolPolicyDecision {
+func on_tool_policy_with_mode(raw_mode: string, ctx: PureCtx, call: ToolCallEnvelope) -> ToolPolicyDecision {
   if not is_compose_tool_name(call.tool) then NoOpinion
   else {
     let mode = current_composition_mode(ctx, raw_mode);
@@ -120,8 +122,12 @@ func on_tool_policy_with_mode(raw_mode: string, ctx: ExtCtx, call: ToolCallEnvel
   }
 }
 
-export func on_tool_policy(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolPolicyDecision ! {Env} {
-  on_tool_policy_with_mode("subagent", ctx, call)
+-- ABI 8.0: the ToolPolicy payload. The composition mode was captured at
+-- registration in 7.4; it now arrives as `ext_config` (the configuration
+-- channel) and is decoded per call. The row is the slot's, `{}`: the 7.4
+-- declaration's `! {Env}` was never performed.
+export func on_tool_policy(ctx: PureCtx, call: ToolCallEnvelope) -> ToolPolicyDecision {
+  on_tool_policy_with_mode(composition_mode_of(ctx.ext_config), ctx, call)
 }
 
 func json_escape(s: string) -> string {
@@ -309,7 +315,29 @@ func cap_text(s: string, max_chars: int) -> string {
 -- caller, which is sharper: `one_attempt` reads `ran.exit_code != 0` as
 -- "snippet runtime failed", so a -1 becomes a RETRY rather than a false success.
 
-func check_snippet(p: ExtPorts, w: ExtWorld, snippet_path: string) -> { ok: bool, errors: string, exit_code: int, next_state: ExtWorld } ! {IO, Process, FS} {
+-- ABI 8.0: THE SMALLEST PORTS RECORDS THESE HELPERS USE. The Compose tool
+-- (`ProviderCtx`, all of `ExtPorts`) and the inline interceptor (`InterceptCtx`,
+-- `InterceptPorts`) both call them, and AILANG records are closed, so neither
+-- view's ports record fits the other's helper. Each helper takes exactly the
+-- ports it calls; each caller projects its own record. No dummy port anywhere.
+type SnippetExecPorts = {
+  tool_handle: (ExtWorld, string, string) -> ExtProcOutcome ! {IO, Process, FS}
+}
+
+type RemovePorts = {
+  path_stat: (ExtWorld, string) -> ExtPathStat ! {FS},
+  file_remove: (ExtWorld, string) -> ExtFileMutation ! {FS}
+}
+
+pure func exec_ports(p: ExtPorts) -> SnippetExecPorts { { tool_handle: p.tool_handle } }
+
+pure func exec_ports_i(p: InterceptPorts) -> SnippetExecPorts { { tool_handle: p.tool_handle } }
+
+pure func remove_ports(p: ExtPorts) -> RemovePorts { { path_stat: p.path_stat, file_remove: p.file_remove } }
+
+pure func remove_ports_i(p: InterceptPorts) -> RemovePorts { { path_stat: p.path_stat, file_remove: p.file_remove } }
+
+func check_snippet(p: SnippetExecPorts, w: ExtWorld, snippet_path: string) -> { ok: bool, errors: string, exit_code: int, next_state: ExtWorld } ! {IO, Process, FS} {
   let out = p.tool_handle(w, bash_exec_tool(), bash_exec_args("ailang", ["check", snippet_path]));
   -- THE BRANCH IS THE TYPED FIELD. `out.exitCode` became `out.exit_code` — a
   -- field read where the ambient form had a field read. Nothing here decodes
@@ -323,7 +351,7 @@ func check_snippet(p: ExtPorts, w: ExtWorld, snippet_path: string) -> { ok: bool
     next_state: out.next_state }
 }
 
-func run_snippet(p: ExtPorts, w: ExtWorld, snippet_path: string, caps: string) -> { stdout: string, stderr: string, exit_code: int, truncated: bool, raw_stdout: string, next_state: ExtWorld } ! {IO, Process, FS} {
+func run_snippet(p: SnippetExecPorts, w: ExtWorld, snippet_path: string, caps: string) -> { stdout: string, stderr: string, exit_code: int, truncated: bool, raw_stdout: string, next_state: ExtWorld } ! {IO, Process, FS} {
   -- `caps` IS ONE ARGV ELEMENT, exactly as it was under ambient `exec`. It is a
   -- comma-joined capability list out of config (`--caps IO,FS,Net`), so it is
   -- one token to `ailang` and one token here; there is no shell to split it and
@@ -450,7 +478,7 @@ func parse_hints(arguments: Json) -> { read: [string], write: [string], avoid: [
   }
 }
 
-func compose_req_from_call(ctx: ExtCtx, call: ToolCallEnvelope) -> { id: string, intent: string, intent_kind: string, expected_output: string, hints_read: [string], hints_write: [string], hints_avoid: [string] } {
+func compose_req_from_call(ctx: ProviderCtx, call: ToolCallEnvelope) -> { id: string, intent: string, intent_kind: string, expected_output: string, hints_read: [string], hints_write: [string], hints_avoid: [string] } {
   let hints = parse_hints(call.arguments);
   {
     id: call.id,
@@ -468,7 +496,7 @@ type AttemptOutcome
   | FinalResult({ item: ToolResultEnvelope, ledger: PremiseLedger })
 
 func one_attempt(
-  ctx: ExtCtx,
+  ctx: ProviderCtx,
   w: ExtWorld,
   req: { id: string, intent: string, expected_output: string, hints_read: [string], hints_write: [string], hints_avoid: [string] },
   archive_key: string,
@@ -609,18 +637,18 @@ func one_attempt(
       -- no longer the newest world below this line — `checked.next_state` is, and
       -- both branches start from it. Every `stored_pending.next_state` that used
       -- to appear under here would have discarded the subprocess.
-      let checked = check_snippet(p, stored_pending.next_state, snippet_path);
+      let checked = check_snippet(exec_ports(p), stored_pending.next_state, snippet_path);
       if not checked.ok then {
         let compact = compact_error_message(checked.errors);
         let fail_meta = snippet_meta_json(p, checked.next_state, req.id, attempt, ctx.step, req.intent, prompt_for_meta, req.intent, intent_kind, model, caps, "check_failed", compact, checked.exit_code);
         let stored_fail = store_snippet_with_meta(p, fail_meta.next_state, ctx.workdir, archive_key, attempt, full_source, fail_meta.json);
         let _ = emit_event("compose_check", ctx.step, req.id, ["\"attempt\":${show(attempt)}", "\"passed\":false", "\"errors\":${json_escape(compact)}"]);
-        let cleaned = remove_if_file(p, stored_fail.next_state, snippet_path);
+        let cleaned = remove_if_file(remove_ports(p), stored_fail.next_state, snippet_path);
         { outcome: NeedRetry({ reason: compact, prior_error: "${compact}\n${targeted_hint(compact)}", ledger: author_ledger, last_snippet: snippet }), next_state: cleaned.next_state }
       } else {
         let _ = emit_event("compose_check", ctx.step, req.id, ["\"attempt\":${show(attempt)}", "\"passed\":true", "\"errors\":\"\""]);
-        let ran = run_snippet(p, checked.next_state, snippet_path, caps);
-        let cleaned = remove_if_file(p, ran.next_state, snippet_path);
+        let ran = run_snippet(exec_ports(p), checked.next_state, snippet_path, caps);
+        let cleaned = remove_if_file(remove_ports(p), ran.next_state, snippet_path);
         let _ = emit_event("compose_exec", ctx.step, req.id, ["\"stdout\":${json_escape(ran.stdout)}", "\"stderr\":${json_escape(ran.stderr)}", "\"exit_code\":${show(ran.exit_code)}"]);
         if ran.exit_code != 0 then {
           let reason = "snippet runtime failed (exit ${show(ran.exit_code)})";
@@ -720,7 +748,7 @@ func one_attempt(
 }
 
 func run_attempts(
-  ctx: ExtCtx,
+  ctx: ProviderCtx,
   w: ExtWorld,
   req: { id: string, intent: string, expected_output: string, hints_read: [string], hints_write: [string], hints_avoid: [string] },
   archive_key: string,
@@ -792,7 +820,7 @@ func run_attempts(
   }
 }
 
-func handle_compose_tool(ctx: ExtCtx, w: ExtWorld, req: { id: string, intent: string, intent_kind: string, expected_output: string, hints_read: [string], hints_write: [string], hints_avoid: [string] }, runtime_cfg: ComposeHostConfig, snippet_caps: string) -> { item: ToolResultEnvelope, next_state: ExtWorld } ! {IO, AI, Process, FS, Env, Clock} {
+func handle_compose_tool(ctx: ProviderCtx, w: ExtWorld, req: { id: string, intent: string, intent_kind: string, expected_output: string, hints_read: [string], hints_write: [string], hints_avoid: [string] }, runtime_cfg: ComposeHostConfig, snippet_caps: string) -> { item: ToolResultEnvelope, next_state: ExtWorld } ! {IO, AI, Process, FS, Env, Clock} {
   let started = ctx.ports.clock_now(w);
   let t0 = started.now_ms;
   let explicit_kind = normalize_intent_kind(req.intent_kind);
@@ -884,7 +912,7 @@ func handle_compose_tool(ctx: ExtCtx, w: ExtWorld, req: { id: string, intent: st
 -- tool call in a batch. Both are fixed there, and a routed hook whose successor
 -- the driver discards would have been a recorder writing into a world nobody
 -- keeps. See that function; WI-D19 §3 found the same shape at the intercept.
-export func on_tool_handle(ctx: ExtCtx, call: ToolCallEnvelope, runtime_cfg: ComposeHostConfig, snippet_caps: string) -> ToolHandleOutcome ! {IO, AI, Process, FS, Env, Clock, Rand}  {
+export func on_tool_handle(ctx: ProviderCtx, call: ToolCallEnvelope, runtime_cfg: ComposeHostConfig, snippet_caps: string) -> ToolHandleOutcome ! {IO, AI, Process, FS, Env, Clock, Rand}  {
   if not is_compose_tool_name(call.tool) then { decision: Delegate, next_state: ctx.world }
   else {
     let handled = handle_compose_tool(ctx, ctx.world, compose_req_from_call(ctx, call), runtime_cfg, snippet_caps);
@@ -918,7 +946,7 @@ export func on_tool_handle(ctx: ExtCtx, call: ToolCallEnvelope, runtime_cfg: Com
 -- `ok: true` on the two non-file arms is "there was nothing to remove", which is
 -- what the ambient `if fileExists(p) then removeFile(p) else ()` returned. It is
 -- NOT "the remove succeeded" — no remove was attempted.
-func remove_if_file(p: ExtPorts, w: ExtWorld, path: string) -> ExtFileMutation ! {FS} {
+func remove_if_file(p: RemovePorts, w: ExtWorld, path: string) -> ExtFileMutation ! {FS} {
   let stat = p.path_stat(w, path);
   match stat.kind {
     ExtPathFile    => p.file_remove(stat.next_state, path),
@@ -1015,7 +1043,7 @@ func remove_if_file(p: ExtPorts, w: ExtWorld, path: string) -> ExtFileMutation !
 -- `println` sites and the ambient AI in the tool-handle chain, both disclosed
 -- classes by decision, and door 3's `show` residue, which is a classifier
 -- question and not an effect this hook performs.
-export func on_response_intercept(ctx: ExtCtx, response_text: string, mode: string, snippet_caps: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
+export func on_response_intercept(ctx: InterceptCtx, response_text: string, mode: string, snippet_caps: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
   if mode != "inline" then { decision: NoIntercept, next_state: ctx.world }
   else {
     let snippet = extract_ailang_fence(response_text);
@@ -1056,9 +1084,9 @@ export func on_response_intercept(ctx: ExtCtx, response_text: string, mode: stri
       -- WI-D26. `written.next_state` was the newest world here until the check
       -- started threading one; both branches below now descend from
       -- `checked.next_state`.
-      let checked = check_snippet(p, written.next_state, path);
+      let checked = check_snippet(exec_ports_i(p), written.next_state, path);
       if not checked.ok then {
-        let cleaned = remove_if_file(p, checked.next_state, path);
+        let cleaned = remove_if_file(remove_ports_i(p), checked.next_state, path);
         { decision: InterceptHandled({
             tool_call_id: "inline-${show(ctx.step)}",
             tool: "ComposeInline",
@@ -1069,8 +1097,8 @@ export func on_response_intercept(ctx: ExtCtx, response_text: string, mode: stri
           }),
           next_state: cleaned.next_state }
       } else {
-        let ran = run_snippet(p, checked.next_state, path, snippet_caps);
-        let cleaned = remove_if_file(p, ran.next_state, path);
+        let ran = run_snippet(exec_ports_i(p), checked.next_state, path, snippet_caps);
+        let cleaned = remove_if_file(remove_ports_i(p), ran.next_state, path);
         { decision: InterceptHandled(mk_result("inline-${show(ctx.step)}", "inline", 1, ran.stdout, ran.stderr, ran.exit_code, "inline snippet executed", ran.truncated, "{}")),
           next_state: cleaned.next_state }
       }
@@ -1086,7 +1114,7 @@ func no_budget_patch() -> BudgetPatch {
   }
 }
 
-func budget_hook(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
+func budget_hook(_ctx: PureCtx, _plan: BudgetPlan) -> BudgetPatch {
   no_budget_patch()
 }
 
@@ -1098,17 +1126,34 @@ func join_csv(xs: [string]) -> string {
   }
 }
 
-export func register_with_config(runtime_cfg: ComposeHostConfig) -> [Capability] ! {Env, FS, AI, Clock, IO, Process, Rand} {
-  let composition_mode = runtime_cfg.compose.mode;
-  let snippet_caps = join_csv(runtime_cfg.snippet_caps);
-  let handle = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { on_tool_handle(ctx, call, runtime_cfg, snippet_caps) };
-  let intercept = func(ctx: ExtCtx, response_text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { on_response_intercept(ctx, response_text, composition_mode, snippet_caps) };
-  -- B8: 6.0 Capability list (canonical atom order); the host stamps the id.
-  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
+-- ABI 8.0 (031 ADR-001 D2): the two effectful payloads, named. In 7.4 they were
+-- `let`-bound lambdas closing over `runtime_cfg`, `snippet_caps` and
+-- `composition_mode`; all three now come from `ext_config`, which is the host
+-- config `register_with_config` disclosed, encoded once (`host_config_json`).
+-- Each declares its slot's whole row (the rows are closed at the constructor).
+func compose_tool_handle(ctx: ProviderCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  let runtime_cfg = host_config_of(ctx.ext_config);
+  on_tool_handle(ctx, call, runtime_cfg, join_csv(runtime_cfg.snippet_caps))
+}
+
+func compose_intercept(ctx: InterceptCtx, response_text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
+  on_response_intercept(ctx, response_text, composition_mode_of(ctx.ext_config), join_csv(snippet_caps_of(ctx.ext_config)))
+}
+
+-- The capability list, a literal of named payloads. `register.ail` writes the
+-- `{ config, caps }` record at its own tail (the shape rule admits delegation
+-- at `caps` only) and delegates here.
+export func compose_caps() -> [Capability] {
   [
     PromptShaper(on_build_system_prompt),
-    ToolPolicy(\ctx call. on_tool_policy_with_mode(composition_mode, ctx, call)),
-    ToolProvider(provided_tools(), handle),
-    ResponseInterceptor(intercept)
+    ToolPolicy(on_tool_policy),
+    ToolProvider(provided_tools(), compose_tool_handle),
+    ResponseInterceptor(compose_intercept)
   ]
+}
+
+-- For callers that hold a `ComposeHostConfig` already (the DST scripts): the
+-- same registration `register.ail` produces from the profile's files.
+export func register_with_config(runtime_cfg: ComposeHostConfig) -> ExtRegistration {
+  { config: host_config_json(runtime_cfg), caps: compose_caps() }
 }

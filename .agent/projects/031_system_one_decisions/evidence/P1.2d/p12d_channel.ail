@@ -1,0 +1,180 @@
+-- 031 PLAN-001 P1.2d: the configuration-channel probe for batch D's two packages.
+-- Every payload is reached the way the host reaches it -- through the registered `caps`,
+-- on its 8.0 view, with the registration's `config` stamped as `ext_config` -- and each
+-- check observes a value that exists ONLY in that config (a non-default mode, caps list,
+-- kind list, run identity, orchestrator mode). A payload that reads a captured or module
+-- value instead of `ext_config` changes the observation, and the check goes red.
+-- Ports are stubs that append what they were asked to the WORLD TOKEN, so what a
+-- payload read or ran is visible in its returned `next_state`. Synthetic values only.
+--   entry main             the checks; "OK:"/"FAIL:" lines, exit 1 on any FAIL
+--   entry compose_provider compose's ToolProvider once (needs --ai-stub); the caller
+--                          greps its compose_start event for the configured model/attempts
+--   entry registration     prints both registrations' encoded config (env set by the caller)
+module local/p12d/p12d_channel
+
+import std/io (println, exit)
+import std/json (Json, jo, ja, kv, js, jnum, encode, get, asString)
+import std/string (contains)
+import std/result (Err)
+import pkg/sunholo/motoko_ext_abi/types (
+  ExtWorld, ExtPorts, Msg, AiStepOutcome, ExtProcOutcome, ExtFileRead, ExtFileMutation, ExtPathStat,
+  ExtDirListing, ExtClockReading, ExtPathMissing, ExtPathFile,
+  Capability, DescribeTools, PromptShaper, ToolPolicy, ToolProvider, ResponseInterceptor, ExitIntent, WorkInFlight,
+  ExtRegistration, PureCtx, ProviderCtx, InterceptCtx, FsCtx, pure_ctx, provider_ctx, intercept_ctx, intercept_ports,
+  fs_ctx, fs_ports, ToolCallEnvelope, ToolPolicyDecision, Allow, Deny, NoOpinion, Pending,
+  ToolHandleOutcome, Handled, Delegate, ResponseInterceptOutcome, InterceptHandled, NoIntercept,
+  ExitIntentOutcome, WorkOutcome, PromptPatch, ToolSchema
+)
+import pkg/sunholo/motoko_ext_compose/types (ComposeHostConfig)
+import pkg/sunholo/motoko_ext_compose/compose as Compose (register_with_config)
+import pkg/sunholo/motoko_ext_compose/register as ComposeReg (register_with_config)
+import pkg/sunholo/motoko_ext_herdr/herdr (HerdrConfig, make_hooks_with)
+import pkg/sunholo/motoko_ext_herdr/register as HerdrReg (register_with_config)
+import pkg/sunholo/motoko_ext_herdr/orchestrator (orchestrator_off, orchestrator_on_for_tests)
+
+-- ---- recording ports ---------------------------------------------------------
+func note(w: ExtWorld, s: string) -> ExtWorld {
+  let prev = match get(w.token, "log") { Some(v) => match asString(v) { Some(x) => x, None => "" }, None => "" };
+  { token: jo([kv("log", js("${prev}${s};"))]) }
+}
+func log_of(w: ExtWorld) -> string {
+  match get(w.token, "log") { Some(v) => match asString(v) { Some(x) => x, None => "" }, None => "" }
+}
+func r_ai(world: ExtWorld, _m: string, _msgs: [Msg]) -> AiStepOutcome ! {AI, IO, Trace} { { result: Err("probe"), next_state: world } }
+func r_tool(world: ExtWorld, t: string, a: string) -> ExtProcOutcome ! {IO, Process, FS} {
+  { output: encode(jo([kv("stdout", js("")), kv("stderr", js("")), kv("exit_code", jnum(0.0))])), exit_code: 0,
+    next_state: note(world, "tool(${a})") }
+}
+func r_read(world: ExtWorld, p: string) -> ExtFileRead ! {FS} { { present: false, content: "", next_state: note(world, "read(${p})") } }
+func r_write(world: ExtWorld, p: string, _c: string) -> ExtFileMutation ! {FS} { { ok: true, error: "", next_state: note(world, "write(${p})") } }
+func r_mut(world: ExtWorld, p: string) -> ExtFileMutation ! {FS} { { ok: true, error: "", next_state: note(world, "mut(${p})") } }
+func r_stat(world: ExtWorld, p: string) -> ExtPathStat ! {FS} { { kind: ExtPathFile, next_state: world } }
+func r_list(world: ExtWorld, _p: string) -> ExtDirListing ! {FS} { { present: false, entries: [], next_state: world } }
+func r_clock(world: ExtWorld) -> ExtClockReading ! {Clock} { { now_ms: 7, next_state: world } }
+func r_env(_k: string, fallback: string) -> string ! {Env} { fallback }
+func ports() -> ExtPorts {
+  { ai_step: r_ai, tool_handle: r_tool, file_read: r_read, file_write: r_write, file_remove: r_mut,
+    path_stat: r_stat, dir_list: r_list, dir_make: r_mut, clock_now: r_clock, env_get: r_env }
+}
+func w0() -> ExtWorld { { token: jo([]) } }
+
+-- ---- payload lookup through the registered caps --------------------------------
+func policy_of(caps: [Capability], ctx: PureCtx, call: ToolCallEnvelope) -> ToolPolicyDecision {
+  match caps { [] => NoOpinion, ToolPolicy(f) :: _ => f(ctx, call), _ :: rest => policy_of(rest, ctx, call) }
+}
+func prompt_of(caps: [Capability], ctx: PureCtx) -> PromptPatch {
+  match caps { [] => { prepend: [], append: [] }, PromptShaper(f) :: _ => f(ctx), _ :: rest => prompt_of(rest, ctx) }
+}
+func describe_of(caps: [Capability], cfg: Json) -> [ToolSchema] {
+  match caps { [] => [], DescribeTools(f) :: _ => f(cfg), _ :: rest => describe_of(rest, cfg) }
+}
+func intercept_of(caps: [Capability], ctx: InterceptCtx, t: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
+  match caps { [] => { decision: NoIntercept, next_state: ctx.world }, ResponseInterceptor(f) :: _ => f(ctx, t), _ :: rest => intercept_of(rest, ctx, t) }
+}
+func provide_of(caps: [Capability], ctx: ProviderCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  match caps { [] => { decision: Delegate, next_state: ctx.world }, ToolProvider(_, f) :: _ => f(ctx, call), _ :: rest => provide_of(rest, ctx, call) }
+}
+func exit_of(caps: [Capability], ctx: FsCtx) -> { enabled: bool, out: ExitIntentOutcome } ! {FS} {
+  match caps { [] => { enabled: false, out: { actions: [], next_state: ctx.world } }, ExitIntent(_, en, f) :: _ => { enabled: en, out: f(ctx) }, _ :: rest => exit_of(rest, ctx) }
+}
+func waiting_of(caps: [Capability], ctx: FsCtx) -> WorkOutcome ! {FS} {
+  match caps { [] => { items: [], next_state: ctx.world }, WorkInFlight(_, f) :: _ => f(ctx), _ :: rest => waiting_of(rest, ctx) }
+}
+
+func show_d(d: ToolPolicyDecision) -> string {
+  match d { Allow => "allow", Deny(m) => "deny(${m})", NoOpinion => "noop", Pending(r, _) => "pending(${r})" }
+}
+func schema_text(xs: [ToolSchema]) -> string { match xs { [] => "", s :: rest => "${s.name}:${s.parameters}|${schema_text(rest)}" } }
+func first(xs: [string]) -> string { match xs { x :: _ => x, [] => "" } }
+func count(xs: [ToolSchema]) -> int { match xs { [] => 0, _ :: rest => 1 + count(rest) } }
+
+func check(label: string, ok: bool, detail: string) -> int ! {IO} {
+  if ok then { println("OK: ${label}"); 0 } else { println("FAIL: ${label} -- ${detail}"); 1 }
+}
+
+-- ---- compose ------------------------------------------------------------------
+func ccfg(mode: string) -> ComposeHostConfig {
+  { compose: { mode: mode, subagent_model: "p12d-sub-model", max_attempts: 1, effect_guard: "1", certificate_template: false,
+               authoring: { structured: false, author_tools: false, author_tools_budget: 1, author_tools_max_bytes: 100,
+                            author_tools_max_turns: 1, author_tools_deny_globs: [], authoring_budget: 1, fallback_after: 0,
+                            min_observed_chars: 1, stdout_max_bytes: 100 },
+               claimcheck: { enabled: false, informalizer_model: "", comparator_model: "", timeout_ms: 1, max_invocations: 1,
+                             stdout_max_bytes: 100, ledger_in_informalizer: false } },
+    snippet_caps: ["IO", "Net"] }
+}
+func compose_call() -> ToolCallEnvelope { { id: "c1", tool: "Compose", arguments: jo([kv("intent", js("probe"))]) } }
+func fenced() -> string { "```ailang\nexport func main() -> () ! {IO} { () }\n```\n" }
+
+func compose_checks() -> int ! {IO, Process, FS, Clock} {
+  let off = Compose.register_with_config(ccfg("off"));
+  let sub = Compose.register_with_config(ccfg("subagent"));
+  let inl = Compose.register_with_config(ccfg("inline"));
+  let hybrid = { pure_ctx(sub.config) | hybrid_tools: true };
+  let d_off = policy_of(off.caps, { pure_ctx(off.config) | hybrid_tools: true }, compose_call());
+  let d_sub = policy_of(sub.caps, hybrid, compose_call());
+  let i = intercept_of(inl.caps, intercept_ctx(pure_ctx(inl.config), intercept_ports(ports()), w0()), fenced());
+  let ilog = log_of(i.next_state);
+  let handled = match i.decision { InterceptHandled(_) => true, _ => false };
+  let s = intercept_of(sub.caps, intercept_ctx(pure_ctx(sub.config), intercept_ports(ports()), w0()), fenced());
+  let s_none = match s.decision { NoIntercept => true, _ => false };
+  check("compose ToolPolicy: mode `off` from ext_config denies Compose", contains(show_d(d_off), "disabled in this session"), show_d(d_off))
+  + check("compose ToolPolicy: mode `subagent` from ext_config allows Compose", show_d(d_sub) == "allow", show_d(d_sub))
+  + check("compose ResponseInterceptor: mode `inline` from ext_config handles a fenced response", handled, ilog)
+  + check("compose ResponseInterceptor: the run uses snippet_caps from ext_config (IO,Net)", contains(ilog, "IO,Net"), ilog)
+  + check("compose ResponseInterceptor: mode `subagent` from ext_config does not intercept", s_none, log_of(s.next_state))
+}
+
+-- ---- herdr --------------------------------------------------------------------
+func hcfg(session: string, reap: bool) -> HerdrConfig {
+  { bin: "/opt/probe/herdr", own_pane: "w5:p7", work_dir: "/w/.motoko/herdr-delegates", kind: "",
+    allowed_kinds: "claude,codex", depth: 0, max_depth: 1, motoko_script: "./x.sh", session_ms: session,
+    sweep_stale: false, dagr_dir: "/w/.dagr", dagr_pane: false, start_timeout_ms: 1000, check_wait_ms: 1000,
+    max_output_chars: 16000, reap_on_exit: reap, settle_on_exit: false, sweep_settle: false, dagr_bin: "dagr", dagr_plan: "" }
+}
+func edit_call() -> ToolCallEnvelope { { id: "e1", tool: "EditFile", arguments: jo([kv("path", js("src/core/session.ail")), kv("edits", ja([]))]) } }
+func delegate_call() -> ToolCallEnvelope { { id: "d1", tool: "Delegate", arguments: jo([kv("prompt", js("probe task"))]) } }
+
+func herdr_checks() -> int ! {IO, Process, FS, Clock, AI, Env, Net, SharedMem, Stream, Rand, Trace} {
+  let tools = ["Delegate", "DelegateCheck"];
+  let plain = make_hooks_with(hcfg("", false), tools, orchestrator_off());
+  let orch = make_hooks_with(hcfg("", false), tools, orchestrator_on_for_tests());
+  let exiting = make_hooks_with(hcfg("1756000000000", true), tools, orchestrator_off());
+  let schemas = describe_of(plain.caps, plain.config);
+  let p = prompt_of(orch.caps, pure_ctx(orch.config));
+  let d = policy_of(orch.caps, { pure_ctx(orch.config) | workdir: "." }, edit_call());
+  let h = provide_of(plain.caps, provider_ctx({ pure_ctx(plain.config) | workdir: "/w" }, ports(), w0()), delegate_call());
+  let htext = match h.decision { Handled(r) => "${r.stdout}${r.stderr}", _ => "not handled" };
+  let fctx = fs_ctx(pure_ctx(exiting.config), fs_ports(ports()), w0());
+  let e = exit_of(exiting.caps, fctx);
+  let wk = waiting_of(exiting.caps, fctx);
+  let run_file = "/w/.dagr/run-w5-p7-1756000000000.json";
+  check("herdr DescribeTools: tools from config advertise two schemas", count(schemas) == 2, schema_text(schemas))
+  -- `codex` alone is not evidence: the `model` parameter's text names it whatever the config says.
+  -- These two strings exist only when the config's kind list and empty default reach the schema.
+  + check("herdr DescribeTools: the kind list from config reaches the schema", contains(schema_text(schemas), "permits claude,codex"), schema_text(schemas))
+  + check("herdr DescribeTools: no default kind in config makes `kind` required", contains(schema_text(schemas), "\"required\":[\"prompt\",\"kind\"]"), schema_text(schemas))
+  + check("herdr PromptShaper: the orchestrator mode from config appends its note", contains(first(p.append), "Orchestrator mode"), first(p.append))
+  + check("herdr ToolPolicy: the orchestrator mode from config denies an edit under src/", contains(show_d(d), "deny("), show_d(d))
+  + check("herdr ToolProvider: the operator's kind list from config is in the refusal", contains(htext, "(claude,codex)"), htext)
+  + check("herdr ExitIntent: enabled (data position) follows the reap knob", e.enabled, "")
+  + check("herdr ExitIntent: renders from this session's run file (pane + session from config)", contains(log_of(e.out.next_state), run_file), log_of(e.out.next_state))
+  + check("herdr WorkInFlight: reads this session's run file (pane + session from config)", contains(log_of(wk.next_state), run_file), log_of(wk.next_state))
+}
+
+export func main() -> () ! {IO, Process, FS, Clock, AI, Env, Net, SharedMem, Stream, Rand, Trace} {
+  let fails = compose_checks() + herdr_checks();
+  if fails > 0 then { println("${show(fails)} check(s) failed"); exit(1) } else println("OK: channel")
+}
+
+export func compose_provider() -> () ! {IO, Process, FS, Clock, AI, Env, Net, SharedMem, Stream, Rand, Trace} {
+  let r = Compose.register_with_config(ccfg("subagent"));
+  let h = provide_of(r.caps, provider_ctx({ pure_ctx(r.config) | model: "p12d-ctx-model" }, ports(), w0()), compose_call());
+  match h.decision { Handled(res) => println("PROVIDER handled exit=${show(res.exit_code)}"), _ => println("PROVIDER not handled") }
+}
+
+export func registration() -> () ! {IO, Process, FS, Clock, AI, Env, Rand} {
+  let c = ComposeReg.register_with_config(());
+  let h = HerdrReg.register_with_config(());
+  let _ = println("CONFIG compose ${encode(c.config)}");
+  println("CONFIG herdr ${encode(h.config)}")
+}

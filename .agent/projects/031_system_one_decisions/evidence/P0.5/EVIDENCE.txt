@@ -1,0 +1,135 @@
+031 PLAN-001 P0.5 -- evidence record (AILANG v0.33.0 ae36986, the pin). HEAD before: 10500e18.
+All fixtures and probes are synthetic.
+
+== Exit results ==========================================================
+target                                   HEAD 10500e18      after P0.5
+make conformance                         2 (harness.ail)    2 (scripts/dst/conformance_selftest.ail: compaction_ai is 7.4)
+make registry_gen_check (real registry)  0                  2 (template now emits 8.0; real file is P1.1's)
+make registry_gen_check (fixture tree)   --                 0
+make ext_hook_scope_selftest             2 (CACHE PRECOND.) 2 (CACHE PRECOND.) -- unchanged, tree-caused
+hook_scope.py --gate-fixtures --ailang-check  0 (29 ok)     0 (29 ok + 12 arity rows)
+make profile_coverage                    2 (ABI 12 kinds, artifact 10)   0
+check_fixtures.py --capability-kinds     --                 0
+p05_conformance_check.sh (kit on 8.0)    --                 0 (11 tests; reject fixtures 12/12 expectations; neutral profile)
+profile_definition_dst.ail (ailang run)  FAIL (swept 10, pinned 8)       PASS (re-pinned 10)
+make profile_definition                  2                  2 (tools/ext_call_inventory/derive.py --json exits 1 on the red tree,
+                                                               before the P1.5r pin sweep; not this part's)
+
+WHY THREE EXITS ARE RED, and what stands in for each (structural, not deferred work):
+- make conformance: after invariants/harness check, the recipe checks and runs
+  scripts/dst/conformance_selftest.ail, whose accept arms call
+  compaction_ai/compaction_structural's register_with_config (7.4 until P1.2
+  batches C and A), and conformance_registry_probe.ail, which imports src/core
+  (P1.1). Neither file is P0.5's. Stand-in: p05_conformance_check.sh -- the kit
+  (invariants, harness, reject_fixtures) checked, its tests run, and the
+  self-test's reject half plus the no-op profile RUN, against the checkout's
+  8.0 ABI in a throwaway workspace.
+- make ext_hook_scope_selftest: derive.py's provision step `ailang check`s all
+  18 extension roots and fails closed on the first that does not compile
+  (all 18 are 7.4). Red at HEAD for the same reason. Stand-ins: the gate
+  fixtures (--gate-fixtures, 29 ok) with the new ABI-arity cross-check, and
+  `derive.py --hook-scope-selftest --no-provision`: every P0.3 pin holds
+  (yield 6/3 of 18, 45 atoms, 0 on `{ config, caps }`, 18 on the 7.4 list,
+  shape pass 0 of 18, 35 binding rejections (inline 19, let 16), door-3
+  residue intToFloat, show) -- ONE failure, "SHIPPED VERDICT MOVED: closure
+  PORT-MEDIATED is []", which needs the extensions compiled; identical at HEAD.
+  No P0.3 pin moved; none was re-pinned.
+- make registry_gen_check: red on the real registry by design (brief); green
+  on tools/ext_registry_gen/fixtures/abi8 via the unmodified recipe
+  (`make -C <tree> -f $PWD/Makefile registry_gen_check`, generate.py symlinked).
+
+== Red-first ==============================================================
+1. Registry template: HEAD's generate.py over the fixture table, type-checked
+   against the 8.0 ABI:
+     Error: type error in registry/registry_generated (decl 0): type unification failed at [return type annotation at registry/registry_generated.ail:25:1]: failed to unify type argument 0: cannot unify old record type with *types.TApp
+   P0.5's output checks clean and runs:
+       ✓ registry/registry_generated.ail matches the generator
+     p05: generated registry checks against ABI 8.0
+     entry alpha#0 config="alpha_tool" tools=1
+     entry beta#1 config={} tools=0
+     registry fixture PASS: 2 entries, config carried onto ExtEntry.config
+2. Arity table: a probe gate dir (3 synthetic fixtures over a probe ABI with
+   both decision variants; sources below; not committed -- the gate's
+   fixture dir and its ABI are P0.3's), with the two decision rows removed:
+       ok  fx_decision_wrong_arity        fail  list-not-enumerable                                  DecisionToolPolicy applied to 2 of its 3 arguments
+     
+     registration-shape gate fixtures: 1 ok, 4 failure(s)
+       FAIL fx_decision_interpret_inline: expected reasons ['payload-inline-lambda'], got ['list-not-enumerable']; expected 1 atom(s), enumerated 0  [named prepare, INLINE interpret: the second binding is shape-checked on its own]
+       FAIL fx_decision_named_ok: expected shape pass, got fail; expected reasons [], got ['list-not-enumerable']; expected 3 atom(s), enumerated 0  [8.0 head; DescribeTools + both decision variants, every callback named]
+       FAIL ABI ARITY: the ABI declares `DecisionSolverJudge` (3, (1, 2)) and CAPABILITY_KINDS does not enumerate it -- an atom of it would be `list-not-enumerable`
+       FAIL ABI ARITY: the ABI declares `DecisionToolPolicy` (3, (1, 2)) and CAPABILITY_KINDS does not enumerate it -- an atom of it would be `list-not-enumerable`
+   and with them (P0.5), --ailang-check:
+       ok  fx_decision_interpret_inline   fail  payload-inline-lambda                                named prepare, INLINE interpret: the second binding is shape-checked on its own  compiler=clean
+       ok  fx_decision_named_ok           pass  -                                                    8.0 head; DescribeTools + both decision variants, every callback named  compiler=clean
+       ok  fx_decision_wrong_arity        fail  list-not-enumerable                                  DecisionToolPolicy applied to 2 of its 3 arguments  compiler=rejected
+     
+     registration-shape gate fixtures: 3 ok, 0 failure(s)
+3. make profile_coverage at HEAD: "FAIL: the ABI declares 12 capability kinds
+   ..., but src/core/dst_profile_coverage.ail enumerates 10" -> green after.
+4. profile_definition_dst.ail at HEAD+coverage change, before its re-pin:
+   "✗ expected 8 unconditionally-dispatched slots, swept 10" -> re-pinned 10.
+
+== Probe sources (item 2) =================================================
+--- probe_abi.ail
+module scripts/dst/fixtures/adr001_boundary/gate_p05_probe/probe_abi
+import std/json (Json)
+export type Ctx = { name: string }
+export type Desc = { local_id: string }
+export type Capability = DescribeTools((Json) -> [string]) | DecisionSolverJudge(Desc, (Ctx, string) -> int, (Ctx, string, int) -> int) | DecisionToolPolicy(Desc, (Ctx, string) -> int, (Ctx, string, int) -> int)
+export type Registration = { config: Json, caps: [Capability] }
+--- fx_decision_named_ok.ail
+module scripts/dst/fixtures/adr001_boundary/gate_p05_probe/fx_decision_named_ok
+import std/json (Json, JString)
+import scripts/dst/fixtures/adr001_boundary/gate_p05_probe/probe_abi (Ctx, Desc, Capability, DescribeTools, DecisionSolverJudge, DecisionToolPolicy, Registration)
+func no_tools(_cfg: Json) -> [string] { [] }
+func jprep(_ctx: Ctx, _c: string) -> int { 0 }
+func jint(_ctx: Ctx, _c: string, _o: int) -> int { 0 }
+func tprep(_ctx: Ctx, _c: string) -> int { 0 }
+func tint(_ctx: Ctx, _c: string, _o: int) -> int { 0 }
+export func register_with_config(_cfg: int) -> Registration { { config: JString("synthetic"), caps: [DescribeTools(no_tools), DecisionSolverJudge({ local_id: "j" }, jprep, jint), DecisionToolPolicy({ local_id: "t" }, tprep, tint)] } }
+--- fx_decision_interpret_inline.ail
+module scripts/dst/fixtures/adr001_boundary/gate_p05_probe/fx_decision_interpret_inline
+import std/json (Json, JString)
+import scripts/dst/fixtures/adr001_boundary/gate_p05_probe/probe_abi (Ctx, Desc, Capability, DecisionSolverJudge, Registration)
+func jprep(_ctx: Ctx, _c: string) -> int { 0 }
+export func register_with_config(_cfg: int) -> Registration { { config: JString("synthetic"), caps: [DecisionSolverJudge({ local_id: "j" }, jprep, \_ctx _c _o. 1)] } }
+--- fx_decision_wrong_arity.ail
+module scripts/dst/fixtures/adr001_boundary/gate_p05_probe/fx_decision_wrong_arity
+import std/json (Json, JString)
+import scripts/dst/fixtures/adr001_boundary/gate_p05_probe/probe_abi (Ctx, Desc, Capability, DecisionToolPolicy, Registration)
+func tprep(_ctx: Ctx, _c: string) -> int { 0 }
+export func register_with_config(_cfg: int) -> Registration { { config: JString("synthetic"), caps: [DecisionToolPolicy({ local_id: "t" }, tprep)] } }
+--- expected.json
+{"fixtures": {
+ "fx_decision_named_ok": {"shape": "pass", "head": "config-caps", "reasons": [], "form": "8.0 head; DescribeTools + both decision variants, every callback named", "atoms": 3, "compiler": "clean"},
+ "fx_decision_interpret_inline": {"shape": "fail", "head": "config-caps", "reasons": ["payload-inline-lambda"], "form": "named prepare, INLINE interpret: the second binding is shape-checked on its own", "atoms": 1, "compiler": "clean"},
+ "fx_decision_wrong_arity": {"shape": "fail", "head": "config-caps", "reasons": ["list-not-enumerable"], "form": "DecisionToolPolicy applied to 2 of its 3 arguments", "atoms": 0, "compiler": "rejected"}
+}}
+
+== Slot-level barrier derivation (check_barrier_count, per-extension half
+   stubbed: classifier 3 provisions the 7.4 tree) ========================
+     ✓ CAPABILITY_KINDS: 12 kinds agree with the ABI and the coverage artifact; rowless on the views plus the boundary: ['decision_solver_judge', 'decision_tool_policy']
+     ✓ SLOT-level barrier count DERIVED from the ABI rows and the dispatch table: 5
+         BARRIER  compactor: unconditionally dispatched, declares ! {AI, IO, Trace}  (outcome returns world state: yes)
+         BARRIER  response_interceptor: unconditionally dispatched, declares ! {IO, Process, FS, Clock}  (outcome returns world state: yes)
+         BARRIER  solver_judge: unconditionally dispatched, declares ! {Process}  (outcome returns world state: yes)
+         BARRIER  exit_intent: dispatched at a lifecycle boundary, and performs that row whenever it is, declares ! {FS}  (outcome returns world state: yes)
+         BARRIER  work_in_flight: unconditionally dispatched, declares ! {FS}  (outcome returns world state: yes)
+         coverable budget_shaper: unconditionally dispatched, declares NO row
+         coverable decision_solver_judge: unconditionally dispatched, pure on the views plus the boundary (ADR-001 (031) D2), not on a declared row
+         coverable decision_tool_policy: unconditionally dispatched, pure on the views plus the boundary (ADR-001 (031) D2), not on a declared row
+         gated     tool_provider: excludable, so not a barrier
+       → 5 slot-level barrier(s) stand: no extension is installable on the DECLARED ROW alone
+     ✓ the barrier count and slot names in 3 profile record(s) match the derivation
+     (per-extension derivation not run: classifier 3 needs the tree compiled)
+
+== Kit run (p05_conformance_check.sh) ==
+   p05: ailang check invariants ok
+   p05: ailang check harness ok
+   p05: ailang check fixtures/reject_fixtures ok
+   11 tests: 11 passed, 0 failed, 0 skipped (1.061117231s)
+   → Type checking...
+   → Effect checking...
+   ✓ Running run.ail
+   kit neutral_registration atoms=3
+   conformance kit on ABI 8.0 PASS

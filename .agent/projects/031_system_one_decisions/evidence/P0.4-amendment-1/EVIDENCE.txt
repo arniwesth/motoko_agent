@@ -1,0 +1,12 @@
+## ADR reading (Immediate/Query in both sums): ABI alone
+✓ No errors found!
+## ADR reading: consumer80
+Error: type error in consumer80 (decl 11): type unification failed at [function application at consumer80.ail:16:90]: failed to unify parameter 0: cannot unify type constructors: ToolPolicyDecision vs FinalizeDecision
+## distinct reading: consumer80
+✓ No errors found!
+## parametric reading (Preparation[v] + aliases): match on alias
+Error: type error in par_use (decl 3): at constructor pattern Immediate: match arm constructor 'Immediate' belongs to ADT 'Preparation', not 'JudgePreparation' (the scrutinee's type).
+  JudgePreparation's constructors are: 
+  Preparation's constructors are: Immediate, Query
+## parametric, scrutinee typed Preparation[FinalizeDecision]
+✓ No errors found!

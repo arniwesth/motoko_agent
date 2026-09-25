@@ -95,7 +95,7 @@ import std/result (Result, Ok, Err)
 import std/ai (Message, ToolCall)
 import src/core/config (CostRates)
 import pkg/sunholo/motoko_ext_abi/types (
-  BudgetPlan, ExtRuntime, ExtCtx, VerificationConfig,
+  BudgetPlan, ExtRuntime, PureCtx, AiCtx, ProviderCtx, InterceptCtx, ProcessCtx, VerificationConfig,
   ToolCallEnvelope, ToolPolicyDecision, Allow,
   ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, PreStepOutcome,
   PromptPatch, BudgetPatch, Msg, Delegate, Handled, NoIntercept, NoDecision, PassThrough
@@ -308,7 +308,7 @@ pure func wait_json(args: Json) -> Json {
       kv("answer_path", js("/tmp/w4-${id}.md")), kv("run_key", js("rk-${id}"))])
 }
 
-func w4_provide(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+func w4_provide(ctx: ProviderCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   let id = arg_str(call.arguments, "id");
   if call.tool == "Delegate" then
     { decision: Handled({ tool_call_id: call.id, tool: call.tool, exit_code: 0, stdout: "delegated ${id}", stderr: "",
@@ -321,21 +321,22 @@ func w4_provide(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO,
 
 func w4_rt() -> ExtRuntime {
   let hooks = fixture_hooks("w4_park", {
+    config: jo([]),
     tools: ["Delegate", "DelegateCheck"],
     describe: \_ . [],
-    prompt: func(_ctx: ExtCtx) -> PromptPatch { { prepend: [], append: [] } },
-    budget: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
+    prompt: func(_ctx: PureCtx) -> PromptPatch { { prepend: [], append: [] } },
+    budget: func(_ctx: PureCtx, _plan: BudgetPlan) -> BudgetPatch {
       { requested_total: None, requested_solver: None, requested_verifier: None }
     },
-    compact: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} {
+    compact: func(ctx: AiCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} {
       { decision: PassThrough, next_state: ctx.world }
     },
     policy: \_ctx _call. Allow,
     provide: w4_provide,
-    intercept: func(ctx: ExtCtx, _text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
+    intercept: func(ctx: InterceptCtx, _text: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
       { decision: NoIntercept, next_state: ctx.world }
     },
-    judge: func(ctx: ExtCtx, _text: string) -> FinalizeOutcome ! {Process} {
+    judge: func(ctx: ProcessCtx, _text: string) -> FinalizeOutcome ! {Process} {
       { decision: NoDecision, next_state: ctx.world }
     }
   });

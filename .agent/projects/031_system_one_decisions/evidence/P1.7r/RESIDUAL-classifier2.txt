@@ -1,0 +1,77 @@
+# P1.7r: the residual outside P1.7r's files -- classifier 2 (tools/ext_call_inventory/derive.py) over the tree
+# at HEAD 73c1464f, `python3 tools/ext_call_inventory/derive.py` (make ext_call_inventory), exit 1.
+# Every closure includes packages/motoko-ext-abi/types.ail, so every extension's closure verdict is UNRESOLVED
+# and the shipped closure yield (derive.py default mode) reads 0 of 18 PORT-MEDIATED, against the pinned 4.
+UNRESOLVED (24) -- fail closed, triage required:
+  packages/motoko-ext-abi/types.ail:1240  .file_read
+      ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible
+      | file_read: p.file_read,
+  packages/motoko-ext-abi/types.ail:1241  .file_write
+      ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible
+      | file_write: p.file_write,
+  packages/motoko-ext-abi/types.ail:1242  .file_remove
+      ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible
+      | file_remove: p.file_remove,
+  packages/motoko-ext-abi/types.ail:1243  .path_stat
+      ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible
+      | path_stat: p.path_stat,
+  packages/motoko-ext-abi/types.ail:1244  .dir_list
+      ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible
+      | dir_list: p.dir_list,
+  packages/motoko-ext-abi/types.ail:1245  .dir_make
+      ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible
+      | dir_make: p.dir_make
+  packages/motoko-ext-abi/types.ail:1249  .ai_step
+      ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible
+      | export pure func ai_ports(p: ExtPorts) -> AiPorts { { ai_step: p.ai_step } }
+  packages/motoko-ext-abi/types.ail:1253  .tool_handle
+      ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible
+      | tool_handle: p.tool_handle,
+  packages/motoko-ext-abi/types.ail:1254  .file_read
+      ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible
+      | file_read: p.file_read,
+  packages/motoko-ext-abi/types.ail:1255  .file_write
+      ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible
+      | file_write: p.file_write,
+  packages/motoko-ext-abi/types.ail:1256  .file_remove
+      ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible
+      | file_remove: p.file_remove,
+  packages/motoko-ext-abi/types.ail:1257  .path_stat
+      ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible
+      | path_stat: p.path_stat,
+  packages/motoko-ext-abi/types.ail:1258  .dir_list
+      ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible
+      | dir_list: p.dir_list,
+  packages/motoko-ext-abi/types.ail:1259  .dir_make
+      ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible
+      | dir_make: p.dir_make,
+  packages/motoko-ext-abi/types.ail:1260  .clock_now
+      ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible
+      | clock_now: p.clock_now
+  packages/motoko-ext-compose/compose.ail:332  .tool_handle
+      ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible
+      | pure func exec_ports(p: ExtPorts) -> SnippetExecPorts { { tool_handle: p.tool_handle } }
+  packages/motoko-ext-compose/compose.ail:334  .tool_handle
+      ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible
+      | pure func exec_ports_i(p: InterceptPorts) -> SnippetExecPorts { { tool_handle: p.tool_handle } }
+  packages/motoko-ext-compose/compose.ail:336  .file_remove
+      ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible
+      | pure func remove_ports(p: ExtPorts) -> RemovePorts { { path_stat: p.path_stat, file_remove: p.file_remove } }
+  packages/motoko-ext-compose/compose.ail:336  .path_stat
+      ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible
+      | pure func remove_ports(p: ExtPorts) -> RemovePorts { { path_stat: p.path_stat, file_remove: p.file_remove } }
+  packages/motoko-ext-compose/compose.ail:338  .file_remove
+      ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible
+      | pure func remove_ports_i(p: InterceptPorts) -> RemovePorts { { path_stat: p.path_stat, file_remove: p.file_remove } }
+  packages/motoko-ext-compose/compose.ail:338  .path_stat
+      ExtPorts field taken as a VALUE, not called: the function escapes and its later call site is invisible
+      | pure func remove_ports_i(p: InterceptPorts) -> RemovePorts { { path_stat: p.path_stat, file_remove: p.file_remove } }
+  packages/motoko-ext-compose/compose.ail:784  .clock_now
+      receiver `ctx.ports` resolves to `None`, not an ABI port type
+      | let exhausted = ctx.ports.clock_now(w);
+  packages/motoko-ext-compose/compose.ail:824  .clock_now
+      receiver `ctx.ports` resolves to `None`, not an ABI port type
+      | let started = ctx.ports.clock_now(w);
+  packages/motoko-ext-agentcli/agentcli.ail:164  .path_stat
+      receiver `p` resolves to `Provider`, not an ABI port type
+      | let st = p.path_stat(w, path);

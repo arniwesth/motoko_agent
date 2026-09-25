@@ -3,15 +3,15 @@ module sunholo/motoko_ext_compaction_structural/compaction_structural
 import std/string (contains, length, substring)
 import std/list (foldl)
 import std/result (Result, Ok, Err)
-import std/json (jo, ja)
-import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, 
-  ExtCtx,
+import std/json (jo)
+import pkg/sunholo/motoko_ext_abi/types (
+  PureCtx,
+  pure_ctx,
   Msg,
   PreStepDecision,
   PassThrough,
   Compacted
 )
-import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
 
 export pure func elide_tier_pct() -> int { 70 }
 
@@ -159,15 +159,18 @@ pure func structural_note(tier: string, keep_last: int) -> string {
   "structural: tier=${tier} keep_last=${show(keep_last)}"
 }
 
-pure func calibrated_ctx_usage(ctx: ExtCtx, msgs: [Msg]) -> int {
+pure func calibrated_ctx_usage(ctx: PureCtx, msgs: [Msg]) -> int {
   calibrated_usage_percent_with_limit(msgs, ctx.context_limit, ctx.telemetry.last_input_tokens, ctx.telemetry.last_estimated_input_tokens)
 }
 
-pure func candidate_fits(ctx: ExtCtx, msgs: [Msg]) -> bool {
+pure func candidate_fits(ctx: PureCtx, msgs: [Msg]) -> bool {
   calibrated_ctx_usage(ctx, msgs) < result_target_pct()
 }
 
-export pure func compact_for_pre_step(ctx: ExtCtx, msgs: [Msg]) -> PreStepDecision {
+-- ABI 8.0: the policy reads data only (`context_limit`, `telemetry`,
+-- `artifacts`), so it takes `PureCtx`, not the Compactor's `AiCtx`, whose
+-- `ai_step` port it never uses.
+export pure func compact_for_pre_step(ctx: PureCtx, msgs: [Msg]) -> PreStepDecision {
   if candidate_fits(ctx, msgs) then PassThrough
   else {
     let capped = cap_oversized_tool_results(msgs, ctx.context_limit);
@@ -215,28 +218,17 @@ func repeated_tools(n: int, content: string) -> [Msg] {
   if n <= 0 then [] else tool("t${show(n)}", content) :: repeated_tools(n - 1, content)
 }
 
-func test_ctx(limit: int) -> ExtCtx {
-  {
+func test_ctx(limit: int) -> PureCtx {
+  { pure_ctx(jo([])) |
     task: "t",
-    step: 0,
     model: "m",
     context_limit: limit,
     cwd: ".",
-    hybrid_tools: false,
     budget: { total: 1, solver: 1, verifier: 0 },
     mode: "default",
     workdir: ".",
-    env_server_url: "",
     budget_remaining: 1,
-    history_slice: [],
-    state_key: "k",
-    finish_reason: "",
-    work_in_flight: [],
-    open_waits: ja([]),
-    context_limit: limit,
-    ports: noop_ext_ports(),
-    artifacts: empty_ext_artifacts(),
-    telemetry: zero_token_telemetry(), world: empty_ext_world()
+    state_key: "k"
   }
 }
 

@@ -4,10 +4,8 @@ import std/json (Json, jo, kv, js, ja, decode, getString, get, asArray, asString
 import std/net (httpGet, httpPost)
 import std/option (Option, Some, None)
 import std/rand (uuid4)
-import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
-  ExtCtx, Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, ToolSchema, PromptPatch, BudgetPlan, BudgetPatch,
-  ToolPolicyDecision, ToolHandleDecision, ToolResultEnvelope, ResponseInterceptDecision, FinalizeDecision,
-  ToolCallEnvelope, Msg, PreStepDecision
+import pkg/sunholo/motoko_ext_abi/types (
+  ToolSchema, ToolHandleDecision, ToolResultEnvelope, ToolCallEnvelope
 )
 import pkg/sunholo/motoko_ext_a2a/types (A2AAgent, A2AConfig)
 
@@ -24,14 +22,14 @@ func make_tool_schema(agent: A2AAgent) -> ToolSchema {
   }
 }
 
-func collect_schemas(agents: [A2AAgent]) -> [ToolSchema] {
+export func collect_schemas(agents: [A2AAgent]) -> [ToolSchema] {
   match agents {
     [] => [],
     a :: rest => make_tool_schema(a) :: collect_schemas(rest)
   }
 }
 
-func collect_tool_names(agents: [A2AAgent]) -> [string] {
+export func collect_tool_names(agents: [A2AAgent]) -> [string] {
   match agents {
     [] => [],
     a :: rest => tool_name(a.name) :: collect_tool_names(rest)
@@ -147,26 +145,18 @@ func make_result(call: ToolCallEnvelope, stdout: string, exit_code: int) -> Tool
   { tool_call_id: call.id, tool: call.tool, exit_code: exit_code, stdout: stdout, stderr: "", metadata: jo([]) }
 }
 
-export func make_hooks(cfg: A2AConfig) -> [Capability] ! {Net, Rand} {
-  let agents = cfg.agents;
-  let schemas = collect_schemas(agents);
-  let names = collect_tool_names(agents);
-  let handle = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: {
-    match find_agent_for_tool(agents, call.tool) {
-      None  => Delegate,
-      Some(a) => {
-        let task_text = get_task_text(call);
-        let result = delegate(a.url, a.skill_id, task_text);
-        Handled(make_result(call, result, 0))
-      }
+-- ABI 8.0: the ToolProvider's decision over the configured agents (the named
+-- payload is register.ail's `a2a_tool_handle`, which reads the agents back from
+-- `ext_config`).
+export func a2a_decide(agents: [A2AAgent], call: ToolCallEnvelope) -> ToolHandleDecision ! {Net, Rand} {
+  match find_agent_for_tool(agents, call.tool) {
+    None  => Delegate,
+    Some(a) => {
+      let task_text = get_task_text(call);
+      let result = delegate(a.url, a.skill_id, task_text);
+      Handled(make_result(call, result, 0))
     }
-  }, next_state: ctx.world } };
-  -- B8: 6.0 Capability list (canonical atom order); the host stamps the id.
-  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
-  [
-    DescribeTools(\_ . schemas),
-    ToolProvider(names, handle)
-  ]
+  }
 }
 
 pure func tool_name_derives_correctly() -> bool

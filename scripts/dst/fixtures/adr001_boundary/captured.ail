@@ -1,0 +1,6 @@
+module scripts/dst/fixtures/adr001_boundary/captured
+import std/io (println)
+import scripts/dst/fixtures/adr001_boundary/types (PureCtx, Slot, Pure)
+func build() -> Slot { let p = { emit: func(s: string) -> () ! {IO} { println(s) } }; Pure(func(ctx: PureCtx) -> int { let _ = p.emit(ctx.name); 1 }) }
+func invoke(s: Slot, ctx: PureCtx) -> int { match s { Pure(f) => f(ctx) } }
+export func main() -> () ! {IO} { println("result=${show(invoke(build(), {name: "EFFECT WITH NO PORTS OR WORLD"}))}") }

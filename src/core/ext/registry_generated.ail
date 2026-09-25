@@ -2,10 +2,12 @@
 -- Source: ailang.toml [extensions]
 -- Do not edit. Regenerate: make registry_gen   (verify: make registry_gen_check)
 --
--- ABI 6.0 list shape (ADR-001 Phase C, D10). This file is generator-produced;
--- nothing in it is hand-diffed. Do NOT use the upstream
+-- ABI 8.0 registration shape (031 ADR-001 D2; ADR-001 Phase C, D10 for the
+-- 6.0 list it replaced): `register_with_config` returns `{ config, caps }` and
+-- the entry keeps `config` unchanged. This file is generator-produced; nothing
+-- in it is hand-diffed. Do NOT use the upstream
 -- `ailang generate-extension-registry` (v0.33.0) here: it still emits the 5.x
--- record shape and its output does not type-check against the 6.0 ABI.
+-- record shape and its output does not type-check against this ABI.
 
 module src/core/ext/registry_generated
 
@@ -28,7 +30,7 @@ import pkg/sunholo/motoko_ext_repetition_guard/register (register_with_config as
 import pkg/sunholo/motoko_ext_agentcli/register (register_with_config as register_agentcli)
 import pkg/sunholo/motoko_ext_herdr/register (register_with_config as register_herdr)
 import src/core/config (RuntimeConfig)
-import pkg/sunholo/motoko_ext_abi/types (Capability, ExtEntry)
+import pkg/sunholo/motoko_ext_abi/types (ExtRegistration, ExtEntry)
 import pkg/sunholo/motoko_ext_abi/types (ExtRegistry)
 import src/core/ext/registry_normalize (normalize_registration, rejection_message)
 import std/string (split, trim)
@@ -38,7 +40,7 @@ import std/list as List (length)
 import std/io (println, exit)
 import std/json (encode, jo, kv, js)
 
-func resolve(name: string, cfg: RuntimeConfig) -> Option[[Capability]] ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+func resolve(name: string, cfg: RuntimeConfig) -> Option[ExtRegistration] ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   if name == "test_dummy" then Some(register_test_dummy(cfg))
   else if name == "omnigraph" then Some(register_omnigraph(cfg))
   else if name == "context_mode" then Some(register_context_mode(cfg))
@@ -60,10 +62,11 @@ func resolve(name: string, cfg: RuntimeConfig) -> Option[[Capability]] ! {AI, Cl
   else None
 }
 
--- B8: the registration boundary. Every resolved list goes through
+-- B8: the registration boundary. Every resolved registration goes through
 -- `normalize_registration` (D3 votes, D3 disjoint provider names, D4 fold
--- repeats, D7 empty). A rejection FAILS THE BUILD -- reported and exit 2 --
--- because silently omitting a mis-registered extension while the others load
+-- repeats, D7 empty), which builds the entry and carries `reg.config` into
+-- `ExtEntry.config` unchanged (031 ADR-001 D2). A rejection FAILS THE
+-- BUILD -- reported and exit 2 -- because silently omitting a mis-registered extension while the others load
 -- is the fail-open shape [AR-codex "Missed"]. An EMPTY registration is
 -- omitted by name (D7, recommended reading), never silently.
 --
@@ -79,9 +82,9 @@ func parse_tokens(xs: [string], idx: int, acc: [ExtEntry], cfg: RuntimeConfig) -
       let name = trim(raw);
       match resolve(name, cfg) {
         None => parse_tokens(rest, idx + 1, acc, cfg),
-        Some(caps) => {
+        Some(reg) => {
           let id = "${name}#${show(idx)}";
-          match normalize_registration(id, caps) {
+          match normalize_registration(id, reg.config, reg.caps) {
             Err(e) => {
               let _ = println(encode(jo([
                 kv("type", js("error")),

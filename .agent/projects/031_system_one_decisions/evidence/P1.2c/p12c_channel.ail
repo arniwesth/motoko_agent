@@ -1,0 +1,145 @@
+-- 031 PLAN-001 P1.2c: the configuration channel, measured through the REAL registrations.
+-- Run by p12c_ws.sh channel, in a workspace with synthetic fixtures under MOTOKO_PROFILE_DIR
+-- (a2a.json: one agent; mcp.json: one mcp-http server; compaction_ai.json: a threshold no
+-- context reaches) and MOTOKO_WORKDIR (an ailang.toml, so ailang-docs' gate passes).
+--
+-- For each extension it takes the registration's own `caps`, finds the atom, and invokes
+-- the payload twice: once with the registration's `config` stamped (as the host does, from
+-- `ExtEntry.config`) and once with `{}`. A payload that read a captured value instead of
+-- `ext_config` could not tell the two apart.
+--   describe_tools: every DescribeTools in the batch, configured=<n> empty=<n>; each must
+--                   differ (all three catalogs depend on registration data).
+--   a2a / mcp / agentcli ToolProvider: the configured tool is handled only under config.
+--     (a2a's delegate hits a plain-http URL, which the pin blocks without a request:
+--      E_NET_PROTOCOL_BLOCKED -- no network is used; agentcli's call has an empty prompt,
+--      so it answers before any exec.)
+--   compaction_ai Compactor: the configured threshold (100000%) passes through; the
+--     default (75%) acts on the same context.
+--   ADR-001 Amendment 3: environment values read at registration (synthetic
+--     CODEX_MODEL, AILANG_DOCS_TIMEOUT_MS set by p12c_ws.sh) are disclosed in config.
+module p12c_channel
+
+import std/io (println)
+import std/json (Json, jo, kv, js, encode)
+import std/list (length)
+import std/string (contains)
+import pkg/sunholo/motoko_ext_abi/types (
+  Capability, DescribeTools, ToolProvider, Compactor,
+  ExtPorts, ExtWorld, ExtPathMissing, AiStepOutcome, ExtClockReading, ExtProcOutcome, ExtFileRead,
+  ExtFileMutation, ExtPathStat, ExtDirListing, Msg, ToolCallEnvelope,
+  ToolHandleDecision, Handled, Delegate, PassThrough, PassThroughObserved, Compacted,
+  pure_ctx, provider_ctx, ai_ctx, empty_ext_world
+)
+import pkg/sunholo/motoko_ext_a2a/register (register_with_config as register_a2a)
+import pkg/sunholo/motoko_ext_agentcli/register (register_with_config as register_agentcli)
+import pkg/sunholo/motoko_ext_ailang_docs/register (register_with_config as register_ailang_docs)
+import pkg/sunholo/motoko_ext_mcp/register (register_with_config as register_mcp)
+import pkg/sunholo/motoko_ext_compaction_ai/register (register_with_config as register_compaction_ai)
+
+-- A test double for the provider view's ten ports: every one answers "nothing here"
+-- and threads the world unchanged. The calls below reach only `env_get` (agentcli's
+-- per-call resolution), which answers its fallback.
+func p_ai(w: ExtWorld, _m: string, _x: [Msg]) -> AiStepOutcome ! {AI, IO, Trace} { { result: Ok("P12C synthetic summary"), next_state: w } }
+func p_tool(w: ExtWorld, _t: string, _a: string) -> ExtProcOutcome ! {IO, Process, FS} { { output: "", exit_code: 1, next_state: w } }
+func p_read(w: ExtWorld, _p: string) -> ExtFileRead ! {FS} { { present: false, content: "", next_state: w } }
+func p_write(w: ExtWorld, _p: string, _c: string) -> ExtFileMutation ! {FS} { { ok: false, error: "p12c", next_state: w } }
+func p_remove(w: ExtWorld, _p: string) -> ExtFileMutation ! {FS} { { ok: false, error: "p12c", next_state: w } }
+func p_stat(w: ExtWorld, _p: string) -> ExtPathStat ! {FS} { { kind: ExtPathMissing, next_state: w } }
+func p_list(w: ExtWorld, _p: string) -> ExtDirListing ! {FS} { { present: false, entries: [], next_state: w } }
+func p_mkdir(w: ExtWorld, _p: string) -> ExtFileMutation ! {FS} { { ok: false, error: "p12c", next_state: w } }
+func p_clock(w: ExtWorld) -> ExtClockReading ! {Clock} { { now_ms: 0, next_state: w } }
+func p_env(_k: string, fallback: string) -> string ! {Env} { fallback }
+
+func probe_ports() -> ExtPorts {
+  { ai_step: p_ai, tool_handle: p_tool, file_read: p_read, file_write: p_write, file_remove: p_remove,
+    path_stat: p_stat, dir_list: p_list, dir_make: p_mkdir, clock_now: p_clock, env_get: p_env }
+}
+
+func describe_count(caps: [Capability], cfg: Json) -> int {
+  match caps {
+    [] => -1,
+    DescribeTools(f) :: _ => length(f(cfg)),
+    _ :: rest => describe_count(rest, cfg)
+  }
+}
+
+func provide(caps: [Capability], cfg: Json, call: ToolCallEnvelope) -> ToolHandleDecision ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  match caps {
+    [] => Delegate,
+    ToolProvider(_, h) :: _ => h(provider_ctx(pure_ctx(cfg), probe_ports(), empty_ext_world()), call).decision,
+    _ :: rest => provide(rest, cfg, call)
+  }
+}
+
+func handled(d: ToolHandleDecision) -> bool {
+  match d { Handled(_) => true, _ => false }
+}
+
+func handled_with(d: ToolHandleDecision, needle: string) -> bool {
+  match d { Handled(r) => contains(r.stdout, needle) || contains(r.stderr, needle), _ => false }
+}
+
+func long_msgs(n: int) -> [Msg] {
+  if n <= 0 then []
+  else [{ role: "user", content: "p12c synthetic turn ${show(n)} abcdefghijklmnopqrstuvwxyz 0123456789 abcdefghijklmnopqrstuvwxyz", tool_calls: [], tool_call_id: "" },
+        { role: "assistant", content: "p12c synthetic reply ${show(n)} abcdefghijklmnopqrstuvwxyz 0123456789 abcdefghijklmnopqrstuvwxyz", tool_calls: [], tool_call_id: "" }]
+       ++ long_msgs(n - 1)
+}
+
+-- "acts" = anything but a plain PassThrough under the threshold.
+func compactor_acts(caps: [Capability], cfg: Json) -> bool ! {AI, IO, Trace} {
+  match caps {
+    [] => false,
+    Compactor(c) :: _ => {
+      let ctx = ai_ctx({ pure_ctx(cfg) | task: "p12c", context_limit: 250 }, { ai_step: p_ai }, empty_ext_world());
+      match c(ctx, long_msgs(8)).decision {
+        PassThrough => false,
+        PassThroughObserved(_, _) => true,
+        Compacted(_, _, _) => true
+      }
+    },
+    _ :: rest => compactor_acts(rest, cfg)
+  }
+}
+
+func check(label: string, ok: bool) -> int ! {IO} {
+  if ok then { println("OK: ${label}"); 0 } else { println("FAIL: ${label}"); 1 }
+}
+
+func call_of(tool: string, args: Json) -> ToolCallEnvelope { { id: "p12c-1", tool: tool, arguments: args } }
+
+export func main() -> () ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  let a2a = register_a2a(0);
+  let agentcli = register_agentcli(0);
+  let docs = register_ailang_docs(0);
+  let mcp = register_mcp(0);
+  let cai = register_compaction_ai(0);
+  let empty = jo([]);
+
+  let a2a_c = describe_count(a2a.caps, a2a.config);
+  let a2a_e = describe_count(a2a.caps, empty);
+  let cli_c = describe_count(agentcli.caps, agentcli.config);
+  let cli_e = describe_count(agentcli.caps, empty);
+  let docs_c = describe_count(docs.caps, docs.config);
+  let docs_e = describe_count(docs.caps, empty);
+  println("describe_tools a2a: configured=${show(a2a_c)} empty=${show(a2a_e)}");
+  println("describe_tools agentcli: configured=${show(cli_c)} empty=${show(cli_e)}");
+  println("describe_tools ailang_docs: configured=${show(docs_c)} empty=${show(docs_e)}");
+
+  let a2a_call = call_of("delegate_to_p12c_agent", jo([kv("task", js("p12c"))]));
+  let cli_call = call_of("ClaudeExec", jo([kv("prompt", js(""))]));
+  let mcp_call = call_of("P12cTool", jo([]));
+
+  let failures =
+    check("a2a catalog follows config (1 vs 0)", a2a_c == 1 && a2a_e == 0)
+    + check("agentcli catalog follows config (2 vs 0)", cli_c == 2 && cli_e == 0)
+    + check("ailang_docs catalog follows config (23 vs 0)", docs_c == 23 && docs_e == 0)
+    + check("a2a provider reads its agents from ext_config", handled_with(provide(a2a.caps, a2a.config, a2a_call), "E_NET") && not handled(provide(a2a.caps, empty, a2a_call)))
+    + check("agentcli provider reads its providers from ext_config", handled_with(provide(agentcli.caps, agentcli.config, cli_call), "non-empty") && not handled(provide(agentcli.caps, empty, cli_call)))
+    + check("mcp provider reads its servers from ext_config", handled_with(provide(mcp.caps, mcp.config, mcp_call), "mcp-http") && not handled(provide(mcp.caps, empty, mcp_call)))
+    + check("compaction_ai compactor reads its thresholds from ext_config", not compactor_acts(cai.caps, cai.config) && compactor_acts(cai.caps, empty))
+    + check("registration-time environment values reach config (Amendment 3)",
+        contains(encode(agentcli.config), "p12c-synthetic-model") && contains(encode(docs.config), "4321"));
+  if failures == 0 then println("OK: channel (${show(8)} checks)")
+  else println("FAIL: channel failures=${show(failures)}")
+}

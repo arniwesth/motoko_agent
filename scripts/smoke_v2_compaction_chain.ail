@@ -14,13 +14,13 @@ import src/core/ext/runtime (
   StageRejected,
   PreStepStage
 )
-import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
+import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry, empty_tool_evidence)
 import src/core/test/stub_step (prose_step)
 import src/core/ports (ScriptedStep)
 import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
   BudgetPlan,
   BudgetPatch,
-  ExtCtx,
+  ExtCtx, PureCtx, AiCtx, ProviderCtx, InterceptCtx, ProcessCtx, NotReached,
   ExtRuntime,
   FinalizeDecision,
   NoDecision,
@@ -65,7 +65,7 @@ func mk_ctx() -> ExtCtx {
 	    context_limit: 0,
 	    ports: noop_ext_ports(),
 	    artifacts: empty_ext_artifacts(),
-	    telemetry: zero_token_telemetry(), world: empty_ext_world()
+	    telemetry: zero_token_telemetry(), verification: NotReached, tool_evidence: empty_tool_evidence(), decision_state: None, world: empty_ext_world()
 	  }
 	}
 
@@ -104,36 +104,37 @@ func rewrite_tool(msgs: [Msg]) -> [Msg] {
   }
 }
 
-func base_hook(id: string, pre: (ExtCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace}) -> FixtureHooks {
+func base_hook(id: string, pre: (AiCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace}) -> FixtureHooks {
   fixture_hooks(id, {
+    config: jo([]),
     tools: [],
     describe: \_ . [],
     prompt: \_ctx. { prepend: [], append: [] },
-    budget: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
+    budget: func(_ctx: PureCtx, _plan: BudgetPlan) -> BudgetPatch {
       { requested_total: None, requested_solver: None, requested_verifier: None }
     },
     compact: pre,
     policy: \_ctx _call. NoOpinion,
-    provide: func(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: { Delegate }, next_state: ctx.world } },
-    intercept: func(ctx: ExtCtx, _r: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: { NoIntercept }, next_state: ctx.world } },
-    judge: func(ctx: ExtCtx, _c: string) -> FinalizeOutcome ! {Process}  { { decision: { NoDecision }, next_state: ctx.world } }
+    provide: func(ctx: ProviderCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace}  { { decision: { Delegate }, next_state: ctx.world } },
+    intercept: func(ctx: InterceptCtx, _r: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: { NoIntercept }, next_state: ctx.world } },
+    judge: func(ctx: ProcessCtx, _c: string) -> FinalizeOutcome ! {Process}  { { decision: { NoDecision }, next_state: ctx.world } }
   })
 }
 
 func hook_a() -> FixtureHooks {
-  base_hook("chain_A", func(ctx: ExtCtx, msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
+  base_hook("chain_A", func(ctx: AiCtx, msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
     Compacted(msgs ++ [mk_msg("user", "chain-A")], "A", jo([]))
   }, next_state: ctx.world } })
 }
 
 func hook_b_bad() -> FixtureHooks {
-  base_hook("chain_B", func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
+  base_hook("chain_B", func(ctx: AiCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
     Compacted([call_msg("tc-chain")], "B", jo([]))
   }, next_state: ctx.world } })
 }
 
 func hook_c() -> FixtureHooks {
-  base_hook("chain_C", func(ctx: ExtCtx, msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
+  base_hook("chain_C", func(ctx: AiCtx, msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
     Compacted(rewrite_tool(msgs), "C", jo([]))
   }, next_state: ctx.world } })
 }

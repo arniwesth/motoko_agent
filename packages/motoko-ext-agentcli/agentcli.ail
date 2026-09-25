@@ -36,27 +36,106 @@ module sunholo/motoko_ext_agentcli/agentcli
 
 import std/option (Option, Some, None)
 import std/string (substring)
-import std/json (Json, jo, kv, js, get, asString)
+import std/json (Json, jo, ja, kv, js, jint, get, asString, getString, getInt, getArray, getStringArrayOrEmpty)
 import std/process (exec, ProcessOutput, ProcessError)
 import std/bytes (toString)
 import std/result (Ok, Err)
 
 import pkg/sunholo/motoko_ext_abi/types (
-  PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome,
-  ExtCtx, Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, ExtPorts, ExtWorld, PromptPatch, BudgetPlan, BudgetPatch,
-  ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision,
-  PassThrough, PreStepDecision, Msg, ToolSchema,
+  ToolHandleOutcome, ProviderCtx, ExtPorts, ExtWorld,
+  ToolHandleDecision, ToolSchema,
   ToolCallEnvelope, ToolResultEnvelope,
   ExtPathKind, ExtPathMissing
 )
 import pkg/sunholo/motoko_ext_agentcli/providers (
-  Provider, all_providers, tool_names, provider_for_tool, argv_for, failure_text
+  Provider, all_providers, codex_provider, claude_provider, tool_names, provider_for_tool, argv_for, failure_text
 )
 
 export type AgentCliConfig = {
   providers: [Provider],
   lock_path: string,
   max_output_chars: int
+}
+
+-- ABI 8.0 (031 ADR-001 D2, Amendment 3): THE CONFIGURATION CHANNEL. What
+-- registration resolved -- which providers are offered, each one's model and
+-- permission flags as read from its environment variables, the lock path under
+-- the profile directory, the output cap -- is disclosed as `config` and read
+-- back by the catalog and the handler from `ext_config`:
+--
+--   {"providers": [{"id": "codex", "model": "...", "extra_flags": ["..."]}, ...],
+--    "lock_path": "...", "max_output_chars": 8000}
+--
+-- None of it is a credential (these CLIs authenticate from their own login);
+-- the environment is read once, at registration, as in 7.4. The rest of each
+-- provider (binary, argv template, failure stream, lock rule, description) is
+-- the table in `providers.ail`, which is code: a configured id the table does
+-- not know selects nothing.
+func provider_json(p: Provider) -> Json {
+  jo([
+    kv("id", js(p.id)),
+    kv("model", js(p.model)),
+    kv("extra_flags", ja(strings_json(p.extra_flags)))
+  ])
+}
+
+func strings_json(xs: [string]) -> [Json] {
+  match xs {
+    [] => [],
+    x :: rest => js(x) :: strings_json(rest)
+  }
+}
+
+func providers_json(ps: [Provider]) -> [Json] {
+  match ps {
+    [] => [],
+    p :: rest => provider_json(p) :: providers_json(rest)
+  }
+}
+
+export func agentcli_config_json(cfg: AgentCliConfig) -> Json {
+  jo([
+    kv("providers", ja(providers_json(cfg.providers))),
+    kv("lock_path", js(cfg.lock_path)),
+    kv("max_output_chars", jint(cfg.max_output_chars))
+  ])
+}
+
+func table_provider(ps: [Provider], id: string) -> [Provider] {
+  match ps {
+    [] => [],
+    p :: rest => if p.id == id then [p] else table_provider(rest, id)
+  }
+}
+
+-- One configured provider: the table's entry for its id with the resolved
+-- model and flags applied.
+func provider_of_json(j: Json) -> [Provider] {
+  match getString(j, "id") {
+    None => [],
+    Some(id) => match table_provider(all_providers(), id) {
+      [] => [],
+      p :: _ => [{ p |
+        model: match getString(j, "model") { Some(m) => m, None => p.model },
+        extra_flags: getStringArrayOrEmpty(j, "extra_flags")
+      }]
+    }
+  }
+}
+
+func providers_of_json(xs: [Json]) -> [Provider] {
+  match xs {
+    [] => [],
+    j :: rest => provider_of_json(j) ++ providers_of_json(rest)
+  }
+}
+
+export func agentcli_config_of(cfg: Json) -> AgentCliConfig {
+  {
+    providers: match getArray(cfg, "providers") { Some(xs) => providers_of_json(xs), None => [] },
+    lock_path: match getString(cfg, "lock_path") { Some(l) => l, None => "./agentcli-exec.lock" },
+    max_output_chars: match getInt(cfg, "max_output_chars") { Some(n) => n, None => 8000 }
+  }
 }
 
 func params_schema() -> string {
@@ -158,7 +237,7 @@ func run_delegate(
   }
 }
 
-export func on_tool_handle(cfg: AgentCliConfig, ctx: ExtCtx, call: ToolCallEnvelope)
+export func on_tool_handle(cfg: AgentCliConfig, ctx: ProviderCtx, call: ToolCallEnvelope)
   -> ToolHandleOutcome ! {IO, Process, FS} {
   match provider_for_tool(cfg.providers, call.tool) {
     [] => { decision: Delegate, next_state: ctx.world },
@@ -197,15 +276,21 @@ func arg_str(args: Json, key: string, fallback: string) -> string {
   }
 }
 
-export func make_hooks(cfg: AgentCliConfig) -> [Capability] ! {IO, Process, FS} {
-  let handle = func(ctx: ExtCtx, call: ToolCallEnvelope)
-    -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
-      on_tool_handle(cfg, ctx, call)
-    };
-  -- B8: 6.0 Capability list (canonical atom order); the host stamps the id.
-  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
-  [
-    DescribeTools(\_ . describe_tools(cfg.providers)),
-    ToolProvider(tool_names(cfg.providers), handle)
-  ]
+func sample_config() -> AgentCliConfig {
+  {
+    providers: [{ claude_provider() | model: "m-x", extra_flags: [] }, codex_provider()],
+    lock_path: "/p/agentcli-exec.lock",
+    max_output_chars: 123
+  }
 }
+
+pure func config_round_trips() -> bool
+  tests [((), true)]
+  {
+    let back = agentcli_config_of(agentcli_config_json(sample_config()));
+    match tool_names(back.providers) { ["ClaudeExec", "CodexExec"] => true, _ => false }
+      && back.lock_path == "/p/agentcli-exec.lock"
+      && back.max_output_chars == 123
+      && match back.providers { p :: _ => p.model == "m-x" && p.bin == "claude" && match p.extra_flags { [] => true, _ => false }, [] => false }
+      && match agentcli_config_of(jo([])).providers { [] => true, _ => false }
+  }

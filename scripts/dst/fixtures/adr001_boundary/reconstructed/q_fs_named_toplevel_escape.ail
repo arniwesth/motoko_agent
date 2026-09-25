@@ -1,0 +1,12 @@
+-- PLAN-001 (031) P0.2b. Reconstructed from shape, not quoted source.
+-- Review 5 (REVIEW-adr001-v0.5-verdicts-claude-fable-5-1.md) §A.3 table row, verbatim:
+-- | `q_fs_named_toplevel_escape` | module-level `let` from `FsCtx` | 1 | — | rejected: eff(w) |
+module scripts/dst/fixtures/adr001_boundary/reconstructed/q_fs_named_toplevel_escape
+import std/io (println)
+import scripts/dst/fixtures/adr001_boundary/types (FsCtx, FsSlot, Fs)
+type W = { f: (FsCtx) -> int ! {FS} }
+let w: W = { f: func(c: FsCtx) -> int ! {FS} { let _ = println(c.name); 1 } }
+func body(ctx: FsCtx) -> int ! {FS} { w.f(ctx) }
+func build() -> FsSlot { Fs(body) }
+func invoke(s: FsSlot, ctx: FsCtx) -> int ! {FS} { match s { Fs(f) => f(ctx) } }
+export func main() -> () ! {IO, FS} { let ctx: FsCtx = { name: "IO OUTSIDE FS VIEW", world: 0, ports: {file_read: func(w: int, path: string) -> string ! {FS} { "" } } }; println("result=${show(invoke(build(), ctx))}") }

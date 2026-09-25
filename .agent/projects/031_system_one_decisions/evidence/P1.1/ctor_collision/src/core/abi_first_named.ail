@@ -1,0 +1,4 @@
+module src/core/abi_first_named
+import pkg/probe/abi/types (Unrelated)
+import src/core/ports (Outcome, ToolFailed, failed)
+export pure func code(o: Outcome) -> string { match o { Done => "", ToolFailed(f) => f.code } }

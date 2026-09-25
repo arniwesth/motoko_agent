@@ -137,7 +137,7 @@ export pure func fxs_program(p: ProgramParts) -> ExecutionProgram {
     },
     bounds: { max_interactions: 3, max_chunks_per_interaction: 1, max_payload_bytes: 16,
               max_resource_size: 0, max_clock_advance_ms: 1, chunk_draw_hi: 0 },
-    manifest: driver_only_manifest("a0a0a0", p.toolchain, "7.4", "{}", ["env_get"], [], "a0a0a0"),
+    manifest: driver_only_manifest("a0a0a0", p.toolchain, "8.0", "{}", ["env_get"], [], "a0a0a0"),
     interactions: [fxs_interaction_env(1, "MOTOKO_HEADLESS"),
                    fxs_interaction_provider(2, p.projection, p.payload, p.chunk),
                    fxs_interaction_tool(3, p.call_id)]

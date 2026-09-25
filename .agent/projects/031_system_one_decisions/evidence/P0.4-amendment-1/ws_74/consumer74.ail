@@ -1,0 +1,4 @@
+module consumer74
+import pkg/sunholo/motoko_ext_abi/types (Capability, PromptShaper, ExtCtx, PromptPatch)
+func shape(ctx: ExtCtx) -> PromptPatch { { prepend: [ctx.task], append: [] } }
+export func register_with_config() -> [Capability] { [PromptShaper(shape)] }

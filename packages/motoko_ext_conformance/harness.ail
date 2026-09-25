@@ -1,14 +1,20 @@
 module sunholo/motoko_ext_conformance/harness
 
 import std/io (println)
-import std/json (Json, jo, kv, js, encode, ja)
+import std/json (Json, jo, kv, js, encode)
 import std/result (Result, Ok, Err)
 import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, ExtWorld, ExtClockReading, ExtProcOutcome, ExtFileRead, ExtFileMutation, ExtPathStat, ExtDirListing, ExtPathKind, ExtPathMissing, AiStepOutcome, 
   BudgetPlan,
-  ExtCtx,
   ExtPorts,
+  PureCtx, ProcessCtx, FsCtx, AiCtx, InterceptCtx, ProviderCtx,
+  pure_ctx, process_ctx, fs_ctx, ai_ctx, intercept_ctx, provider_ctx,
+  fs_ports, ai_ports, intercept_ports,
+  ExtRegistration,
   Capability,
   Compactor,
+  DescribeTools,
+  DecisionSolverJudge,
+  DecisionToolPolicy,
   Msg,
   PreStepDecision,
   PassThrough,
@@ -21,7 +27,21 @@ import pkg/sunholo/motoko_ext_conformance/invariants (
   conformance_abi_version,
   no_system_in_output,
   pairing_preserved,
-  ids_preserved
+  ids_preserved,
+  no_tools,
+  neutral_descriptor,
+  neutral_judge_prepare,
+  neutral_judge_interpret,
+  neutral_tool_prepare,
+  neutral_tool_interpret,
+  finalize_vote_neutral,
+  tool_vote_neutral,
+  judge_preparation_neutral,
+  tool_preparation_neutral,
+  conformance_probe_ctx,
+  conformance_probe_call,
+  conformance_probe_request,
+  conformance_probe_observation
 )
 
 export type ScenarioFailure = {
@@ -159,27 +179,101 @@ func budget() -> BudgetPlan {
   { total: 100, solver: 60, verifier: 40 }
 }
 
-export func mk_conformance_ctx(segment: [Msg], artifacts: Json, ports: ExtPorts) -> ExtCtx {
-  {
+-- 8.0 (031 ADR-001 D2): no callback receives `ExtCtx`. The kit builds the
+-- DATA half once, through the ABI's exported `pure_ctx` and record update --
+-- the 8.x stability rule's construction, so a minor that adds a view field
+-- does not break the kit -- and projects each row's view from it with the
+-- ABI's constructor. `ext_config` is the configuration a host would stamp from
+-- `ExtEntry.config`; the kit supplies `{}`.
+export func conformance_pure_ctx(segment: [Msg], artifacts: Json) -> PureCtx {
+  { pure_ctx(jo([])) |
     task: "conformance",
     step: 1,
     model: "conformance-model",
     cwd: ".",
-    hybrid_tools: false,
     budget: budget(),
     mode: "conformance",
     workdir: ".",
-    env_server_url: "",
     budget_remaining: 100,
     history_slice: segment,
     state_key: "conformance",
-    finish_reason: "",
-    work_in_flight: [],
-    open_waits: ja([]),
     context_limit: 10,
-    ports: ports,
-    artifacts: artifacts,
-    telemetry: zero_token_telemetry(), world: empty_ext_world()
+    artifacts: artifacts
+  }
+}
+
+-- One constructor per row's view (ADR D2's table). The compactor scenarios
+-- below use the `{AI, IO, Trace}` view; the others are the kit's for a
+-- consumer testing another slot, each carrying exactly its row's ports.
+export func conformance_process_ctx(segment: [Msg], artifacts: Json) -> ProcessCtx {
+  process_ctx(conformance_pure_ctx(segment, artifacts), empty_ext_world())
+}
+
+export func conformance_fs_ctx(segment: [Msg], artifacts: Json, ports: ExtPorts) -> FsCtx {
+  fs_ctx(conformance_pure_ctx(segment, artifacts), fs_ports(ports), empty_ext_world())
+}
+
+export func conformance_intercept_ctx(segment: [Msg], artifacts: Json, ports: ExtPorts) -> InterceptCtx {
+  intercept_ctx(conformance_pure_ctx(segment, artifacts), intercept_ports(ports), empty_ext_world())
+}
+
+export func conformance_provider_ctx(segment: [Msg], artifacts: Json, ports: ExtPorts) -> ProviderCtx {
+  provider_ctx(conformance_pure_ctx(segment, artifacts), ports, empty_ext_world())
+}
+
+-- The compactor's view: `Compactor`'s row is `{AI, IO, Trace}`, so it gets
+-- `ai_step` and nothing else. The name is kept from 7.x; the type is `AiCtx`.
+export func mk_conformance_ctx(segment: [Msg], artifacts: Json, ports: ExtPorts) -> AiCtx {
+  ai_ctx(conformance_pure_ctx(segment, artifacts), ai_ports(ports), empty_ext_world())
+}
+
+-- THE NO-OP PROFILE (031 P0.5): a registration whose every atom is neutral --
+-- `DescribeTools` advertising nothing and one atom of each decision variant
+-- abstaining (`invariants.ail` holds the callbacks and the neutrality tests).
+-- One atom per vote family, as D2's multiplicity rule allows; a registration
+-- that wants the legacy `SolverJudge`/`ToolPolicy` too is a different profile.
+export func neutral_registration() -> ExtRegistration {
+  {
+    config: jo([]),
+    caps: [
+      DescribeTools(no_tools),
+      DecisionSolverJudge(neutral_descriptor("conformance.neutral_judge"),
+                          neutral_judge_prepare, neutral_judge_interpret),
+      DecisionToolPolicy(neutral_descriptor("conformance.neutral_tool_policy"),
+                         neutral_tool_prepare, neutral_tool_interpret)
+    ]
+  }
+}
+
+-- Is this registration a NO-OP PROFILE? Every atom is invoked on the kit's
+-- probe inputs and must change nothing: `DescribeTools` advertises no tool under
+-- the registration's own `config`, and each decision atom's `prepare` abstains
+-- without querying and its `interpret` abstains too. Any other kind is not a
+-- no-op the kit can vouch for, so it answers false rather than skipping it.
+export func registration_neutral(reg: ExtRegistration) -> bool {
+  caps_neutral(reg.config, reg.caps)
+}
+
+func caps_neutral(config: Json, caps: [Capability]) -> bool {
+  match caps {
+    [] => true,
+    DescribeTools(describe) :: rest =>
+      (match describe(config) { [] => true, _ => false }) && caps_neutral(config, rest),
+    DecisionSolverJudge(_, prepare, interpret) :: rest => {
+      let ctx = { conformance_probe_ctx() | ext_config: config };
+      judge_preparation_neutral(prepare(ctx, "conformance candidate"))
+        && finalize_vote_neutral(interpret(ctx, "conformance candidate",
+                                           conformance_probe_request(), conformance_probe_observation()))
+        && caps_neutral(config, rest)
+    },
+    DecisionToolPolicy(_, prepare, interpret) :: rest => {
+      let ctx = { conformance_probe_ctx() | ext_config: config };
+      tool_preparation_neutral(prepare(ctx, conformance_probe_call()))
+        && tool_vote_neutral(interpret(ctx, conformance_probe_call(),
+                                       conformance_probe_request(), conformance_probe_observation()))
+        && caps_neutral(config, rest)
+    },
+    _ :: _ => false
   }
 }
 
@@ -280,7 +374,7 @@ func decision_artifacts(d: PreStepDecision) -> Json {
 -- 6.0 Capability list: the compactor scenarios exercise exactly ONE atom.
 -- Walk the list for the FIRST `Compactor(f)`; a list without one cannot be
 -- conformance-tested as a compactor, and `compact_with` says so.
-func compact_with(caps: [Capability], ctx: ExtCtx, msgs: [Msg]) -> Result[PreStepDecision, ScenarioFailure] ! {AI, IO, Trace} {
+func compact_with(caps: [Capability], ctx: AiCtx, msgs: [Msg]) -> Result[PreStepDecision, ScenarioFailure] ! {AI, IO, Trace} {
   match caps {
     [] => Err({ failed_invariant: "no_compactor_atom", trace: ["capability list carries no Compactor atom"] }),
     Compactor(f) :: _ => Ok(f(ctx, msgs).decision),
@@ -447,8 +541,8 @@ func run_all(caps: [Capability], scenarios: [Scenario], failed: int) -> int ! {I
 }
 
 -- The 6.0 list carries no id (the host stamps it), so the banner reports the
--- atom count instead.
+-- atom count instead. 8.0: a caller holding an `ExtRegistration` passes `.caps`.
 export func run_conformance(caps: [Capability]) -> int ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
-  let _ = println("conformance kit 5.0.0 ABI ${conformance_abi_version()} caps=${show(count_caps(caps))}");
+  let _ = println("conformance kit 6.0.0 ABI ${conformance_abi_version()} caps=${show(count_caps(caps))}");
   run_all(caps, all_scenarios(), 0)
 }

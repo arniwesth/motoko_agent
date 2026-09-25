@@ -7,13 +7,13 @@ description = "AI-powered conversation compaction extension for motoko_agent"
 license = "Apache-2.0"
 
 [dependencies]
-"sunholo/motoko_ext_abi" = { path = "../motoko-ext-abi" }
+"sunholo/motoko_ext_abi" = { path = "../motoko-ext-abi", version = "8.0" }
 
 [exports]
 modules = ["sunholo/motoko_ext_compaction_ai/compaction_ai", "sunholo/motoko_ext_compaction_ai/register", "sunholo/motoko_ext_compaction_ai/types"]
 
 [effects]
-max = ["AI", "IO", "Process", "FS", "Env", "Net", "SharedMem", "Clock", "Stream"]
+max = ["AI", "IO", "Trace", "Env", "FS"]
 
 [metadata]
 tags = ["motoko", "extension", "compaction", "ai", "context"]

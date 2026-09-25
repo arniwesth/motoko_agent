@@ -1,0 +1,7 @@
+module local/probe/r1
+import std/json (jo)
+import pkg/sunholo/motoko_ext_abi/types (ExtRegistration, ToolProvider)
+import pkg/local/probe/h (handle)
+export func register_with_config(_cfg: a) -> ExtRegistration {
+  { config: jo([]), caps: [ToolProvider([], handle)] }
+}

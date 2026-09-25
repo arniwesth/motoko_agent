@@ -1,0 +1,19 @@
+→ Type checking...
+→ Effect checking...
+✓ Running scripts/dst/event_vocabulary_dst.ail
+=== event_vocabulary_dst (D6, event-vocabulary/1) ===
+  ✓ vocabulary validates: 45 rows, 45 variants sampled
+  ✓ all 45 variants round-trip: wire name and payload schema match the live projection
+  ✓ both StreamDelta branches round-trip (reasoning_delta / thinking_delta)
+  ✓ the two optional payload keys round-trip present as well as absent (first_kept / ext_artifacts)
+  ✓ every variant classified: 39 logical, 6 display-only
+      display-only: CompactionApplied, ExtCompactionRejected, ExtensionDiagnostic, CostWarning, SessionStart, TotalsUpdated
+  i 2 logical variant(s) do NOT reach the returned trace today — D6.4's gap, for WI-A14:
+      gap: ScratchpadResult, SessionSuspend
+  i 1 classification finding(s):
+      DoneEvent: RESOLVED by WI-A14; recorded because the resolution is the interesting part. The tension WI-A8 could not settle: D6.3 requires the returned outcome, the DoneEvent when present, and the RunSummary to AGREE — an invariant over its content, which is exactly what DisplayOnly denies — while D6.1 requires the RunSummary to be the FINAL record of the returned trace, and the driver projected the DoneEvent AFTER c2_finalize had appended the summary. Both cannot hold by APPENDING it where it is emitted. What made the resolution free is that D6.4's obligation is PARITY and not a shared transition — the decision says so in as many words and names streams as the case where a shared transition is impossible — so the append and the projection are separated at this one site: session.ail's Finalize arm appends the DoneEvent BEFORE c2_finalize and projects it after, unchanged. The returned trace holds ... DoneEvent, RunSummary with the summary still final (D6.1); the wire still carries run_summary before done, so no compatibility surface moves (D8); and D6.3's agreement is now decidable over the returned trace alone, which dst_invariants.outcome_agreement_findings reads. The alternative — reclassifying it DisplayOnly — was refused: DisplayOnly means 'cannot change invariant results', and D6.3 is an invariant over precisely this event's content, so the reclassification would have made D6.3 unstatable rather than satisfied.
+  ✓ control: an empty vocabulary is rejected
+event_vocabulary_dst PASS
+  ✓ 45 LedgerEvent variants == 45 vocabulary rows == 45 golden-pinned variants
+  ✓ src/core/dst_event_vocabulary.ail
+  ✓ src/core/phase_vocab.ail (goldens)

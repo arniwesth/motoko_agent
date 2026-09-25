@@ -1,0 +1,33 @@
+→ Type checking...
+→ Effect checking...
+✓ Running scripts/dst/driver_only_dst.ail
+driver_only_dst  (driver_only v32)
+  ✓ driver_only v32 LOADS CLEAN at the bound revision
+  ✓ the recorded attribution reference is current: (c0fbf10, sha256:0211ac242f677bd392bb317611b03a335d266426ec9d050cd5cce4e96b8f5583)
+  ✓ names 5 omission(s), each with a reason: compaction_ai, compaction_structural, decision_framework, empty_stop_guard, progress_contract_guard
+      (which of these are at ZERO barriers is derived by make profile_definition, not restated here — P3)
+      ✓ approval_deadline_exceeded: condition read from the catalogue
+      ✓ extension_effect_fault: condition read from the catalogue
+  ✓ waives all 2 conditional D3 classes, by A7's stable ids
+  ✓ routed-set claim, COMPUTED at the bound revision (nothing recorded):
+      reachable core sites: 7
+      routed:               6
+      declared unrouted:    1
+      (plan P4 says 'the four driver sites'; the computed answer is 6 routed,
+       because A12 routed a fifth in tool_phase.ail and A5 declared the two unrouted ones)
+  ✓ decision 1: every unrouted reachable core site is DECLARED and INSTRUMENTED
+      src/core/test/stub_step.ail:203
+        instrument: make world_state — the Clock poison pair shows the deterministic entry point completes with Clock withheld, so it does not reach this site; the same pair shows the LIVE world dies, so this is where the real clock is read
+  ✓ the runtime exclusion check is VACUOUS for driver_only: nothing installed, nothing excluded, no dispatch can violate (binding from WI-C5)
+  ✓ the per-run execution manifest validates against the definition it realizes
+      profile:            driver_only/32
+      event vocabulary:   event-vocabulary/1
+      classifier-2 set:   1 field(s), derived
+      unrouted fields:    0 field(s), derived
+      scan roots:         2 at commit HEAD
+driver_only_dst PASS
+  ✓ classifier-2 set matches the tool: ['env_get']
+  ✓ unrouted-field set matches the tool: [] (a DISTINCT state, not a non-member)
+  ✓ every installable classifier-2 caller is omitted by name in the profile: []
+FAIL: could not read `Capability.BudgetShaper`'s payload in packages/motoko-ext-abi/types.ail — the omission basis cannot be checked
+make: *** [Makefile:1344: driver_only] Error 1

@@ -1,0 +1,9 @@
+-- A named SolverJudge (slot row {Process}, view ProcessCtx) reads its budget from the environment.
+module local/@V@/@V@
+import std/env (getEnvOr)
+import pkg/sunholo/motoko_ext_abi/types (Capability, SolverJudge, ProcessCtx, FinalizeOutcome, NoDecision)
+func finalize(ctx: ProcessCtx, _c: string) -> FinalizeOutcome ! {Process} {
+  let _b = getEnvOr("MOTOKO_REPEAT_ANSWER_BUDGET", "3");
+  { decision: NoDecision, next_state: ctx.world }
+}
+export func caps() -> [Capability] { [SolverJudge(finalize)] }

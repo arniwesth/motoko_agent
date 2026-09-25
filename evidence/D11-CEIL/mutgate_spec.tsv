@@ -1,0 +1,59 @@
+# D11-CEIL mutgate spec — the two constants 013 D11-CEIL moved.
+#
+# Each row breaks THE BEHAVIOUR ITS ROW NAMES and must turn that row red:
+#     baseline GREEN -> mutated RED -> restored GREEN, bytes identical.
+#
+# ROW 1 DOES NOT REVERT TO 80000, AND THE REASON IS THE BEST SINGLE PIECE OF
+# EVIDENCE FOR THIS WHOLE CHANGE. The brief asked for the ceiling to be reverted.
+# Tried, twice: a cold run in the mutgate clone came in at 79000 ms against the
+# reverted 80000 and PASSED BY ONE SECOND, scoring the row vacuous. The old
+# ceiling sits INSIDE the noise band of current cold runs (79-111 s observed),
+# so reverting to it is a coin toss and not a discriminator -- and that is
+# precisely why CI passed once at exactly 80000 against 80000 and then failed at
+# 106000. A gate whose pass depends on which second it lands in is the failure
+# this re-measurement exists to end; it cannot also be the proof.
+#
+# So the mutation is 180000 -> 50000: WI-D4's own measured slow end, the
+# ceiling's previous generation of measurement, and comfortably below every cold
+# sample ever observed here. The row then discriminates deterministically, and
+# what it proves is the thing that matters -- that `pr_target_ceiling_ms()` is
+# load-bearing, read by the recipe, and fails the target when it is too low.
+#
+# ROW 1 MUST FORCE A COLD COMPILE, and getting this wrong scores the row
+# VACUOUS when the mutation is in fact perfectly sound. `make corpus_pr` only
+# exceeds any plausible ceiling COLD: 87-90 s cold against 31 s warm, measured
+# in this clone. mutgate runs baseline, mutated and restored in the SAME repo,
+# so runs 2 and 3 are warm unless something makes them cold, and a warm 31 s
+# run passes the reverted 80000 ceiling exactly as happily as the real one.
+#
+# `rm -rf .ailang` DOES NOT DO IT, which is the trap worth recording. The
+# AILANG compile cache is not in the tree: it is GLOBAL, at ~/.ailang/cache,
+# and keyed such that a clone at a NEW PATH misses it — which is why a fresh
+# clone is cold at all, and why the tree's own .ailang is 112K of corpus
+# store and nothing else. Deleting it changes nothing. Nor may this spec wipe
+# the global cache: it is shared with every other agent working in this
+# container. So each run points AILANG_CACHE_DIR at its own empty temp dir --
+# cold by construction, shared state untouched -- and removes it afterwards,
+# because a cold run leaves 154M behind.
+#
+# ROW 2 IS NOT A REVERT, AND THE REASON IS WORTH READING BEFORE CHANGING IT.
+# The brief asked for `measured_ms_per_seed()` to be REVERTED to 381. That
+# mutation does not discriminate, and not because the test is weak: the
+# constant moved UP (381 -> 416), so reverting it buys MORE seeds per budget
+# (5000/381 = 13 against 5000/416 = 12) and the check it feeds --
+# `seeds_affordable_in(budget) >= minimum_seeds` -- passes more comfortably
+# than it does on the real code. A mutation that makes a test pass harder is
+# not a test of anything. What the check NAMES is "the declared minimum fits
+# the budget at the measured per-seed cost", so the mutation that breaks it is
+# one where the cost no longer fits: 416 -> 417 gives 5000/417 = 11 < 12.
+#
+# That the mutation is ONE MILLISECOND is the finding, not a convenience. It is
+# a direct demonstration that the margin under `pr_job()` is now exactly zero.
+#
+# NO PIPES IN A test_cmd: mutgate runs `eval` under `set -o pipefail`, so a
+# `cmd | grep -q X` takes SIGPIPE and scores a BASELINE RED (exit 141) that
+# says nothing about the row. Both rows redirect to a log and return the
+# command's own exit status.
+# fix_id	target_file	sed_expr	test_cmd
+d11_ceiling	src/core/dst_corpus.ail	s/^export pure func pr_target_ceiling_ms() -> int { 180000 }$/export pure func pr_target_ceiling_ms() -> int { 50000 }/	d=$(mktemp -d); AILANG_CACHE_DIR=$d make corpus_pr > /tmp/d11_ceiling.log 2>&1; rc=$?; rm -rf $d; exit $rc
+d11_per_seed	src/core/dst_corpus.ail	s/^export pure func measured_ms_per_seed() -> int { 416 }$/export pure func measured_ms_per_seed() -> int { 417 }/	ailang test src/core/dst_corpus.ail > /tmp/d11_per_seed.log 2>&1

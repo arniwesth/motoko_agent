@@ -934,7 +934,7 @@ pure func tx_ids() -> Identities {
   let b = driver_only_manifest("", "", "", "", [], [], "");
   {
     source_revision: "a0a0a0", scan_root_commit: "a0a0a0", tracked_changes: [],
-    toolchain: "AILANG v0.33.0 fx", toolchain_sha256: "sha256:fxbin", abi_version: "7.4",
+    toolchain: "AILANG v0.33.0 fx", toolchain_sha256: "sha256:fxbin", abi_version: "8.0",
     classifier_2_set: ["env_get"], unrouted_fields: [], scan_roots: ["src", "packages"],
     packages: [tx_pkg("fx/abi", "sha256:i1"), tx_pkg("fx/core", "sha256:i2")], lock_sha256: "sha256:fxlock",
     normalized_configuration: "{\"fx\":1}",
@@ -955,7 +955,7 @@ pure func tx_pin() -> EPin {
 pure func tx_cmp() -> Comparators {
   {
     revision_is_commit: true, assembled_tree: "t0t0", revision_tree: "t0t0",
-    lock_abi_version: "7.4", pinned_classifier_2_set: ["env_get"], pinned_unrouted_fields: [],
+    lock_abi_version: "8.0", pinned_classifier_2_set: ["env_get"], pinned_unrouted_fields: [],
     profile_scan_roots: profile_scan_roots(),
     leaf_files: ["src/core/session.ail", "src/core/tool_phase.ail", "src/core/context_usage.ail", "src/core/test/stub_step.ail"],
     rederived_configuration: "{\"fx\":1}", e_pin: Some(tx_pin()), registry_used: []
@@ -1055,7 +1055,7 @@ pure func test_m9_manifest_of() -> bool
     let m = manifest_of(tx_ids());
     m.toolchain == "AILANG v0.33.0 fx binary=sha256:fxbin"
       && m.source_revision == "a0a0a0" && m.scan_root_commit == "a0a0a0"
-      && m.abi_version == "7.4" && List.length(m.extension_packages) == 0
+      && m.abi_version == "8.0" && List.length(m.extension_packages) == 0
       && ad_strs_eq(m.scan_roots, ["src", "packages"])
       && List.length(manifest_findings(m)) == 0
   }

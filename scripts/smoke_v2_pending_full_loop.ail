@@ -23,12 +23,13 @@ module scripts/smoke_v2_pending_full_loop
 
 import std/io (println, exit)
 import std/option (None)
+import std/json (Json, jo)
 import std/result (Result, Ok, Err)
 import std/ai (Message, AIError, ToolCall, ToolSchema)
 import src/core/config (CostRates, VerificationConfig)
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
   BudgetPlan,
-  ExtCtx,
+  PureCtx, AiCtx, ProviderCtx, InterceptCtx, ProcessCtx,
   ExtRuntime,
   ExtRegistry,
   ToolPolicyDecision,
@@ -52,46 +53,47 @@ func parity_system_message() -> Message {
 }
 
 -- New since a9b53e7: extensions declare their tool schemas via on_describe_tools.
-pure func empty_describe_tools() -> [ToolSchema] { [] }
+pure func empty_describe_tools(_config: Json) -> [ToolSchema] { [] }
 
 -- Pending hooks: each returns Pending with a different default policy.
 
-pure func pending_deny_default(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+pure func pending_deny_default(_ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
   Pending("integration test — needs review", DenyAfterTimeout)
 }
 
-pure func pending_allow_default(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+pure func pending_allow_default(_ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
   Pending("integration test — auto-allow on timeout", AllowAfterTimeout)
 }
 
 -- Boilerplate filler hooks (non-policy slots return neutral values).
 
-pure func noop_response_intercept(ctx: ExtCtx, _response: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: {
+pure func noop_response_intercept(ctx: InterceptCtx, _response: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: {
   NoIntercept
 }, next_state: ctx.world } }
 
-pure func nodecision_solver_candidate(ctx: ExtCtx, _candidate: string) -> FinalizeOutcome ! {Process}  { { decision: {
+pure func nodecision_solver_candidate(ctx: ProcessCtx, _candidate: string) -> FinalizeOutcome ! {Process}  { { decision: {
   NoDecision
 }, next_state: ctx.world } }
 
-pure func empty_prompt_patch(_ctx: ExtCtx) -> PromptPatch {
+pure func empty_prompt_patch(_ctx: PureCtx) -> PromptPatch {
   { prepend: [], append: [] }
 }
 
-pure func empty_budget_patch(_ctx: ExtCtx, _budget: BudgetPlan) -> BudgetPatch {
+pure func empty_budget_patch(_ctx: PureCtx, _budget: BudgetPlan) -> BudgetPatch {
   { requested_total: None, requested_solver: None, requested_verifier: None }
 }
 
-pure func no_handle(ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { { decision: {
+pure func no_handle(ctx: ProviderCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace}  { { decision: {
   Delegate
 }, next_state: ctx.world } }
 
-pure func pass_pre_step(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
+pure func pass_pre_step(ctx: AiCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
   PassThrough
 }, next_state: ctx.world } }
 
-func mk_hook(id: string, policy: (ExtCtx, ToolCallEnvelope) -> ToolPolicyDecision) -> FixtureHooks {
+func mk_hook(id: string, policy: (PureCtx, ToolCallEnvelope) -> ToolPolicyDecision) -> FixtureHooks {
   fixture_hooks(id, {
+    config: jo([]),
     tools: [],
     describe: empty_describe_tools,
     prompt: empty_prompt_patch,

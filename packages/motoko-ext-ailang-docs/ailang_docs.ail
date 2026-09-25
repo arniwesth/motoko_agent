@@ -2,18 +2,15 @@ module sunholo/motoko_ext_ailang_docs/ailang_docs
 
 import std/option (Option, Some, None)
 import std/fs (fileExists)
+import std/json (Json, jo, kv, jb, jint, getBool, getInt)
 
-import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
-  ExtCtx, Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, PromptPatch, BudgetPlan, BudgetPatch,
-  ToolPolicyDecision, ToolHandleDecision, ResponseInterceptDecision, FinalizeDecision,
-  PassThrough, PreStepDecision, Msg,
-  ToolCallEnvelope
+import pkg/sunholo/motoko_ext_abi/types (
+  ToolHandleOutcome, ProviderCtx, ToolHandleDecision, ToolCallEnvelope, ToolSchema
 )
 import pkg/sunholo/motoko_ext_mcp/types (McpServerConfig, McpToolMapping)
 import pkg/sunholo/motoko_ext_mcp/exec (run_mcp_tool)
 import pkg/sunholo/motoko_ext_mcp/resolve (resolve_tool, all_tool_names)
 import pkg/sunholo/motoko_ext_ailang_docs/types (mcp_config, tool_mappings, tool_schemas)
-import pkg/sunholo/motoko_ext_ailang_docs/prompts (build_prompt_patch)
 
 -- Workdir gate: only register tools when the workdir is plausibly an
 -- AILANG project. Cheap heuristic — check for ailang.toml at the root.
@@ -22,11 +19,11 @@ import pkg/sunholo/motoko_ext_ailang_docs/prompts (build_prompt_patch)
 -- training, just without the docs tools surfaced. False positives
 -- (toml exists but task is unrelated) are bounded by the prompt-side
 -- task_signals_ailang gate in build_prompt_patch.
-func workdir_is_ailang_project(workdir: string) -> bool ! {FS} {
+export func workdir_is_ailang_project(workdir: string) -> bool ! {FS} {
   fileExists("${workdir}/ailang.toml")
 }
 
-export func on_tool_handle(cfg: McpServerConfig, mappings: [McpToolMapping], ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {Process, FS, Rand}  { { decision: {
+export func on_tool_handle(cfg: McpServerConfig, mappings: [McpToolMapping], ctx: ProviderCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {Process, FS, Rand}  { { decision: {
   match resolve_tool(call.tool, mappings) {
     Some(m) => match run_mcp_tool(call.id, m.canonical, ctx.workdir, cfg, m.mcp_name, call.arguments) {
       Some(result) => Handled(result),
@@ -36,18 +33,47 @@ export func on_tool_handle(cfg: McpServerConfig, mappings: [McpToolMapping], ctx
   }
 }, next_state: ctx.world } }
 
-export func make_hooks(workdir: string, timeout_ms: int, max_output_chars: int) -> [Capability] ! {FS, Process, Rand} {
-  let active = workdir_is_ailang_project(workdir);
-  let cfg = mcp_config(timeout_ms, max_output_chars);
-  let mappings = tool_mappings();
-  let tools = if active then all_tool_names(mappings) else [];
-  let schemas = if active then tool_schemas() else [];
-  let handle = func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand}  { on_tool_handle(cfg, mappings, ctx, call) };
-  -- B8: 6.0 Capability list (canonical atom order); the host stamps the id.
-  -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
-  [
-    DescribeTools(\_ . schemas),
-    PromptShaper(\ctx. build_prompt_patch(ctx.task)),
-    ToolProvider(tools, handle)
-  ]
+-- ABI 8.0 (031 ADR-001 D2, Amendment 3): THE CONFIGURATION CHANNEL. What
+-- registration decided and read is disclosed as `config` and read back from
+-- `ext_config`: whether this workdir is an AILANG project (the gate above) and
+-- the two bridge limits from `AILANG_DOCS_TIMEOUT_MS` /
+-- `AILANG_DOCS_MAX_OUTPUT_CHARS`, read once at registration as in 7.4:
+--
+--   {"active": true, "timeout_ms": 30000, "max_output_chars": 8000}
+--
+-- The catalog is a function of it: the 23 schemas when active, none otherwise.
+-- The workdir value only locates the gate's file and is not disclosed. The
+-- server is public; there is no credential, name or value.
+export func ailang_docs_config_json(active: bool, timeout_ms: int, max_output_chars: int) -> Json {
+  jo([kv("active", jb(active)), kv("timeout_ms", jint(timeout_ms)), kv("max_output_chars", jint(max_output_chars))])
 }
+
+export func active_of_config(cfg: Json) -> bool {
+  match getBool(cfg, "active") { Some(b) => b, None => false }
+}
+
+export func ailang_docs_catalog(cfg: Json) -> [ToolSchema] {
+  if active_of_config(cfg) then tool_schemas() else []
+}
+
+-- The bridge configuration, from `ext_config`; 7.4's defaults when absent.
+export func mcp_config_of(cfg: Json) -> McpServerConfig {
+  mcp_config(
+    match getInt(cfg, "timeout_ms") { Some(n) => n, None => 30000 },
+    match getInt(cfg, "max_output_chars") { Some(n) => n, None => 8000 }
+  )
+}
+
+pure func catalog_follows_config() -> bool
+  tests [((), true)]
+  {
+    let on = ailang_docs_catalog(ailang_docs_config_json(true, 1, 2));
+    let off = ailang_docs_catalog(ailang_docs_config_json(false, 1, 2));
+    let empty = ailang_docs_catalog(jo([]));
+    match on { [] => false, _ => true }
+      && match off { [] => true, _ => false }
+      && match empty { [] => true, _ => false }
+      && mcp_config_of(ailang_docs_config_json(true, 1234, 56)).timeout_ms == 1234
+      && mcp_config_of(ailang_docs_config_json(true, 1234, 56)).max_output_chars == 56
+      && mcp_config_of(jo([])).timeout_ms == 30000
+  }

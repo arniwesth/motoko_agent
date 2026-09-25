@@ -1,0 +1,21 @@
+./scripts/dst/run_declared_vs_performed.sh
+declared_vs_performed — D5's missing detector (WI-C5), all 18 bindings (WI-D6; count read from src/core/ext/registry_generated.ail)
+
+-- producer 1: DECLARED, read from source --
+  ✗ BudgetShaper's payload row (was on_budget_plan's ABI row) not found in packages/motoko-ext-abi/types.ail — the detector's declared side has no producer
+  ✓ no binding site in the tree declares an effect row on a BudgetPatch-returning hook (all 48 former sites narrowed)
+      packages/motoko-ext-compose/compose.ail:1089  func budget_hook(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
+  ✓ compose's binding declares the same (empty) row as the ABI slot
+  ✓ every extension in src/core/ext/registry_generated.ail's install set has a reg_/budget_ arm pair in scripts/dst/declared_vs_performed.ail (18 extensions, member for member)
+
+-- producer 2: PERFORMED, observed out of process (runtime capability trap) --
+   compose's four slots, WI-C5's original subjects:
+  ✗ compose_pre_step died with Env, FS and Process withheld — it performs one of them
+  ✗ compose_budget died with Env, FS and Process withheld — it performs one of them
+  ✗ compose_solver died with Env, FS and Process withheld — it performs one of them
+  ✗ compose_intercept_noninline died with Env, FS and Process withheld — it performs one of them
+  ✓ all seven dispatching arms build their registry from compose_then_witness — the join holds
+
+   all 18 on_budget_plan bindings, register-vs-dispatch differential:
+      regime A = Env, FS, Process withheld     regime B = FS, Process withheld (Env granted)
+make: *** [Makefile:445: declared_vs_performed] Error 1

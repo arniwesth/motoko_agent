@@ -1,0 +1,8 @@
+module scripts/dst/fixtures/adr001_boundary/n_fs_named_localsmuggle
+import std/io (println)
+import scripts/dst/fixtures/adr001_boundary/types (FsCtx, FsSlot, Fs)
+type W = { f: (FsCtx) -> int ! {FS} }
+func body(ctx: FsCtx) -> int ! {FS} { let w: W = { f: func(c: FsCtx) -> int ! {FS} { let _ = println(c.name); 1 } }; w.f(ctx) }
+func build() -> FsSlot { Fs(body) }
+func invoke(s: FsSlot, ctx: FsCtx) -> int ! {FS} { match s { Fs(f) => f(ctx) } }
+export func main() -> () ! {IO, FS} { let ctx: FsCtx = { name: "IO OUTSIDE FS VIEW", world: 0, ports: {file_read: func(w: int, path: string) -> string ! {FS} { "" } } }; println("result=${show(invoke(build(), ctx))}") }

@@ -1,0 +1,25 @@
+-- P1.2d probe 3 (expect CLEAN): the only route that compiles -- registration
+-- reads the pane id and session VALUES and discloses them in `config`, which the
+-- brief (names-not-values) forbids.
+module local/p12d/p_value_in_config
+import std/env (getEnvOr)
+import std/json (Json, jo, kv, js, getString)
+import std/option (Some, None)
+import pkg/sunholo/motoko_ext_abi/types (FsCtx, ExitIntentOutcome, ExtRegistration, ExitIntent)
+
+pure func str_at(cfg: Json, k: string) -> string {
+  match getString(cfg, k) { Some(s) => s, None => "" }
+}
+
+func herdr_exit(ctx: FsCtx) -> ExitIntentOutcome ! {FS} {
+  let pane = str_at(ctx.ext_config, "own_pane");
+  let session = str_at(ctx.ext_config, "session_ms");
+  let read = ctx.ports.file_read(ctx.world, "${ctx.workdir}/.dagr/run-${pane}-${session}.json");
+  { actions: [], next_state: read.next_state }
+}
+
+export func register_with_config(_cfg: a) -> ExtRegistration ! {Env} {
+  let cfg = jo([kv("own_pane", js(getEnvOr("HERDR_PANE_ID", ""))),
+                kv("session_ms", js(getEnvOr("MOTOKO_SESSION_MS", "")))]);
+  { config: cfg, caps: [ExitIntent("delegate-panes", true, herdr_exit)] }
+}

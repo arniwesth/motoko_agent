@@ -1,0 +1,9 @@
+module scripts/dst/fixtures/adr001_boundary/helper
+import std/io (println)
+import scripts/dst/fixtures/adr001_boundary/types (PureCtx, Slot, Pure)
+type FullCtx = { name: string, world: int }
+func helper(ctx: FullCtx) -> int { 1 }
+func body(ctx: PureCtx) -> int { helper(ctx) }
+func build() -> Slot { Pure(body) }
+func invoke(s: Slot, ctx: PureCtx) -> int { match s { Pure(f) => f(ctx) } }
+export func main() -> () ! {IO} { println("result=${show(invoke(build(), {name: "EFFECT WITH NO PORTS OR WORLD"}))}") }

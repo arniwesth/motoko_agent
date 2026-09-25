@@ -1,0 +1,20 @@
+-- 031 PLAN-001 P1.3r, measured on AILANG v0.33.0: a function-typed PARAMETER's
+-- effect row is open. `run_arm` declares `arm: (int) -> int` with no row and is
+-- itself declared pure-rowed, yet an annotated `! {IO}` lambda is accepted as
+-- `arm`, and its effect is charged to the caller (`main`, `! {IO}`), which
+-- prints. So a "pure answerer" parameter is not a compile-time guarantee; the
+-- line-R cursor calls its stub arm BY NAME instead (src/core/ext/runtime.ail).
+--   ailang check probe.ail        -> No errors found
+--   ailang run --caps IO --entry main probe.ail   -> prints "effect ran", then 2
+module probe
+
+import std/io (println)
+
+func run_arm(arm: (int) -> int, x: int) -> int {
+  arm(x)
+}
+
+export func main() -> () ! {IO} {
+  let r = run_arm(func(x: int) -> int ! {IO} { let _ = println("effect ran"); x + 1 }, 1);
+  println(show(r))
+}

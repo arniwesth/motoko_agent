@@ -31,12 +31,11 @@ import std/json (Json, jo, kv, js, decode, ja)
 import std/string (contains, intToStr)
 import std/result (Ok, Err)
 import pkg/sunholo/motoko_ext_abi/types (
-  ExtCtx, Msg, ToolCall, ToolCallEnvelope, BudgetPlan,
+  PureCtx, Msg, ToolCall, ToolCallEnvelope, BudgetPlan,
   ToolPolicyDecision, Allow, Deny, NoOpinion, Pending,
   FinalizeDecision, Accept, ContinueWithFeedback, NoDecision,
-  empty_ext_world
+  pure_ctx
 )
-import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
 import pkg/sunholo/motoko_ext_repetition_guard/repetition_guard (
   decide_call, decide_answer, decide_call_with_budget, decide_answer_with_budget,
   decide_call_full, restate_min_chars, guard_marker
@@ -46,17 +45,14 @@ import pkg/sunholo/motoko_ext_repetition_guard/repetition_guard (
 -- Building a transcript
 -- ---------------------------------------------------------------------------
 
-func ctx_of(history: [Msg]) -> ExtCtx {
+-- ABI 8.0: the guard's helpers take `PureCtx` (no ports, no world), built
+-- through the ABI constructor plus record update.
+func ctx_of(history: [Msg]) -> PureCtx {
   let budget: BudgetPlan = { total: 4, solver: 4, verifier: 0 };
-  { task: "verify-repetition-guard", step: 0, model: "test-model", cwd: ".",
+  { pure_ctx(jo([])) |
+    task: "verify-repetition-guard", step: 0, model: "test-model", cwd: ".",
     hybrid_tools: false, budget: budget, mode: "v2", workdir: ".",
-    env_server_url: "", budget_remaining: 4, history_slice: history,
-    state_key: "test", context_limit: 0, ports: noop_ext_ports(),
-    finish_reason: "",
-    work_in_flight: [],
-    open_waits: ja([]),
-    artifacts: empty_ext_artifacts(), telemetry: zero_token_telemetry(),
-    world: empty_ext_world() }
+    budget_remaining: 4, history_slice: history, state_key: "test" }
 }
 
 func assistant_call(id: string, tool: string, args: string) -> Msg {
@@ -113,12 +109,10 @@ func denial_text(d: ToolPolicyDecision) -> string {
   match d { Deny(m) => m, _ => "" }
 }
 
+-- ABI 8.0: `Accept` carries no text -- the judge accepts the candidate it was
+-- given, so there is no replacement text to compare.
 func accepted(d: FinalizeDecision) -> bool {
-  match d { Accept(_) => true, _ => false }
-}
-
-func accepted_text(d: FinalizeDecision) -> string {
-  match d { Accept(t) => t, _ => "" }
+  match d { Accept => true, _ => false }
 }
 
 -- ---------------------------------------------------------------------------
@@ -223,7 +217,7 @@ export func main() -> () ! {IO} {
   let said3 = ctx_of([assistant_text(answer), assistant_text(answer), assistant_text(answer)]);
   let f1 = decide_answer(said3, answer);
   let a8 = check("an answer given twice before is accepted on the third emission",
-                 accepted(f1) && accepted_text(f1) == answer);
+                 accepted(f1));
 
   -- 12. AND NOT BEFORE. `history_slice` is `msgs ++ [candidate]`, so the
   --    candidate must never count itself -- otherwise a first answer looks like

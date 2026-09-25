@@ -1,0 +1,10 @@
+-- Control: the same payload defined in the registering module.
+module local/@V@/reg_local
+import std/json (jo)
+import pkg/sunholo/motoko_ext_abi/types (ExtRegistration, ToolProvider, ProviderCtx, ToolCallEnvelope, ToolHandleOutcome, Delegate)
+func handle(ctx: ProviderCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  { decision: Delegate, next_state: ctx.world }
+}
+export func register_with_config(_cfg: a) -> ExtRegistration {
+  { config: jo([]), caps: [ToolProvider(["T"], handle)] }
+}

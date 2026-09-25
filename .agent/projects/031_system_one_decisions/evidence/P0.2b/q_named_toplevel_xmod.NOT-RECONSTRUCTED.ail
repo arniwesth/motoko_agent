@@ -1,0 +1,12 @@
+-- PLAN-001 (031) P0.2b. NOT A FIXTURE: the attempted reconstruction, kept as evidence.
+-- Review 5 §A.3 table row, verbatim:
+-- | `q_named_toplevel_xmod` | same, `W`/`apply` imported | 1 | — | rejected: app |
+module scripts/dst/fixtures/adr001_boundary/reconstructed/q_named_toplevel_xmod
+import std/io (println)
+import scripts/dst/fixtures/adr001_boundary/types (PureCtx, Slot, Pure)
+import scripts/dst/fixtures/adr001_boundary/helpers (W, apply)
+let w: W = { f: func(c: PureCtx) -> int ! {} { let _ = println(c.name); 1 } }
+func body(ctx: PureCtx) -> int { apply(ctx, w) }
+func build() -> Slot { Pure(body) }
+func invoke(s: Slot, ctx: PureCtx) -> int { match s { Pure(f) => f(ctx) } }
+export func main() -> () ! {IO} { println("result=${show(invoke(build(), {name: "EFFECT WITH NO PORTS OR WORLD"}))}") }

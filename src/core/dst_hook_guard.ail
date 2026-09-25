@@ -174,7 +174,7 @@ export func guarded_dispatch_tool_handle(
   position: int,
   partial: LedgerTrace,
   meta: ReplayMetadata
-) -> Result[ToolHandleOutcome, DstResult] ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+) -> Result[ToolHandleOutcome, DstResult] ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} { -- 8.0: `Trace` joins the row with ToolProvider's
   match first_excluded_for_call(d, rt.registry.entries, call.tool, position, partial, meta) {
     -- Checked BEFORE the fold runs. A guard that dispatched first and inspected
     -- afterwards would have let the excluded hook perform its effects, which is

@@ -1,0 +1,79 @@
+# 031 PLAN-001 P1.2c mutgate spec (013 GATE-mutation-red-submission-precondition.md).
+# fix_id <TAB> target_file <TAB> sed_expr <TAB> test_cmd. Run through p12c_mutgate.sh, never in a checkout anyone
+# is using. Every test_cmd builds its own workspace from the throwaway's files (ABI, core, batch A from the clone's
+# HEAD; batch C and the masked files from its working tree), never the primary's through a tracked ailang.lock.
+# No `cmd | grep -q` anywhere (pipefail/SIGPIPE): the helpers log to a file, then grep it.
+#
+# --- the registration boundary: re-inline one payload per package -> the gate rejects -> red
+a2a_inline	packages/motoko-ext-a2a/register.ail	s/      DescribeTools(a2a_describe_tools),/      DescribeTools(\\cfg. a2a_describe_tools(cfg)),/	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_ws.sh gate a2a
+agentcli_inline	packages/motoko-ext-agentcli/register.ail	s/      ToolProvider(tool_names(cfg.providers), agentcli_tool_handle)/      ToolProvider(tool_names(cfg.providers), func(ctx: ProviderCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} { agentcli_tool_handle(ctx, call) })/	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_ws.sh gate agentcli
+docs_inline	packages/motoko-ext-ailang-docs/register.ail	s/      PromptShaper(ailang_docs_prompt),/      PromptShaper(\\ctx. ailang_docs_prompt(ctx)),/	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_ws.sh gate ailang_docs
+mcp_inline	packages/motoko-ext-mcp/register.ail	s/      ToolProvider(collect_all_tool_names(cfg), mcp_tool_handle)/      ToolProvider(collect_all_tool_names(cfg), \\ctx call. mcp_tool_handle(ctx, call))/	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_ws.sh gate mcp
+cai_inline	packages/motoko-ext-compaction-ai/register.ail	s/      Compactor(compaction_ai_compact)/      Compactor(\\ctx msgs. compaction_ai_compact(ctx, msgs))/	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_ws.sh gate compaction_ai
+# batch C's OWN five registration-shape rows (each config-caps pass), independent of what other batches land.
+# Attempt 1 asserted the WHOLE-TREE totals (11 of 18, 23) here, measured before P1.2b landed; at the commit
+# (on top of P1.2b) the tree read 16/18 and 9, so the row was red at baseline and intake refused it.
+batch_c_shape	packages/motoko-ext-mcp/register.ail	s/      ToolProvider(collect_all_tool_names(cfg), mcp_tool_handle)/      ToolProvider(collect_all_tool_names(cfg), \\ctx call. mcp_tool_handle(ctx, call))/	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_ws.sh gate a2a agentcli ailang_docs mcp compaction_ai
+#
+# --- each capture read from a captured (module) value instead of ext_config -> the channel probe -> red
+a2a_capture_describe	packages/motoko-ext-a2a/register.ail	s/  collect_schemas(parse_a2a_json(cfg).agents)/  collect_schemas(parse_a2a_json(a2a_config_json({ agents: [] })).agents)/	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_ws.sh channel
+a2a_capture_provider	packages/motoko-ext-a2a/register.ail	s/a2a_decide(parse_a2a_json(ctx.ext_config).agents, call)/a2a_decide(parse_a2a_json(a2a_config_json({ agents: [] })).agents, call)/	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_ws.sh channel
+agentcli_capture_describe	packages/motoko-ext-agentcli/register.ail	s/  describe_tools(agentcli_config_of(cfg).providers)/  describe_tools(all_providers())/	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_ws.sh channel
+agentcli_capture_provider	packages/motoko-ext-agentcli/register.ail	s/  on_tool_handle(agentcli_config_of(ctx.ext_config), ctx, call)/  on_tool_handle({ providers: all_providers(), lock_path: "", max_output_chars: 1 }, ctx, call)/	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_ws.sh channel
+docs_capture_describe	packages/motoko-ext-ailang-docs/register.ail	s/  ailang_docs_catalog(cfg)/  ailang_docs_catalog(ailang_docs_config_json(true, 0, 0))/	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_ws.sh channel
+# ailang-docs' ToolProvider execs the MCP bridge, so no offline probe observes its limits; its decode is the row:
+docs_capture_limits	packages/motoko-ext-ailang-docs/ailang_docs.ail	s/    match getInt(cfg, "timeout_ms") { Some(n) => n, None => 30000 },/    30000,/	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_ws.sh test packages/motoko-ext-ailang-docs/ailang_docs.ail
+mcp_capture_provider	packages/motoko-ext-mcp/register.ail	s/mcp_decide(ctx.ext_config, call)/mcp_decide(mcp_config_json({ servers: [] }), call)/	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_ws.sh channel
+cai_capture_compactor	packages/motoko-ext-compaction-ai/register.ail	s/  compact_with_ai(ctx, msgs, config_of_json(ctx.ext_config))/  compact_with_ai(ctx, msgs, config_of_json(jo([])))/	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_ws.sh channel
+# registration withholds what it read (ADR-001 Amendment 3: environment values go through config) -> red
+agentcli_env_withheld	packages/motoko-ext-agentcli/register.ail	s/        model: getEnvOr(p.model_env, p.model),/        model: p.model,/	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_ws.sh channel
+docs_env_withheld	packages/motoko-ext-ailang-docs/register.ail	s/    config: ailang_docs_config_json(active, timeout_ms, max_output_chars),/    config: ailang_docs_config_json(active, 30000, max_output_chars),/	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_ws.sh channel
+mcp_config_withheld	packages/motoko-ext-mcp/register.ail	s/    config: mcp_config_json(cfg),/    config: mcp_config_json({ servers: [] }),/	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_ws.sh channel
+#
+# --- the manifest pin: back to 7.4 -> the package's own lock fails -> red
+pin_8_0	packages/motoko-ext-mcp/ailang.toml	s/version = "8.0" }/version = "7.4" }/	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_ws.sh check motoko-ext-mcp
+#
+# --- compaction-ai: the repaired test contexts and the calibration carried out of src/core
+cai_failing_port_test	packages/motoko-ext-compaction-ai/compaction_ai.ail	s/  Err("ext ai_step port unavailable")/  Ok("ext ai_step port unavailable")/	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_ws.sh test packages/motoko-ext-compaction-ai/compaction_ai.ail
+# First run: VACUOUS -- a 1-permille drift vanished in the probe's rounding at every limit it used.
+# The probe gained a limit-1 case (percent = tokens x100); the same strict mutation now goes red.
+cai_calib_parity	packages/motoko-ext-compaction-ai/compaction_ai.ail	s/    let scaled = anchor_real + ((raw_est - anchor_est) \* 1235) \/ 1000;/    let scaled = anchor_real + ((raw_est - anchor_est) * 1234) \/ 1000;/	P11_RELAX=1 bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_core_check.sh run scripts/p12c/p12c_calib_parity.ail IO < /dev/null
+#
+# --- the masked files (PLAN-001 §3 P1.2), each on 8.0
+masked_selftest	scripts/dst/conformance_selftest.ail	s/    + expect_accept("compaction_ai", ai.caps)/    + expect_accept("compaction_ai", [])/	P11_RELAX=1 bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_core_check.sh run scripts/dst/conformance_selftest.ail AI,Clock,Env,FS,IO,Net,Process,SharedMem,Stream,Trace < /dev/null
+# long_qwen fails to CHECK on HEAD 4109827b's core on a cold cache (a type-name collision P1.3r introduced; README).
+# Its row runs against P1.3r's parent a7aa68a8, which is core on 8.0 without that import.
+# First run: this row mutated the structural fixture's pure_view context_limit -- VACUOUS (no scenario
+# asserts on the structural compactor). Re-aimed at the rebuilt AiCtx (direct_ctx_with_task_step): 5 scenarios fail.
+masked_long_qwen	scripts/dst/long_qwen_compaction_dst.ail	s/^      context_limit: limit,$/      context_limit: 100000000,/	P12C_REV=a7aa68a8 P11_RELAX=1 bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_core_check.sh run scripts/dst/long_qwen_compaction_dst.ail AI,Clock,Env,FS,IO,Net,Process,SharedMem,Stream,Trace,Rand < /dev/null
+#
+# --- ADR-001 Amendment 2: one row per effect this part ADDED to a ceiling; drop it -> own-root check -> red
+ceiling_a2a_Process	packages/motoko-ext-a2a/ailang.toml	/^max = /s/, "Process"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_pkgroot.sh motoko-ext-a2a
+ceiling_a2a_AI	packages/motoko-ext-a2a/ailang.toml	/^max = /s/, "AI"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_pkgroot.sh motoko-ext-a2a
+ceiling_a2a_SharedMem	packages/motoko-ext-a2a/ailang.toml	/^max = /s/, "SharedMem"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_pkgroot.sh motoko-ext-a2a
+ceiling_a2a_Clock	packages/motoko-ext-a2a/ailang.toml	/^max = /s/, "Clock"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_pkgroot.sh motoko-ext-a2a
+ceiling_a2a_Stream	packages/motoko-ext-a2a/ailang.toml	/^max = /s/, "Stream"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_pkgroot.sh motoko-ext-a2a
+ceiling_a2a_Trace	packages/motoko-ext-a2a/ailang.toml	/^max = /s/, "Trace"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_pkgroot.sh motoko-ext-a2a
+ceiling_agentcli_AI	packages/motoko-ext-agentcli/ailang.toml	/^max = /s/, "AI"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_pkgroot.sh motoko-ext-agentcli
+ceiling_agentcli_Net	packages/motoko-ext-agentcli/ailang.toml	/^max = /s/, "Net"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_pkgroot.sh motoko-ext-agentcli
+ceiling_agentcli_SharedMem	packages/motoko-ext-agentcli/ailang.toml	/^max = /s/, "SharedMem"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_pkgroot.sh motoko-ext-agentcli
+ceiling_agentcli_Clock	packages/motoko-ext-agentcli/ailang.toml	/^max = /s/, "Clock"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_pkgroot.sh motoko-ext-agentcli
+ceiling_agentcli_Stream	packages/motoko-ext-agentcli/ailang.toml	/^max = /s/, "Stream"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_pkgroot.sh motoko-ext-agentcli
+ceiling_agentcli_Rand	packages/motoko-ext-agentcli/ailang.toml	/^max = /s/, "Rand"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_pkgroot.sh motoko-ext-agentcli
+ceiling_agentcli_Trace	packages/motoko-ext-agentcli/ailang.toml	/^max = /s/, "Trace"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_pkgroot.sh motoko-ext-agentcli
+ceiling_ailang-docs_IO	packages/motoko-ext-ailang-docs/ailang.toml	/^max = /s/, "IO"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_pkgroot.sh motoko-ext-ailang-docs
+ceiling_ailang-docs_AI	packages/motoko-ext-ailang-docs/ailang.toml	/^max = /s/, "AI"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_pkgroot.sh motoko-ext-ailang-docs
+ceiling_ailang-docs_Net	packages/motoko-ext-ailang-docs/ailang.toml	/^max = /s/, "Net"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_pkgroot.sh motoko-ext-ailang-docs
+ceiling_ailang-docs_SharedMem	packages/motoko-ext-ailang-docs/ailang.toml	/^max = /s/, "SharedMem"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_pkgroot.sh motoko-ext-ailang-docs
+ceiling_ailang-docs_Clock	packages/motoko-ext-ailang-docs/ailang.toml	/^max = /s/, "Clock"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_pkgroot.sh motoko-ext-ailang-docs
+ceiling_ailang-docs_Stream	packages/motoko-ext-ailang-docs/ailang.toml	/^max = /s/, "Stream"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_pkgroot.sh motoko-ext-ailang-docs
+ceiling_ailang-docs_Rand	packages/motoko-ext-ailang-docs/ailang.toml	/^max = /s/, "Rand"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_pkgroot.sh motoko-ext-ailang-docs
+ceiling_ailang-docs_Trace	packages/motoko-ext-ailang-docs/ailang.toml	/^max = /s/, "Trace"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_pkgroot.sh motoko-ext-ailang-docs
+ceiling_mcp_AI	packages/motoko-ext-mcp/ailang.toml	/^max = /s/, "AI"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_pkgroot.sh motoko-ext-mcp
+ceiling_mcp_Net	packages/motoko-ext-mcp/ailang.toml	/^max = /s/, "Net"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_pkgroot.sh motoko-ext-mcp
+ceiling_mcp_SharedMem	packages/motoko-ext-mcp/ailang.toml	/^max = /s/, "SharedMem"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_pkgroot.sh motoko-ext-mcp
+ceiling_mcp_Clock	packages/motoko-ext-mcp/ailang.toml	/^max = /s/, "Clock"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_pkgroot.sh motoko-ext-mcp
+ceiling_mcp_Stream	packages/motoko-ext-mcp/ailang.toml	/^max = /s/, "Stream"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_pkgroot.sh motoko-ext-mcp
+ceiling_mcp_Rand	packages/motoko-ext-mcp/ailang.toml	/^max = /s/, "Rand"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_pkgroot.sh motoko-ext-mcp
+ceiling_mcp_Trace	packages/motoko-ext-mcp/ailang.toml	/^max = /s/, "Trace"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_pkgroot.sh motoko-ext-mcp
+ceiling_compaction-ai_Trace	packages/motoko-ext-compaction-ai/ailang.toml	/^max = /s/, "Trace"//	bash .agent/projects/031_system_one_decisions/evidence/P1.2c/p12c_pkgroot.sh motoko-ext-compaction-ai

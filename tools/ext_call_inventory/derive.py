@@ -53,6 +53,14 @@ Traps this tool is written against:
      parses; membership and sites come from source.
   * running from a temporary directory auto-relaxes MOD010 and hides that.
      Inherited refusal from classifier 1.
+  * 8.0 (ADR-001 (031) D2/D7) projects `ExtPorts` into per-row VIEWS -- `FsPorts`,
+     `AiPorts`, `InterceptPorts`, built by taking each field as a value into a
+     record literal -- and every callback calls its port through its view.
+     Matching `ExtPorts` by name reported the ABI's own projections as form 3
+     (15 sites), skipped every call through a view silently, and left every
+     extension closure UNRESOLVED. Views are derived by STRUCTURE (identical
+     field signatures), projections into a view resolve, binders are read from
+     their own function -- see "8.0: the views" at the call-site inventory.
 
 Exit codes: 0 clean, 1 unresolved membership or unresolved occurrences, 2 harness error.
 """
@@ -332,76 +340,215 @@ def let_lambda_body(body: str, name: str) -> str | None:
 
 class Occurrence:
     def __init__(self, path: str, line: int, receiver: str, field: str,
-                 kind: str, why: str, text: str):
+                 kind: str, why: str, text: str, via: str = ""):
         self.path, self.line, self.receiver, self.field = path, line, receiver, field
-        self.kind, self.why, self.text = kind, why, text
+        self.kind, self.why, self.text, self.via = kind, why, text, via
 
     def as_dict(self) -> dict:
-        return {"file": self.path, "line": self.line, "receiver": self.receiver,
-                "field": self.field, "kind": self.kind, "why": self.why,
-                "source": self.text}
+        d = {"file": self.path, "line": self.line, "receiver": self.receiver,
+             "field": self.field, "kind": self.kind, "why": self.why,
+             "source": self.text}
+        if self.via:
+            d["via"] = self.via
+        return d
 
 
-def binder_types(clean: str) -> dict[str, str]:
-    """Identifier -> declared type, from DECLARATION contexts only.
+# --------------------------------------------------------------------------
+# 8.0 (ADR-001 (031) D2, D7): the views.  `ExtCtx` is projected into six
+# per-row context views, and the port record with it: `FsCtx.ports: FsPorts`,
+# `AiCtx.ports: AiPorts`, `InterceptCtx.ports: InterceptPorts`, each a record
+# of `ExtPorts` fields under the same names with the IDENTICAL signatures,
+# built by the ABI's `fs_ports` / `ai_ports` / `intercept_ports`, which take
+# each `ExtPorts` field as a VALUE into a record literal.  Before 8.0 this
+# tool matched `ExtPorts` by name (D7's row said so) and resolved nothing
+# else; at 8.0 every callback on a view calls its port through the view, and
+# the projections read as form 3 -- 15 unresolved sites in the ABI alone,
+# every closure UNRESOLVED, and the closure yield 0 of 18 (P1.7r).
+#
+# Three things are taught, each in one place and each derived, not listed:
+#
+#   * A VIEW is any record type -- ABI or extension-local -- other than
+#     `ExtPorts` every one of whose fields is an `ExtPorts` field under the
+#     same name with the identical signature, effect row included.  Derived by
+#     STRUCTURE (`port_views`): a name list is the fail-open detector this
+#     tool's docstring warns about, silent the day the ABI adds a view; the
+#     structure also excludes core `Ports` and `ContextReader`, which share
+#     field names with `ExtPorts` and no signature (they take `WorldState`).
+#     A call whose receiver resolves to a view is a mediated call.
+#   * A PROJECTION -- an `ExtPorts` (or view) field taken as a value -- is
+#     resolved when, and only when, it is the same-named field of a record
+#     literal inside a function whose declared result type is a view that
+#     declares that field: the value does not escape, it is forwarded under
+#     its own name into a record this tool reads as a receiver, so the later
+#     call site is visible after all.  Any other value-escape stays form 3.
+#   * Binders are SCOPED to the function that declares them.  Before, an
+#     identifier's type was the first declaration anywhere in the file, so
+#     compose's `ctx: ProviderCtx` read as its first `ctx: PureCtx` (no
+#     `ports`) and agentcli's `p: ExtPorts` as its first `p: Provider` --
+#     two unresolved sites that were never unresolvable, and, the other way,
+#     an unannotated `let p = ctx.ports` counted as resolved because some
+#     other function declared a `p: ExtPorts` (form 1, hidden).
+# --------------------------------------------------------------------------
 
-    Two contexts count: a function signature's parameter list, and an annotated
-    `let x: T`. Record LITERALS must not count -- `PortedProvider`'s construction
-    binds `ports: p`, and a scan that treats `name: value` as an annotation
-    concludes that `ports` has type `p` and then reports every core driver call
-    as an unresolved extension seam. Requiring a capitalised type name is not
-    enough on its own; the context restriction is what makes it right.
+def port_views(types: dict[str, dict[str, str]], ext: dict[str, str]) -> dict[str, list[str]]:
+    """Record type -> its fields, for every VIEW of `ExtPorts` in `types`."""
+    views: dict[str, list[str]] = {}
+    for name, fields in types.items():
+        if name == "ExtPorts" or not fields:
+            continue
+        # THE VIEW RULE: every field an ExtPorts field, same name, identical signature.
+        if all(f in ext and ext[f] == sig for f, sig in fields.items()):
+            views[name] = sorted(fields)
+    return views
+
+
+#: views found in scanned files but declared outside the ABI (an extension's own
+#: narrower port record), `name -> file`, for the report; cleared per run
+LOCAL_VIEWS: dict[str, str] = {}
+
+
+class Scope:
+    """One `func` -- named or anonymous, nested included -- with the span of its
+    body in the cleaned text, its parameters' declared types and its declared
+    result type (an identifier, or "" for a record literal or none)."""
+
+    def __init__(self, name: str | None, start: int, end: int,
+                 params: dict[str, str], result: str):
+        self.name, self.start, self.end, self.params, self.result = name, start, end, params, result
+
+
+def _balanced_end(text: str, i: int, open_ch: str, close_ch: str) -> int:
+    """Index of the bracket closing the one at `text[i]`, or -1."""
+    depth = 0
+    while i < len(text):
+        if text[i] == open_ch:
+            depth += 1
+        elif text[i] == close_ch:
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return -1
+
+
+def header_and_body(clean: str, pos: int) -> tuple[str, int, int] | None:
+    """From just after a parameter list's `)`: `(result type text, body start,
+    body end)`.
+
+    Reads the signature the way the grammar does -- `-> T`, then an optional
+    effect row `! {…}`, then the body `{` -- instead of taking "the first `{`
+    that is not an effect row", which mistakes a RECORD-LITERAL result type
+    (`-> { ok: bool, next_state: ExtWorld } ! {IO} {`, compose has several)
+    for the body and leaves the real body outside every scope.
     """
-    out: dict[str, str] = {}
-    for sig in re.finditer(rf"func\s+(?:{IDENT}\s*)?\(", clean):
-        # balanced, not `[^)]*`: a function-typed parameter such as
-        # `(StreamChunk) -> ()` closes the list early and drops every binder
-        # after it, which turns resolvable receivers into triage noise.
-        depth, i = 0, sig.end() - 1
-        while i < len(clean):
-            if clean[i] == "(":
-                depth += 1
-            elif clean[i] == ")":
-                depth -= 1
-                if depth == 0:
-                    break
+    n, i = len(clean), pos
+    result = ""
+    while i < n and clean[i] in " \t\r\n":
+        i += 1
+    if clean.startswith("->", i):
+        i += 2
+        j = i
+        while j < n:
+            c = clean[j]
+            if c in "{[(":
+                if c == "{" and clean[i:j].strip() != "" and clean[i:j].strip()[-1:] not in "-,>":
+                    break                     # a `{` after a complete type is the body
+                k = _balanced_end(clean, j, c, {"{": "}", "[": "]", "(": ")"}[c])
+                if k == -1:
+                    return None
+                j = k + 1
+                continue
+            if c == "!":
+                break
+            j += 1
+        result = " ".join(clean[i:j].split())
+        i = j
+    while i < n and clean[i] in " \t\r\n":
+        i += 1
+    if clean.startswith("!", i):              # the effect row
+        b = clean.find("{", i)
+        if b == -1:
+            return None
+        e = _balanced_end(clean, b, "{", "}")
+        if e == -1:
+            return None
+        i = e + 1
+        while i < n and clean[i] in " \t\r\n":
             i += 1
-        for m in re.finditer(rf"({IDENT})\s*:\s*\[?([A-Z][A-Za-z0-9_]*)", clean[sig.end():i]):
-            out.setdefault(m.group(1), m.group(2))
-    for m in re.finditer(rf"let\s+({IDENT})\s*:\s*\[?([A-Z][A-Za-z0-9_]*)", clean):
-        out[m.group(1)] = m.group(2)
-    return out
+    if i >= n or clean[i] != "{":
+        return None
+    e = _balanced_end(clean, i, "{", "}")
+    if e == -1:
+        return None
+    return result, i + 1, e
 
 
-def local_return_types(clean: str) -> dict[str, str]:
-    """Local `func name(...) -> T` result types, for `let x = name(...)` receivers."""
-    out: dict[str, str] = {}
-    for m in re.finditer(rf"func\s+({IDENT})\s*\(", clean):
-        tail = clean[m.end():m.end() + 600]
-        rt = result_type("(" + tail)
-        if rt and re.fullmatch(IDENT, rt):
-            out[m.group(1)] = rt
-    return out
+def func_scopes(clean: str) -> list[Scope]:
+    """Every `func` in the file as a `Scope`, in source order."""
+    scopes: list[Scope] = []
+    for m in re.finditer(rf"\bfunc\b\s*({IDENT})?\s*\(", clean):
+        close = _balanced_end(clean, m.end() - 1, "(", ")")
+        if close == -1:
+            continue
+        params: dict[str, str] = {}
+        for pm in re.finditer(rf"({IDENT})\s*:\s*\[?([A-Z][A-Za-z0-9_]*)", clean[m.end():close]):
+            params.setdefault(pm.group(1), pm.group(2))
+        hb = header_and_body(clean, close + 1)
+        if hb is None:
+            continue
+        result, bstart, bend = hb
+        scopes.append(Scope(m.group(1), bstart, bend, params,
+                            result if re.fullmatch(IDENT, result or "") else ""))
+    return scopes
 
 
 def scan_file(path: Path, repo: Path, ext_fields: list[str], carriers: dict[str, str],
-              other_owners: set[str]) -> list[Occurrence]:
+              other_owners: set[str], projections: list[Occurrence] | None = None
+              ) -> list[Occurrence]:
+    """Every `<receiver>.<ExtPorts field>` in `path`, resolved or fail-closed.
+
+    Resolved PROJECTIONS (see above) are neither calls nor unresolved: they are
+    appended to `projections` when the caller passes a list (the inventory's
+    own report) and otherwise not reported -- the same treatment a core-owned
+    receiver gets, so classifier 3's mediated-call count stays a count of
+    CALLS."""
     raw = path.read_text(errors="replace")
     clean = strip_noise(raw)
     rel = str(path.relative_to(repo))
-    binders = binder_types(clean)
-    returns = local_return_types(clean)
+    ext = ALL_TYPES.get("ExtPorts", {})
     # the file's own record types matter: `C2LoopState.provider: Ports` is declared
     # in session.ail, and without it `st.provider.env_get` resolves to nothing and
     # is triaged as an unresolved extension seam when it is a core driver call.
-    types = {**ALL_TYPES, **record_types(clean)}
+    local_types = record_types(clean)
+    types = {**ALL_TYPES, **local_types}
+    views = port_views(types, ext)
+    for v in views:
+        if v in local_types and v not in ALL_TYPES:
+            LOCAL_VIEWS.setdefault(v, rel)
+    receivers = {"ExtPorts", *views}
 
-    # `let x = f(...)` where f is a local function with a declared result type
+    scopes = func_scopes(clean)
+    returns = {s.name: s.result for s in scopes if s.name and s.result}
+    # `let x: T`; `let x = f(...)` where f is a local function with a declared
+    # result type; and -- 8.0, P1.7r -- `let x = a.b.c;`, an ALIAS OF A
+    # DECLARED-TYPED PATH, which binds `x` to the type that path resolves to in
+    # scope by the same declaration-only lookup a direct `a.b.c.field(` call
+    # gets (no inference: if the path does not resolve, `x` stays unbound and
+    # its calls are form 1).  Each is scoped to the innermost function holding
+    # it, and a later `let` of the same name wins.  ("alias", offset, name,
+    # path) entries are resolved lazily, against the binders in force there.
+    lets: list[tuple[int, str, str, str]] = []
+    for m in re.finditer(rf"let\s+({IDENT})\s*:\s*\[?([A-Z][A-Za-z0-9_]*)", clean):
+        lets.append((m.start(), m.group(1), "type", m.group(2)))
     for m in re.finditer(rf"let\s+({IDENT})\s*=\s*({IDENT})\s*\(", clean):
-        if m.group(1) not in binders and m.group(2) in returns:
-            binders[m.group(1)] = returns[m.group(2)]
+        if m.group(2) in returns:
+            lets.append((m.start(), m.group(1), "type", returns[m.group(2)]))
+    for m in re.finditer(rf"let\s+({IDENT})\s*=\s*({IDENT}(?:[ \t]*\.[ \t]*{IDENT})*)[ \t]*(?:;|\n)", clean):
+        # THE ALIAS RULE: a declared-typed path, resolved in scope, binds the alias.
+        lets.append((m.start(), m.group(1), "alias", m.group(2).replace(" ", "").replace("\t", "")))
+    lets.sort()
 
-    def type_of_path(recv: str) -> str | None:
+    def type_of_path(recv: str, binders: dict[str, str]) -> str | None:
         """Resolve a dotted identifier path to a declared type name, or None."""
         parts = recv.split(".")
         if not all(re.fullmatch(IDENT, p) for p in parts):
@@ -418,44 +565,95 @@ def scan_file(path: Path, repo: Path, ext_fields: list[str], carriers: dict[str,
                 return None
         return ty
 
+    def containing(o: int) -> list[Scope]:
+        # THE SCOPE RULE: the functions whose bodies hold `o`, outermost first.
+        return [s for s in scopes if s.start <= o < s.end]
+
+    def bind_let(b: dict[str, str], name: str, how: str, what: str) -> None:
+        if how == "type":
+            b[name] = what
+        else:
+            ty = type_of_path(what, b)
+            if ty is not None:
+                b[name] = ty
+            else:
+                b.pop(name, None)                       # re-bound to something unreadable
+
+    def binders_at(o: int) -> dict[str, str]:
+        chain = containing(o)
+        b: dict[str, str] = {}
+        for off, name, how, what in lets:               # file-scope lets
+            if off < o and not containing(off):
+                bind_let(b, name, how, what)
+        for sc in chain:
+            b.update(sc.params)
+            for off, name, how, what in lets:           # lets declared in this body
+                if off < o and sc.start <= off < sc.end and (containing(off)[-1] is sc):
+                    bind_let(b, name, how, what)
+        return b
+
     occurrences: list[Occurrence] = []
-    lines = clean.splitlines()
+    raw_lines = raw.splitlines()
 
-    for i, line in enumerate(lines, 1):
-        for field in ext_fields:
-            # Either a dotted identifier path, or a `)`/`]` -- a receiver produced
-            # by a call or an index, which is exactly the re-export and computed
-            # forms and can never be resolved to a declared type.
-            pat = (rf"(?:(?P<recv>{IDENT}(?:\s*\.\s*{IDENT})*)|(?P<opaque>[)\]]))"
-                   rf"\s*\.\s*{field}\b\s*(?P<call>\(?)")
-            for m in re.finditer(pat, line):
-                recv = (m.group("recv") or "").replace(" ", "")
-                opaque = m.group("opaque") is not None
-                called = m.group("call") == "("
-                src = raw.splitlines()[i - 1].strip()
-                ty = None if opaque else (type_of_path(recv) if recv else None)
+    for field in ext_fields:
+        # Either a dotted identifier path, or a `)`/`]` -- a receiver produced
+        # by a call or an index, which is exactly the re-export and computed
+        # forms and can never be resolved to a declared type.  Line-local, as
+        # the per-line scan this replaces was.
+        pat = (rf"(?:(?P<recv>{IDENT}(?:[ \t]*\.[ \t]*{IDENT})*)|(?P<opaque>[)\]]))"
+               rf"[ \t]*\.[ \t]*{field}\b[ \t]*(?P<call>\(?)")
+        for m in re.finditer(pat, clean):
+            o = m.start()
+            i = clean.count("\n", 0, o) + 1
+            recv = (m.group("recv") or "").replace(" ", "").replace("\t", "")
+            opaque = m.group("opaque") is not None
+            called = m.group("call") == "("
+            src = raw_lines[i - 1].strip() if i - 1 < len(raw_lines) else ""
+            binders = binders_at(o)
+            ty = None if opaque else (type_of_path(recv, binders) if recv else None)
 
-                if ty == "ExtPorts":
-                    kind, why = ("call", "receiver is ExtPorts-typed") if called else (
-                        "unresolved", "ExtPorts field taken as a VALUE, not called: "
-                                      "the function escapes and its later call site is invisible")
-                elif ty is not None and ty in other_owners:
-                    # a different declared type owns this field name. `env_get` and
-                    # `clock_now` name both an ExtPorts field and a core Ports field;
-                    # these are the driver's own calls, not extension-side entries.
+            if ty in receivers:
+                if called:
+                    why = ("receiver is ExtPorts-typed" if ty == "ExtPorts" else
+                           f"receiver is `{ty}`, a view of ExtPorts ({len(views[ty])} field(s), "
+                           f"identical signatures) -- a mediated call through the view")
+                    occurrences.append(Occurrence(rel, i, recv, field, "call", why, src,
+                                                  via="" if ty == "ExtPorts" else f"view:{ty}"))
                     continue
+                # THE PROJECTION RULE: the same-named field of a record literal, in a
+                # function whose declared result type is a view declaring that field.
+                inner = containing(o)
+                target = inner[-1].result if inner else ""
+                named_field = re.search(rf"[{{,]\s*{field}\s*:\s*$", clean[:o]) is not None
+                if named_field and target in views and field in types[target]:
+                    occ = Occurrence(rel, i, recv, field, "projection",
+                                     f"`{ty}.{field}` forwarded under its own name into a "
+                                     f"`{target}` record -- a view this tool reads as a receiver, "
+                                     f"so the call site is the view's", src, via=f"view:{target}")
+                    if projections is not None:
+                        projections.append(occ)
+                    continue
+                kind, why = ("unresolved",
+                             "ExtPorts field taken as a VALUE, not called: the function escapes "
+                             "and its later call site is invisible")
+            elif ty is not None and ty in other_owners:
+                # a different declared type owns this field name. `env_get` and
+                # `clock_now` name both an ExtPorts field and a core Ports field;
+                # these are the driver's own calls, not extension-side entries.
+                continue
+            else:
+                kind = "unresolved"
+                if opaque:
+                    why = ("receiver is a call or index result, not a typed identifier "
+                           "path (re-export or computed access) -- cannot be resolved "
+                           "to ExtPorts")
+                elif recv.split(".")[0] not in binders:
+                    why = (f"receiver `{recv}` has no declared type in scope "
+                           f"(local alias or wrapper) -- cannot be resolved to ExtPorts")
                 else:
-                    kind = "unresolved"
-                    if opaque:
-                        why = ("receiver is a call or index result, not a typed identifier "
-                               "path (re-export or computed access) -- cannot be resolved "
-                               "to ExtPorts")
-                    elif recv.split(".")[0] not in binders:
-                        why = (f"receiver `{recv}` has no declared type in this file "
-                               f"(local alias or wrapper) -- cannot be resolved to ExtPorts")
-                    else:
-                        why = f"receiver `{recv}` resolves to `{ty}`, not an ABI port type"
-                occurrences.append(Occurrence(rel, i, recv or "<opaque>", field, kind, why, src))
+                    why = f"receiver `{recv}` resolves to `{ty}`, not an ABI port type"
+            occurrences.append(Occurrence(rel, i, recv or "<opaque>", field, kind, why, src))
+    occurrences.sort(key=lambda x: (x.line, x.field))
     return occurrences
 
 
@@ -550,8 +748,16 @@ def main() -> int:
     carriers = {ty: fld for ty, fields in {**abi_types, **core_types}.items()
                 for fld, t in fields.items() if t.strip() == "ExtPorts"}
     carrier_fields = {fld for fld in carriers.values()}
-    other_owners = {ty for ty, fields in {**abi_types, **core_types}.items()
+    # 8.0: an ABI record that shares field NAMES with `ExtPorts` is either a VIEW
+    # (structurally, above) or nothing this tool may skip; only the CORE's own
+    # owners of those names (`Ports`, `ContextReader`, the driver's calls) are
+    # skipped as another type's field.  Before, the ABI's views were skipped
+    # here silently -- a call through a view was neither counted nor flagged.
+    other_owners = {ty for ty, fields in core_types.items()
                     if ty != "ExtPorts" and any(f in fields for f in ext_fields)}
+    abi_views = port_views(abi_types, ext)
+    LOCAL_VIEWS.clear()
+    projections: list[Occurrence] = []
 
     occurrences: list[Occurrence] = []
     for r in [x.strip() for x in args.roots.split(",") if x.strip()]:
@@ -561,7 +767,8 @@ def main() -> int:
             return 2
         for path in ail_files(base):
             occurrences.extend(scan_file(path, repo, ext_fields,
-                                         {c: True for c in carrier_fields}, other_owners))
+                                         {c: True for c in carrier_fields}, other_owners,
+                                         projections=projections))
 
     member_calls = [o for o in occurrences if o.kind == "call" and o.field in members]
     other_calls = [o for o in occurrences if o.kind == "call" and o.field not in members]
@@ -570,7 +777,11 @@ def main() -> int:
     rev = source_revision(repo)
 
     if args.self_test:
-        return self_test(repo, membership, ext_fields)
+        return self_test(repo, membership, ext_fields, abi_views)
+
+    views_report = {v: {"fields": fs, "declared_in": ABI_TYPES} for v, fs in sorted(abi_views.items())}
+    views_report.update({v: {"fields": port_views(record_types(strip_noise((repo / f).read_text(errors="replace"))), ext)[v],
+                             "declared_in": f} for v, f in sorted(LOCAL_VIEWS.items())})
 
     if args.json:
         print(json.dumps({
@@ -583,6 +794,8 @@ def main() -> int:
             "member_call_sites": [o.as_dict() for o in member_calls],
             "non_member_call_sites": [o.as_dict() for o in other_calls],
             "unresolved": [o.as_dict() for o in unresolved],
+            "port_views": views_report,
+            "port_view_projections": [o.as_dict() for o in projections],
         }, indent=2))
     else:
         print(f"source revision    {rev}")
@@ -595,6 +808,9 @@ def main() -> int:
             print(f"  {f:<12} {m['state']:<11} {m['why']}")
         print()
         print(f"CLASSIFIER-2 SET ({len(members)}): {', '.join(sorted(members)) or '-'}")
+        print(f"ExtPorts VIEWS ({len(views_report)}, derived by structure -- 8.0): "
+              + ", ".join(f"{v} ({len(d['fields'])} field(s){'' if d['declared_in'] == ABI_TYPES else ', ' + d['declared_in']})"
+                          for v, d in views_report.items()))
         if unrouted:
             print(f"UNROUTED ({len(unrouted)}): {', '.join(sorted(unrouted))} "
                   f"-- covered by the poison probe, not by this classifier")
@@ -606,6 +822,11 @@ def main() -> int:
             print(f"\nnon-member port calls ({len(other_calls)}), recorded not gated:")
             for o in other_calls:
                 print(f"  {o.file_line()}  {o.receiver}.{o.field}")
+        if projections:
+            print(f"\nport-view projections ({len(projections)}), resolved -- a port forwarded "
+                  f"under its own name into a view record:")
+            for o in projections:
+                print(f"  {o.file_line()}  {o.receiver}.{o.field} -> {o.via.split(':', 1)[1]}")
         if unresolved:
             print(f"\nUNRESOLVED ({len(unresolved)}) -- fail closed, triage required:")
             for o in unresolved:
@@ -616,10 +837,18 @@ def main() -> int:
     return 1 if unresolved else 0
 
 
-def self_test(repo: Path, membership: dict, ext_fields: list[str]) -> int:
+def self_test(repo: Path, membership: dict, ext_fields: list[str],
+              abi_views: dict[str, list[str]] | None = None) -> int:
     """The fixture suite. Each fixture uses one unresolvable form; each must be
     reported unresolved. A fixture that comes back clean is the fail-open defect
-    this classifier exists to prevent, so silence is a failure, not a pass."""
+    this classifier exists to prevent, so silence is a failure, not a pass.
+
+    8.0 (P1.7r) adds the CONTROLS for what the views taught: a call through a
+    view resolves, a same-named projection into a view resolves (and is counted
+    as a projection, not a call), a binder is read from ITS function; and their
+    negatives: a value forwarded under another name or into a record that is
+    not a view is still form 3.  The ABI's views are pinned by name and field
+    set in both directions, like the membership rows."""
     fixtures = repo / "tools/ext_call_inventory/fixtures"
     if not fixtures.is_dir():
         print(f"self-test: no fixture directory at {fixtures}", file=sys.stderr)
@@ -634,16 +863,20 @@ def self_test(repo: Path, membership: dict, ext_fields: list[str]) -> int:
         if want is None:
             fails.append(f"{rel}: fixture present but not declared in expected.json")
             continue
-        got = scan_file(path, fixtures, ext_fields, {"ports": True}, set())
+        projs: list[Occurrence] = []
+        got = scan_file(path, fixtures, ext_fields, {"ports": True}, set(), projections=projs)
         n_unres = len([o for o in got if o.kind == "unresolved"])
         n_call = len([o for o in got if o.kind == "call"])
-        if n_unres != want["unresolved"] or n_call != want["resolved"]:
+        n_proj = len(projs)
+        want_proj = want.get("projections", 0)
+        if n_unres != want["unresolved"] or n_call != want["resolved"] or n_proj != want_proj:
             fails.append(f"{rel}: expected {want['unresolved']} unresolved / "
-                         f"{want['resolved']} resolved, got {n_unres} / {n_call}"
-                         f"  [{want['form']}]")
+                         f"{want['resolved']} resolved / {want_proj} projection(s), got "
+                         f"{n_unres} / {n_call} / {n_proj}  [{want['form']}]")
         else:
-            print(f"  ok  {rel:<28} {want['form']}  "
-                  f"({n_unres} unresolved, {n_call} resolved)")
+            print(f"  ok  {rel:<32} {want['form']}  "
+                  f"({n_unres} unresolved, {n_call} resolved"
+                  + (f", {n_proj} projection(s))" if n_proj else ")"))
 
     missing = set(expected["fixtures"]) - {str(p.relative_to(fixtures)) for p in ail_files(fixtures)}
     for m in sorted(missing):
@@ -710,6 +943,33 @@ def self_test(repo: Path, membership: dict, ext_fields: list[str]) -> int:
     if not reach_fails:
         print(f"  ok  reachability      {len(derived)} ExtPorts field(s) derived, "
               f"{len(pinned)} pinned, sets identical")
+
+    # THE VIEWS PIN (8.0, P1.7r): the ABI's views of `ExtPorts`, derived by
+    # structure every run, pinned by name AND field set in both directions --
+    # the same shape as the membership reachability check, for the same reason:
+    # a view added to the ABI without a pin is a receiver nobody reviewed, and
+    # a pinned view that no longer derives is a projection the ABI dropped (or
+    # a signature that drifted from `ExtPorts`, which silently turns every call
+    # through it into form 3).
+    want_views = expected.get("port_views")
+    if want_views is not None:
+        want_views = {k: v for k, v in want_views.items() if not k.startswith("_")}
+    got_views = abi_views or {}
+    if want_views is None:
+        fails.append("VIEWS: expected.json has no `port_views` block; the ABI's views are "
+                     "receivers and must be pinned")
+    else:
+        for v in sorted(set(want_views) | set(got_views)):
+            if v not in got_views:
+                fails.append(f"VIEWS: expected.json pins the view `{v}` but no such view derives "
+                             f"from the ABI (removed, or a field's signature drifted from ExtPorts)")
+            elif v not in want_views:
+                fails.append(f"VIEWS: the ABI declares the view `{v}` {got_views[v]} and expected.json "
+                             f"does not pin it -- a new receiver nobody reviewed")
+            elif sorted(want_views[v]) != sorted(got_views[v]):
+                fails.append(f"VIEWS: `{v}` pinned as {sorted(want_views[v])}, derived {got_views[v]}")
+            else:
+                print(f"  ok  view {v:<16} {len(got_views[v])} field(s): {', '.join(got_views[v])}")
 
     # And the control that makes the pinned seams falsifiable: if the
     # bridge resolves NOTHING, every membership line above would still have to

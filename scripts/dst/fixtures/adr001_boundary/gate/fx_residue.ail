@@ -1,0 +1,5 @@
+module scripts/dst/fixtures/adr001_boundary/gate/fx_residue
+import std/json (JString)
+import scripts/dst/fixtures/adr001_boundary/gate/gate_abi (Ctx, Capability, ToolPolicy, Registration)
+func body(ctx: Ctx) -> int { let _ = show(ctx.name); 1 }
+export func register_with_config(_cfg: int) -> Registration { { config: JString("synthetic"), caps: [ToolPolicy(body)] } }

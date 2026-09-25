@@ -1,0 +1,16 @@
+-- P1.2d probe 1 (expect REJECT): a named ExitIntent render reads the pane id
+-- from the environment. The slot row is {FS}; Env is not in it.
+module local/p12d/p_env_in_render
+import std/env (getEnvOr)
+import std/json (jo)
+import pkg/sunholo/motoko_ext_abi/types (FsCtx, ExitIntentOutcome, ExtRegistration, ExitIntent)
+
+func herdr_exit(ctx: FsCtx) -> ExitIntentOutcome ! {FS} {
+  let pane = getEnvOr("HERDR_PANE_ID", "");
+  let read = ctx.ports.file_read(ctx.world, "${ctx.workdir}/.dagr/run-${pane}.json");
+  { actions: [], next_state: read.next_state }
+}
+
+export func register_with_config(_cfg: a) -> ExtRegistration {
+  { config: jo([]), caps: [ExitIntent("delegate-panes", true, herdr_exit)] }
+}

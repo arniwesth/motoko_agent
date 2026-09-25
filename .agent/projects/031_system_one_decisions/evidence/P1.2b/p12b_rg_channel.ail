@@ -1,0 +1,70 @@
+-- 031 PLAN-001 P1.2b: repetition-guard's two captures (the call and answer budgets) go
+-- through the configuration channel. Run by `p12b_ws.sh probe rg`, which sets
+-- MOTOKO_REPEAT_CALL_BUDGET=2 and MOTOKO_REPEAT_ANSWER_BUDGET=1 (synthetic, below the
+-- defaults 5 and 2). Registration must DISCLOSE both as `config`; each callback, invoked the
+-- way the host invokes it -- on a view stamped with that config and nothing else -- must act
+-- on the lowered budget, and on an EMPTY config must act on the default. A callback that
+-- reads its budget from anywhere but `ext_config` fails one side or the other.
+module p12b_rg_channel
+
+import std/io (println)
+import std/json (Json, jo, kv, js, encode, getInt)
+import std/option (Some, None)
+import pkg/sunholo/motoko_ext_abi/types (
+  Capability, ToolPolicy, SolverJudge, Msg, ToolCallEnvelope,
+  ToolPolicyDecision, Deny, FinalizeDecision, Accept,
+  pure_ctx, process_ctx, empty_ext_world
+)
+import pkg/sunholo/motoko_ext_repetition_guard/register (register_with_config)
+
+func call_msg(id: string) -> Msg {
+  { role: "assistant", content: "", tool_calls: [{ id: id, name: "BashExec", arguments: "{\"cmd\":\"ls\"}" }], tool_call_id: "" }
+}
+func result_msg(id: string) -> Msg { { role: "tool", content: "same", tool_calls: [], tool_call_id: id } }
+func text_msg(t: string) -> Msg { { role: "assistant", content: t, tool_calls: [], tool_call_id: "" } }
+
+-- two identical (call, result) pairs: denied at budget 2, not at the default 5
+func two_pairs() -> [Msg] { [call_msg("a"), result_msg("a"), call_msg("b"), result_msg("b")] }
+-- the candidate once before (plus itself as the tail): accepted at budget 1, not at 2
+func said_once() -> [Msg] { [text_msg("P12B answer"), text_msg("P12B answer")] }
+
+pure func int_is(o: Option[int], n: int) -> bool { match o { Some(v) => v == n, None => false } }
+pure func bool_is(o: Option[bool], b: bool) -> bool { match o { Some(v) => v == b, None => false } }
+
+func policy_denies(caps: [Capability], cfg: Json) -> Option[bool] {
+  match caps {
+    [] => None,
+    c :: rest => match c {
+      ToolPolicy(f) => Some(match f({ pure_ctx(cfg) | history_slice: two_pairs() },
+                                    { id: "live", tool: "BashExec", arguments: jo([kv("cmd", js("ls"))]) }) {
+                              Deny(_) => true, _ => false }),
+      _ => policy_denies(rest, cfg)
+    }
+  }
+}
+
+func judge_accepts(caps: [Capability], cfg: Json) -> Option[bool] ! {Process} {
+  match caps {
+    [] => None,
+    c :: rest => match c {
+      SolverJudge(f) => Some(match f(process_ctx({ pure_ctx(cfg) | history_slice: said_once() }, empty_ext_world()), "P12B answer").decision {
+                               Accept => true, _ => false }),
+      _ => judge_accepts(rest, cfg)
+    }
+  }
+}
+
+export func main() -> () ! {Env, FS, IO, Process} {
+  let reg = register_with_config(0);
+  let cfg = reg.config;
+  let d1 = policy_denies(reg.caps, cfg);
+  let d0 = policy_denies(reg.caps, jo([]));
+  let a1 = judge_accepts(reg.caps, cfg);
+  let a0 = judge_accepts(reg.caps, jo([]));
+  if not int_is(getInt(cfg, "calls"), 2) || not int_is(getInt(cfg, "answers"), 1) then println("FAIL: registration did not disclose the budgets: ${encode(cfg)}")
+  else if not bool_is(d1, true) then println("FAIL: the policy on the disclosed config (calls=2) did not deny two identical pairs")
+  else if not bool_is(d0, false) then println("FAIL: the policy on an EMPTY config denied -- its budget is not coming from ext_config")
+  else if not bool_is(a1, true) then println("FAIL: the judge on the disclosed config (answers=1) did not accept")
+  else if not bool_is(a0, false) then println("FAIL: the judge on an EMPTY config accepted -- its budget is not coming from ext_config")
+  else println("OK: channel -- both budgets disclosed as config and read back from ext_config only")
+}

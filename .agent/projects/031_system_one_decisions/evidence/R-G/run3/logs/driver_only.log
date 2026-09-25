@@ -1,0 +1,60 @@
+→ Type checking...
+→ Effect checking...
+✓ Running scripts/dst/driver_only_dst.ail
+driver_only_dst  (driver_only v32)
+  ✓ driver_only v32 LOADS CLEAN at the bound revision
+  ✓ the recorded attribution reference is current: (c0fbf10, sha256:0211ac242f677bd392bb317611b03a335d266426ec9d050cd5cce4e96b8f5583)
+  ✓ names 5 omission(s), each with a reason: compaction_ai, compaction_structural, decision_framework, empty_stop_guard, progress_contract_guard
+      (which of these are at ZERO barriers is derived by make profile_definition, not restated here — P3)
+      ✓ approval_deadline_exceeded: condition read from the catalogue
+      ✓ extension_effect_fault: condition read from the catalogue
+  ✓ waives all 2 conditional D3 classes, by A7's stable ids
+  ✓ routed-set claim, COMPUTED at the bound revision (nothing recorded):
+      reachable core sites: 7
+      routed:               6
+      declared unrouted:    1
+      (plan P4 says 'the four driver sites'; the computed answer is 6 routed,
+       because A12 routed a fifth in tool_phase.ail and A5 declared the two unrouted ones)
+  ✓ decision 1: every unrouted reachable core site is DECLARED and INSTRUMENTED
+      src/core/test/stub_step.ail:203
+        instrument: make world_state — the Clock poison pair shows the deterministic entry point completes with Clock withheld, so it does not reach this site; the same pair shows the LIVE world dies, so this is where the real clock is read
+  ✓ the runtime exclusion check is VACUOUS for driver_only: nothing installed, nothing excluded, no dispatch can violate (binding from WI-C5)
+  ✓ the per-run execution manifest validates against the definition it realizes
+      profile:            driver_only/32
+      event vocabulary:   event-vocabulary/1
+      classifier-2 set:   1 field(s), derived
+      unrouted fields:    0 field(s), derived
+      scan roots:         2 at commit HEAD
+driver_only_dst PASS
+  ✓ classifier-2 set matches the tool: ['env_get']
+  ✓ unrouted-field set matches the tool: [] (a DISTINCT state, not a non-member)
+  ✓ every installable classifier-2 caller is omitted by name in the profile: []
+  ✓ omission basis intact: BudgetShaper is Unconditional, declares NO effect row (WI-D6; was ! {Env, FS} through WI-D5), and returns BudgetPatch (no successor)
+    ! note: check 3 is now VACUOUS (zero classifier-2 member call sites). This check, not that one, is what holds the omission.
+  ✓ CAPABILITY_KINDS: 12 kinds agree with the ABI and the coverage artifact; rowless on the views plus the boundary: ['decision_solver_judge', 'decision_tool_policy']
+  ✓ SLOT-level barrier count DERIVED from the ABI rows and the dispatch table: 5
+      BARRIER  compactor: unconditionally dispatched, declares ! {AI, IO, Trace}  (outcome returns world state: yes)
+      BARRIER  response_interceptor: unconditionally dispatched, declares ! {IO, Process, FS, Clock}  (outcome returns world state: yes)
+      BARRIER  solver_judge: unconditionally dispatched, declares ! {Process}  (outcome returns world state: yes)
+      BARRIER  exit_intent: dispatched at a lifecycle boundary, and performs that row whenever it is, declares ! {FS}  (outcome returns world state: yes)
+      BARRIER  work_in_flight: unconditionally dispatched, declares ! {FS}  (outcome returns world state: yes)
+      coverable budget_shaper: unconditionally dispatched, declares NO row
+      coverable decision_solver_judge: unconditionally dispatched, pure on the views plus the boundary (ADR-001 (031) D2), not on a declared row
+      coverable decision_tool_policy: unconditionally dispatched, pure on the views plus the boundary (ADR-001 (031) D2), not on a declared row
+      gated     tool_provider: excludable, so not a barrier
+    → 5 slot-level barrier(s) stand: no extension is installable on the DECLARED ROW alone
+  ✓ the barrier count and slot names in 3 profile record(s) match the derivation
+  ✓ barrier count RE-DERIVED per (extension, slot) — classifier 3 is the third producer: 70 of 90 pairs stand
+      CLEARED for 'compaction_structural': compactor, response_interceptor, solver_judge, exit_intent, work_in_flight  — ZERO barriers remain
+      CLEARED for 'decision_framework': compactor, response_interceptor, solver_judge, exit_intent, work_in_flight  — ZERO barriers remain
+      CLEARED for 'empty_stop_guard': compactor, response_interceptor, solver_judge, exit_intent, work_in_flight  — ZERO barriers remain
+      CLEARED for 'progress_contract_guard': compactor, response_interceptor, solver_judge, exit_intent, work_in_flight  — ZERO barriers remain
+      all 5 barriers stand unchanged for the other 14 extension(s)
+    → ZERO barriers remain for ['compaction_structural', 'decision_framework', 'empty_stop_guard', 'progress_contract_guard'], so those extensions ARE installable
+    → each is accounted for BY NAME in the profile, so the empty install list is a CHOICE rather than a consequence for them, and a consequence still for the rest
+  ✓ classification-basis producers re-derived: 4 measured, each with a Makefile target (discovery, effect_inventory, ext_ambient_inventory, ext_call_inventory); 2 assumed, deliberately without one (declared_row, disclosure)
+  ✓ the ABI version every profile record's prose names is the one the package declares: 8.0 (4 site(s) across 7 file(s))
+  ✓ every manifest ABI pin in the tree is the declared one: 8.0 (33 pin(s) across 553 tracked .ail file(s))
+  ✓ exempted, a fixture literal built to differ: src/eval/journal/admission.ail:993 pins '7.3' != 8.0 — the A9b fixture: a differing abi_version is what makes a9b_abi fire A9b:AbiVersionDiffers
+  ✓ no fact in the fixtures is a stale transcription of the tool's output
+  ✓ src/core/dst_driver_only.ail

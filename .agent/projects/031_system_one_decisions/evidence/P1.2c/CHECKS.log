@@ -1,0 +1,130 @@
+# P1.2c exit checks. HEAD 791be004; AILANG AILANG v0.33.0; 2026-09-21T17:31:24Z
+
+## 1. own-root check (p12c_pkgroot.sh), ABI from HEAD
+p12c: motoko-ext-a2a own root ok (max=[Net,FS,Env,Rand,IO,Process,AI,SharedMem,Clock,Stream,Trace])
+p12c: motoko-ext-agentcli own root ok (max=[Process,FS,Env,IO,AI,Net,SharedMem,Clock,Stream,Rand,Trace])
+p12c: motoko-ext-ailang-docs own root ok (max=[Process,FS,Env,IO,AI,Net,SharedMem,Clock,Stream,Rand,Trace])
+p12c: motoko-ext-mcp own root ok (max=[Process,FS,Env,IO,AI,Net,SharedMem,Clock,Stream,Rand,Trace])
+p12c: motoko-ext-compaction-ai own root ok (max=[AI,IO,Trace,Env,FS])
+exit 0
+
+## check every module + each package's ABI pin (p12c_ws.sh check)
+p12c: lock packages/motoko-ext-a2a ok (ABI pin 8.0)
+p12c: check packages/motoko-ext-a2a/a2a.ail ok
+p12c: check packages/motoko-ext-a2a/config.ail ok
+p12c: check packages/motoko-ext-a2a/register.ail ok
+p12c: check packages/motoko-ext-a2a/types.ail ok
+p12c: lock packages/motoko-ext-agentcli ok (ABI pin 8.0)
+p12c: check packages/motoko-ext-agentcli/agentcli.ail ok
+p12c: check packages/motoko-ext-agentcli/providers.ail ok
+p12c: check packages/motoko-ext-agentcli/register.ail ok
+p12c: lock packages/motoko-ext-ailang-docs ok (ABI pin 8.0)
+p12c: check packages/motoko-ext-ailang-docs/ailang_docs.ail ok
+p12c: check packages/motoko-ext-ailang-docs/prompts.ail ok
+p12c: check packages/motoko-ext-ailang-docs/register.ail ok
+p12c: check packages/motoko-ext-ailang-docs/types.ail ok
+p12c: lock packages/motoko-ext-mcp ok (ABI pin 8.0)
+p12c: check packages/motoko-ext-mcp/_smoke.ail ok
+p12c: check packages/motoko-ext-mcp/assets.ail ok
+p12c: check packages/motoko-ext-mcp/compress.ail ok
+p12c: check packages/motoko-ext-mcp/exec.ail ok
+p12c: check packages/motoko-ext-mcp/mcp.ail ok
+p12c: check packages/motoko-ext-mcp/register.ail ok
+p12c: check packages/motoko-ext-mcp/resolve.ail ok
+p12c: check packages/motoko-ext-mcp/types.ail ok
+p12c: lock packages/motoko-ext-compaction-ai ok (ABI pin 8.0)
+p12c: check packages/motoko-ext-compaction-ai/_smoke.ail ok
+p12c: check packages/motoko-ext-compaction-ai/compaction_ai.ail ok
+p12c: check packages/motoko-ext-compaction-ai/register.ail ok
+p12c: check packages/motoko-ext-compaction-ai/types.ail ok
+exit 0
+
+## 2. own tests (p12c_ws.sh test = ailang test per module with tests)
+p12c: test packages/motoko-ext-a2a/a2a.ail ok -- 7 tests: 7 passed, 0 failed, 0 skipped (1.277402272s)
+p12c: test packages/motoko-ext-a2a/config.ail ok -- 4 tests: 4 passed, 0 failed, 0 skipped (353.078734ms)
+p12c: test packages/motoko-ext-agentcli/agentcli.ail ok -- 1 tests: 1 passed, 0 failed, 0 skipped (945.00483ms)
+p12c: test packages/motoko-ext-ailang-docs/ailang_docs.ail ok -- 1 tests: 1 passed, 0 failed, 0 skipped (922.593044ms)
+p12c: test packages/motoko-ext-ailang-docs/prompts.ail ok -- 2 tests: 2 passed, 0 failed, 0 skipped (295.17814ms)
+p12c: test packages/motoko-ext-mcp/mcp.ail ok -- 5 tests: 5 passed, 0 failed, 0 skipped (1.220215312s)
+p12c: test packages/motoko-ext-mcp/resolve.ail ok -- 4 tests: 4 passed, 0 failed, 0 skipped (137.154023ms)
+p12c: test packages/motoko-ext-compaction-ai/compaction_ai.ail ok -- 11 tests: 11 passed, 0 failed, 0 skipped (3.106432085s)
+p12c: test packages/motoko-ext-compaction-ai/types.ail ok -- 2 tests: 2 passed, 0 failed, 0 skipped (226.686822ms)
+exit 0
+
+## package smokes
+OK: register_with_config returned without panic
+p12c: smoke motoko-ext-mcp ok
+exit 0
+OK: register_with_config returned without panic
+OK: compact_with_ai observed compaction_ai.no_foldable_prefix
+p12c: smoke motoko-ext-compaction-ai ok
+exit 0
+
+## 3. the P0.3 gate (derive.py --hook-scope --no-provision) over the working tree
+p12c: derive.py --hook-scope --no-provision exit 1 (nonzero is expected while other batches are 7.4)
+p12c: gate a2a pass
+p12c: gate agentcli pass
+p12c: gate ailang_docs pass
+p12c: gate mcp pass
+p12c: gate compaction_ai pass
+exit 0
+p12c: derive.py --hook-scope --no-provision exit 1 (nonzero is expected while other batches are 7.4)
+REGISTRATION SHAPE: pass 16 of 18; fail 2
+  binding rejections      0  (-)  -- ADR D2: red by these on the unmigrated tree
+exit 1
+
+## 4b. channel: every DescribeTools configured vs {}, each capture through ext_config
+describe_tools a2a: configured=1 empty=0
+describe_tools agentcli: configured=2 empty=0
+describe_tools ailang_docs: configured=23 empty=0
+OK: a2a catalog follows config (1 vs 0)
+OK: agentcli catalog follows config (2 vs 0)
+OK: ailang_docs catalog follows config (23 vs 0)
+OK: a2a provider reads its agents from ext_config
+OK: agentcli provider reads its providers from ext_config
+OK: mcp provider reads its servers from ext_config
+OK: compaction_ai compactor reads its thresholds from ext_config
+OK: registration-time environment values reach config (Amendment 3)
+OK: channel (8 checks)
+p12c: channel ok
+exit 0
+
+## calibration parity (package copy vs src/core at HEAD)
+OK: calibration parity (8 cases)
+p12c: run scripts/p12c/p12c_calib_parity.ail ok
+
+## 4. masked files, core from committed HEAD (cold cache)
+p12c: check scripts/dst/conformance_selftest.ail ok
+p12c: check scripts/dst/long_qwen_compaction_dst.ail FAILED (exit 1): Error: type error in src/core/test/dst_harness (decl 4): type unification failed at [function application at /tmp/p12ccore.17PTjG/src/core/test/dst_harness.ail:44:14]: failed to unify parameter 0: cannot unify list[Capability] with ()
+conformance self-test PASS
+p12c: run scripts/dst/conformance_selftest.ail ok
+
+## 4. long_qwen against P1.3r's parent a7aa68a8 (core on 8.0, before runtime.ail imported the conformance harness)
+p12c: check scripts/dst/long_qwen_compaction_dst.ail ok
+scenario=compaction.strict_provider_orphaned_toolcall ok
+scenario=compaction.compaction_ai_successor_is_not_dropped ok
+long_qwen_compaction_dst PASS count=12
+p12c: run scripts/dst/long_qwen_compaction_dst.ail ok
+## 3b. the gate on committed HEAD f21e508d + batch C only (fresh clone; the shared working tree also holds other batches' uncommitted edits, which read 16 of 18 above)
+derive exit 1
+  a2a                     UNRESOLVED        HOOK-AMBIENT          4
+  agentcli                UNRESOLVED        HOOK-AMBIENT          1
+  ailang_docs             UNRESOLVED        HOOK-UNRESOLVED       2
+  compaction_ai           UNRESOLVED        HOOK-UNRESOLVED       2
+  mcp                     UNRESOLVED        HOOK-PORT-MEDIATED    3
+  a2a                       4  std/net.httpGet, std/fs.fileExists, std/fs.readFile, std/env.getEnvOr
+  agentcli                  1  std/env.getEnvOr
+  ailang_docs               2  std/fs.fileExists, std/env.getEnvOr
+  compaction_ai             2  std/env.getEnvOr, std/fs.readFileResult
+  mcp                       3  std/fs.fileExists, std/fs.readFile, std/env.getEnvOr
+  a2a                     config-caps       pass    
+  agentcli                config-caps       pass    
+  ailang_docs             config-caps       pass    
+  compaction_ai           config-caps       pass    
+  mcp                     config-caps       pass    
+REGISTRATION SHAPE: pass 11 of 18; fail 7
+  binding rejections     23  (payload-inline-lambda 11, payload-let-bound 12)  -- ADR D2: red by these on the unmigrated tree
+
+## calibration parity after the limit-1 case was added (mutgate run 1 found the 1-permille row vacuous)
+OK: calibration parity (9 cases)
+p12c: run scripts/p12c/p12c_calib_parity.ail ok

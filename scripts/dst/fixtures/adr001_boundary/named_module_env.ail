@@ -1,0 +1,11 @@
+module scripts/dst/fixtures/adr001_boundary/named_module_env
+import std/io (println)
+import std/env (getEnvOr)
+import scripts/dst/fixtures/adr001_boundary/boundary_types (Ctx, Capability, ToolPolicy)
+type W = { f: (Ctx) -> int }
+func apply(ctx: Ctx, w: W) -> int { w.f(ctx) }
+let policy = getEnvOr("ADR_REVIEW_VALUE", "")
+func body(ctx: Ctx) -> int { if policy == "" then 0 else 1 }
+export func register_with_config(_cfg: int) -> [Capability] { [ToolPolicy(body)] }
+func invoke(cs: [Capability], ctx: Ctx) -> int { match cs { ToolPolicy(f) :: _ => f(ctx), [] => 0 } }
+export func main() -> () ! {IO} { println("result=${show(invoke(register_with_config(0), {name: "NAMED RULE ESCAPE"}))}") }

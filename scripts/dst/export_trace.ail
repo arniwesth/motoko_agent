@@ -82,7 +82,7 @@ import pkg/sunholo/motoko_ext_abi/types (
   PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome,
   BudgetPlan, BudgetPatch, PromptPatch, ToolSchema, ToolPolicyDecision,
   Pending, DenyAfterTimeout, Delegate, NoIntercept, NoDecision, PassThrough,
-  ExtCtx, ExtRuntime
+  PureCtx, AiCtx, ProviderCtx, InterceptCtx, ProcessCtx, ExtRuntime
 )
 import src/core/test/ext_fixture (fixture_hooks)
 
@@ -153,30 +153,31 @@ pure func history() -> [Message] { [msg("system", "s"), msg("user", "u")] }
 pure func budget() -> BudgetPlan { { total: 10, solver: 6, verifier: 4 } }
 pure func zero_rates() -> CostRates { { input_per_1m_millicents: 0, output_per_1m_millicents: 0 } }
 
-func no_describe() -> [ToolSchema] { [] }
-func no_prompt(_ctx: ExtCtx) -> PromptPatch { { prepend: [], append: [] } }
-func no_budget(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
+func no_describe(_config: Json) -> [ToolSchema] { [] }
+func no_prompt(_ctx: PureCtx) -> PromptPatch { { prepend: [], append: [] } }
+func no_budget(_ctx: PureCtx, _plan: BudgetPlan) -> BudgetPatch {
   { requested_total: None, requested_solver: None, requested_verifier: None }
 }
-func no_handle(ctx: ExtCtx, _call: ToolCallEnvelope)
-  -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+func no_handle(ctx: ProviderCtx, _call: ToolCallEnvelope)
+  -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   { decision: { Delegate }, next_state: ctx.world }
 }
-func no_intercept(ctx: ExtCtx, _text: string)
+func no_intercept(ctx: InterceptCtx, _text: string)
   -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
   { decision: { NoIntercept }, next_state: ctx.world }
 }
-func no_solver(ctx: ExtCtx, _text: string)
+func no_solver(ctx: ProcessCtx, _text: string)
   -> FinalizeOutcome ! {Process} { { decision: { NoDecision }, next_state: ctx.world } }
-func passthrough_pre_step(ctx: ExtCtx, _msgs: [Msg])
+func passthrough_pre_step(ctx: AiCtx, _msgs: [Msg])
   -> PreStepOutcome ! {AI, IO, Trace} { { decision: { PassThrough }, next_state: ctx.world } }
-func pending_policy(_ctx: ExtCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+func pending_policy(_ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
   Pending("generated: approval required", DenyAfterTimeout)
 }
 
 func approval_rt(id: string) -> ExtRuntime {
   let v: VerificationConfig = { enabled: false, command: "" };
   let hooks = fixture_hooks(id, {
+    config: jo([]),
     tools: [],
     describe: no_describe,
     prompt: no_prompt,
@@ -198,7 +199,7 @@ func run_generated(id: string, w: WorldState) -> TracedSessionResult
 }
 
 pure func run_manifest() -> ExecutionManifest {
-  driver_only_manifest("HEAD", "ailang 0.33.0", "7.4", "{}",
+  driver_only_manifest("HEAD", "ailang 0.33.0", "8.0", "{}",
                        ["ai_step", "env_get", "tool_handle"], ["clock_now"], "HEAD")
 }
 

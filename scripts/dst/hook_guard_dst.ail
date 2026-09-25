@@ -56,10 +56,10 @@ import src/core/dst_attribution_table (table_identity)
 import src/core/dst_fault_catalogue (fault_catalogue, conditional_class_ids)
 import src/core/dst_profile (waivers_from)
 import src/core/dst_profile_coverage (CapabilityDisclosureIds, AtomIds, all_capability_kinds, capability_kind_id, atoms_at_zero, AtomRef)
-import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
+import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry, empty_tool_evidence)
 
 import pkg/sunholo/motoko_ext_abi/types (
-  ExtCtx, ExtRuntime, ToolHandleOutcome,
+  ExtCtx, PureCtx, AiCtx, ProviderCtx, InterceptCtx, ProcessCtx, NotReached, ExtRuntime, ToolHandleOutcome,
   BudgetPlan, BudgetPatch, PreStepOutcome, ResponseInterceptOutcome, FinalizeOutcome,
   ToolPolicyDecision, ToolHandleDecision, PreStepDecision,
   ResponseInterceptDecision, FinalizeDecision,
@@ -84,24 +84,25 @@ pure func ran_marker() -> string { "GUARDED-HOOK-BODY-RAN" }
 
 func guarded_hook() -> FixtureHooks {
   fixture_hooks(guarded_ext_id(), {
+    config: jo([]),
     tools: [guarded_tool()],
     describe: \_ . [],
     prompt: \_ctx. { prepend: [], append: [] },
-    budget: func(_ctx: ExtCtx, _plan: BudgetPlan) -> BudgetPatch {
+    budget: func(_ctx: PureCtx, _plan: BudgetPlan) -> BudgetPatch {
       { requested_total: None, requested_solver: None, requested_verifier: None }
     },
-    compact: func(ctx: ExtCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} { { decision: { PassThrough }, next_state: ctx.world } },
+    compact: func(ctx: AiCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} { { decision: { PassThrough }, next_state: ctx.world } },
     policy: \_ctx _call. Allow,
     -- Returns `Handled` with the marker in `stdout`, so a caller can tell
     -- "the body ran" from "the body was skipped" — the two are otherwise
     -- indistinguishable from an `Err`.
-    provide: func(ctx: ExtCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+    provide: func(ctx: ProviderCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
       { decision: { Handled({ tool_call_id: call.id, tool: call.tool, exit_code: 0,
                               stdout: ran_marker(), stderr: "", metadata: jo([]) }) },
         next_state: ctx.world }
     },
-    intercept: func(ctx: ExtCtx, _t: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} { { decision: { NoIntercept }, next_state: ctx.world } },
-    judge: func(ctx: ExtCtx, _c: string) -> FinalizeOutcome ! {Process} { { decision: { NoDecision }, next_state: ctx.world } }
+    intercept: func(ctx: InterceptCtx, _t: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} { { decision: { NoIntercept }, next_state: ctx.world } },
+    judge: func(ctx: ProcessCtx, _c: string) -> FinalizeOutcome ! {Process} { { decision: { NoDecision }, next_state: ctx.world } }
   })
 }
 
@@ -118,7 +119,7 @@ func ctx() -> ExtCtx {
     work_in_flight: [],
     open_waits: ja([]),
     context_limit: 0, ports: noop_ext_ports(), artifacts: empty_ext_artifacts(),
-    telemetry: zero_token_telemetry(), world: empty_ext_world() }
+    telemetry: zero_token_telemetry(), verification: NotReached, tool_evidence: empty_tool_evidence(), decision_state: None, world: empty_ext_world() }
 }
 
 pure func call_for(tool: string) -> ToolCallEnvelope {
@@ -208,7 +209,7 @@ func outcome_stdout(o: ToolHandleOutcome) -> string {
 
 -- 1. Dispatch reaching an EXCLUDED gated hook returns the typed failure, with
 --    the partial evidence D6.6 requires and WITHOUT having run the body.
-func scenario_excluded_hook_fails_closed() -> bool ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+func scenario_excluded_hook_fails_closed() -> bool ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   let got = guarded_dispatch_tool_handle(excluding(), rt(), ctx(), call_for(guarded_tool()),
                                          7, empty_ledger_trace(), meta());
   let ok = match got {
@@ -232,7 +233,7 @@ func scenario_excluded_hook_fails_closed() -> bool ! {IO, Process, FS, AI, Env, 
 -- 2. The SAME call under a definition that covers the slot proceeds AND the
 --    body runs. Without this row, a guard that failed everything closed would
 --    pass row 1 — which is S7's "a guard that fires too much" exactly.
-func scenario_covered_hook_proceeds() -> bool ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+func scenario_covered_hook_proceeds() -> bool ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   let got = guarded_dispatch_tool_handle(covering(), rt(), ctx(), call_for(guarded_tool()),
                                          7, empty_ledger_trace(), meta());
   let ok = match got {
@@ -252,7 +253,7 @@ func scenario_covered_hook_proceeds() -> bool ! {IO, Process, FS, AI, Env, Net, 
 --    `ext/runtime.first_handle`'s gate. The guard mirrors that predicate, and a
 --    mirror that drifts fails OPEN — it would report a violation for a hook the
 --    fold never dispatches, or miss one it does.
-func scenario_unreached_hook_is_not_a_violation() -> bool ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+func scenario_unreached_hook_is_not_a_violation() -> bool ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   let got = guarded_dispatch_tool_handle(excluding(), rt(), ctx(), call_for(other_tool()),
                                          7, empty_ledger_trace(), meta());
   let ok = match got {
@@ -266,7 +267,7 @@ func scenario_unreached_hook_is_not_a_violation() -> bool ! {IO, Process, FS, AI
 
 -- 4. An empty install list cannot violate. This is `driver_only`'s shape, and
 --    the row states the vacuity as a claim rather than leaving it in a comment.
-func scenario_empty_install_is_vacuous() -> bool ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+func scenario_empty_install_is_vacuous() -> bool ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   let got = guarded_dispatch_tool_handle(definition_with([]), rt(), ctx(), call_for(guarded_tool()),
                                          7, empty_ledger_trace(), meta());
   let ok = match got {
@@ -278,7 +279,7 @@ func scenario_empty_install_is_vacuous() -> bool ! {IO, Process, FS, AI, Env, Ne
   ok
 }
 
-export func main() -> () ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand} {
+export func main() -> () ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   let _ = println("hook_guard — routing_violation_at's production call site (WI-C5)");
   let r1 = scenario_excluded_hook_fails_closed();
   let r2 = scenario_covered_hook_proceeds();

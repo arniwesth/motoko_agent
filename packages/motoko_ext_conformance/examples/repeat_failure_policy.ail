@@ -1,0 +1,241 @@
+-- 031 PLAN-001 P0.6 -- the TOOL-POLICY consumer on ABI 8.0 (ADR-001 freeze
+-- evidence 2(c)): a no-progress guard as a `DecisionToolPolicy`.
+--
+-- It compares a proposed call with the recent TYPED outcomes on
+-- `ctx.tool_evidence`: if the same tool failed at least `min_failures` times
+-- in the last `window` records, it asks one binary question -- will this call
+-- repeat the recorded failure? -- and votes `Deny(feedback)` when the answer
+-- clears `deny_min_bp`; otherwise, and on any `Unavailable`, `NoOpinion`. It
+-- never returns `Allow` or `Pending`: a guard that only denies cannot
+-- out-vote another policy's refusal.
+--
+-- Only typed outcomes count as failures: `CommandExit(n)` with `n != 0` and
+-- `ToolFailed`. Output text, `ToolOutcomeUnknown` and `ToolPending` never do
+-- (D3: textual output cannot create a typed outcome).
+--
+-- Configuration, as in `completion_guard`: registration builds both
+-- projections from its input and discloses them in `config`; evidence selection (`window`,
+-- `min_failures`) and the question read `question_config`; the threshold and
+-- the feedback bound read `interpretation_config`; a missing threshold
+-- abstains. Both callbacks are named, unshadowed, top-level functions bound
+-- directly under the `{ config, caps }` head. Everything here is synthetic.
+module sunholo/motoko_ext_conformance/examples/repeat_failure_policy
+
+import std/json (Json, jo, ja, kv, js, jb, jint, getInt, getString)
+import std/option (Option, Some, None)
+import std/string (length, substring)
+import pkg/sunholo/motoko_ext_abi/types (
+  PureCtx, ExtRegistration, DecisionToolPolicy, ToolCallEnvelope,
+  DecisionPolicyDescriptor, DecisionRequest, DecisionObservation, DecisionInvocationState,
+  NamedQuestion, Binary, DecisionAnswer, BinaryAnswer, Answered, Unavailable,
+  ToolEvidence, ObservedToolOutcome, CommandExit, ToolFailed,
+  ToolPolicyDecision, Deny, NoOpinion,
+  ToolPreparation, ToolImmediate, ToolQuery
+)
+
+-- ---------------------------------------------------------------------------
+-- Registration
+-- ---------------------------------------------------------------------------
+
+-- THE REGISTRATION INPUT, as in `completion_guard`: this example's settings
+-- object, typed `Json` because the kit does not depend on core. Every field is
+-- optional; an absent field takes its DOCUMENTED DEFAULT:
+--
+--   field               default                  projection
+--   backend_binding     "repeat-failure-judge"   question_config
+--   question_id         "repeats_failure"        question_config
+--   window              4                        question_config  (evidence selection)
+--   min_failures        2                        question_config  (when to ask)
+--   deny_min_bp         7000                     interpretation_config  (threshold)
+--   max_feedback_chars  200                      interpretation_config  (feedback bound)
+--   max_interventions   3                        the descriptor's limit
+--
+-- The resolved projections go on the descriptor AND in `config` (stamped as
+-- `ext_config`); the callbacks read only the projections.
+
+export func repeat_question_config(cfg: Json) -> Json {
+  jo([
+    kv("backend_binding", js(opt_str(getString(cfg, "backend_binding"), "repeat-failure-judge"))),
+    kv("question_id", js(opt_str(getString(cfg, "question_id"), "repeats_failure"))),
+    kv("window", jint(opt_int(getInt(cfg, "window"), 4))),
+    kv("min_failures", jint(opt_int(getInt(cfg, "min_failures"), 2)))
+  ])
+}
+
+export func repeat_interpretation_config(cfg: Json) -> Json {
+  jo([
+    kv("deny_min_bp", jint(opt_int(getInt(cfg, "deny_min_bp"), 7000))),
+    kv("max_feedback_chars", jint(opt_int(getInt(cfg, "max_feedback_chars"), 200)))
+  ])
+}
+
+export func repeat_max_interventions(cfg: Json) -> int {
+  opt_int(getInt(cfg, "max_interventions"), 3)
+}
+
+export func repeat_descriptor(cfg: Json) -> DecisionPolicyDescriptor {
+  {
+    local_id: "example.repeat_failure_policy",
+    question_version: "repeat-question/1",
+    question_config: repeat_question_config(cfg),
+    interpretation_version: "repeat-interpretation/1",
+    interpretation_config: repeat_interpretation_config(cfg),
+    max_interventions: repeat_max_interventions(cfg)
+  }
+}
+
+-- The disclosed configuration: exactly the resolved projections and limit.
+export func repeat_config(cfg: Json) -> Json {
+  jo([
+    kv("question_config", repeat_question_config(cfg)),
+    kv("interpretation_config", repeat_interpretation_config(cfg)),
+    kv("max_interventions", jint(repeat_max_interventions(cfg)))
+  ])
+}
+
+export func register_with_config(cfg: Json) -> ExtRegistration {
+  {
+    config: repeat_config(cfg),
+    caps: [DecisionToolPolicy(repeat_descriptor(cfg), repeat_prepare, repeat_interpret)]
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- prepare: compare the proposed call with recent typed outcomes
+-- ---------------------------------------------------------------------------
+
+func repeat_prepare(ctx: PureCtx, call: ToolCallEnvelope) -> ToolPreparation {
+  match ctx.decision_state {
+    None => ToolImmediate(NoOpinion),
+    Some(st) =>
+      if st.interventions_used >= st.intervention_limit then ToolImmediate(NoOpinion)
+      else {
+        let qc = st.question_config;
+        let recent = last_n(ctx.tool_evidence.records, opt_int(getInt(qc, "window"), 0));
+        let failures = failures_of(recent, call.tool);
+        match getInt(qc, "min_failures") {
+          None => ToolImmediate(NoOpinion),
+          Some(min) =>
+            if min <= 0 || count(failures) < min then ToolImmediate(NoOpinion)
+            else ToolQuery(repeat_request(qc, call, failures))
+        }
+      }
+  }
+}
+
+func repeat_request(qc: Json, call: ToolCallEnvelope, failures: [ToolEvidence]) -> DecisionRequest {
+  {
+    backend_binding: opt_str(getString(qc, "backend_binding"), ""),
+    state: jo([
+      kv("proposed_tool", js(call.tool)),
+      kv("proposed_arguments", call.arguments),
+      kv("recent_failures", ja(failures_json(failures)))
+    ]),
+    questions: [{
+      id: opt_str(getString(qc, "question_id"), "repeats_failure"),
+      prompt: "Will the proposed call repeat one of the recorded failures without new information?",
+      guidance: jo([]),
+      kind: Binary
+    }]
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- interpret: Deny or NoOpinion
+-- ---------------------------------------------------------------------------
+
+func repeat_interpret(ctx: PureCtx, call: ToolCallEnvelope, req: DecisionRequest,
+    obs: DecisionObservation) -> ToolPolicyDecision {
+  match ctx.decision_state {
+    None => NoOpinion,
+    Some(st) =>
+      if st.interventions_used >= st.intervention_limit then NoOpinion
+      else match obs.result {
+        Unavailable(_) => NoOpinion,
+        Answered(resp) => match first_question_id(req.questions) {
+          None => NoOpinion,
+          Some(qid) => match binary_for(resp.answers, qid) {
+            None => NoOpinion,
+            Some(p) => repeat_vote(st, call, p)
+          }
+        }
+      }
+  }
+}
+
+func repeat_vote(st: DecisionInvocationState, call: ToolCallEnvelope, p: int) -> ToolPolicyDecision {
+  let ic = st.interpretation_config;
+  match getInt(ic, "deny_min_bp") {
+    None => NoOpinion,
+    Some(min_bp) =>
+      if p < min_bp then NoOpinion
+      else Deny(clip(repeat_feedback(call.tool, p), opt_int(getInt(ic, "max_feedback_chars"), 0)))
+  }
+}
+
+-- THE TEMPLATE (code; `repeat-interpretation/1`).
+pure func repeat_feedback(tool: string, p: int) -> string {
+  "No-progress guard: '${tool}' has failed repeatedly and this call is judged likely (${show(p)} bp) to fail the same way. Change the approach or gather new information first."
+}
+
+-- ---------------------------------------------------------------------------
+-- helpers (pure, named)
+-- ---------------------------------------------------------------------------
+
+pure func is_failure(o: ObservedToolOutcome) -> bool {
+  match o { CommandExit(n) => n != 0, ToolFailed(_) => true, _ => false }
+}
+
+pure func failures_of(rs: [ToolEvidence], tool: string) -> [ToolEvidence] {
+  match rs {
+    [] => [],
+    r :: rest =>
+      if r.tool_name == tool && is_failure(r.outcome) then r :: failures_of(rest, tool)
+      else failures_of(rest, tool)
+  }
+}
+
+pure func failures_json(rs: [ToolEvidence]) -> [Json] {
+  match rs {
+    [] => [],
+    r :: rest => jo([
+      kv("call_id", js(r.call_id)),
+      kv("step", jint(r.step)),
+      kv("outcome", js(match r.outcome { CommandExit(n) => "exit ${show(n)}", ToolFailed(m) => "failed: ${m}", _ => "other" })),
+      kv("truncated", jb(r.truncated))
+    ]) :: failures_json(rest)
+  }
+}
+
+pure func first_question_id(qs: [NamedQuestion]) -> Option[string] {
+  match qs { [] => None, q :: _ => Some(q.id) }
+}
+
+pure func binary_for(answers: [DecisionAnswer], qid: string) -> Option[int] {
+  match answers {
+    [] => None,
+    a :: rest =>
+      if a.question_id == qid then (match a.answer { BinaryAnswer(p) => Some(p), _ => None })
+      else binary_for(rest, qid)
+  }
+}
+
+pure func last_n(xs: [ToolEvidence], n: int) -> [ToolEvidence] {
+  drop_n(xs, count(xs) - n)
+}
+
+pure func drop_n(xs: [ToolEvidence], k: int) -> [ToolEvidence] {
+  if k <= 0 then xs else match xs { [] => [], _ :: rest => drop_n(rest, k - 1) }
+}
+
+pure func count(xs: [ToolEvidence]) -> int {
+  match xs { [] => 0, _ :: rest => 1 + count(rest) }
+}
+
+pure func clip(s: string, n: int) -> string {
+  if n <= 0 then "" else if length(s) <= n then s else substring(s, 0, n)
+}
+
+pure func opt_int(o: Option[int], d: int) -> int { match o { Some(n) => n, None => d } }
+
+pure func opt_str(o: Option[string], d: string) -> string { match o { Some(s) => s, None => d } }

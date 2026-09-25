@@ -1,0 +1,47 @@
+-- 031 P0.5 registry fixture: run the GENERATED registry and show `config`
+-- arriving on `ExtEntry.config` unchanged -- the value a host passes to
+-- `DescribeTools` and stamps as `ext_config` (PLAN-001 P1.1 wires the host).
+module registry/run
+
+import std/io (println, exit)
+import std/json (Json, JString, encode)
+import pkg/sunholo/motoko_ext_abi/types (ExtEntry, Capability, DescribeTools)
+import registry/registry_generated (parse_core_ext_order)
+
+func tools_advertised(config: Json, caps: [Capability]) -> int {
+  match caps {
+    [] => 0,
+    DescribeTools(f) :: rest => length_of(f(config)) + tools_advertised(config, rest),
+    _ :: rest => tools_advertised(config, rest)
+  }
+}
+
+pure func length_of(xs: [a]) -> int { match xs { [] => 0, _ :: rest => 1 + length_of(rest) } }
+
+func report(es: [ExtEntry]) -> int ! {IO} {
+  match es {
+    [] => 0,
+    e :: rest => {
+      let _ = println("entry ${e.id} config=${encode(e.config)} tools=${show(tools_advertised(e.config, e.caps))}");
+      1 + report(rest)
+    }
+  }
+}
+
+pure func alpha_config_kept(es: [ExtEntry]) -> bool {
+  match es {
+    [] => false,
+    e :: rest => if e.id == "alpha#0" then (match e.config { JString(s) => s == "alpha_tool", _ => false })
+                 else alpha_config_kept(rest)
+  }
+}
+
+export func main() -> () ! {IO} {
+  let reg = parse_core_ext_order("alpha,beta", { profile: "fixture" });
+  let n = report(reg.entries);
+  if n == 2 && alpha_config_kept(reg.entries) then println("registry fixture PASS: 2 entries, config carried onto ExtEntry.config")
+  else {
+    let _ = println("registry fixture FAIL: entries=${show(n)}");
+    exit(1)
+  }
+}

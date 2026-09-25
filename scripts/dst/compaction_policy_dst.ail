@@ -1,13 +1,12 @@
 module scripts/dst/compaction_policy_dst
 
-import std/json (ja)
+import std/json (jo)
 import std/io (println, exit)
 import std/list (length)
 import std/result (Result, Ok, Err)
 import std/string (length as string_length)
 import std/ai (ToolCall)
-import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, ExtCtx, Msg, PreStepDecision, PassThrough, Compacted)
-import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry)
+import pkg/sunholo/motoko_ext_abi/types (PureCtx, pure_ctx, Msg, PreStepDecision, PassThrough, Compacted)
 import src/core/test/dst_harness (Scenario, ScenarioFailure, ok_or_failure, run_all)
 import pkg/sunholo/motoko_ext_compaction_structural/compaction_structural (
   compact_for_pre_step,
@@ -43,29 +42,22 @@ func long_content() -> string {
   "long tool output that genuinely exceeds eighty characters and keeps going well past the elide threshold so shortening actually happens and the decision becomes Compacted not PassThrough"
 }
 
-func ctx(limit: int) -> ExtCtx {
-  {
+-- ABI 8.0 (031 PLAN-001 P1.2a): `compact_for_pre_step` takes `PureCtx` -- the
+-- structural policy reads data only -- so the context is built through the
+-- ABI's `pure_ctx` (no ports, no world). Values as before.
+func ctx(limit: int) -> PureCtx {
+  { pure_ctx(jo([])) |
     task: "t",
-    step: 0,
     model: "ollama/qwen3.6:35b-a3b-mxfp8",
     context_limit: limit,
     cwd: ".",
-    hybrid_tools: false,
     budget: { total: 1, solver: 1, verifier: 0 },
     mode: "default",
     workdir: ".",
-    env_server_url: "",
     budget_remaining: 1,
-    history_slice: [],
-	    state_key: "k",
-	    finish_reason: "",
-	    work_in_flight: [],
-	    open_waits: ja([]),
-	    ports: noop_ext_ports(),
-	    artifacts: empty_ext_artifacts(),
-	    telemetry: zero_token_telemetry(), world: empty_ext_world()
-	  }
-	}
+    state_key: "k"
+  }
+}
 
 func tool_heavy_msgs() -> [Msg] {
   let c = long_content();

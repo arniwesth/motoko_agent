@@ -94,9 +94,11 @@ func mk_budget() -> BudgetPlan {
   { total: 4, solver: 4, verifier: 0 }
 }
 
+-- ABI 8.0: registration returns `{ config, caps }`, and the entry keeps both.
 func structural_rt() -> ExtRuntime ! {Env, FS} {
   let v: VerificationConfig = { enabled: false, command: "make check_core" };
-  { registry: { entries: [{ id: "compaction_structural", caps: register_structural_compaction(()) }] }, strict_mode: false, verification: v }
+  let reg = register_structural_compaction(());
+  { registry: { entries: [{ id: "compaction_structural", config: reg.config, caps: reg.caps }] }, strict_mode: false, verification: v }
 }
 
 -- WI-D4. THE CATALOGUE THIS SUITE RUNS ON, DECLARED RATHER THAN INHERITED.

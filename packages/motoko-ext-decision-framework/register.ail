@@ -15,7 +15,7 @@
 --   "[package]", "[extensions]", "register_with_config", "self-modify"
 --
 -- This is the canonical "context-aware extension" pattern: hooks fire every
--- step with ExtCtx (task, history, workdir, model). Lightweight checks at
+-- step with a context view (task, history, workdir, model). Lightweight checks at
 -- on_build_system_prompt time keep the matrix out of irrelevant prompts.
 --
 -- Companions (planned):
@@ -30,22 +30,12 @@ module sunholo/motoko_ext_decision_framework/register
 
 import std/option (None)
 import std/string (length, toLower, contains)
-import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
-  ExtCtx,
-  Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge,
-  ToolSchema,
-  PromptPatch,
-  BudgetPlan,
-  BudgetPatch,
-  ToolPolicyDecision,
-  ToolHandleDecision,
-  ToolCallEnvelope,
-  ToolResultEnvelope,
-  ResponseInterceptDecision,
-  FinalizeDecision,
-  PreStepDecision,
-  Msg,
-  NoOpinion, Delegate, NoIntercept, NoDecision, PassThrough
+import std/json (jo)
+import pkg/sunholo/motoko_ext_abi/types (
+  PureCtx,
+  ExtRegistration,
+  PromptShaper,
+  PromptPatch
 )
 
 -- The four-decision ladder. Kept tight (~20 lines) to avoid prompt bloat.
@@ -128,20 +118,25 @@ pure func task_signals_fires_on_relevant_keywords() -> bool
 
 -- Conditional prompt patch: returns the matrix iff task_signals_self_modification.
 -- This is the canonical "context-aware extension" pattern — hooks fire every
--- step with full ExtCtx; lightweight pure checks here keep irrelevant prompts
+-- step with its context view; lightweight pure checks here keep irrelevant prompts
 -- clean. The decision is logged via emit_event upstream when the agent loop
 -- iterates so operators can confirm activation behaviour from JSONL.
-pure func conditional_prompt_patch(ctx: ExtCtx) -> PromptPatch {
+pure func conditional_prompt_patch(ctx: PureCtx) -> PromptPatch {
   if task_signals_self_modification(ctx.task) then
     { prepend: [], append: [decision_ladder_text()] }
   else
     { prepend: [], append: [] }
 }
 
-export func register_with_config(_cfg: a) -> [Capability] {
-  -- B8: 6.0 Capability list (canonical atom order); the host stamps the id.
+-- ABI 8.0 (031 ADR-001 D2): `{ config, caps }`, the payload a named top-level
+-- function bound directly. Nothing is captured at registration, so the
+-- disclosed configuration is empty.
+export func register_with_config(_cfg: a) -> ExtRegistration {
   -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
-  [
-    PromptShaper(conditional_prompt_patch)
-  ]
+  {
+    config: jo([]),
+    caps: [
+      PromptShaper(conditional_prompt_patch)
+    ]
+  }
 }

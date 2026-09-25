@@ -1,0 +1,32 @@
+module tools/ext_call_inventory/fixtures/control_view_projection
+
+-- CONTROL (8.0): a PROJECTION -- an ExtPorts field taken as a VALUE, forwarded
+-- under its OWN NAME into a record whose declared type is a view.
+--
+-- This is how the ABI builds `FsPorts` / `AiPorts` / `InterceptPorts`
+-- (`fs_ports(p: ExtPorts) -> FsPorts { { file_read: p.file_read, ... } }`) and
+-- how compose narrows a port record for a helper. Read as form 3 (a wrapper:
+-- "the function escapes and its later call site is invisible") it put 15
+-- unresolved sites in the ABI alone and made every extension's closure
+-- UNRESOLVED (P1.7r). It is not an escape: the field keeps its name inside a
+-- record this tool reads as a receiver, so the later call site -- `q.file_read(`
+-- below -- is visible and resolved. Pinned: ONE projection, ONE resolved call,
+-- zero unresolved.
+--
+-- `NarrowPorts` is declared HERE, not in the ABI: an extension-local view is a
+-- view by the same structural rule (identical field signatures), which is what
+-- compose's `SnippetExecPorts` and `RemovePorts` need.
+
+import pkg/sunholo/motoko_ext_abi/types (ExtPorts, ExtWorld, ExtFileRead)
+
+type NarrowPorts = {
+  file_read: (ExtWorld, string) -> ExtFileRead ! {FS}
+}
+
+export func narrow(p: ExtPorts) -> NarrowPorts {
+  { file_read: p.file_read }
+}
+
+export func read_through(q: NarrowPorts, w: ExtWorld, path: string) -> ExtFileRead ! {FS} {
+  q.file_read(w, path)
+}

@@ -1,0 +1,3 @@
+module src/core/ports
+export type Outcome = Done | ToolFailed({ code: string })
+export pure func failed(c: string) -> Outcome { ToolFailed({ code: c }) }

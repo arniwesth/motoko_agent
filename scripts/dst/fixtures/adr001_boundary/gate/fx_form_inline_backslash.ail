@@ -1,0 +1,4 @@
+module scripts/dst/fixtures/adr001_boundary/gate/fx_form_inline_backslash
+import scripts/dst/fixtures/adr001_boundary/gate/gate_abi (Ctx, Capability, PromptShaper)
+func shape_with(_cached: string, _ctx: Ctx) -> int { 1 }
+export func register_with_config(_cfg: int) -> [Capability] { let cached = "prompt"; [PromptShaper(\ctx. shape_with(cached, ctx))] }

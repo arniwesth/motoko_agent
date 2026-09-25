@@ -1,0 +1,25 @@
+# P1.5r-a3 exit checks, primary checkout /workspaces/motoko_agent, HEAD cc6f3856 + this part's diff, AILANG v0.33.0, 2026-09-21T21:56:49Z
+== make profile_definition: exit 0
+  ✓ omission basis intact: BudgetShaper is Unconditional, declares NO effect row (WI-D6; was ! {Env, FS} through WI-D5), and returns BudgetPatch (no successor)
+  ✓ src/core/dst_profile.ail
+== make driver_only: exit 0
+  ✓ omission basis intact: BudgetShaper is Unconditional, declares NO effect row (WI-D6; was ! {Env, FS} through WI-D5), and returns BudgetPatch (no successor)
+  ✓ src/core/dst_driver_only.ail
+== make declared_vs_performed: exit 0
+  ✓ IMPORTED SUM (named-wide): a named function declared ! {AI, IO, Trace, Env} is REJECTED as a Compactor atom (incompatible closed rows, the ONLY extra label Env) -- on the real ABI the payload row IS compiler-enforced for named atoms
+  ✓ IMPORTED SUM (named-exact): the SAME named impl at exactly the payload row is ACCEPTED -- so named-wide's rejection is caused by the Env label, not by the context type, the import, or the probe
+  ✓ IMPORTED SUM (unannot): an UNANNOTATED inline lambda performing Env is REJECTED at the payload row even though the enclosing row admits Env -- the enclosing row no longer absorbs an inline atom
+  ✓ IMPORTED SUM (annot): an inline lambda DECLARING the payload row and performing Env is REJECTED at its own annotation -- same verdict as the local-sum (i-annot) row
+  ✓ IMPORTED SUM (exact-ctl): an inline lambda at exactly the payload row, performing nothing, is ACCEPTED -- so the three rejections above are caused by the rows, not by the probe
+  ✓ IMPORTED SUM (smuggle): the SAME performing lambda bound to a LOCAL record field first and then passed as the atom is ACCEPTED -- limitation 1 is the one remaining door into a 6.0 payload, and it is what this file's control_env/contro
+  ✓ IMPORTED SUM (8.0 context): every probe above names the Compactor slot's 8.0 context, AiCtx, and no other -- the compiler cannot check this for the inline probes (v0.33.0 does not unify an inline lambda's parameter annotation; fb_30e8
+  ✓ 16 register_with_config rows across the 18 extensions (decision_framework, microrag and compose.ail's real registration declare none; compose's register.ail wrapper adds one) — the denominator for the absorption rows below
+  ✓ absorption of 'Env' by register_with_config rows: 16 of 16, unchanged — a record-field-smuggled atom (the one 8.0 form that bypasses the payload row) that begins performing 'Env' compiles under exactly those 16; the shape rule, not 
+  ✓ absorption of 'FS' by register_with_config rows: 13 of 16, unchanged — a record-field-smuggled atom (the one 8.0 form that bypasses the payload row) that begins performing 'FS' compiles under exactly those 13; the shape rule, not th
+  ✓ absorption of 'Process' by register_with_config rows: 3 of 16, unchanged — a record-field-smuggled atom (the one 8.0 form that bypasses the payload row) that begins performing 'Process' compiles under exactly those 3; the shape rule
+  ✓ compaction_ai's register_with_config is no longer at the ten-effect row — the single total-absorption site WI-D8 recorded is closed; that finding is now stale
+declared_vs_performed: 137 passed, 0 failed
+declared_vs_performed: 137 passed, 0 failed
+== make ext_hook_scope: exit 0
+GATE: GREEN -- every installable extension has a total, passing registration-shape result.
+GATE: GREEN -- every installable extension has a total, passing registration-shape result.

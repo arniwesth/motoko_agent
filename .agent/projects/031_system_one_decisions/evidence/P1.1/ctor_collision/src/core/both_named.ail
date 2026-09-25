@@ -1,0 +1,4 @@
+module src/core/both_named
+import src/core/ports (Outcome, ToolFailed)
+import pkg/probe/abi/types (Observed, Seen)
+export pure func observe(o: Outcome) -> Observed { match o { Done => Seen, ToolFailed(f) => ToolFailed(f.code) } }

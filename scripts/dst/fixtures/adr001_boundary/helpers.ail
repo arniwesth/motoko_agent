@@ -1,0 +1,4 @@
+module scripts/dst/fixtures/adr001_boundary/helpers
+import scripts/dst/fixtures/adr001_boundary/types (PureCtx)
+export type W = { f: (PureCtx) -> int }
+export func apply(ctx: PureCtx, w: W) -> int { w.f(ctx) }

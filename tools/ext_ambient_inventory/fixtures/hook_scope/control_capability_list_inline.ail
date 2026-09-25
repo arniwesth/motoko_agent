@@ -2,6 +2,13 @@
 -- capability-constructor applications, every function-typed argument an inline
 -- lambda -- including one whose parameter list holds a comma, so the per-atom
 -- argument split is exercised.  Must resolve CLEAN with exactly THREE atoms.
+-- P1.7r (031 ADR-001 D2): KEPT ON THE 7.4 SHAPE DELIBERATELY.  This fixture's
+-- purpose is the per-atom argument split over INLINE lambdas whose parameter
+-- lists hold commas -- a form 8.0 forbids at the boundary.  Migrating it would
+-- leave nothing to split.  The registration-shape gate is TESTING this old
+-- form: it pins `payload-inline-lambda` (facts 1 and 4) and
+-- `return-shape-unsupported` (the 7.4 bare list) on exactly this text, beside
+-- the walk's clean verdict and the three-atom count.
 module fixture/control_capability_list_inline
 
 import pkg/sunholo/motoko_ext_abi/types (ExtCtx, FinalizeOutcome, ToolCallEnvelope, ToolPolicyDecision)
