@@ -2850,19 +2850,34 @@ motoko:
 # restore with `git diff --quiet HEAD`, which only means something from a clean
 # start. /tmp/motoko-dst-demo is cleared so a rehearsal's logs cannot stand in
 # for this run's.
+#
+# THE TOOL BUDGET. BashExec is `exec(cmd, args)` in src/core/tool_runtime.ail,
+# with no timeout of its own, so the wall is the AILANG runtime's
+# --process-timeout (default 30 s) plus the 5 s WaitDelay grace in
+# ailang/internal/effects/process.go -- the `timeout after 35005ms` a killed
+# command reports, with exit 1 and EMPTY stdout, which the prompt's rule 7
+# correctly reads as "no verdict" and stops on. Neither the schema's per-call
+# `timeout_secs` nor tools.delegated_timeout_ms is on that path. The demo's
+# commands do not fit in 30 s: the mutant's `ailang check` is a cold compile
+# (~58 s, the content changed) and strict_replay is 95 s cold, 33 s warm. So
+# the target sets MOTOKO_PROCESS_TIMEOUT, which the TUI forwards to the
+# runtime as --process-timeout (src/tui/src/runtime-process.ts).
 DEMO_DST_PROMPT := .agent/notes/DEMO-dst-self-test-prompt.md
+DEMO_DST_PROCESS_TIMEOUT ?= 300s
 AUDIENCE ?= 42
 
 .PHONY: demo_dst
 demo_dst:
 	@set -eu; \
 	case "$(AUDIENCE)" in ''|*[!0-9]*) echo "FAIL: AUDIENCE must be a non-negative integer, got '$(AUDIENCE)'"; exit 1;; esac; \
+	printf '%s\n' "$(DEMO_DST_PROCESS_TIMEOUT)" | grep -Eq '^[0-9]+(ms|s|m|h)$$' || { echo "FAIL: DEMO_DST_PROCESS_TIMEOUT must be a duration such as 300s or 5m, got '$(DEMO_DST_PROCESS_TIMEOUT)'"; exit 1; }; \
 	test -f $(DEMO_DST_PROMPT) || { echo "FAIL: $(DEMO_DST_PROMPT) is missing"; exit 1; }; \
 	grep -q '^AUDIENCE_NUMBER = ' $(DEMO_DST_PROMPT) || { echo "FAIL: $(DEMO_DST_PROMPT) has no 'AUDIENCE_NUMBER = ' line to set"; exit 1; }; \
 	git diff --quiet HEAD -- src/core/session.ail || { echo "FAIL: src/core/session.ail has uncommitted changes; the demo edits it and restores it to HEAD"; exit 1; }; \
 	rm -rf /tmp/motoko-dst-demo
 	clear
 	MOTOKO_CONFIG=$(PROFILE) \
+	  MOTOKO_PROCESS_TIMEOUT=$(DEMO_DST_PROCESS_TIMEOUT) \
 	  TASK="$$(sed 's/^AUDIENCE_NUMBER = .*/AUDIENCE_NUMBER = $(AUDIENCE)/' $(DEMO_DST_PROMPT))" \
 	  ./scripts/run-agent.sh
 

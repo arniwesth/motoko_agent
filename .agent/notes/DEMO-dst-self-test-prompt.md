@@ -16,7 +16,7 @@ AUDIENCE_NUMBER = 42
 2. Run the commands below as written and in order. Don't run `make dst` or any other long job.
 3. Keep full output in `/tmp/motoko-dst-demo/`, and show only the filtered view given here. If a filter prints nothing, read the full log before saying anything.
 4. Name the test profile exactly as the `manifest:` line prints it, never from memory.
-5. Between steps, say at most two plain sentences. Explain each term the first time you use it.
+5. Narration always rides in the same response as the next command. In this harness a response with no tool call ends the session, so the only response without one is the closing report in Act 5. For each step, the "Point out" items for the output you just got, each with its quoted line, then the next command, in one response. Nothing else. Explain each term the first time you use it.
 6. The only file you may change is `src/core/session.ail`. Change it only in Act 3, only with the command given, and make sure it is byte-identical to HEAD before you finish. Don't commit, stash or reset anything, and don't touch any other file.
 7. If anything differs from what this script expects, stop, show the line and say plainly what happened. An honest surprise makes a better demo than a smoothed-over one.
 
@@ -41,7 +41,7 @@ chmod +x /tmp/motoko-dst-demo/epoch.sh
 
 If the output says DIRTY, stop and say you won't run the demo on a file with uncommitted changes.
 
-Otherwise, say one sentence about what DST means here. A seeded, simulated world (model replies, tool results, environment and clock) drives your real session code, and every interaction is recorded and checked.
+Otherwise, in the same response as Act 1's command, say one sentence about what DST means here: a seeded, simulated world (model replies, tool results, environment and clock) drives your real session code, and every interaction is recorded and checked.
 
 ## Act 1: Same seed, same world (about 70 s)
 
@@ -71,20 +71,20 @@ diff /tmp/motoko-dst-demo/ids-a.txt /tmp/motoko-dst-demo/ids-b.txt && echo "IDEN
 Point out:
 
 - Nobody pinned these seeds; the audience's number chose them.
-- Each seed injected fault classes (`classes:`) and reached a named recovery branch in production code (`branches:`).
+- For each seed, `classes:` lists the fault classes its world injected and `branches:` the recovery branch in production code that each one reached. A seed showing `(none)` drew a world with no faults; that is a valid draw, not a problem. Point at one seed that did inject something.
 - The `manifest:` line is the profile you'll name from now on.
 - Two separate processes produced byte-identical program identities. Ask the audience to remember the identity column.
 
 ## Act 3: Break myself (about 2½ min)
 
-First explain the bug in two sentences. `session_policy_init`, the function that configured this very session, reads four environment variables and passes the simulated world from each read to the next. You'll make the third read start from the first read's world instead of the second's. That silently drops the record that `MOTOKO_RETRY_STREAM_ERROR` was ever read.
+In the same response as the command below, explain the bug in two sentences. `session_policy_init`, the function that configured this very session, reads four environment variables and passes the simulated world from each read to the next. You'll make the third read start from the first read's world instead of the second's. That silently drops the record that `MOTOKO_RETRY_STREAM_ERROR` was ever read.
 
 ```bash
 sed -i 's/let r_base = ports.env_get(advance(r_retry.next_state, EnvRead)/let r_base = ports.env_get(advance(r_persist.next_state, EnvRead)/' src/core/session.ail
 git diff -U0 src/core/session.ail
 ```
 
-Then explain why this bug is nasty:
+With the type-check command in 3a, explain why this bug is nasty:
 
 - It type-checks.
 - Against the live environment, an env read returns its input world unchanged, so a real session behaves identically and no user would ever see the bug.
@@ -96,7 +96,7 @@ Then explain why this bug is nasty:
 ailang check src/core/session.ail 2>&1 | tail -1
 ```
 
-**3b. The audience's world, again (about 5 s)**
+**3b. The audience's world, again (about 40 s: the changed file forces a cold compile)**
 
 ```bash
 /tmp/motoko-dst-demo/epoch.sh E mutant
@@ -120,7 +120,7 @@ Walk through it in this order:
 3. The finding names `MOTOKO_RETRY_STREAM_ERROR`: 1 read was reached and 0 were recorded. A witness that the recorder did not write is what catches the bug.
 4. Read the rest of that finding line in the full log and put its caveat in plain words. The expected count is derived from the driver's source and control flow, not from a runtime trap. The harness labels this as a different kind of evidence, and so should you.
 
-## Act 4: Put it back (about 80 s)
+## Act 4: Put it back (about 2 min)
 
 ```bash
 sed -i 's/let r_base = ports.env_get(advance(r_persist.next_state, EnvRead)/let r_base = ports.env_get(advance(r_retry.next_state, EnvRead)/' src/core/session.ail
@@ -130,6 +130,7 @@ git diff --quiet HEAD -- src/core/session.ail && echo "session.ail byte-identica
 If the output says NOT RESTORED, run `git checkout -- src/core/session.ail`. That is safe because the file was clean at preflight. Check again, and say that you had to.
 
 ```bash
+ailang check src/core/session.ail 2>&1 | tail -1
 /tmp/motoko-dst-demo/epoch.sh E restored
 diff /tmp/motoko-dst-demo/ids-a.txt /tmp/motoko-dst-demo/ids-restored.txt && echo "identities back to baseline"
 make strict_replay > /tmp/motoko-dst-demo/4-strict-clean.log 2>&1; echo "exit=$?"
@@ -138,6 +139,7 @@ grep -E '^rich: discovery recorded|rich: the REPLAYED|^strict_replay_dst' /tmp/m
 
 Point out:
 
+- The restored file type-checks, so the scorecard's clean column is observed, not assumed.
 - The identities returned to exactly the Act 2 baseline.
 - strict_replay passes.
 - Discovery recorded one more interaction than it did with the bug in place: the missing env read.
@@ -150,7 +152,7 @@ grep -E 'shipped catalogue validates|driver_only installs none' /tmp/motoko-dst-
 sed -n '/recorded coverage gap/,/physical-fault/p' /tmp/motoko-dst-demo/5-faults.log
 ```
 
-Finish with three things.
+Finish with three things, in one response with no tool call. That response ends the session, and it is the only one that should.
 
 1. **A scorecard table.** Use the columns "check", "clean" and "with the bug", and include rows for the type check, the audience-world job, the seed identities and strict_replay. Use only values you observed.
 2. **"What this does not show."** Write three bullets, each tied to a printed line:
