@@ -921,6 +921,18 @@ export class RuntimeProcess {
 
     const supervisorArgs = buildSupervisorArgs(resolvedProfile, model, workdir, port, systemPrompt, task, resume);
 
+    // BashExec/RunTests run in-process as `exec(cmd, args)`
+    // (src/core/tool_runtime.ail) with no timeout of their own, so their wall
+    // is the runtime's --process-timeout (default 30s) plus the 5s WaitDelay
+    // in ailang/internal/effects/process.go -- reported to the model as
+    // `timeout after 35005ms` with exit 1 and EMPTY stdout. Nothing in a
+    // profile reaches that flag, and the tool schema's `timeout_secs` is not
+    // read by the dispatcher, so MOTOKO_PROCESS_TIMEOUT (a Go duration such
+    // as "300s") is the one knob. The binary rejects a malformed value at
+    // startup rather than running with a default.
+    const processTimeout = (process.env.MOTOKO_PROCESS_TIMEOUT ?? "").trim();
+    const processTimeoutArgs = processTimeout === "" ? [] : ["--process-timeout", processTimeout];
+
     this.proc = spawn(
       ailangBin,
       [
@@ -935,6 +947,7 @@ export class RuntimeProcess {
         "--net-allow-localhost",
         "--stream-allow-http",
         "--stream-allow-localhost",
+        ...processTimeoutArgs,
         "src/core/supervisor.ail",
         "--",
         ...supervisorArgs
