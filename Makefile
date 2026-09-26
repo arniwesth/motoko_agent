@@ -3002,13 +3002,15 @@ verify_classify_check:
 # path; test_new_contract_policy.py is its mutation gate, run by
 # verify_classify_check.
 #
-# BASE here is the development trunk, NOT the Makefile-wide BASE (line 83), which
-# is `make pr`'s target branch. main is a release mirror that main_dst is merged
-# into periodically and runs months behind it, so diffing against main re-flags
-# every declaration that predates the rule -- the whole reason this gate is keyed
-# on the diff rather than the tree. A command-line `BASE=` still wins, for a
-# branch cut from somewhere else.
-new_contract_policy: BASE = main_dst
+# BASE here is a git REF, origin/main -- NOT the Makefile-wide BASE (line 83),
+# which is the branch NAME `make pr` targets. The name `main` would resolve to
+# your LOCAL main, which is wherever you last pulled it; a stale one diffs in
+# everything merged since and re-flags declarations that predate the rule, the
+# whole reason this gate is keyed on the diff rather than the tree. The
+# remote-tracking ref moves with every fetch, and the diff is three-dot, from
+# the merge base, so origin/main moving ahead of your branch adds nothing to it.
+# A command-line `BASE=` still wins, for a branch stacked on another.
+new_contract_policy: BASE = origin/main
 new_contract_policy:
 	@python3 tools/verify_classify/new_contract_policy.py --base "$(BASE)"
 

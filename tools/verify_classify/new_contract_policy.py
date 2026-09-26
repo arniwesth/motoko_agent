@@ -25,7 +25,7 @@ SCOPE. A new `pure func` reachable ONLY from a `tests [...]` block is out of §4
 (027's ruling of 2026-09-24). That is computed from each module's reference graph,
 never read off a name, a path or a comment -- see the SCOPE section below.
 
-Usage:  new_contract_policy.py [--base main_dst]
+Usage:  new_contract_policy.py [--base origin/main]
 """
 
 import argparse
@@ -486,7 +486,7 @@ class Scope:
 def main() -> int:
     global ROOT
     ap = argparse.ArgumentParser()
-    ap.add_argument("--base", default="main_dst")
+    ap.add_argument("--base", default="origin/main")
     # For the self-test's scratch repositories (test_new_contract_policy.py).
     ap.add_argument("--root", type=Path, default=ROOT)
     args = ap.parse_args()
