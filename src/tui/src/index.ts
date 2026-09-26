@@ -233,6 +233,8 @@ type ProfileAgentConfig = {
   aiOptionsJson?: string;
   extensions?: string[];
   scratchpadWsLoopback?: boolean;
+  /** `tools.process_timeout`, a Go duration such as "300s": the runtime's --process-timeout. */
+  processTimeout?: string;
   clickstack?: {
     enabled?: boolean;
     endpoint?: string;
@@ -344,6 +346,9 @@ function applyToolProfileConfig(
     "MOTOKO_SCRATCHPAD_WS_LOOPBACK",
     profile.scratchpadWsLoopback === undefined ? undefined : profile.scratchpadWsLoopback ? "1" : "0",
   );
+  // The runtime's --process-timeout, read by RuntimeProcess from the env so a
+  // shell-set MOTOKO_PROCESS_TIMEOUT beats the profile like every key above.
+  setFromProfile(protectedKeys, "MOTOKO_PROCESS_TIMEOUT", profile.processTimeout);
 }
 
 function resolveProfileAgentConfig(workdir: string, profile: string): ProfileAgentConfig {
@@ -364,6 +369,7 @@ function resolveProfileAgentConfig(workdir: string, profile: string): ProfileAge
       };
       tools?: {
         scratchpad_ws_loopback?: unknown;
+        process_timeout?: unknown;
       };
       clickstack?: {
         enabled?: unknown;
@@ -396,6 +402,9 @@ function resolveProfileAgentConfig(workdir: string, profile: string): ProfileAge
       extensions,
       scratchpadWsLoopback: typeof parsed.tools?.scratchpad_ws_loopback === "boolean"
         ? parsed.tools.scratchpad_ws_loopback
+        : undefined,
+      processTimeout: typeof parsed.tools?.process_timeout === "string" && parsed.tools.process_timeout.trim() !== ""
+        ? parsed.tools.process_timeout.trim()
         : undefined,
       clickstack: {
         enabled: typeof parsed.clickstack?.enabled === "boolean"
