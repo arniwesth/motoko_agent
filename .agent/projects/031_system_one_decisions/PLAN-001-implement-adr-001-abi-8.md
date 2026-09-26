@@ -1218,6 +1218,55 @@ less careful check would have reported a false hole.
 **§4's text**: `DRAFT-2026-09-24-adr001-s4-scope-amendment.md` proposes the wording. It is **not adopted** —
 §4 is 027's document, and 027 adopts, amends or refuses it.
 
+### CI-POLICY-BASE and RETIRE-MAIN-DST — 2026-09-25/26, PRs #187 (superseded) and #188 (merged `bab573c4`)
+
+Post-merge fallout from #154, and the one place in this run where **the orchestrator's own recommendation was
+wrong twice and the correction came from evidence**.
+
+**The symptom.** `main`'s first CI run after #154 (`36166159071`) failed `new_contract_policy`: **1335 of 1384
+in-scope new declarations unjustified**, every one of them old. Five of six jobs green. The gate was correct;
+the base was not.
+
+**The cause.** The workflow chose the base by event, and for a push used `github.event.before`. `push:` fires
+on `main` only, and `main` was then a release **mirror** that only ever received trunk — so "since `main`'s
+previous tip" meant "everything trunk did since the last sync". The log printed it: `base: e48de909`, June's
+tip. Measured: `origin/main_dst...origin/main` adds **0** `pure func`s, `e48de909...origin/main` adds **2150**.
+
+The first delegate found a **second** broken route the orchestrator had missed: a PR into `main` from any
+trunk-cut branch hit the same defect through `github.base_ref`, since only `head == main_dst` had been
+special-cased — which is why #154 itself passed while the push of its own merge failed. It also named the
+blindness in the other direction: a hotfix sits in `event.before` for every *later* push, so a red `main`
+would quietly go green on the next commit.
+
+**Then the operator closed the branch.** `main_dst` was the branch Motoko's DST system was implemented on;
+that work is merged and the branch is retired, not maintained. **That made PR #187 wrong to merge**, though it
+was green: its rule routes every base to `origin/$TRUNK`, so with `TRUNK` pointed at `main` a push would diff
+`origin/main` against `HEAD` — the same commit — and **pass unconditionally**. Vacuity reached from the
+opposite side to the one the brief guarded.
+
+**The resolution is that the original logic was never wrong.** A PR against its own base, a push against
+`event.before`, is right for a single trunk; it misfired only because `main` was not one. With one branch,
+`push: [main]` + `event.before` *is* the ratchet — which also closes the unprotected-trunk gap #187 raised,
+with no new trigger and no branch protection.
+
+| receipt (orchestrator's own run) | result |
+|---|---|
+| `make new_contract_policy` with **no `BASE=`** | **rc=0**, `since origin/main` — the default is what a developer gets, so it is part of the fix |
+| green side, simulating the landing push (`BASE=da714845`) | **rc=0** on a **real** diff (3 files, 61 insertions, no `pure func`s) — green for the right reason, not vacuously |
+| red side, same diff + an unjustified `pure func` | **rc=2**, named |
+| red side under the **default** base as well | **rc=2** |
+| CI, PR path (#188) | `base: origin/main` → `no pure func added` |
+| **CI, PUSH path on `main`** (`36223804839`) | **`base: da714845`** → `no pure func added` — the path that could not be tested until the merge |
+
+**Two things the retirement delegate added beyond its brief, both kept.** `event.before` is guarded for two
+failure modes, not the one flagged: all-zeros on a new branch, **and** a `before` orphaned by a force-push,
+falling back to `HEAD~1` with a printed reason. And the default is **`origin/main`, not `main`** — a local
+branch is wherever it was last pulled, and a stale one diffs in everything merged since. That exact trap
+produced two wrong measurements earlier in this run; it now lives in the tool rather than in memory.
+
+**Left for the operator:** close #187 as superseded, delete the `main_dst` branch, close the redundant #186,
+and 027's adoption of the draft §4 amendment.
+
 ## 10. Estimates
 
 | phase | delegate-days |
