@@ -2833,6 +2833,39 @@ motoko:
 	clear
 	MOTOKO_CONFIG=$(PROFILE) ./scripts/run-agent.sh $(ARGS)
 
+# The DST self-test demo, driven by Motoko itself. It plants a one-line bug in
+# its own driver (session_policy_init drops a world successor, losing the record
+# of the MOTOKO_RETRY_STREAM_ERROR read), shows that the type checker, the
+# rotating job's ✓ and replay all miss it, has strict_replay name it, then
+# restores the file byte for byte. The acts and their expected output lines are
+# in the prompt. About 5 minutes of tool time plus narration; like `motoko`, it
+# does not rebuild, so run `make build` beforehand.
+#
+# AUDIENCE picks the rotating-corpus epoch. The demo-scale job only certifies
+# when AUDIENCE mod 13 is 1-6 (3, 17, 42, 69, ...); any other number still
+# runs, and Motoko explains the refusal and moves to the next qualifying one.
+# Select the model with MODEL=... or PROFILE=... as for `run`.
+#
+# Refuses to start on a dirty session.ail: the demo edits it and proves the
+# restore with `git diff --quiet HEAD`, which only means something from a clean
+# start. /tmp/motoko-dst-demo is cleared so a rehearsal's logs cannot stand in
+# for this run's.
+DEMO_DST_PROMPT := .agent/notes/DEMO-dst-self-test-prompt.md
+AUDIENCE ?= 42
+
+.PHONY: demo_dst
+demo_dst:
+	@set -eu; \
+	case "$(AUDIENCE)" in ''|*[!0-9]*) echo "FAIL: AUDIENCE must be a non-negative integer, got '$(AUDIENCE)'"; exit 1;; esac; \
+	test -f $(DEMO_DST_PROMPT) || { echo "FAIL: $(DEMO_DST_PROMPT) is missing"; exit 1; }; \
+	grep -q '^AUDIENCE_NUMBER = ' $(DEMO_DST_PROMPT) || { echo "FAIL: $(DEMO_DST_PROMPT) has no 'AUDIENCE_NUMBER = ' line to set"; exit 1; }; \
+	git diff --quiet HEAD -- src/core/session.ail || { echo "FAIL: src/core/session.ail has uncommitted changes; the demo edits it and restores it to HEAD"; exit 1; }; \
+	rm -rf /tmp/motoko-dst-demo
+	clear
+	MOTOKO_CONFIG=$(PROFILE) \
+	  TASK="$$(sed 's/^AUDIENCE_NUMBER = .*/AUDIENCE_NUMBER = $(AUDIENCE)/' $(DEMO_DST_PROMPT))" \
+	  ./scripts/run-agent.sh
+
 # Optional live calibration only; not part of compaction_dst or CI.
 # Requires OPENROUTER_API_KEY and uses Qwen for both agent and compaction_ai.
 live_qwen36_compaction_calibration: build
