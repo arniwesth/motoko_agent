@@ -926,10 +926,12 @@ export class RuntimeProcess {
     // is the runtime's --process-timeout (default 30s) plus the 5s WaitDelay
     // in ailang/internal/effects/process.go -- reported to the model as
     // `timeout after 35005ms` with exit 1 and EMPTY stdout. Nothing in a
-    // profile reaches that flag, and the tool schema's `timeout_secs` is not
-    // read by the dispatcher, so MOTOKO_PROCESS_TIMEOUT (a Go duration such
-    // as "300s") is the one knob. The binary rejects a malformed value at
-    // startup rather than running with a default.
+    // profile reaches that flag by itself, and the tool schema's
+    // `timeout_secs` is not read by the dispatcher, so MOTOKO_PROCESS_TIMEOUT
+    // (a Go duration such as "300s") is the one knob: index.ts publishes the
+    // profile's `tools.process_timeout` under that name unless the shell set
+    // it. The binary rejects a malformed value at startup rather than running
+    // with a default.
     const processTimeout = (process.env.MOTOKO_PROCESS_TIMEOUT ?? "").trim();
     const processTimeoutArgs = processTimeout === "" ? [] : ["--process-timeout", processTimeout];
 

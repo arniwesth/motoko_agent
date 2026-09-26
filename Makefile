@@ -2844,7 +2844,9 @@ motoko:
 # AUDIENCE picks the rotating-corpus epoch. The demo-scale job only certifies
 # when AUDIENCE mod 13 is 1-6 (3, 17, 42, 69, ...); any other number still
 # runs, and Motoko explains the refusal and moves to the next qualifying one.
-# Select the model with MODEL=... or PROFILE=... as for `run`.
+# Runs under the tracked demo_dst profile, which pins the model and the tool
+# budget; DEMO_DST_PROFILE=... runs under another profile, and MODEL=... still
+# overrides the model as for `run`.
 #
 # Refuses to start on a dirty session.ail: the demo edits it and proves the
 # restore with `git diff --quiet HEAD`, which only means something from a clean
@@ -2857,27 +2859,32 @@ motoko:
 # ailang/internal/effects/process.go -- the `timeout after 35005ms` a killed
 # command reports, with exit 1 and EMPTY stdout, which the prompt's rule 7
 # correctly reads as "no verdict" and stops on. Neither the schema's per-call
-# `timeout_secs` nor tools.delegated_timeout_ms is on that path. The demo's
-# commands do not fit in 30 s: the mutant's `ailang check` is a cold compile
-# (~58 s, the content changed) and strict_replay is 95 s cold, 33 s warm. So
-# the target sets MOTOKO_PROCESS_TIMEOUT, which the TUI forwards to the
-# runtime as --process-timeout (src/tui/src/runtime-process.ts).
+# `timeout_secs` nor tools.delegated_timeout_ms is on that path
+# (.agent/issues/bashexec-timeout-knobs-are-dead.md). The demo's commands do
+# not fit in 30 s: the mutant's `ailang check` is a cold compile (~58 s, the
+# content changed) and strict_replay is 95 s cold, 33 s warm. The demo_dst
+# profile sets tools.process_timeout to 300s, which the TUI forwards to the
+# runtime as --process-timeout; DEMO_DST_PROCESS_TIMEOUT=... overrides it for
+# one run through the same MOTOKO_PROCESS_TIMEOUT env var, which beats the
+# profile.
 DEMO_DST_PROMPT := .agent/notes/DEMO-dst-self-test-prompt.md
-DEMO_DST_PROCESS_TIMEOUT ?= 300s
+DEMO_DST_PROFILE ?= demo_dst
+DEMO_DST_PROCESS_TIMEOUT ?=
 AUDIENCE ?= 42
 
 .PHONY: demo_dst
 demo_dst:
 	@set -eu; \
 	case "$(AUDIENCE)" in ''|*[!0-9]*) echo "FAIL: AUDIENCE must be a non-negative integer, got '$(AUDIENCE)'"; exit 1;; esac; \
-	printf '%s\n' "$(DEMO_DST_PROCESS_TIMEOUT)" | grep -Eq '^[0-9]+(ms|s|m|h)$$' || { echo "FAIL: DEMO_DST_PROCESS_TIMEOUT must be a duration such as 300s or 5m, got '$(DEMO_DST_PROCESS_TIMEOUT)'"; exit 1; }; \
+	if [ -n "$(DEMO_DST_PROCESS_TIMEOUT)" ]; then printf '%s\n' "$(DEMO_DST_PROCESS_TIMEOUT)" | grep -Eq '^[0-9]+(ms|s|m|h)$$' || { echo "FAIL: DEMO_DST_PROCESS_TIMEOUT must be a duration such as 300s or 5m, got '$(DEMO_DST_PROCESS_TIMEOUT)'"; exit 1; }; fi; \
+	test -f .motoko/config/$(DEMO_DST_PROFILE)/config.json || { echo "FAIL: no profile at .motoko/config/$(DEMO_DST_PROFILE)/config.json (DEMO_DST_PROFILE=$(DEMO_DST_PROFILE))"; exit 1; }; \
 	test -f $(DEMO_DST_PROMPT) || { echo "FAIL: $(DEMO_DST_PROMPT) is missing"; exit 1; }; \
 	grep -q '^AUDIENCE_NUMBER = ' $(DEMO_DST_PROMPT) || { echo "FAIL: $(DEMO_DST_PROMPT) has no 'AUDIENCE_NUMBER = ' line to set"; exit 1; }; \
 	git diff --quiet HEAD -- src/core/session.ail || { echo "FAIL: src/core/session.ail has uncommitted changes; the demo edits it and restores it to HEAD"; exit 1; }; \
 	rm -rf /tmp/motoko-dst-demo
 	clear
-	MOTOKO_CONFIG=$(PROFILE) \
-	  MOTOKO_PROCESS_TIMEOUT=$(DEMO_DST_PROCESS_TIMEOUT) \
+	MOTOKO_CONFIG=$(DEMO_DST_PROFILE) \
+	  $(if $(DEMO_DST_PROCESS_TIMEOUT),MOTOKO_PROCESS_TIMEOUT=$(DEMO_DST_PROCESS_TIMEOUT)) \
 	  TASK="$$(sed 's/^AUDIENCE_NUMBER = .*/AUDIENCE_NUMBER = $(AUDIENCE)/' $(DEMO_DST_PROMPT))" \
 	  ./scripts/run-agent.sh
 

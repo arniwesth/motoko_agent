@@ -5,7 +5,12 @@
 open — filed 2026-09-26 from the `make demo_dst` runs (sessions
 `session_1790414683122-598f9b02d794a0b1` and `session_1790415720845-56963b377d77b009`).
 Interim relief landed in `242eeb4d` (`MOTOKO_PROCESS_TIMEOUT` → `--process-timeout`), which is a
-per-session global and not a fix for either knob.
+per-session global and not a fix for either knob. **The per-session half was then closed the same
+day:** a profile's `tools.process_timeout` is forwarded to `--process-timeout` (`index.ts`,
+`resolveProfileAgentConfig` → `applyToolProfileConfig`, with the shell env var taking precedence),
+so a profile now states a budget that is applied. Still open: `timeout_secs` is advertised and
+unparsed, and `tools.delegated_timeout_ms` is still loaded, copied and read by nothing — it should
+be deleted so no profile states a budget nobody applies.
 
 ## Description
 
