@@ -3443,7 +3443,7 @@ test_coverage_selftest:
 	@python3 tools/test_coverage/derive.py --self-test
 
 # ---------------------------------------------------------------------------
-# agent_confined — the boundary checks for .devcontainer/agent_confined/
+# agent_confined — the boundary checks for .devcontainer/agent/
 #
 # Wired here so the container's confinement is regression-tested rather than
 # described. Both targets are HOST-SIDE: `agent_confined_check` shells out to
@@ -3457,16 +3457,16 @@ test_coverage_selftest:
 # — so it is not a make target; the command is in the profile's README.
 .PHONY: agent_confined_check agent_confined_r7
 agent_confined_check:
-	@.devcontainer/agent_confined/agent.sh check
+	@.devcontainer/agent/agent.sh check
 
 R7_BASELINE ?= $(HOME)/r7-baseline.json
 agent_confined_r7:
 	@test -f "$(R7_BASELINE)" || { \
 	  echo "no baseline at $(R7_BASELINE) — record one FROM A SANITISED TREE first:"; \
-	  echo "  .devcontainer/agent_confined/checks/r7_git_audit.py --root \"$$PWD\" --record $(R7_BASELINE)"; \
+	  echo "  .devcontainer/agent/checks/r7_git_audit.py --root \"$$PWD\" --record $(R7_BASELINE)"; \
 	  echo "(set R7_BASELINE=<path> to use another location)"; \
 	  exit 2; }
-	@python3 .devcontainer/agent_confined/checks/r7_git_audit.py --root "$$PWD" --verify "$(R7_BASELINE)"
+	@python3 .devcontainer/agent/checks/r7_git_audit.py --root "$$PWD" --verify "$(R7_BASELINE)"
 
 # `make studio` starts Herdr Studio in the agent container and prints the login URL.
 #
@@ -3479,7 +3479,7 @@ agent_confined_r7:
 HERDR_STUDIO_PORT ?= 8787
 .PHONY: studio
 studio:
-	@agent=.devcontainer/agent_confined/agent.sh; \
+	@agent=.devcontainer/agent/agent.sh; \
 	if ! $$agent run curl -fsS -m3 http://127.0.0.1:8787/healthz >/dev/null 2>&1; then \
 	  echo "starting herdr-gui in the agent container…"; \
 	  $$agent run bash -lc 'mkdir -p "$$HOME/.config/herdr-gui" && setsid nohup herdr-gui --host 0.0.0.0 --port 8787 >"$$HOME/.config/herdr-gui/bridge.log" 2>&1 < /dev/null &'; \
