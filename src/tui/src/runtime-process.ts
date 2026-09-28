@@ -363,6 +363,27 @@ function mirrorProfileFromRepo(
   }
 }
 
+// #196: the same sandbox problem for the model catalogue. The core's
+// `catalog_path` (src/core/context_usage.ail) falls back to
+// ${MOTOKO_REPO}/.motoko/model-catalog.json, but AILANG_FS_SANDBOX pins reads
+// to <workdir>, so from an eval workspace that fallback always misses and the
+// run reports `context_limit: 0` (`catalogue_absent`). Copy the repo's
+// catalogue in so the core's workdir-relative probe finds it. Same no-op
+// cases as mirrorProfileFromRepo, and a workdir's own catalogue always wins.
+export function mirrorModelCatalogFromRepo(workdir: string, repoPath: string): void {
+  const repo = repoPath.trim();
+  if (repo === "") return;
+  const absWorkdir = path.resolve(workdir);
+  const absRepo = path.resolve(repo);
+  if (absWorkdir === absRepo) return;
+  const dst = path.join(absWorkdir, ".motoko", "model-catalog.json");
+  if (fs.existsSync(dst)) return;
+  const src = path.join(absRepo, ".motoko", "model-catalog.json");
+  if (!fs.existsSync(src)) return;
+  fs.mkdirSync(path.dirname(dst), { recursive: true });
+  fs.copyFileSync(src, dst);
+}
+
 // 2026-05-14: if MOTOKO_CONFIG points to an absolute path OUTSIDE the workdir
 // (e.g. ~/.motoko/config/mark — a personal profile that shouldn't live in
 // motoko_agent's tree), the AILANG runtime can't read it: FS_SANDBOX is
@@ -901,6 +922,7 @@ export class RuntimeProcess {
      // sandbox. Mirror runs at most once per spawn and is a no-op when
      // workdir is already the fork itself.
     mirrorProfileFromRepo(workdir, profile, childEnv.MOTOKO_REPO ?? "");
+    mirrorModelCatalogFromRepo(workdir, childEnv.MOTOKO_REPO ?? "");
 
     // 2026-05-14: If MOTOKO_CONFIG was an absolute out-of-tree path
     // (e.g. ~/.motoko/config/mark), mirror it into workdir and use the
