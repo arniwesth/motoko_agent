@@ -150,7 +150,7 @@ func edit_ail(ctx: ProviderCtx, call: ToolCallEnvelope, path: string) -> ToolHan
     }
   }
   -- dry runs and SHA-guarded edits keep motoko's native semantics
-  if arg_bool(call.arguments, "dry_run") || arg_str(call.arguments, "expected_sha256") != "" then Delegate else if edits == [] then Delegate else {
+  if arg_bool(call.arguments, "dry_run") || arg_str(call.arguments, "expected_sha256") != "" then Delegate else if is_empty(edits) then Delegate else {
     let target = resolve(ctx.workdir, path)
     match readFileResult(target) {
       Err(msg) => Handled(result_err(call, "EditFile: cannot read ${path}: ${msg}")),
@@ -167,6 +167,11 @@ func edit_ail(ctx: ProviderCtx, call: ToolCallEnvelope, path: string) -> ToolHan
       }
     }
   }
+}
+
+-- match, not `== []`: == on [Json] needs AILANG >= 0.42 and motoko builds against its floor.
+pure func is_empty(xs: [Json]) -> bool {
+  match xs { [] => true, _ => false }
 }
 
 pure func list_count(xs: [string]) -> int {

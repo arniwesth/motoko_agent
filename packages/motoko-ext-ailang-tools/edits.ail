@@ -79,22 +79,30 @@ export pure func apply_edit(text: string, old: string, new: string) -> Result[(s
   }
 }
 
+-- Tests compare through match, not ==: == on Result and tuples needs
+-- AILANG >= 0.42, and motoko still builds against its ailang.toml floor.
+pure func edit_gives(r: Result[(string, string), string], text: string, how: string) -> bool {
+  match r { Ok((t, h)) => t == text && h == how, Err(_) => false }
+}
+
+pure func edit_fails(r: Result[(string, string), string]) -> bool {
+  match r { Ok(_) => false, Err(_) => true }
+}
+
 pure func edits_apply_exact_once() -> bool
   tests [((), true)]
   {
-    apply_edit("a\nb\nc", "b", "B") == Ok(("a\nB\nc", "exact"))
+    edit_gives(apply_edit("a\nb\nc", "b", "B"), "a\nB\nc", "exact")
   }
 
 pure func edits_fall_back_to_whitespace_tolerant() -> bool
   tests [((), true)]
   {
-    apply_edit("f() {\n    x + 1\n}", "f() {\n  x + 1\n}", "f() {\n  x + 2\n}") == Ok(("f() {\n  x + 2\n}", "whitespace-tolerant"))
+    edit_gives(apply_edit("f() {\n    x + 1\n}", "f() {\n  x + 1\n}", "f() {\n  x + 2\n}"), "f() {\n  x + 2\n}", "whitespace-tolerant")
   }
 
 pure func edits_refuse_ambiguous_and_missing() -> bool
   tests [((), true)]
   {
-    let dup = match apply_edit("x\nx", "x", "y") { Ok(_) => false, Err(_) => true };
-    let none = match apply_edit("a\nb", "zzz", "y") { Ok(_) => false, Err(_) => true };
-    dup && none
+    edit_fails(apply_edit("x\nx", "x", "y")) && edit_fails(apply_edit("a\nb", "zzz", "y"))
   }
