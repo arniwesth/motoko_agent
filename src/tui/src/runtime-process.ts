@@ -934,6 +934,14 @@ export class RuntimeProcess {
     // with a default.
     const processTimeout = (process.env.MOTOKO_PROCESS_TIMEOUT ?? "").trim();
     const processTimeoutArgs = processTimeout === "" ? [] : ["--process-timeout", processTimeout];
+    // AILANG's recursion ceiling (default 10,000 calls). From ailang v0.45.0 (#1317) it
+    // is enforced on callback paths too — before, a callback that ran after a stack hop
+    // started from a zero call counter — so a long streamed step now aborts the whole
+    // session with RT_REC_003 (measured 2026-09-28: gauntlet_10, ~14k streamed events).
+    // The same change made deep recursion safe (the evaluator hops to a fresh goroutine
+    // every 2^17 levels), so the runtime is launched with a ceiling that a real session
+    // does not reach. MOTOKO_MAX_RECURSION_DEPTH overrides it.
+    const maxRecursionDepth = (process.env.MOTOKO_MAX_RECURSION_DEPTH ?? "").trim() || "1000000";
 
     this.proc = spawn(
       ailangBin,
@@ -950,6 +958,8 @@ export class RuntimeProcess {
         "--stream-allow-http",
         "--stream-allow-localhost",
         ...processTimeoutArgs,
+        "--max-recursion-depth",
+        maxRecursionDepth,
         "src/core/supervisor.ail",
         "--",
         ...supervisorArgs
