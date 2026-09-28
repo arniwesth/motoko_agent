@@ -29,7 +29,7 @@ module sunholo/motoko_ext_microrag/register
 import std/option (None, Some)
 import std/string (length, endsWith)
 import std/process (exec)
-import std/fs (writeFile)
+import std/fs (writeFileResult)
 import std/bytes (toString)
 import std/json (Json, get, asString, encode, jo)
 import pkg/sunholo/motoko_ext_abi/types (
@@ -135,12 +135,20 @@ func auto_write_with_microrag(call: ToolCallEnvelope) -> ToolHandleDecision ! {F
   if path == "" then Handled(make_error_result(call, "WriteFile: missing 'path'"))
   else if content == "" then Handled(make_error_result(call, "WriteFile: missing 'content'"))
   else {
-    let _ = writeFile(path, content);
-    let retrieval = microrag_context_for(path, content);
-    let combined = if length(retrieval) == 0
-      then "Wrote ${show(length(content))} bytes to ${path}"
-      else "Wrote ${show(length(content))} bytes to ${path}\n\n[μRAG auto-injected for next turn]:\n${retrieval}";
-    Handled(make_result(call, combined, 0))
+    -- writeFileResult, not writeFile: a failed write (a path outside the
+    -- sandbox, a missing parent, permissions) must come back to the model as
+    -- a tool error. writeFile raised it instead, which ended the whole session
+    -- ("writeFile: path ... escapes sandbox", motoko main 2026-09-28).
+    match writeFileResult(path, content) {
+      Err(msg) => Handled(make_error_result(call, "WriteFile: ${msg}")),
+      Ok(_) => {
+        let retrieval = microrag_context_for(path, content);
+        let combined = if length(retrieval) == 0
+          then "Wrote ${show(length(content))} bytes to ${path}"
+          else "Wrote ${show(length(content))} bytes to ${path}\n\n[μRAG auto-injected for next turn]:\n${retrieval}";
+        Handled(make_result(call, combined, 0))
+      }
+    }
   }
 }
 
