@@ -2383,7 +2383,7 @@ terminal_trace:
 	fi; \
 	ailang test src/core/dst_result.ail > /dev/null; echo "  ✓ src/core/dst_result.ail"; \
 	ailang test src/core/phase_vocab.ail > /dev/null; echo "  ✓ src/core/phase_vocab.ail"; \
-	ailang test src/core/session.ail > /dev/null && echo "  ✓ src/core/session.ail"
+	echo "  - src/core/session.ail's tests run in test_coverage_slow (sunholo-data/ailang#1328)"
 
 # Driver full-loop coverage (WI-A16). These eight smoke scripts exercise the v2
 # driver loop end-to-end and, until this target existed, ran in no make target
@@ -2968,7 +2968,9 @@ test: test_core
 # returns zero for per-function encoding/solver ERROR verdicts unless --strict
 # is used; --strict would also reject the intentionally tolerated SKIPPED
 # bucket, so parse ERROR explicitly below instead of trusting only its status.
-# Files with no contracts at all are counted as bare and do not fail.
+# Files with no contracts at all are counted as bare and do not fail. v0.33 said
+# "no functions with contracts"; v0.47 says "N exported functions: N without
+# contracts" (a file with some contracts reads "N verified, M without contracts").
 # Reasons, not rejection codes: verify.go:340-349 strips codes from the human message.
 verify_core:
 	@proven=0; unstated=0; blocked=0; fail=0; bare=0; \
@@ -2984,7 +2986,7 @@ verify_core:
 			fail=$$((fail + 1)); \
 			continue; \
 		fi; \
-		if echo "$$out" | grep -q "no functions with contracts"; then \
+		if echo "$$out" | grep -qE "no functions with contracts|exported functions: [0-9]+ without contracts"; then \
 			bare=$$((bare + 1)); \
 			continue; \
 		fi; \
@@ -3099,7 +3101,7 @@ verify_ext:
 			fail=$$((fail + 1)); \
 			continue; \
 		fi; \
-		if echo "$$out" | grep -q "no functions with contracts"; then \
+		if echo "$$out" | grep -qE "no functions with contracts|exported functions: [0-9]+ without contracts"; then \
 			bare=$$((bare + 1)); \
 			continue; \
 		fi; \
@@ -3435,9 +3437,21 @@ ext_hook_scope_selftest:
 # shared between containers is not idle cores anyway: 28 there, with 4.8 of 8 busy.
 TEST_COVERAGE_JOBS ?= $(shell n=$$(nproc 2>/dev/null || echo 1); [ $$n -lt 6 ] && echo $$n || echo 6)
 
-.PHONY: test_coverage test_coverage_selftest
+# TEMPORARY, for sunholo-data/ailang#1328: `ailang test` on these files is
+# 18-24x slower than on v0.33.0 (session.ail: 98 s -> ~2,300 s), far past the
+# 600 s per-file hang backstop. `test_coverage` walks everything else under the
+# usual caps; `test_coverage_slow` walks only these, with a cap sized for the
+# regression, in a CI job that cannot block a merge (verify-extensions.yml,
+# coverage_slow). Delete both the list and the target once #1328 is fixed.
+TEST_COVERAGE_SLOW := src/core/session.ail src/core/ext/runtime.ail src/core/test/scripted_ports.ail
+TEST_COVERAGE_SLOW_TIMEOUT ?= 5400
+
+.PHONY: test_coverage test_coverage_slow test_coverage_selftest
 test_coverage:
-	@python3 tools/test_coverage/derive.py --jobs $(TEST_COVERAGE_JOBS)
+	@python3 tools/test_coverage/derive.py --jobs $(TEST_COVERAGE_JOBS) $(addprefix --exclude ,$(TEST_COVERAGE_SLOW))
+
+test_coverage_slow:
+	@python3 tools/test_coverage/derive.py --jobs 3 --timeout $(TEST_COVERAGE_SLOW_TIMEOUT) $(addprefix --only ,$(TEST_COVERAGE_SLOW))
 
 test_coverage_selftest:
 	@python3 tools/test_coverage/derive.py --self-test
