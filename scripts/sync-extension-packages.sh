@@ -83,7 +83,7 @@ sync_core() {
     --exclude 'ext/test_dummy/' \
     "$src_dir/" "$pkg_mod_dir/"
 
-  # The package manifest lives outside src/core: on AILANG v0.47.1 a nested
+  # The package manifest lives outside src/core: on AILANG v0.47 a nested
   # ailang.toml makes `ailang check src/core/*.ail` resolve src/core as its own
   # project, with no lockfile, so every pkg/ import fails to load.
   cp "$ROOT_DIR/scripts/packaging/motoko_core.ailang.toml" "$pkg_dir/ailang.toml"
