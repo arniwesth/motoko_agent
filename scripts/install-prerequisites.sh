@@ -37,8 +37,8 @@ GO_MIN_MINOR=22
 BUN_MIN_MAJOR=1
 NODE_MIN_MAJOR=18
 OMNIGRAPH_MIN_VERSION="0.3.0"
-AILANG_REF="v0.33.0"
-AILANG_MIN_VERSION="0.33.0"
+AILANG_REF="v0.47.2"
+AILANG_MIN_VERSION="0.47.2"
 DUCKDB_VERSION="1.1.3"
 # Ubuntu noble's universe carries gh 2.45.0 and will for the life of the release.
 # The PR ops pipeline (.agent/projects/016_github_ops/) needs newer: `gh api

@@ -114,6 +114,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Sequence
 
 RULES: dict[str, str] = {
     "failing": "a file's inline tests do not all pass",
@@ -344,7 +345,8 @@ def load_skip_records(path: Path) -> list[dict]:
     return data["records"]
 
 
-def classify(results: list[FileResult], records: list[dict]) -> list[Finding]:
+def classify(results: list[FileResult], records: list[dict],
+             whole_walk: bool = True) -> list[Finding]:
     out: list[Finding] = []
     matched: set[str] = set()
 
@@ -385,7 +387,9 @@ def classify(results: list[FileResult], records: list[dict]) -> list[Finding]:
     for rec in records:
         if rec["prefix"] in matched:
             continue
-        if rec.get("expected") == "always":
+        # A partial walk (--only) cannot prove a reason absent from the tree;
+        # the run over everything else asserts staleness instead.
+        if rec.get("expected") == "always" and whole_walk:
             out.append(Finding(
                 "stale_skip_record", rec["prefix"],
                 "recorded as always present, but nothing skipped for this "
@@ -534,19 +538,23 @@ def judge_sealing(returncode: int, output: str, probe: Path) -> list[Finding]:
     return []
 
 
-def discover(root: Path) -> list[Path]:
-    return sorted(root.rglob("*.ail"))
+def discover(root: Path, only: Sequence[Path] = (), exclude: Sequence[Path] = ()) -> list[Path]:
+    files = sorted(root.rglob("*.ail"))
+    if only:
+        return [f for f in files if f in only]
+    return [f for f in files if f not in exclude]
 
 
-def run_inventory(root: Path, records: list[dict], jobs: int,
-                  timeout: int) -> tuple[list[FileResult], list[Finding]]:
-    files = discover(root)
+def run_inventory(root: Path, records: list[dict], jobs: int, timeout: int,
+                  only: Sequence[Path] = (), exclude: Sequence[Path] = ()
+                  ) -> tuple[list[FileResult], list[Finding]]:
+    files = discover(root, only, exclude)
     if jobs > 1:
         with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
             results = list(pool.map(lambda p: run_file(p, timeout), files))
     else:
         results = [run_file(p, timeout) for p in files]
-    return results, classify(results, records)
+    return results, classify(results, records, whole_walk=not only)
 
 
 def report(results: list[FileResult], findings: list[Finding], root: Path,
@@ -815,6 +823,8 @@ def _constructed_rows() -> list[str]:
         classify(empty, always), {"stale_skip_record"})
     row("a `sometimes` record matching nothing is not a failure",
         classify(empty, sometimes), set())
+    row("a partial walk (--only) does not assert `always` records",
+        classify(empty, always, whole_walk=False), set())
     return fails
 
 
@@ -825,6 +835,16 @@ def main() -> int:
                     help="directory walked recursively for .ail files")
     ap.add_argument("--target", default="test_coverage",
                     help="the make target whose CI reachability is checked")
+    # A TEMPORARY split, not a roster: `make test_coverage` walks everything
+    # but TEST_COVERAGE_SLOW, and `make test_coverage_slow` walks only those, in
+    # a CI job that may not block a merge. Both are partitions of one walk.
+    # Exists for sunholo-data/ailang#1328 (`ailang test` on session.ail went
+    # from 98 s at v0.33.0 to ~2,300 s on v0.44+). Delete with it.
+    group = ap.add_mutually_exclusive_group()
+    group.add_argument("--exclude", action="append", default=[], type=Path,
+                       help="skip this file (repeatable)")
+    group.add_argument("--only", action="append", default=[], type=Path,
+                       help="walk only this file (repeatable); `always` skip records are not asserted")
     # Serial by DEFAULT, but no longer serial by NECESSITY -- and the
     # difference is the whole of this comment.
     #
@@ -908,7 +928,13 @@ def main() -> int:
         print(f"no such directory: {root}", file=sys.stderr)
         return 2
 
-    results, findings = run_inventory(root, records, args.jobs, args.timeout)
+    walked = set(discover(root))
+    for f in args.only + args.exclude:
+        if f not in walked:
+            print(f"not a file this walk discovers under {root}: {f}", file=sys.stderr)
+            return 2
+    results, findings = run_inventory(root, records, args.jobs, args.timeout,
+                                      args.only, args.exclude)
     findings += check_git_tracking(root, results)
     findings += check_reachability(args.target, Path(".github/workflows"),
                                    Path("Makefile"))
