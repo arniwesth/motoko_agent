@@ -1,0 +1,78 @@
+-- scripts/verify_native_path_guard.ail
+--
+-- The native tools' symlink guard must refuse a path that resolves outside the
+-- workdir. validate_path_common runs a bash guard that exits 43/44 on an
+-- escape, and std/process `exec` returns Ok for ANY exit code (Err only when
+-- the process cannot run), so a guard matched on `Ok(_)` accepted every path.
+-- The lexical checks (absolute, `..`) never went through exec, so only
+-- symlink escapes got past it; AILANG_FS_SANDBOX, where the TUI sets it, was
+-- the only thing stopping them. This runs without that variable, so the guard
+-- is the only thing under test.
+--
+-- Usage:
+--   AILANG_RELAX_MODULES=1 ailang run --caps IO,FS,Process,Env,Clock \
+--     --entry main scripts/verify_native_path_guard.ail
+module scripts/verify_native_path_guard
+
+import std/io (println, exit)
+import std/string (contains, trim)
+import std/bytes (toString)
+import std/json (jo, ja, kv, js, jnum, encode)
+import std/fs (readFileResult, fileExists, writeFileResult)
+import std/process (exec)
+import std/result (Ok, Err)
+import src/core/tool_dispatch_adapter (dispatch_one)
+
+func call(workdir: string, id: string, name: string, args: string) -> string ! {IO, FS, Process, Env, Clock} {
+  dispatch_one(workdir, { id: id, name: name, arguments: args })
+}
+
+func check(label: string, ok: bool, detail: string) -> bool ! {IO} {
+  if ok then { println("OK: ${label}"); true }
+  else { println("FAIL: ${label} — ${detail}"); false }
+}
+
+func refused(result: string) -> bool {
+  contains(result, "\"error\":true") && contains(result, "escapes workspace")
+}
+
+func file_text(p: string) -> string ! {FS} {
+  match readFileResult(p) { Ok(t) => t, Err(_) => "" }
+}
+
+export func main() -> () ! {IO, FS, Process, Env, Clock} {
+  let root = match exec("mktemp", ["-d"]) { Ok(out) => trim(toString(out.stdout)), Err(_) => "" };
+  if root == "" then { println("FAIL: mktemp -d"); exit(1) } else {
+    let workdir = "${root}/work";
+    let outside = "${root}/outside";
+    let _ = exec("mkdir", ["-p", workdir, outside]);
+    let _ = exec("ln", ["-s", outside, "${workdir}/link"]);
+    let _ = writeFileResult("${outside}/secret.txt", "secret\n");
+    let _ = writeFileResult("${workdir}/inside.txt", "inside\n");
+
+    let read_esc = call(workdir, "r1", "ReadFile",
+      encode(jo([kv("path", js("link/secret.txt")), kv("start", jnum(1.0)), kv("end", jnum(5.0))])));
+    let write_esc = call(workdir, "w1", "WriteFile",
+      encode(jo([kv("path", js("link/planted.txt")), kv("content", js("planted"))])));
+    let edit_esc = call(workdir, "e1", "EditFile",
+      encode(jo([kv("path", js("link/secret.txt")),
+        kv("edits", ja([jo([kv("old", js("secret")), kv("new", js("changed"))])]))])));
+    let read_in = call(workdir, "r2", "ReadFile",
+      encode(jo([kv("path", js("inside.txt")), kv("start", jnum(1.0)), kv("end", jnum(5.0))])));
+
+    let results = [
+      check("ReadFile through a symlink out of the workdir is refused", refused(read_esc), read_esc),
+      check("WriteFile through a symlink out of the workdir is refused", refused(write_esc), write_esc),
+      check("...and nothing was written outside", not fileExists("${outside}/planted.txt"), "planted.txt exists"),
+      check("EditFile through a symlink out of the workdir is refused", refused(edit_esc), edit_esc),
+      check("...and the outside file is unchanged", file_text("${outside}/secret.txt") == "secret\n", file_text("${outside}/secret.txt")),
+      check("ReadFile inside the workdir still works", not contains(read_in, "\"error\":true"), read_in)
+    ];
+    let _ = exec("rm", ["-rf", root]);
+    if all_true(results) then () else exit(1)
+  }
+}
+
+pure func all_true(xs: [bool]) -> bool {
+  match xs { [] => true, x :: rest => x && all_true(rest) }
+}

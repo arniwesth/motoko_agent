@@ -2501,7 +2501,7 @@ conformance:
 # at runtime (e.g. matching Result constructors against an Option
 # value — see scripts/verify_extension_boot.ail header for full
 # rationale + history).
-check_core: verify_extensions verify_repetition_guard verify_herdr_gate verify_herdr_check_answer verify_herdr_delegate_wait verify_wait_descriptor_fixtures verify_herdr_owner_tag verify_herdr_dagr_pane verify_herdr_orchestrator verify_delegate_kind verify_dagr_producer verify_exit_intent
+check_core: verify_extensions verify_repetition_guard verify_herdr_gate verify_herdr_check_answer verify_herdr_delegate_wait verify_wait_descriptor_fixtures verify_herdr_owner_tag verify_herdr_dagr_pane verify_herdr_orchestrator verify_delegate_kind verify_dagr_producer verify_exit_intent verify_native_path_guard
 	@ok=0; fail=0; \
 	for f in src/core/*.ail; do \
 		if ailang check "$$f" >/dev/null 2>&1; then \
@@ -2620,6 +2620,12 @@ verify_herdr_owner_tag:
 # is driven through the registered `Capability` rather than by calling the
 # closure, so the `enabled` gate and the fold's ordering are exercised too.
 .PHONY: verify_exit_intent
+verify_native_path_guard:
+	@out=$$(AILANG_RELAX_MODULES=1 ailang run --caps IO,FS,Process,Env,Clock --entry main \
+		scripts/verify_native_path_guard.ail 2>/dev/null); rc=$$?; \
+	echo "$$out" | grep -E '^(OK|FAIL)' | cut -c1-200; \
+	[ $$rc -eq 0 ] || (echo "verify_native_path_guard: a native file tool followed a symlink out of the workdir" && exit 1)
+
 verify_exit_intent:
 	@out=$$(AILANG_RELAX_MODULES=1 ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry main \
 		scripts/verify_exit_intent.ail 2>/dev/null); rc=$$?; \
