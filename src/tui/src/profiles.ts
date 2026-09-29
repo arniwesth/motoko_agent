@@ -67,3 +67,28 @@ export function fetchAvailableProfiles(workdir: string = process.cwd()): Profile
 export function currentProfile(): string {
   return process.env.MOTOKO_CONFIG ?? "default";
 }
+
+/**
+ * Locate a profile's config.json the way the runtime will see it: an absolute
+ * profile is used as-is; otherwise the workdir's copy wins, then
+ * MOTOKO_REPO's. The repo fallback matters when WORKDIR is outside the repo
+ * (an eval workspace): runtime-process mirrors the repo profile into the
+ * workdir only when it spawns the runtime, which is after the TUI has read
+ * the profile's agent/tools settings. Returns null when neither exists.
+ */
+export function resolveProfileConfigPath(
+  workdir: string,
+  profile: string,
+  repoPath: string = process.env.MOTOKO_REPO ?? "",
+): string | null {
+  if (path.isAbsolute(profile)) {
+    const configPath = path.join(profile, "config.json");
+    return fs.existsSync(configPath) ? configPath : null;
+  }
+  const local = path.join(workdir, ".motoko", "config", profile, "config.json");
+  if (fs.existsSync(local)) return local;
+  const repo = repoPath.trim();
+  if (repo === "") return null;
+  const fromRepo = path.join(path.resolve(repo), ".motoko", "config", profile, "config.json");
+  return fs.existsSync(fromRepo) ? fromRepo : null;
+}

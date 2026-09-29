@@ -42,6 +42,7 @@ import { SessionJournal } from "./session-journal.js";
 import { acquireLease, registerLeaseHooks } from "./session-lease.js";
 import { activeProfile } from "./config.js";
 import { resolveRuntimeModel } from "./models.js";
+import { resolveProfileConfigPath } from "./profiles.js";
 import type { AgentEvent, DelegatedCall, ResumeSpawn } from "./runtime-process.js";
 import type { ScratchpadCellResult } from "./scratchpad/frames.js";
 
@@ -352,11 +353,8 @@ function applyToolProfileConfig(
 }
 
 function resolveProfileAgentConfig(workdir: string, profile: string): ProfileAgentConfig {
-  const profileDir = path.isAbsolute(profile)
-    ? profile
-    : path.join(workdir, ".motoko", "config", profile);
-  const configPath = path.join(profileDir, "config.json");
-  if (!fs.existsSync(configPath)) return {};
+  const configPath = resolveProfileConfigPath(workdir, profile);
+  if (configPath === null) return {};
   try {
     const parsed = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
       agent?: {
