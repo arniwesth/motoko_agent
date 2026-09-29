@@ -466,8 +466,12 @@ func validate_path_common(tool: string, id: string, path: string, workdir: strin
         Err(path_error(id, tool, "path appears absolute (missing leading slash): ${path}"))
       else {
         let guard_script = "set -eu\nwd=$(realpath \"$1\")\nrel=\"$2\"\njoined=\"$wd/$rel\"\ntarget=$(realpath -m \"$joined\")\ncase \"$target\" in\n  \"$wd\"|\"$wd\"/*) ;;\n  *) exit 43 ;;\nesac\nif [ -e \"$joined\" ]; then\n  resolved=$(realpath \"$joined\")\n  case \"$resolved\" in\n    \"$wd\"|\"$wd\"/*) ;;\n    *) exit 44 ;;\n  esac\nfi\n";
+        -- exec is Ok for ANY exit code (Err only when bash cannot run), so the
+        -- guard's verdict is its exit code: 43/44 mean the path escapes. Any
+        -- other failure is let through as before: `realpath -m` is GNU-only,
+        -- and refusing on it would refuse every path where it is missing.
         match exec("bash", ["-lc", guard_script, "motoko-path-guard", workdir, stripped]) {
-          Ok(_) => Ok(()),
+          Ok(out) => if out.exitCode == 43 || out.exitCode == 44 then Err(path_error(id, tool, "path escapes workspace: ${path}")) else Ok(()),
           Err(_) => Err(path_error(id, tool, "path escapes workspace: ${path}"))
         }
       }
@@ -823,7 +827,7 @@ func atomic_write(path: string, content: string) -> Result[(), string] ! {FS, Pr
       let chmod_result =
         if fileExists(path) then
           match exec("chmod", ["--reference", path, tmp]) {
-            Ok(_) => Ok(()),
+            Ok(out) => if out.exitCode == 0 then Ok(()) else Err("failed to preserve mode bits: ${trim(toString(out.stderr))}"),
             Err(err) => Err("failed to preserve mode bits: ${process_error_to_string(err)}")
           }
         else Ok(());
@@ -834,7 +838,12 @@ func atomic_write(path: string, content: string) -> Result[(), string] ! {FS, Pr
         },
         Ok(_) =>
           match exec("mv", ["-f", tmp, path]) {
-            Ok(_) => Ok(()),
+            Ok(out) =>
+              if out.exitCode == 0 then Ok(())
+              else {
+                let _ = exec("rm", ["-f", tmp]);
+                Err("atomic rename failed: ${trim(toString(out.stderr))}")
+              },
             Err(err) => {
               let _ = exec("rm", ["-f", tmp]);
               Err("atomic rename failed: ${process_error_to_string(err)}")
