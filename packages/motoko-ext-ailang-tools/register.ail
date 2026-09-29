@@ -72,6 +72,12 @@ func inside_workdir(workdir: string, path: string) -> bool ! {Process} {
   }
 }
 
+-- A relative path as a command-line argument: "./" keeps a name such as
+-- "-quiet.ail" from being read as a flag by `ailang check` / `ailang iface`.
+pure func cli_path(path: string) -> string {
+  if startsWith(path, "/") || startsWith(path, "./") then path else "./${path}"
+}
+
 pure func parent_dir(path: string) -> string {
   let parts = split(path, "/")
   match parts {
@@ -105,7 +111,7 @@ func result_err(call: ToolCallEnvelope, msg: string) -> ToolResultEnvelope {
 -- way the benchmark's own `ailang run` resolves them.
 func check_verdict(workdir: string, path: string) -> string ! {Process} {
   let dir = if workdir == "" then "." else workdir
-  match exec("bash", ["-c", "cd \"$1\" && ailang check \"$2\" 2>&1", "ailang_check", dir, path]) {
+  match exec("bash", ["-c", "cd \"$1\" && ailang check \"$2\" 2>&1", "ailang_check", dir, cli_path(path)]) {
     Err(_) => "ailang check: could not run.",
     Ok(out) => if out.exitCode == 0 then "ailang check: OK - file type-checks." else "ailang check: FAILED - fix these errors before continuing:\n${cap(toString(out.stdout), 1200)}"
   }
@@ -226,7 +232,7 @@ func read_ail(ctx: ProviderCtx, call: ToolCallEnvelope, path: string) -> ToolHan
   else if any(\p. p != "" && contains(path, p), read_full) then Delegate
   else {
     let dir = if ctx.workdir == "" then "." else ctx.workdir;
-    match exec("bash", ["-c", "cd \"$1\" && ailang iface --compact \"$2\"", "ailang_iface", dir, path]) {
+    match exec("bash", ["-c", "cd \"$1\" && ailang iface --compact \"$2\"", "ailang_iface", dir, cli_path(path)]) {
       Err(_) => Delegate,
       Ok(out) =>
         if out.exitCode != 0 then Delegate

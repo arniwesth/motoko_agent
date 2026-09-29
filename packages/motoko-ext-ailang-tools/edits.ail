@@ -27,6 +27,16 @@ pure func drop_trailing_blank(xs: [string]) -> [string] {
   reverse(drop_leading_blank(reverse(xs)))
 }
 
+pure func count_leading_blank(xs: [string]) -> int {
+  match xs { [] => 0, h :: t => if trim(h) == "" then 1 + count_leading_blank(t) else 0 }
+}
+
+-- Drop at most n leading blank lines.
+pure func drop_leading_blank_n(n: int, xs: [string]) -> [string] {
+  if n <= 0 then xs
+  else match xs { [] => [], h :: t => if trim(h) == "" then drop_leading_blank_n(n - 1, t) else xs }
+}
+
 -- Does the prefix of file_lines, each trimmed, equal old_trimmed line for line?
 pure func window_eq(file_lines: [string], old_trimmed: [string]) -> bool {
   match old_trimmed {
@@ -52,12 +62,17 @@ pure func find_windows(lines: [string], old_trimmed: [string], i: int, first: in
 }
 
 -- Replace the single line window of `text` that equals `old` once every line is
--- trimmed. Errors when there is no such window or more than one. Leading and
--- trailing blank lines are dropped from `new` as they are from `old`: the window
--- is sized without them, so splicing them in would add blank lines each edit.
+-- trimmed. Errors when there is no such window or more than one. The window
+-- excludes `old`'s leading and trailing blank lines (those file lines stay), so
+-- as many blank lines are dropped from each edge of `new`: a `new` ending in
+-- "\n" like `old` must not add a blank line per edit, while blank lines `new`
+-- adds beyond `old`'s are kept.
 export pure func apply_ws_tolerant(text: string, old: string, new: string) -> Result[string, string] {
-  let ot = drop_trailing_blank(drop_leading_blank(trim_each(split(old, "\n"))));
-  let nl = drop_trailing_blank(drop_leading_blank(split(new, "\n")));
+  let ol = split(old, "\n");
+  let ot = drop_trailing_blank(drop_leading_blank(trim_each(ol)));
+  let lead = count_leading_blank(ol);
+  let trail = count_leading_blank(reverse(ol));
+  let nl = reverse(drop_leading_blank_n(trail, reverse(drop_leading_blank_n(lead, split(new, "\n")))));
   if list_length(ot) == 0 then Err("`old` is empty")
   else {
     let lines = split(text, "\n");
@@ -123,4 +138,10 @@ pure func edits_fallback_adds_no_blank_lines() -> bool
   {
     edit_gives(apply_edit("f() {\n    x + 1\n}", "        x + 1\n", "        x + 2\n", false), "f() {\n        x + 2\n}", "whitespace-tolerant")
       && edit_gives(apply_edit("f() {\n    x + 1\n}", "\n      x + 1\n\n", "\n      x + 2\n\n", false), "f() {\n      x + 2\n}", "whitespace-tolerant")
+  }
+
+pure func edits_fallback_keeps_blank_lines_new_adds() -> bool
+  tests [((), true)]
+  {
+    edit_gives(apply_edit("f() {\n    x + 1\n}", "      x + 1", "      x + 1\n\n      y", false), "f() {\n      x + 1\n\n      y\n}", "whitespace-tolerant")
   }
