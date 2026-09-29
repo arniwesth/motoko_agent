@@ -52,27 +52,32 @@ pure func find_windows(lines: [string], old_trimmed: [string], i: int, first: in
 }
 
 -- Replace the single line window of `text` that equals `old` once every line is
--- trimmed. Errors when there is no such window or more than one.
+-- trimmed. Errors when there is no such window or more than one. Leading and
+-- trailing blank lines are dropped from `new` as they are from `old`: the window
+-- is sized without them, so splicing them in would add blank lines each edit.
 export pure func apply_ws_tolerant(text: string, old: string, new: string) -> Result[string, string] {
   let ot = drop_trailing_blank(drop_leading_blank(trim_each(split(old, "\n"))));
+  let nl = drop_trailing_blank(drop_leading_blank(split(new, "\n")));
   if list_length(ot) == 0 then Err("`old` is empty")
   else {
     let lines = split(text, "\n");
     let w = find_windows(lines, ot, 0, -1, 0);
     if w.count == 1 then
-      Ok(join("\n", take(w.first, lines) ++ split(new, "\n") ++ drop(w.first + list_length(ot), lines)))
+      Ok(join("\n", take(w.first, lines) ++ nl ++ drop(w.first + list_length(ot), lines)))
     else if w.count == 0 then Err("`old` matched 0 occurrences (exact and whitespace-tolerant)")
     else Err("`old` matched ${show(w.count)} places (whitespace-tolerant); include more context so it is unique")
   }
 }
 
--- Apply one edit: exact when `old` occurs exactly once, whitespace-tolerant when
--- it occurs zero times. More than one exact occurrence is an error, never a
--- guess. The second component names the strategy used.
-export pure func apply_edit(text: string, old: string, new: string) -> Result[(string, string), string] {
+-- Apply one edit: exact when `old` occurs exactly once (or at least once with
+-- replace_all, which replaces every occurrence, as motoko's native EditFile
+-- does), whitespace-tolerant when it occurs zero times. More than one exact
+-- occurrence without replace_all is an error, never a guess. The second
+-- component names the strategy used.
+export pure func apply_edit(text: string, old: string, new: string, replace_all: bool) -> Result[(string, string), string] {
   let n = occurrences(text, old);
-  if n == 1 then Ok((replace(text, old, new), "exact"))
-  else if n > 1 then Err("`old` matched ${show(n)} places; include more context so it is unique")
+  if n == 1 || (n > 1 && replace_all) then Ok((replace(text, old, new), "exact"))
+  else if n > 1 then Err("`old` matched ${show(n)} places; include more context so it is unique, or set replace_all=true")
   else match apply_ws_tolerant(text, old, new) {
     Ok(t) => Ok((t, "whitespace-tolerant")),
     Err(e) => Err(e)
@@ -92,17 +97,30 @@ pure func edit_fails(r: Result[(string, string), string]) -> bool {
 pure func edits_apply_exact_once() -> bool
   tests [((), true)]
   {
-    edit_gives(apply_edit("a\nb\nc", "b", "B"), "a\nB\nc", "exact")
+    edit_gives(apply_edit("a\nb\nc", "b", "B", false), "a\nB\nc", "exact")
   }
 
 pure func edits_fall_back_to_whitespace_tolerant() -> bool
   tests [((), true)]
   {
-    edit_gives(apply_edit("f() {\n    x + 1\n}", "f() {\n  x + 1\n}", "f() {\n  x + 2\n}"), "f() {\n  x + 2\n}", "whitespace-tolerant")
+    edit_gives(apply_edit("f() {\n    x + 1\n}", "f() {\n  x + 1\n}", "f() {\n  x + 2\n}", false), "f() {\n  x + 2\n}", "whitespace-tolerant")
   }
 
 pure func edits_refuse_ambiguous_and_missing() -> bool
   tests [((), true)]
   {
-    edit_fails(apply_edit("x\nx", "x", "y")) && edit_fails(apply_edit("a\nb", "zzz", "y"))
+    edit_fails(apply_edit("x\nx", "x", "y", false)) && edit_fails(apply_edit("a\nb", "zzz", "y", false))
+  }
+
+pure func edits_replace_all_replaces_every_occurrence() -> bool
+  tests [((), true)]
+  {
+    edit_gives(apply_edit("foo(1) + foo(2)", "foo", "baz", true), "baz(1) + baz(2)", "exact")
+  }
+
+pure func edits_fallback_adds_no_blank_lines() -> bool
+  tests [((), true)]
+  {
+    edit_gives(apply_edit("f() {\n    x + 1\n}", "        x + 1\n", "        x + 2\n", false), "f() {\n        x + 2\n}", "whitespace-tolerant")
+      && edit_gives(apply_edit("f() {\n    x + 1\n}", "\n      x + 1\n\n", "\n      x + 2\n\n", false), "f() {\n      x + 2\n}", "whitespace-tolerant")
   }

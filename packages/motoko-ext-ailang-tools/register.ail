@@ -18,6 +18,10 @@ module sunholo/motoko_ext_ailang_tools/register
 --
 -- Writes go through writeFileResult / mkdirAllResult, so a refused write (a
 -- path outside the sandbox, permissions) is a tool error, never a dead session.
+-- AILANG_FS_SANDBOX covers only those std/fs calls, not the `ailang iface` /
+-- `ailang check` subprocesses, so a path with a `..` segment or one resolving
+-- outside the workdir is Delegated before anything runs: motoko's native
+-- validate_path_common then refuses it with its usual message.
 import std/option (Option, None, Some)
 import std/result (Result, Ok, Err)
 import std/string (endsWith, startsWith, contains, split, substring, length as str_length)
@@ -52,6 +56,20 @@ pure func arg_bool(args: Json, key: string) -> bool {
 
 pure func resolve(workdir: string, path: string) -> string {
   if startsWith(path, "/") || workdir == "" || workdir == "." then path else if endsWith(workdir, "/") then "${workdir}${path}" else "${workdir}/${path}"
+}
+
+-- Lexically clean (no `..` segment) and, with symlinks resolved, inside the
+-- workdir -- the same test as the native tools' path guard. Fails closed.
+func inside_workdir(workdir: string, path: string) -> bool ! {Process} {
+  if any(\seg. seg == "..", split(path, "/")) then false
+  else {
+    let dir = if workdir == "" then "." else workdir;
+    let guard = "set -eu\nwd=$(realpath \"$1\")\ncase \"$2\" in /*) joined=\"$2\" ;; *) joined=\"$wd/$2\" ;; esac\ntarget=$(realpath -m \"$joined\")\ncase \"$target\" in \"$wd\"/*) ;; *) exit 43 ;; esac\n";
+    match exec("bash", ["-c", guard, "ailang_tools_path_guard", dir, path]) {
+      Err(_) => false,
+      Ok(out) => out.exitCode == 0
+    }
+  }
 }
 
 pure func parent_dir(path: string) -> string {
@@ -133,7 +151,7 @@ pure func apply_all(text: string, edits: [Json], strategies: [string]) -> Result
     e :: rest => {
       let old = arg_str(e, "old")
       let new = arg_str(e, "new")
-      match apply_edit(text, old, new) {
+      match apply_edit(text, old, new, arg_bool(e, "replace_all")) {
         Err(msg) => Err(msg),
         Ok((t, how)) => apply_all(t, rest, strategies ++ [how])
       }
@@ -219,7 +237,7 @@ func read_ail(ctx: ProviderCtx, call: ToolCallEnvelope, path: string) -> ToolHan
 
 func ailang_tools_decide(ctx: ProviderCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {FS, Process, Env} {
   let path = arg_str(call.arguments, "path")
-  if not endsWith(path, ".ail") then Delegate else if call.tool == "WriteFile" then write_ail(ctx, call, path) else if call.tool == "EditFile" then edit_ail(ctx, call, path) else if call.tool == "ReadFile" then read_ail(ctx, call, path) else Delegate
+  if not endsWith(path, ".ail") then Delegate else if not inside_workdir(ctx.workdir, path) then Delegate else if call.tool == "WriteFile" then write_ail(ctx, call, path) else if call.tool == "EditFile" then edit_ail(ctx, call, path) else if call.tool == "ReadFile" then read_ail(ctx, call, path) else Delegate
 }
 
 func ailang_tools_handle(ctx: ProviderCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
