@@ -1,0 +1,27 @@
+-- verify_strict_extensions — extensions.strict refuses to start with less
+-- installed than the profile declares.
+--
+-- Usage (driven by `make verify_strict_extensions`, which writes the profile):
+--   ailang run ... scripts/verify_strict_extensions.ail -- <workdir>
+-- The profile `probe` under <workdir>/.motoko/config/ names one extension that
+-- is not installed. With extensions.strict = true the registry build must exit
+-- 2 with a JSON error line before any session starts; with strict = false it
+-- must skip the name (with a warning) and build an empty registry.
+module scripts/verify_strict_extensions
+
+import std/io (println)
+import std/env (getArgs)
+import std/list as List (length)
+import src/core/config (load_config_from_cli)
+import src/core/ext/runtime (init_runtime_with_config)
+
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  match getArgs() {
+    [workdir] => {
+      let cfg = load_config_from_cli(["--workdir", workdir, "--profile", "probe"]);
+      let rt = init_runtime_with_config(cfg);
+      println("OK registry built with ${show(List.length(rt.registry.entries))} entries (strict=${show(cfg.extensions.strict)})")
+    },
+    _ => println("FAIL usage: verify_strict_extensions.ail -- <workdir>")
+  }
+}
