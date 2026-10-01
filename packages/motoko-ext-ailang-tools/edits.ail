@@ -1,0 +1,147 @@
+module sunholo/motoko_ext_ailang_tools/edits
+
+-- Pure edit logic for the AILANG tools extension: exact substring edits with a
+-- whitespace-tolerant fallback. Ported from the sunholo/eval-canonical fork
+-- (ba683eb3, M-EDIT-WS-TOLERANT): exact-match-only EditFile forced models into
+-- rewrite loops when their `old` text differed from the file only by
+-- indentation or trailing spaces.
+
+import std/string (split, join, trim, replace, length as str_length)
+import std/list (length as list_length, reverse, take, drop)
+import std/result (Result, Ok, Err)
+
+-- How many times needle occurs in hay (non-overlapping). 0 for an empty needle.
+export pure func occurrences(hay: string, needle: string) -> int {
+  if str_length(needle) == 0 then 0 else list_length(split(hay, needle)) - 1
+}
+
+pure func trim_each(xs: [string]) -> [string] {
+  match xs { [] => [], h :: t => trim(h) :: trim_each(t) }
+}
+
+pure func drop_leading_blank(xs: [string]) -> [string] {
+  match xs { [] => [], h :: t => if trim(h) == "" then drop_leading_blank(t) else xs }
+}
+
+pure func drop_trailing_blank(xs: [string]) -> [string] {
+  reverse(drop_leading_blank(reverse(xs)))
+}
+
+pure func count_leading_blank(xs: [string]) -> int {
+  match xs { [] => 0, h :: t => if trim(h) == "" then 1 + count_leading_blank(t) else 0 }
+}
+
+-- Drop at most n leading blank lines.
+pure func drop_leading_blank_n(n: int, xs: [string]) -> [string] {
+  if n <= 0 then xs
+  else match xs { [] => [], h :: t => if trim(h) == "" then drop_leading_blank_n(n - 1, t) else xs }
+}
+
+-- Does the prefix of file_lines, each trimmed, equal old_trimmed line for line?
+pure func window_eq(file_lines: [string], old_trimmed: [string]) -> bool {
+  match old_trimmed {
+    [] => true,
+    o :: ot => match file_lines {
+      [] => false,
+      f :: ft => if trim(f) == o then window_eq(ft, ot) else false
+    }
+  }
+}
+
+-- First matching start line and the number of matching windows.
+pure func find_windows(lines: [string], old_trimmed: [string], i: int, first: int, count: int) -> { first: int, count: int } {
+  match lines {
+    [] => { first: first, count: count },
+    _ :: rest => {
+      let hit = window_eq(lines, old_trimmed);
+      find_windows(rest, old_trimmed, i + 1,
+        if hit && count == 0 then i else first,
+        if hit then count + 1 else count)
+    }
+  }
+}
+
+-- Replace the single line window of `text` that equals `old` once every line is
+-- trimmed. Errors when there is no such window or more than one. The window
+-- excludes `old`'s leading and trailing blank lines (those file lines stay), so
+-- as many blank lines are dropped from each edge of `new`: a `new` ending in
+-- "\n" like `old` must not add a blank line per edit, while blank lines `new`
+-- adds beyond `old`'s are kept.
+export pure func apply_ws_tolerant(text: string, old: string, new: string) -> Result[string, string] {
+  let ol = split(old, "\n");
+  let ot = drop_trailing_blank(drop_leading_blank(trim_each(ol)));
+  let lead = count_leading_blank(ol);
+  let trail = count_leading_blank(reverse(ol));
+  let nl = reverse(drop_leading_blank_n(trail, reverse(drop_leading_blank_n(lead, split(new, "\n")))));
+  if list_length(ot) == 0 then Err("`old` is empty")
+  else {
+    let lines = split(text, "\n");
+    let w = find_windows(lines, ot, 0, -1, 0);
+    if w.count == 1 then
+      Ok(join("\n", take(w.first, lines) ++ nl ++ drop(w.first + list_length(ot), lines)))
+    else if w.count == 0 then Err("`old` matched 0 occurrences (exact and whitespace-tolerant)")
+    else Err("`old` matched ${show(w.count)} places (whitespace-tolerant); include more context so it is unique")
+  }
+}
+
+-- Apply one edit: exact when `old` occurs exactly once (or at least once with
+-- replace_all, which replaces every occurrence, as motoko's native EditFile
+-- does), whitespace-tolerant when it occurs zero times. More than one exact
+-- occurrence without replace_all is an error, never a guess. The second
+-- component names the strategy used.
+export pure func apply_edit(text: string, old: string, new: string, replace_all: bool) -> Result[(string, string), string] {
+  let n = occurrences(text, old);
+  if n == 1 || (n > 1 && replace_all) then Ok((replace(text, old, new), "exact"))
+  else if n > 1 then Err("`old` matched ${show(n)} places; include more context so it is unique, or set replace_all=true")
+  else match apply_ws_tolerant(text, old, new) {
+    Ok(t) => Ok((t, "whitespace-tolerant")),
+    Err(e) => Err(e)
+  }
+}
+
+-- Tests compare through match, not ==: == on Result and tuples needs
+-- AILANG >= 0.42, and motoko still builds against its ailang.toml floor.
+pure func edit_gives(r: Result[(string, string), string], text: string, how: string) -> bool {
+  match r { Ok((t, h)) => t == text && h == how, Err(_) => false }
+}
+
+pure func edit_fails(r: Result[(string, string), string]) -> bool {
+  match r { Ok(_) => false, Err(_) => true }
+}
+
+pure func edits_apply_exact_once() -> bool
+  tests [((), true)]
+  {
+    edit_gives(apply_edit("a\nb\nc", "b", "B", false), "a\nB\nc", "exact")
+  }
+
+pure func edits_fall_back_to_whitespace_tolerant() -> bool
+  tests [((), true)]
+  {
+    edit_gives(apply_edit("f() {\n    x + 1\n}", "f() {\n  x + 1\n}", "f() {\n  x + 2\n}", false), "f() {\n  x + 2\n}", "whitespace-tolerant")
+  }
+
+pure func edits_refuse_ambiguous_and_missing() -> bool
+  tests [((), true)]
+  {
+    edit_fails(apply_edit("x\nx", "x", "y", false)) && edit_fails(apply_edit("a\nb", "zzz", "y", false))
+  }
+
+pure func edits_replace_all_replaces_every_occurrence() -> bool
+  tests [((), true)]
+  {
+    edit_gives(apply_edit("foo(1) + foo(2)", "foo", "baz", true), "baz(1) + baz(2)", "exact")
+  }
+
+pure func edits_fallback_adds_no_blank_lines() -> bool
+  tests [((), true)]
+  {
+    edit_gives(apply_edit("f() {\n    x + 1\n}", "        x + 1\n", "        x + 2\n", false), "f() {\n        x + 2\n}", "whitespace-tolerant")
+      && edit_gives(apply_edit("f() {\n    x + 1\n}", "\n      x + 1\n\n", "\n      x + 2\n\n", false), "f() {\n      x + 2\n}", "whitespace-tolerant")
+  }
+
+pure func edits_fallback_keeps_blank_lines_new_adds() -> bool
+  tests [((), true)]
+  {
+    edit_gives(apply_edit("f() {\n    x + 1\n}", "      x + 1", "      x + 1\n\n      y", false), "f() {\n      x + 1\n\n      y\n}", "whitespace-tolerant")
+  }

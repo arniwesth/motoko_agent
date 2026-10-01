@@ -1,0 +1,264 @@
+module sunholo/motoko_ext_ailang_tools/register
+
+-- AILANG-aware file tools for motoko (extension ABI 8.0).
+--
+-- Claims WriteFile, EditFile and ReadFile through ToolProvider and handles them
+-- only for .ail paths; every other call is Delegated to the next provider and
+-- finally to motoko's native tool. ABI 8.0 cannot append to a native result, so
+-- for .ail files this extension performs the write or edit itself.
+--
+--   * WriteFile / EditFile on .ail: write, then run `ailang check` on the file
+--     and put the verdict in the tool result, so a type error is seen on the
+--     step that caused it (fork 5fea0905, per-edit DP7).
+--   * EditFile: exact substring edits with a whitespace-tolerant fallback
+--     (fork ba683eb3; see edits.ail).
+--   * ReadFile on .ail, opt-in per profile (ailang_tools.json "autoread"):
+--     return the module's compact interface (`ailang iface --compact`) unless
+--     the path matches a "read_full" entry (fork 49b6b58e).
+--
+-- Writes go through writeFileResult / mkdirAllResult, so a refused write (a
+-- path outside the sandbox, permissions) is a tool error, never a dead session.
+-- AILANG_FS_SANDBOX covers only those std/fs calls, not the `ailang iface` /
+-- `ailang check` subprocesses, so a path with a `..` segment or one resolving
+-- outside the workdir is Delegated before anything runs: motoko's native
+-- validate_path_common then refuses it with its usual message.
+import std/option (Option, None, Some)
+import std/result (Result, Ok, Err)
+import std/string (endsWith, startsWith, contains, split, substring, length as str_length)
+import std/list (any)
+import std/process (exec)
+import std/fs (readFileResult, writeFileResult, mkdirAllResult, isDir)
+import std/bytes (toString)
+import std/json (Json, get, asString, asArray, asBool, jo, decode)
+import std/env (getEnvOr)
+import pkg/sunholo/motoko_ext_abi/types (ProviderCtx, ExtRegistration, ToolProvider, ToolHandleDecision, ToolHandleOutcome, ToolCallEnvelope, ToolResultEnvelope, Delegate, Handled)
+import pkg/sunholo/motoko_ext_ailang_tools/edits (apply_edit)
+
+pure func arg_str(args: Json, key: string) -> string {
+  match get(args, key) {
+    None => "",
+    Some(j) => match asString(j) {
+      None => "",
+      Some(s) => s
+    }
+  }
+}
+
+pure func arg_bool(args: Json, key: string) -> bool {
+  match get(args, key) {
+    None => false,
+    Some(j) => match asBool(j) {
+      None => false,
+      Some(b) => b
+    }
+  }
+}
+
+pure func resolve(workdir: string, path: string) -> string {
+  if startsWith(path, "/") || workdir == "" || workdir == "." then path else if endsWith(workdir, "/") then "${workdir}${path}" else "${workdir}/${path}"
+}
+
+-- Lexically clean (no `..` segment) and, with symlinks resolved, inside the
+-- workdir -- the same test as the native tools' path guard. Fails closed.
+func inside_workdir(workdir: string, path: string) -> bool ! {Process} {
+  if any(\seg. seg == "..", split(path, "/")) then false
+  else {
+    let dir = if workdir == "" then "." else workdir;
+    let guard = "set -eu\nwd=$(realpath \"$1\")\ncase \"$2\" in /*) joined=\"$2\" ;; *) joined=\"$wd/$2\" ;; esac\ntarget=$(realpath -m \"$joined\")\ncase \"$target\" in \"$wd\"/*) ;; *) exit 43 ;; esac\n";
+    match exec("bash", ["-c", guard, "ailang_tools_path_guard", dir, path]) {
+      Err(_) => false,
+      Ok(out) => out.exitCode == 0
+    }
+  }
+}
+
+-- A relative path as a command-line argument: "./" keeps a name such as
+-- "-quiet.ail" from being read as a flag by `ailang check` / `ailang iface`.
+pure func cli_path(path: string) -> string {
+  if startsWith(path, "/") || startsWith(path, "./") then path else "./${path}"
+}
+
+pure func parent_dir(path: string) -> string {
+  let parts = split(path, "/")
+  match parts {
+    [] => "",
+    [_] => "",
+    _ => substring(path, 0, str_length(path) - str_length(last_part(parts)) - 1)
+  }
+}
+
+pure func last_part(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    [x] => x,
+    _ :: rest => last_part(rest)
+  }
+}
+
+pure func cap(s: string, n: int) -> string {
+  if str_length(s) > n then "${substring(s, 0, n)}\n... (truncated)" else s
+}
+
+func result_ok(call: ToolCallEnvelope, stdout: string) -> ToolResultEnvelope {
+  { tool_call_id: call.id, tool: call.tool, exit_code: 0, stdout: stdout, stderr: "", metadata: jo([]) }
+}
+
+func result_err(call: ToolCallEnvelope, msg: string) -> ToolResultEnvelope {
+  { tool_call_id: call.id, tool: call.tool, exit_code: 1, stdout: "", stderr: msg, metadata: jo([]) }
+}
+
+-- `ailang check` on one file, run from the workdir so module names resolve the
+-- way the benchmark's own `ailang run` resolves them.
+func check_verdict(workdir: string, path: string) -> string ! {Process} {
+  let dir = if workdir == "" then "." else workdir
+  match exec("bash", ["-c", "cd \"$1\" && ailang check \"$2\" 2>&1", "ailang_check", dir, cli_path(path)]) {
+    Err(_) => "ailang check: could not run.",
+    Ok(out) => if out.exitCode == 0 then "ailang check: OK - file type-checks." else "ailang check: FAILED - fix these errors before continuing:\n${cap(toString(out.stdout), 1200)}"
+  }
+}
+
+-- The builtin-signature hints motoko_ext_microrag attaches to a .ail write.
+-- This extension runs first for .ail writes (so microrag never sees them), so it
+-- carries the same hints: the cloud profile keeps microrag's behaviour and gains
+-- the type-check. Empty when the command is unavailable.
+func microrag_hints(path: string, content: string) -> string ! {Process} {
+  match exec("ailang", ["micro-rag", "lint-builtin", "--file", path, "--code", content]) {
+    Err(_) => "",
+    Ok(out) => {
+      let text = toString(out.stdout);
+      if out.exitCode != 0 || str_length(text) == 0 then ""
+      else "\n\n[μRAG auto-injected for next turn]:\n${cap(text, 2000)}"
+    }
+  }
+}
+
+func write_ail(ctx: ProviderCtx, call: ToolCallEnvelope, path: string) -> ToolHandleDecision ! {FS, Process} {
+  let content = arg_str(call.arguments, "content")
+  let target = resolve(ctx.workdir, path)
+  let parent = parent_dir(target)
+  let made = if parent != "" && not isDir(parent) then mkdirAllResult(parent) else Ok()
+  match made {
+    Err(msg) => Handled(result_err(call, "WriteFile: cannot create parent directory: ${msg}")),
+    Ok(_) => match writeFileResult(target, content) {
+      Err(msg) => Handled(result_err(call, "WriteFile: ${msg}")),
+      Ok(_) => {
+        let verdict = check_verdict(ctx.workdir, path);
+        let hints = microrag_hints(path, content);
+        Handled(result_ok(call, "Wrote ${show(str_length(content))} bytes to ${path}\n\n${verdict}${hints}"))
+      }
+    }
+  }
+}
+
+-- Apply the edits in order; the whole call fails if any edit fails.
+pure func apply_all(text: string, edits: [Json], strategies: [string]) -> Result[(string, [string]), string] {
+  match edits {
+    [] => Ok((text, strategies)),
+    e :: rest => {
+      let old = arg_str(e, "old")
+      let new = arg_str(e, "new")
+      match apply_edit(text, old, new, arg_bool(e, "replace_all")) {
+        Err(msg) => Err(msg),
+        Ok((t, how)) => apply_all(t, rest, strategies ++ [how])
+      }
+    }
+  }
+}
+
+func edit_ail(ctx: ProviderCtx, call: ToolCallEnvelope, path: string) -> ToolHandleDecision ! {FS, Process} {
+  let edits = match get(call.arguments, "edits") {
+    None => [],
+    Some(j) => match asArray(j) {
+      None => [],
+      Some(xs) => xs
+    }
+  }
+  -- dry runs and SHA-guarded edits keep motoko's native semantics
+  if arg_bool(call.arguments, "dry_run") || arg_str(call.arguments, "expected_sha256") != "" then Delegate else if is_empty(edits) then Delegate else {
+    let target = resolve(ctx.workdir, path)
+    match readFileResult(target) {
+      Err(msg) => Handled(result_err(call, "EditFile: cannot read ${path}: ${msg}")),
+      Ok(before) => match apply_all(before, edits, []) {
+        Err(msg) => Handled(result_err(call, "EditFile: ${msg}")),
+        Ok((after, how)) => match writeFileResult(target, after) {
+          Err(msg) => Handled(result_err(call, "EditFile: ${msg}")),
+          Ok(_) => {
+            let note = if any(\s. s == "whitespace-tolerant", how) then " (matched ignoring indentation/trailing whitespace)" else ""
+            let verdict = check_verdict(ctx.workdir, path);
+            Handled(result_ok(call, "Applied ${show(list_count(how))} edit(s) to ${path}${note}\n\n${verdict}"))
+          }
+        }
+      }
+    }
+  }
+}
+
+-- match, not `== []`: == on [Json] needs AILANG >= 0.42 and motoko builds against its floor.
+pure func is_empty(xs: [Json]) -> bool {
+  match xs { [] => true, _ => false }
+}
+
+pure func list_count(xs: [string]) -> int {
+  match xs {
+    [] => 0,
+    _ :: rest => 1 + list_count(rest)
+  }
+}
+
+-- Compact-interface reads are opt-in per profile: <profile>/ailang_tools.json
+-- {"autoread": true, "read_full": ["benchmark/solution.ail"]}. Configured here,
+-- not through MOTOKO_AST_AUTOREAD: motoko forwards only an allowlist of
+-- environment variables to its runtime, so that variable never arrived.
+pure func config_list(cfg: Json, key: string) -> [string] {
+  match get(cfg, key) {
+    None => [],
+    Some(j) => match asArray(j) {
+      None => [],
+      Some(xs) => strings_of(xs)
+    }
+  }
+}
+
+pure func strings_of(xs: [Json]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest => match asString(x) { None => strings_of(rest), Some(v) => v :: strings_of(rest) }
+  }
+}
+
+func read_ail(ctx: ProviderCtx, call: ToolCallEnvelope, path: string) -> ToolHandleDecision ! {Process} {
+  let read_full = config_list(ctx.ext_config, "read_full");
+  if not arg_bool(ctx.ext_config, "autoread") then Delegate
+  else if any(\p. p != "" && contains(path, p), read_full) then Delegate
+  else {
+    let dir = if ctx.workdir == "" then "." else ctx.workdir;
+    match exec("bash", ["-c", "cd \"$1\" && ailang iface --compact \"$2\"", "ailang_iface", dir, cli_path(path)]) {
+      Err(_) => Delegate,
+      Ok(out) =>
+        if out.exitCode != 0 then Delegate
+        else Handled(result_ok(call, "-- [AST auto-read] compact interface for dependency module ${path}; use BashExec cat to see the full implementation if needed.\n${toString(out.stdout)}"))
+    }
+  }
+}
+
+func ailang_tools_decide(ctx: ProviderCtx, call: ToolCallEnvelope) -> ToolHandleDecision ! {FS, Process, Env} {
+  let path = arg_str(call.arguments, "path")
+  if not endsWith(path, ".ail") then Delegate else if not inside_workdir(ctx.workdir, path) then Delegate else if call.tool == "WriteFile" then write_ail(ctx, call, path) else if call.tool == "EditFile" then edit_ail(ctx, call, path) else if call.tool == "ReadFile" then read_ail(ctx, call, path) else Delegate
+}
+
+func ailang_tools_handle(ctx: ProviderCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  { decision: ailang_tools_decide(ctx, call), next_state: ctx.world }
+}
+
+-- The extension's config is <profile>/ailang_tools.json, read here because the
+-- host passes each extension the whole runtime config, not a per-extension one;
+-- what this returns as `config` is what every callback sees as ctx.ext_config.
+-- A missing or unparsable file is an empty config: every feature at its default.
+export func register_with_config(_cfg: a) -> ExtRegistration ! {Env, FS} {
+  let dir = getEnvOr("MOTOKO_PROFILE_DIR", ".");
+  let cfg = match readFileResult("${dir}/ailang_tools.json") {
+    Err(_) => jo([]),
+    Ok(text) => match decode(text) { Err(_) => jo([]), Ok(j) => j }
+  };
+  { config: cfg, caps: [ToolProvider(["WriteFile", "EditFile", "ReadFile"], ailang_tools_handle)] }
+}
