@@ -2744,8 +2744,13 @@ verify_skills_tests:
 	done; \
 	[ $$fail -eq 0 ] || { echo "verify_skills_tests: the skills package's inline tests are not all passing"; exit 1; }
 
+# The native file tools refuse a path that resolves outside the workdir, and
+# EditFile works (mode bits kept) inside it. AILANG_FS_SANDBOX is cleared:
+# inside a Motoko session the TUI pins it to the workdir, which would put the
+# mktemp workdir out of reach (same as verify_strict_extensions).
+.PHONY: verify_native_path_guard
 verify_native_path_guard:
-	@out=$$(AILANG_RELAX_MODULES=1 ailang run --caps IO,FS,Process,Env,Clock --entry main \
+	@out=$$(env -u AILANG_FS_SANDBOX AILANG_RELAX_MODULES=1 ailang run --caps IO,FS,Process,Env,Clock --entry main \
 		scripts/verify_native_path_guard.ail 2>/dev/null); rc=$$?; \
 	echo "$$out" | grep -E '^(OK|FAIL|SKIP)' | cut -c1-200; \
 	[ $$rc -eq 0 ] || (echo "verify_native_path_guard: a native file tool check failed (FAIL lines above)" && exit 1)
