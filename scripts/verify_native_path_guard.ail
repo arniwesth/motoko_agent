@@ -9,6 +9,12 @@
 -- the only thing stopping them. This runs without that variable, so the guard
 -- is the only thing under test.
 --
+-- The guard resolves paths with `realpath -m`, which is GNU-only; where it is
+-- missing (stock macOS) the guard cannot judge symlinks, so the escape checks
+-- are SKIPPED there rather than failed. The inside-the-workdir checks always
+-- run: EditFile on an existing file goes through atomic_write's mode copy,
+-- which used GNU-only `chmod --reference` and failed every edit on macOS.
+--
 -- Usage:
 --   AILANG_RELAX_MODULES=1 ailang run --caps IO,FS,Process,Env,Clock \
 --     --entry main scripts/verify_native_path_guard.ail
@@ -59,15 +65,33 @@ export func main() -> () ! {IO, FS, Process, Env, Clock} {
         kv("edits", ja([jo([kv("old", js("secret")), kv("new", js("changed"))])]))])));
     let read_in = call(workdir, "r2", "ReadFile",
       encode(jo([kv("path", js("inside.txt")), kv("start", jnum(1.0)), kv("end", jnum(5.0))])));
+    let _ = exec("chmod", ["640", "${workdir}/inside.txt"]);
+    let edit_in = call(workdir, "e2", "EditFile",
+      encode(jo([kv("path", js("inside.txt")),
+        kv("edits", ja([jo([kv("old", js("inside")), kv("new", js("edited"))])]))])));
+    let mode_in = match exec("bash", ["-c", "stat -c %a \"$1\" 2>/dev/null || stat -f %Lp \"$1\"", "mode", "${workdir}/inside.txt"]) {
+      Ok(out) => trim(toString(out.stdout)), Err(_) => ""
+    };
 
-    let results = [
+    let inside = [
+      check("ReadFile inside the workdir still works", not contains(read_in, "\"error\":true"), read_in),
+      check("EditFile on an existing file inside the workdir works", not contains(edit_in, "\"error\":true") && file_text("${workdir}/inside.txt") == "edited\n", edit_in),
+      check("...and keeps the file's mode bits", mode_in == "640", "mode is ${mode_in}")
+    ];
+    let has_realpath_m = match exec("bash", ["-c", "realpath -m /nonexistent/x >/dev/null 2>&1"]) {
+      Ok(out) => out.exitCode == 0, Err(_) => false
+    };
+    let escapes = if not has_realpath_m then {
+      println("SKIP: symlink-escape checks — `realpath -m` is unavailable here (GNU coreutils), so the guard cannot judge symlinks");
+      []
+    } else [
       check("ReadFile through a symlink out of the workdir is refused", refused(read_esc), read_esc),
       check("WriteFile through a symlink out of the workdir is refused", refused(write_esc), write_esc),
       check("...and nothing was written outside", not fileExists("${outside}/planted.txt"), "planted.txt exists"),
       check("EditFile through a symlink out of the workdir is refused", refused(edit_esc), edit_esc),
-      check("...and the outside file is unchanged", file_text("${outside}/secret.txt") == "secret\n", file_text("${outside}/secret.txt")),
-      check("ReadFile inside the workdir still works", not contains(read_in, "\"error\":true"), read_in)
+      check("...and the outside file is unchanged", file_text("${outside}/secret.txt") == "secret\n", file_text("${outside}/secret.txt"))
     ];
+    let results = inside ++ escapes;
     let _ = exec("rm", ["-rf", root]);
     if all_true(results) then () else exit(1)
   }
