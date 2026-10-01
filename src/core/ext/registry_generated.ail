@@ -80,6 +80,9 @@ func parse_tokens(xs: [string], idx: int, acc: [ExtEntry], cfg: RuntimeConfig) -
     [] => { entries: acc },
     raw :: rest => {
       let name = trim(raw);
+      -- A blank entry (a trailing comma in --ext-order "a,b,") names nothing:
+      -- skip it in both modes rather than report '' as a missing extension.
+      if name == "" then parse_tokens(rest, idx + 1, acc, cfg) else
       match resolve(name, cfg) {
         -- An order entry that names no installed extension. Non-strict keeps
         -- the old behaviour (skip) but says so; strict refuses to start, so a

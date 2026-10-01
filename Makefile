@@ -2623,22 +2623,28 @@ verify_herdr_owner_tag:
 # extensions.strict (`.motoko/config/<profile>/config.json`): a profile that
 # names an extension which is not installed, or one that registers no
 # capability, must refuse to start rather than run with less than it declares.
-# Two arms on a throwaway profile naming an uninstalled extension: strict exits
-# 2 with the JSON error line; lax builds an empty registry.
+# Three arms on throwaway profiles: strict + an uninstalled name exits 2 with the
+# JSON error line; lax + the same name builds an empty registry; strict + an
+# extension that registers nothing (test_dummy, EXT_DUMMY_REGISTER_NOTHING=1)
+# exits 2. AILANG_FS_SANDBOX is cleared: inside a Motoko session the TUI pins it
+# to the workdir, which would make the mktemp profile unreadable.
+.PHONY: verify_strict_extensions
 verify_strict_extensions:
 	@d=$$(mktemp -d); trap 'rm -rf "$$d"' EXIT; mkdir -p "$$d/.motoko/config/probe"; \
-	for mode in true false; do \
-	  printf '{"agent":{"model":"stub"},"extensions":{"order":["no_such_ext"],"strict":%s}}\n' $$mode > "$$d/.motoko/config/probe/config.json"; \
-	  out=$$(AILANG_RELAX_MODULES=1 ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry main \
-	    scripts/verify_strict_extensions.ail -- "$$d" 2>/dev/null); rc=$$?; \
-	  if [ $$mode = true ]; then \
-	    if [ $$rc -eq 2 ] && echo "$$out" | grep -q 'extensions.strict.*no_such_ext.*refusing to start'; then echo "OK strict: refused to start (exit 2)"; \
-	    else echo "FAIL strict: rc=$$rc"; echo "$$out" | tail -3; echo "verify_strict_extensions: a strict profile started with a missing extension"; exit 1; fi; \
-	  else \
-	    if [ $$rc -eq 0 ] && echo "$$out" | grep -q 'OK registry built with 0 entries' && echo "$$out" | grep -q 'not installed; skipped'; then echo "OK lax: skipped with a warning"; \
-	    else echo "FAIL lax: rc=$$rc"; echo "$$out" | tail -3; echo "verify_strict_extensions: the non-strict path changed"; exit 1; fi; \
-	  fi; \
-	done
+	run() { env -u AILANG_FS_SANDBOX AILANG_RELAX_MODULES=1 "$$@" ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry main \
+	    scripts/verify_strict_extensions.ail -- "$$d" 2>/dev/null; }; \
+	printf '{"agent":{"model":"stub"},"extensions":{"order":["no_such_ext"],"strict":true}}\n' > "$$d/.motoko/config/probe/config.json"; \
+	out=$$(run); rc=$$?; \
+	if [ $$rc -eq 2 ] && echo "$$out" | grep -q 'extensions.strict.*no_such_ext.*refusing to start'; then echo "OK strict: an uninstalled extension refused to start (exit 2)"; \
+	else echo "FAIL strict/uninstalled: rc=$$rc"; echo "$$out" | tail -3; echo "verify_strict_extensions: a strict profile started with a missing extension"; exit 1; fi; \
+	printf '{"agent":{"model":"stub"},"extensions":{"order":["no_such_ext"],"strict":false}}\n' > "$$d/.motoko/config/probe/config.json"; \
+	out=$$(run); rc=$$?; \
+	if [ $$rc -eq 0 ] && echo "$$out" | grep -q 'OK registry built with 0 entries' && echo "$$out" | grep -q 'not installed; skipped'; then echo "OK lax: skipped with a warning"; \
+	else echo "FAIL lax: rc=$$rc"; echo "$$out" | tail -3; echo "verify_strict_extensions: the non-strict path changed"; exit 1; fi; \
+	printf '{"agent":{"model":"stub"},"extensions":{"order":["test_dummy"],"strict":true}}\n' > "$$d/.motoko/config/probe/config.json"; \
+	out=$$(run EXT_DUMMY_REGISTER_NOTHING=1); rc=$$?; \
+	if [ $$rc -eq 2 ] && echo "$$out" | grep -q 'extensions.strict.*registers no capability atom'; then echo "OK strict: an empty registration refused to start (exit 2)"; \
+	else echo "FAIL strict/empty: rc=$$rc"; echo "$$out" | tail -3; echo "verify_strict_extensions: a strict profile started without an extension that registered nothing"; exit 1; fi
 
 verify_native_path_guard:
 	@out=$$(AILANG_RELAX_MODULES=1 ailang run --caps IO,FS,Process,Env,Clock --entry main \
