@@ -2747,8 +2747,8 @@ verify_skills_tests:
 verify_native_path_guard:
 	@out=$$(AILANG_RELAX_MODULES=1 ailang run --caps IO,FS,Process,Env,Clock --entry main \
 		scripts/verify_native_path_guard.ail 2>/dev/null); rc=$$?; \
-	echo "$$out" | grep -E '^(OK|FAIL)' | cut -c1-200; \
-	[ $$rc -eq 0 ] || (echo "verify_native_path_guard: a native file tool followed a symlink out of the workdir" && exit 1)
+	echo "$$out" | grep -E '^(OK|FAIL|SKIP)' | cut -c1-200; \
+	[ $$rc -eq 0 ] || (echo "verify_native_path_guard: a native file tool check failed (FAIL lines above)" && exit 1)
 
 verify_exit_intent:
 	@out=$$(AILANG_RELAX_MODULES=1 ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry main \
