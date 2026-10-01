@@ -42,7 +42,7 @@ services:
     # variable in `.env`, not the seven that were named. In practice that is a small delta — `.env`
     # is on the bind mount at /workspaces/motoko_agent/.env and readable by anything in here anyway,
     # which is why Motoko could read it directly all along. The real narrowing of an agent's env
-    # surface is `.devcontainer/agent_confined/`, which keeps a curated list AND makes it work by
+    # surface is `.devcontainer/agent/`, which keeps a curated list AND makes it work by
     # passing `--env-file <repo>/.env` on the command line.
     #
     # TWO NAMING FACTS THAT SURVIVE THE LIST, because they are about `.env`'s contents rather than

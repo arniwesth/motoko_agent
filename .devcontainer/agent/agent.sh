@@ -25,7 +25,7 @@
 #   agent.sh check                    # run the R9 acceptance sweep against the running service
 #   agent.sh help                     # this block, coloured on a terminal
 #
-# (Written `agent.sh` for brevity; invoke it by path — `.devcontainer/agent_confined/agent.sh …` — or alias
+# (Written `agent.sh` for brevity; invoke it by path — `.devcontainer/agent/agent.sh …` — or alias
 # it.)
 #
 # TWO KINDS OF SESSION, and the difference is the whole trick:
@@ -221,7 +221,7 @@ import json, sys, urllib.request
 # An explicit User-Agent, not decoration: herdr.dev answers 403 to urllib's default `Python-urllib/3.x`
 # (measured 2026-08-22) while serving the identical request under a curl-shaped one. Without this the
 # upgrade path fails with "403 Forbidden" and looks like an outage.
-UA = "motoko-agent-confined/1.0 (+.devcontainer/agent_confined/agent.sh)"
+UA = "motoko-agent-confined/1.0 (+.devcontainer/agent/agent.sh)"
 
 def get(url):
     req = urllib.request.Request(url, headers={"User-Agent": UA})
@@ -259,7 +259,7 @@ write_versions_file() {
 #
 # Do not hand-edit to upgrade. Run:
 #
-#   .devcontainer/agent_confined/agent.sh upgrade    # re-resolve every line from upstream, rewrite, rebuild
+#   .devcontainer/agent/agent.sh upgrade    # re-resolve every line from upstream, rewrite, rebuild
 #
 # and commit the diff — that diff IS the harness-upgrade record. \`agent.sh build\` deliberately does NOT
 # re-resolve: a rebuild reproduces this file, an upgrade changes it.
