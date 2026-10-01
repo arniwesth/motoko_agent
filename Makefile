@@ -2501,7 +2501,7 @@ conformance:
 # at runtime (e.g. matching Result constructors against an Option
 # value — see scripts/verify_extension_boot.ail header for full
 # rationale + history).
-check_core: verify_extensions verify_repetition_guard verify_herdr_gate verify_herdr_check_answer verify_herdr_delegate_wait verify_wait_descriptor_fixtures verify_herdr_owner_tag verify_herdr_dagr_pane verify_herdr_orchestrator verify_delegate_kind verify_dagr_producer verify_exit_intent verify_native_path_guard
+check_core: verify_extensions verify_repetition_guard verify_herdr_gate verify_herdr_check_answer verify_herdr_delegate_wait verify_wait_descriptor_fixtures verify_herdr_owner_tag verify_herdr_dagr_pane verify_herdr_orchestrator verify_delegate_kind verify_dagr_producer verify_exit_intent verify_native_path_guard verify_strict_extensions
 	@ok=0; fail=0; \
 	for f in src/core/*.ail; do \
 		if ailang check "$$f" >/dev/null 2>&1; then \
@@ -2620,6 +2620,26 @@ verify_herdr_owner_tag:
 # is driven through the registered `Capability` rather than by calling the
 # closure, so the `enabled` gate and the fold's ordering are exercised too.
 .PHONY: verify_exit_intent
+# extensions.strict (`.motoko/config/<profile>/config.json`): a profile that
+# names an extension which is not installed, or one that registers no
+# capability, must refuse to start rather than run with less than it declares.
+# Two arms on a throwaway profile naming an uninstalled extension: strict exits
+# 2 with the JSON error line; lax builds an empty registry.
+verify_strict_extensions:
+	@d=$$(mktemp -d); trap 'rm -rf "$$d"' EXIT; mkdir -p "$$d/.motoko/config/probe"; \
+	for mode in true false; do \
+	  printf '{"agent":{"model":"stub"},"extensions":{"order":["no_such_ext"],"strict":%s}}\n' $$mode > "$$d/.motoko/config/probe/config.json"; \
+	  out=$$(AILANG_RELAX_MODULES=1 ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry main \
+	    scripts/verify_strict_extensions.ail -- "$$d" 2>/dev/null); rc=$$?; \
+	  if [ $$mode = true ]; then \
+	    if [ $$rc -eq 2 ] && echo "$$out" | grep -q 'extensions.strict.*no_such_ext.*refusing to start'; then echo "OK strict: refused to start (exit 2)"; \
+	    else echo "FAIL strict: rc=$$rc"; echo "$$out" | tail -3; echo "verify_strict_extensions: a strict profile started with a missing extension"; exit 1; fi; \
+	  else \
+	    if [ $$rc -eq 0 ] && echo "$$out" | grep -q 'OK registry built with 0 entries' && echo "$$out" | grep -q 'not installed; skipped'; then echo "OK lax: skipped with a warning"; \
+	    else echo "FAIL lax: rc=$$rc"; echo "$$out" | tail -3; echo "verify_strict_extensions: the non-strict path changed"; exit 1; fi; \
+	  fi; \
+	done
+
 verify_native_path_guard:
 	@out=$$(AILANG_RELAX_MODULES=1 ailang run --caps IO,FS,Process,Env,Clock --entry main \
 		scripts/verify_native_path_guard.ail 2>/dev/null); rc=$$?; \
