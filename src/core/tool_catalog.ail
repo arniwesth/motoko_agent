@@ -147,8 +147,28 @@ pure func collect_ext_schemas(entries: [ExtEntry]) -> [ToolSchema] {
 -- Full tool catalog including any tools registered by active extensions.
 -- Use this instead of `tools()` when an ExtRuntime is available so that
 -- extension-provided tools appear in the LLM's tool list.
+--
+-- One schema per tool name. A ToolProvider that claims a native name (ailang_tools
+-- and microrag both wrap WriteFile/EditFile/ReadFile) used to append a second,
+-- name-only schema: the request then carried ReadFile x2, WriteFile x3, EditFile x2,
+-- and strict OpenRouter providers (Relace, Sail Research) rejected it with 400.
+-- The first schema for a name wins, so the native tool keeps its full parameters.
 export pure func tools_with_extensions(rt: ExtRuntime) -> [ToolSchema] {
-  tools() ++ collect_ext_schemas(rt.registry.entries)
+  unique_by_name(tools(), collect_ext_schemas(rt.registry.entries))
+}
+
+pure func has_schema_named(name: string, xs: [ToolSchema]) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if x.name == name then true else has_schema_named(name, rest)
+  }
+}
+
+pure func unique_by_name(kept: [ToolSchema], xs: [ToolSchema]) -> [ToolSchema] {
+  match xs {
+    [] => kept,
+    x :: rest => if has_schema_named(x.name, kept) then unique_by_name(kept, rest) else unique_by_name(kept ++ [x], rest)
+  }
 }
 
 -- Inline tests
@@ -194,6 +214,13 @@ pure func test_describe_tools_receives_the_entry_config() -> bool
     let configured = tools_with_extensions(catalog_rt(jo([kv("tool", js("Configured"))])));
     let empty = tools_with_extensions(catalog_rt(jo([])));
     List.length(configured) == 8 && last_name(configured) == "Configured" && List.length(empty) == 7
+  }
+
+pure func test_provider_claiming_a_native_name_adds_no_duplicate() -> bool
+  tests [((), true)]
+  {
+    let wrapped = tools_with_extensions(catalog_rt(jo([kv("tool", js("WriteFile"))])));
+    List.length(wrapped) == 7
   }
 
 pure func test_ext_schema_synthesised_name() -> bool
