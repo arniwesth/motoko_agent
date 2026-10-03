@@ -68,9 +68,10 @@ MUTATIONS = [
     ("regrouped text forgets its scale", "explainer_kit/lint.py",
      "scale=float(np.median(scales)) if scales else 1)", "scale=1)", False),
     ("caption_cut is judged before the wait", "explainer_kit/kit.py",
-     "        self.hush(0.15)  # never talk over the line before\n"
-     "        if self.cap is not None and self.renderer.time < self.read_until - 0.05:",
-     "        if self.cap is not None and self.renderer.time < self.read_until - 0.05:", True),
+     "        self.hush(0.15)  # never talk over the line before\n",
+     "", True),
+    ("a wait rounded down to a frame is a cut", "explainer_kit/kit.py",
+     "        slack = max(0.05, 1 / config.frame_rate + 0.005)", "        slack = 0.05", True),
     # -- which lines a scene speaks ---------------------------------------------------------------
     ("speak(text=...) is skipped", "explainer_kit/film.py",
      '        nodes = node.args[:1] or [kw.value for kw in node.keywords if kw.arg == "text"]',

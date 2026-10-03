@@ -10,11 +10,13 @@ example. That film renders through this tool identically to the hand-built pipel
 
 ## Quick start
 
+From the repository root. Every path is relative to where the command is run.
+
 ```sh
-tools/explainer/setup.sh                                   # once: about 1.5 GB, no root
-tools/explainer/explainer lint   examples/minimal.py       # seconds: timeline and geometry
-tools/explainer/explainer render examples/minimal.py --draft
-tools/explainer/explainer render examples/minimal.py       # 1080p, beside the film file
+tools/explainer/setup.sh                                            # once: 1.5 GB, no root
+tools/explainer/explainer lint   tools/explainer/examples/minimal.py   # seconds; draws nothing
+tools/explainer/explainer render tools/explainer/examples/minimal.py --draft
+tools/explainer/explainer render tools/explainer/examples/minimal.py   # 1080p, beside the file
 ```
 
 ## Writing a film
@@ -42,19 +44,29 @@ class Idea(Explainer):
 
 | On the scene | What it does |
 |---|---|
-| `say(*lines)` | Swaps the caption and starts its narration. Arguments must be string literals. |
-| `rest(extra=0)` | Checks the picture, then waits until the caption is read and said. |
-| `speak(text)` | Narration with no caption, for a title card. Follow it with `hush()`. |
-| `header(kicker, title)`, `source(text)` | The line at the top, and the small sources line at the bottom left. |
-| `end()` | Fades the scene out. |
+| `say(*lines, run_time=0.55)` | Swaps the caption for these lines and starts their narration. The lines must be string literals. `run_time` is the cross-fade. |
+| `rest(extra=0.0)` | Checks the picture, then waits until the caption has been read and said, plus `extra` seconds. |
+| `speak(text, lead=0.2)` | Narration with no caption, for a title card, starting `lead` seconds from now. Follow it with `hush()`. |
+| `hush(pad=0.3)` | Waits for the narration to finish, plus `pad` seconds. |
+| `header(kicker, title)` | The line at the top: the kicker in blue, then the title. Returns it. |
+| `source(text)` | The small sources line at the bottom left. Returns it. |
+| `end()` | Fades everything out. |
 | `lint_now()` | Runs the geometry checks on a pose that `rest()` does not see. |
 
 | Helper | What it makes |
 |---|---|
-| `T(markup, size=28, color=WHITE)` | One line of serif text with a fixed line box. |
-| `code(lines)`, `card(lines, w=, h=)` | Monospaced lines as one layout; the same in a dark panel (`.lines`, `.bg`). |
-| `pill(markup, color, dashed=False)`, `node(label, color)` | A labelled outline; a named actor. |
-| `arrow(a, b)`, `check()`, `cross()`, `neq(color)` | An arrow with a sane tip, and marks the fonts lack. |
+| `T(markup, size=28, color=WHITE, font=SERIF, slant=NORMAL, weight=NORMAL)` | One line of text with a fixed line box, so stacked lines share a baseline. `font=MONO` for code. |
+| `code(lines, size=20, color=GREY_A, spacing=0.8)` | Monospaced lines set as one layout; returns one group per line. Colour letters in markup apply; the font letter does not. |
+| `card(lines, size=20, w=None, h=None, pad=0.3, stroke=GREY_D, color=GREY_A)` | The same in a dark panel, sized to its text unless `w` or `h` is given. `.lines` and `.bg` reach its parts. |
+| `pill(markup, color, size=20, font=SERIF, pad=0.44, fill=0.13, dashed=False, text_color=None)` | A short label in a rounded outline; `dashed` for something provisional. `.label` and `.box`. |
+| `node(label, color, w=2.4, h=1.0, size=26)` | A named actor: a tinted rounded box with its name inside. |
+| `arrow(start, end, color=WHITE, width=4, buff=0.1, tip=0.2)` | An arrow whose tip stays a sane size on short runs. |
+| `check(color=GREEN, size=0.3, width=6)`, `cross(color=RED, size=0.3, width=6)` | Marks the fonts lack. |
+| `neq(color, size=44)` | A not-equals sign. |
+
+Also exported: `SERIF` and `MONO` (the two fonts), `BG` and `PANEL` (the background and panel
+colours), `CAP_Y` (where captions sit), `TAGS` (the markup's colour letters) and `parse`. Sizes
+are in the same units as Manim's `font_size`; positions and widths are in Manim's scene units.
 
 **Inline markup.** `{cy|effects: unknown}` is code font (`c`) in yellow (`y`); `i` is italic. The
 colour letters are in `TAGS` (g y t b r p m o w), and a film may add its own.

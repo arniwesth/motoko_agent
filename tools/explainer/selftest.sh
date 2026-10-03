@@ -184,6 +184,15 @@ echo 'raise ImportError("the file beside the film was imported instead of the ki
 "$explainer" lint "$media/shadow/film.py" --media "$media/shadow-media" >/dev/null 2>&1 ||
   fail "a file named explainer_kit.py beside the film shadowed the kit"
 
+# A caption that was given its rest() was not cut short, even where a frame is 67 ms long.
+"$explainer" render "$here/tests/cut.py" --draft --no-voice --media "$media/cut" --json \
+  >"$media/cut.json" 2>/dev/null || true
+python3 -c "
+import json
+r = json.load(open('$media/cut.json'))
+assert r['lint']['findings'] == [] and r['ok'], r['lint']
+" || fail "a rested caption was reported as cut at draft frame rate"
+
 # A caption that stayed up until its slow narration ended was not cut short.
 EXPLAINER_SPEED=0.5 "$explainer" render "$here/tests/slow.py" --draft --media "$media/slow" \
   --json >"$media/slow.json" 2>/dev/null || fail "the slow-narration film did not render clean"
@@ -208,4 +217,5 @@ code=$(status "$explainer" check "$film" --draft --media "$m")
   fail "check after a render in which a scene crashed did not refuse it (exit $code)"
 
 echo "full: ok, fresh --json, a directory per scene, sheet, narrated and measured --scenes," \
-  "late audio fails on sync, ${heard}a shadowing file, slow narration, missing film, crashed scene"
+  "late audio fails on sync, ${heard}a shadowing file, a rested caption at draft rate," \
+  "slow narration, missing film, crashed scene"

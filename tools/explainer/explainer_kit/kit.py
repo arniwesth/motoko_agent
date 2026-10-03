@@ -233,7 +233,10 @@ class Explainer(Scene):
     def say(self, *lines, run_time=0.55):
         """Replace the caption with these lines (inline markup allowed) and speak them."""
         self.hush(0.15)  # never talk over the line before
-        if self.cap is not None and self.renderer.time < self.read_until - 0.05:
+        # A wait is rounded down to whole frames, so a caption that was given its rest() can
+        # still be up to one frame short. That is not a cut; a missing rest() is seconds short.
+        slack = max(0.05, 1 / config.frame_rate + 0.005)
+        if self.cap is not None and self.renderer.time < self.read_until - slack:
             self.finding("caption_cut", "warning",
                          f"replaced {self.read_until - self.renderer.time:.1f} s before it "
                          "could be read: call rest() first", [self.cap_text])
