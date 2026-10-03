@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# explainer: render a narrated Manim film and check it. See README.md; `explainer --help`.
+#
+# Runs the CLI under the conda-forge environment that holds manim, ffmpeg and Kokoro.
+# EXPLAINER_ENV (or MANIM_ENV) names that environment; setup.sh creates it.
+set -euo pipefail
+here=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
+env=${EXPLAINER_ENV:-${MANIM_ENV:-$HOME/.local/share/manim-env-root/env}}
+if [ ! -x "$env/bin/python" ]; then
+  echo "explainer: no environment at $env; run $here/setup.sh (about 1.5 GB, no root needed)" >&2
+  exit 1
+fi
+export PATH="$env/bin:$PATH" PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONDONTWRITEBYTECODE=1  # no __pycache__ beside a project's film file
+# -P keeps the current directory off the import path: run from a folder that happens to hold
+# another explainer_kit, or a file named like a library, the tool must still import its own.
+exec python -P -m explainer_kit.cli "$@"
