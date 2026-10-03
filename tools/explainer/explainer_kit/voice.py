@@ -11,12 +11,16 @@ import hashlib
 import os
 import pathlib
 import re
+import sys
 import wave
 
 VOICE = os.environ.get("EXPLAINER_VOICE", "af_heart")
 SPEED = float(os.environ.get("EXPLAINER_SPEED", "1.0"))
 MODELS = pathlib.Path(os.environ.get(
     "KOKORO_MODELS", "~/.local/share/manim-env-root/models/kokoro")).expanduser()
+WHISPER = pathlib.Path(os.environ.get(
+    "WHISPER_MODELS", "~/.local/share/manim-env-root/models/whisper")).expanduser()
+MODEL_FILES = {"kokoro-v1.0.onnx": 325532387, "voices-v1.0.bin": 28214398}  # bytes
 RATE = 24000  # Kokoro's sample rate
 LEVEL = 0.07  # RMS each clip is brought to, so lines match in loudness without a compressor
 # +6 dB under a limiter takes the mixed track from about -23 LUFS to -17, peaks near -1 dBFS.
@@ -50,13 +54,22 @@ def seconds(path):
         return w.getnframes() / w.getframerate()
 
 
+def clip_ok(path):
+    """Whether a cached clip is a readable, non-empty WAV. An interrupted write leaves one not."""
+    try:
+        with wave.open(str(path)) as w:
+            return w.getnframes() > 0
+    except (OSError, EOFError, wave.Error):
+        return False
+
+
 def clip(text):
     """(path, seconds) of the clip for a spoken line, or None when narration is off."""
     voice_dir = os.environ.get("EXPLAINER_VOICE_DIR")
     if not voice_dir:
         return None
     path = clip_path(text, voice_dir)
-    if not path.exists():
+    if not clip_ok(path):
         raise FileNotFoundError(f"no narration clip for {text!r}: the CLI makes them before "
                                 "rendering; a say() built at run time cannot be narrated")
     return path, seconds(path)
@@ -72,12 +85,16 @@ def _lang():
     return "en-gb" if VOICE.startswith("b") else "en-us"
 
 
-def synth(texts, voice_dir, log=print):
-    """Make the clips that are missing. Returns how many were made."""
+def _to_stderr(message):
+    print(message, file=sys.stderr)
+
+
+def synth(texts, voice_dir, log=_to_stderr):
+    """Make the clips that are missing or damaged. Returns how many were made."""
     import numpy as np
     out = pathlib.Path(voice_dir)
     out.mkdir(parents=True, exist_ok=True)
-    todo = [t for t in dict.fromkeys(texts) if not clip_path(t, out).exists()]
+    todo = [t for t in dict.fromkeys(texts) if not clip_ok(clip_path(t, out))]
     if not todo:
         return 0
     from kokoro_onnx import Kokoro
@@ -89,11 +106,14 @@ def synth(texts, voice_dir, log=print):
         loud = np.flatnonzero(np.abs(samples) > 0.01)
         samples = samples[max(0, loud[0] - 480):loud[-1] + 1200]  # 20 ms before, 50 ms after
         samples = np.clip(samples * (LEVEL / np.sqrt(np.mean(samples ** 2))), -0.98, 0.98)
-        with wave.open(str(clip_path(text, out)), "wb") as w:
+        final = clip_path(text, out)
+        partial = final.with_suffix(".part")
+        with wave.open(str(partial), "wb") as w:
             w.setnchannels(1)
             w.setsampwidth(2)
             w.setframerate(RATE)
             w.writeframes((samples * 32767).astype("<i2").tobytes())
+        os.replace(partial, final)  # a clip is either whole or absent
         log(f"  voiced {len(samples) / RATE:5.2f}s  {text}")
     return len(todo)
 
@@ -122,6 +142,12 @@ def phonemes(texts):
     return [tokenizer.phonemize(text, _lang()) for text in texts]
 
 
+def whisper_model(model_name="small.en"):
+    """The directory of a provisioned Whisper model, or None. setup.sh --with-whisper fills it."""
+    path = WHISPER / model_name
+    return path if (path / "model.bin").exists() else None
+
+
 def transcribe(texts, voice_dir, model_name="small.en"):
     """A stand-in for listening: what a speech recogniser hears in each clip, against the line.
 
@@ -140,7 +166,12 @@ def transcribe(texts, voice_dir, model_name="small.en"):
         text = re.sub(r"[^a-z0-9 ]", "", text.lower().replace("-", " "))
         return [digits.get(w, w) for w in text.split()]
 
-    model = WhisperModel(model_name, device="cpu", compute_type="int8")
+    path = whisper_model(model_name)
+    if path is None:
+        raise FileNotFoundError(f"no Whisper model in {WHISPER / model_name}: "
+                                "run setup.sh --with-whisper")
+    # Loaded from disk with downloads off: a render must not reach for the network.
+    model = WhisperModel(str(path), device="cpu", compute_type="int8", local_files_only=True)
     exact, diffs = 0, []
     for text in dict.fromkeys(texts):
         with wave.open(str(clip_path(text, voice_dir))) as w:

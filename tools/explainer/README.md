@@ -72,15 +72,17 @@ them, so keep a scene's content above y = -2.6 and the header's row (y = 3.5) cl
 | `lint FILM` | Runs every scene's timeline without drawing it; reports durations and geometry findings. | 27 s |
 | `render FILM` | Makes missing narration clips, renders scenes in parallel, joins them, mixes and levels the voice, then checks. Writes the film beside its file. | 2.5 min |
 | `render FILM --draft` | The same at 854×480, 15 fps, kept in scratch. | under a minute |
-| `check FILM` | Re-runs the checks on the last render. | seconds |
+| `check FILM` | Re-runs the checks on the last successful render. Refuses (exit 1) if a scene failed or the film is gone. | seconds |
 | `say FILM` | Prints each spoken line and how it will be pronounced. | seconds |
 | `sheet FILM` | Contact sheets of the last render, for an author who can look. | seconds |
 | `doctor` | Says what is installed and what is missing. | |
 
-Flags: `--scenes A B` limits a command to some scenes (no joined film is written); `--no-voice`
-renders captions only; `--transcribe` adds the speech-to-text check; `--json` prints the report
-alone; `-o` names the output; `--media` moves the scratch directory. The first render of a film
-synthesizes its clips at about five seconds a line; after that only changed lines are re-made.
+Flags: `--scenes A B` limits a command to some scenes: no joined film is written, and each scene
+is narrated into its own file in scratch and checked there. `--no-voice` renders captions only;
+`--transcribe` adds the speech-to-text check; `--json` prints the report alone; `-o` names the
+output; `--media` moves the scratch directory. Progress goes to stderr, so stdout is only ever
+the report. The first render of a film synthesizes its clips at about five seconds a line; after
+that only changed lines are re-made.
 
 **Exit status:** 0 clean, 1 could not render, 2 rendered but a check failed.
 
@@ -92,26 +94,32 @@ transcription results. `ok` is false if any error-level finding or sync failure 
 
 | Check | Level | What it catches |
 |---|---|---|
-| `off_frame` | error | Any visible shape or text extending past the frame. |
-| `text_overlap` | error | Two pieces of text printed over each other. |
-| `caption_overlap` | error | A shape reaching into the caption. |
+| `off_frame` | error | Any ink past the frame: shapes with their stroke thickness, arrows, images, text. |
+| `text_overlap` | error | Two pieces of text printed over each other: the kit's text, plain Manim `Text`, or two lines of one caption. |
+| `caption_overlap` | error | A filled shape, an image or a stroke reaching into the caption. An empty outline around it is fine. |
 | `narration_cut` | error | A scene ending while its last line is still being said. |
-| `unspeakable` | error | A `say()` whose text is built at run time, so no clip can be made for it. |
+| `unspeakable` | error | A `say()` or `speak()` in a rendered scene whose text is built at run time, so no clip can be made for it. |
 | `near_edge` | warning | Text within 0.12 units of the frame edge. |
 | `small_text` | warning | Text set below size 13. |
 | `caption_cut` | warning | A caption replaced before it could be read (a missing `rest()`). |
-| sync | error | Each clip's first sound in the finished file against where its scene put it (80 ms). |
+| sync | error | Each clip's first sound in the finished file against where its scene put it (80 ms), read by the file's own timestamps, so a track muxed late fails. |
 | overlaps | error | Two clips speaking at once. |
 | loudness | reported | Integrated LUFS and true peak of the finished track. |
 | transcription | reported | Whisper's reading of each clip against its line. Homophones and digits for spelt-out numbers are expected differences. |
 
-`selftest.sh` holds each geometry check to account: `examples/defects.py` has one scene per
-check with that defect seeded, and the test fails unless each is flagged as its own kind and the
-clean scenes stay clean. It draws nothing and takes about eight seconds.
+`selftest.sh` holds the checks to account. `examples/defects.py` has twelve scenes with one
+seeded defect each, and the test fails unless each is flagged as its own kind and the clean
+scenes stay clean. `tests/units.py` covers what is not geometry: which lines a film speaks, a
+damaged clip cache, a late audio track, a render that never finished. That much draws nothing and
+takes about eight seconds. `selftest.sh --full` also renders a small narrated film and checks
+what only a real render shows; about twenty seconds in all.
 
-**What the checks do not see.** They work from bounding boxes at the poses where a scene rests.
-They do not judge balance, crowding, colour, or whether an arrow points at the right thing, and
-they see nothing in the middle of an animation. Of the three layout defects the 034 film
+**What the checks do not see.** They work from geometry at the poses where a scene rests. They
+do not judge balance, crowding, colour, or whether an arrow points at the right thing, and they
+see nothing in the middle of an animation. Text is text to them when it is the kit's or a Manim
+`Text` or `MarkupText`; `Tex`, and words inside an image, are shapes. A shape over ordinary text
+is not flagged, because that is what a label in a box looks like; only the caption is protected.
+Of the three layout defects the 034 film
 actually had while it was being made, lint flags two when they are put back (a label printed
 over another, a stamp past the right edge). The third was a row moved in from the edge for
 comfort at 0.16 units, which no threshold here separates from a layout that is fine. Cramped
@@ -120,9 +128,11 @@ check shows the words are intelligible and correct, not that the delivery sounds
 
 ## How it works
 
-- **Narration first.** `film.py` reads the film's source for `say(...)` and `speak(...)` literals
-  and `voice.py` synthesizes one Kokoro clip per line, cached by text, voice and speed. A scene
-  times itself by the clip's length, which is why a spoken line cannot be built at run time.
+- **Narration first.** `film.py` reads the film's source for `say(...)` and `speak(...)` literals,
+  wherever they are: a scene's own methods, a base class in the same file, a module-level
+  function. `voice.py` synthesizes one Kokoro clip per line, cached by text, voice and speed, and
+  written whole or not at all. A scene times itself by the clip's length, which is why a spoken
+  line cannot be built at run time.
 - **One Manim process per scene**, in parallel. Each writes a small report: its length, when each
   clip starts, and what `lint` found.
 - **One track.** The clips are laid at the recorded times, levelled at +6 dB under a limiter
@@ -139,10 +149,16 @@ check shows the words are intelligible and correct, not that the delivery sounds
 
 `setup.sh` installs everything unprivileged under `~/.local/share/manim-env-root`: micromamba, a
 conda-forge environment with Manim and ffmpeg, `kokoro-onnx`, and 340 MB of Kokoro model files
-(Apache-2.0). `--with-whisper` adds `faster-whisper` for `--transcribe`. Nothing leaves the
-machine at render time. `EXPLAINER_ENV`, `KOKORO_MODELS` and `EXPLAINER_MEDIA` relocate the
-environment, the models and the scratch directory; `EXPLAINER_VOICE` picks another Kokoro voice
-(default `af_heart`; `am_*` are US male, `bm_*` and `bf_*` British).
+(Apache-2.0). `--with-whisper` adds `faster-whisper` and its `small.en` model (464 MB) for
+`--transcribe`. Each download goes to a temporary name and takes its place only once verified
+(the Kokoro files by checksum), so an interrupted run cannot leave a broken file that a later
+run trusts.
+
+All network use is in `setup.sh`. Rendering and checking, `--transcribe` included, load their
+models from disk with downloads disabled. `EXPLAINER_ENV`, `KOKORO_MODELS`, `WHISPER_MODELS` and
+`EXPLAINER_MEDIA` relocate the environment, the models and the scratch directory;
+`EXPLAINER_VOICE` picks another Kokoro voice (default `af_heart`; `am_*` are US male, `bm_*` and
+`bf_*` British).
 
 A render takes minutes. Under Motoko's `BashExec`, whose wall is 30 seconds unless the profile
 sets `tools.process_timeout`, only `lint`, `say`, `check` and `doctor` fit without a raised

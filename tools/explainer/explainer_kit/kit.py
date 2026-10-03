@@ -227,11 +227,11 @@ class Explainer(Scene):
 
     def say(self, *lines, run_time=0.55):
         """Replace the caption with these lines (inline markup allowed) and speak them."""
+        self.hush(0.15)  # never talk over the line before
         if self.cap is not None and self.renderer.time < self.read_until - 0.05:
             self.finding("caption_cut", "warning",
                          f"replaced {self.read_until - self.renderer.time:.1f} s before it "
                          "could be read: call rest() first", [self.cap_text])
-        self.hush(0.15)  # never talk over the line before
         new = VGroup(*[T(line, size=28) for line in lines]).arrange(DOWN, buff=0.1)
         for line in new:
             line.explainer_tag["kind"] = "caption"
