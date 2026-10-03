@@ -44,7 +44,15 @@ to a session yet.
 ### Review
 
 An independent review by Codex (`gpt-6.1-sol`), read-only, found 18 defects; it reproduced 16
-and inferred two. All 18 are fixed in the third commit.
+and inferred two. The third commit addresses all 18.
+
+**The reviewer's re-check found that only 8 of them are fully fixed** (1, 3, 8, 9, 13, 14, 15,
+17). For the other ten the original reproduction now passes but a nearby input still triggers the
+defect, and it lists 14 open items, four of them severe: a manifest that does not say which film
+it belongs to, text that loses its identity when one character is removed, background strokes,
+and a captions-only `check` that accepts a file that is not a movie. Two of the new regression
+tests would pass with their fix reverted. A further fix pass is in progress; until it lands, read
+the table below as what was attempted, not as what holds.
 
 | # | Finding | Fix |
 |---|---|---|
@@ -112,7 +120,7 @@ Checked by `tools/explainer/selftest.sh`. The first real test of the install pat
 - [ ] `setup.sh` has not been run from a clean machine
 - [ ] Not run on x86_64; this box is aarch64
 - [ ] The narration has not been listened to by its author, only transcribed
-- [ ] The fixes have not been re-reviewed by the reviewer
+- [ ] Re-check by the reviewer: 8 of 18 fully fixed, 10 partly, 14 open items (see Review)
 - [ ] The lints see geometry at rest poses only: not balance, crowding, or anything mid-animation
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
