@@ -824,31 +824,26 @@ func atomic_write(path: string, content: string) -> Result[(), string] ! {FS, Pr
     Err(msg) => Err(msg),
     Ok(tmp) => {
       let _ = writeFile(tmp, content);
-      let chmod_result =
-        if fileExists(path) then
-          match exec("chmod", ["--reference", path, tmp]) {
-            Ok(out) => if out.exitCode == 0 then Ok(()) else Err("failed to preserve mode bits: ${trim(toString(out.stderr))}"),
-            Err(err) => Err("failed to preserve mode bits: ${process_error_to_string(err)}")
-          }
-        else Ok(());
-      match chmod_result {
-        Err(msg) => {
+      -- Best effort: give the temp file the original's mode bits. GNU stat
+      -- takes `-c %a`, BSD/macOS stat `-f %Lp`; `chmod --reference` is
+      -- GNU-only and, once its exit code was honoured (#202), failed every
+      -- EditFile on macOS. A failure here leaves the temp file's default mode
+      -- and never fails the edit; only the rename below can.
+      let _ = if fileExists(path) then {
+        let _ = exec("bash", ["-c", "m=$(stat -c %a \"$1\" 2>/dev/null || stat -f %Lp \"$1\") && chmod \"$m\" \"$2\"", "motoko-chmod", path, tmp]);
+        ()
+      } else ();
+      match exec("mv", ["-f", tmp, path]) {
+        Ok(out) =>
+          if out.exitCode == 0 then Ok(())
+          else {
+            let _ = exec("rm", ["-f", tmp]);
+            Err("atomic rename failed: ${trim(toString(out.stderr))}")
+          },
+        Err(err) => {
           let _ = exec("rm", ["-f", tmp]);
-          Err(msg)
-        },
-        Ok(_) =>
-          match exec("mv", ["-f", tmp, path]) {
-            Ok(out) =>
-              if out.exitCode == 0 then Ok(())
-              else {
-                let _ = exec("rm", ["-f", tmp]);
-                Err("atomic rename failed: ${trim(toString(out.stderr))}")
-              },
-            Err(err) => {
-              let _ = exec("rm", ["-f", tmp]);
-              Err("atomic rename failed: ${process_error_to_string(err)}")
-            }
-          }
+          Err("atomic rename failed: ${process_error_to_string(err)}")
+        }
       }
     }
   }
