@@ -132,6 +132,31 @@ comfort at 0.16 units, which no threshold here separates from a layout that is f
 line spacing and a top-heavy frame, both fixed by eye, are invisible to it. The transcription
 check shows the words are intelligible and correct, not that the delivery sounds natural.
 
+## Known limits
+
+Found in the fourth round of review and not fixed. The reviewer would hold a merge for the first
+four and accept the rest as recorded limits.
+
+- **A movie with no decodable frames can pass `check`** if the film it expects is shorter than
+  0.2 s, because the length tolerance is applied before asking whether anything decoded.
+- **Images that are stretched unevenly or rotated are measured wrongly.** Each visible pixel is
+  given one radius, so a stretched border image can be flagged as covering the caption it
+  frames, and a rotated pixel past the frame can be missed.
+- **Method lookup is depth-first, not Python's order.** With diamond inheritance
+  (`Child(_Left, _Right)`, both deriving from `_Root`) the wrong method is followed and its
+  narration is not made, so the render stops on a missing clip.
+- **A nested function that calls another nested function loses sight of it**, so the second
+  one's narration is not collected.
+- **Reachability goes by names.** A local variable named like a module-level helper counts as a
+  call to it, and a lambda's body is always entered. Either can report a line as unspeakable in
+  a scene that never says it.
+- **`sheet` on a very short scene** (shorter than half the sampling interval) prints a path and
+  exits 0 without writing a file.
+- **A regrouped text's size includes what is attached to its glyphs**, so a glyph with an offset
+  child can hide a small-text warning.
+- **`tests/mutate.py` does not cover** `Base.method(self)` resolution or the checksum check on a
+  freshly downloaded file; reverting either leaves the self-test green.
+
 ## How it works
 
 - **Narration first.** `film.py` reads the film's source for the `say(...)` and `speak(...)`
