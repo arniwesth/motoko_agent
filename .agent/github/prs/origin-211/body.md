@@ -21,6 +21,8 @@ Motoko session, gets `explainer lint FILM` in place of looking.
 - fix(tools): explainer — address the review of PR #211
 - fix(tools): explainer — address the reviewer's re-check of PR #211
 - fix(tools): explainer — address the third round of review on PR #211
+- fix(tools): explainer — fix the four findings the reviewer would hold the merge for
+- docs(tools): explainer — record the fourth review round's open findings as known limits
 - chore(github) commits recording this PR
 
 24 files under `tools/explainer/`:
@@ -64,22 +66,24 @@ crashed), and two fixes that could be reverted with the self-test still green. T
 addresses all 11; the third table says how.
 
 **Fourth round.** The reviewer re-checked that commit: 6 of the 11 fixed (2, 5, 6, 8, 9, 11) and
-5 not (1, 3, 4, 7, 10). It lists 8 remaining findings, none of which is fixed in this PR. They
-are recorded in the tool's README under "Known limits". The reviewer would hold the merge for
-the first four:
+5 not (1, 3, 4, 7, 10). It listed 8 remaining findings and said which it would hold the merge
+for. Those four are fixed in the last fix commit, which the reviewer has not re-checked:
 
-1. `check` passes a movie with no decodable frames when the expected film is under 0.2 s
-2. stretched or rotated images are measured wrongly, giving both false and missed findings
-3. method lookup is depth-first, not Python's order, so diamond inheritance follows the wrong
-   method
-4. a nested function calling another nested function loses its narration
+1. `check` passed a movie with no decodable frames when the expected film was under 0.2 s. It
+   now counts decoded frames and requires exactly the number the render made
+2. stretched or rotated images were measured wrongly. Each pixel is now a box of its own shape
+3. method lookup was depth-first, so diamond inheritance followed the wrong method. It now
+   follows Python's own order
+4. a nested function calling another nested function lost its narration. A nested function now
+   sees the functions defined around it
 
-and would accept the rest as recorded limits: name-based reachability (a shadowing local, an
-uncalled lambda), `sheet` on a very short scene, a glyph with an offset child hiding a
-small-text warning, and two fixes `tests/mutate.py` does not cover.
+The four it was content to see recorded are not fixed and are listed in the tool's README under
+"Known limits": name-based reachability (a shadowing local, an uncalled lambda), `sheet` on a
+very short scene, a glyph with an offset child hiding a small-text warning, and two fixes
+`tests/mutate.py` does not cover.
 
-Each round has found fewer and less severe problems (18, 14, 11, 8), but none has come back
-clean, and the review was stopped here.
+Each round found fewer and less severe problems (18, 14, 11, 8), but none came back clean, and
+the review was stopped here.
 
 First round:
 
@@ -170,19 +174,20 @@ Checked by `tools/explainer/selftest.sh`. The first real test of the install pat
 ## Test evidence
 
 - [x] `tools/explainer/selftest.sh --full`, about a minute:
-  `geometry: ok, 19 seeded defects each flagged as its own kind, 5 clean scenes clean`,
-  `units: ok, 25 of 25 passed`,
+  `geometry: ok, 20 seeded defects each flagged as its own kind, 7 clean scenes clean`,
+  `units: ok, 28 of 28 passed`,
   `setup: ok, a failed download leaves nothing, checksums and model completeness hold`,
   `full: ok, fresh --json, a directory per scene, sheet, narrated and measured --scenes, late
   audio fails on sync, transcription as JSON, a shadowing file, slow narration, missing film,
   crashed scene`
-- [x] `tests/mutate.py`: 39 fixes reverted one at a time in a copy of the tool. 37 turned the
-  self-test red in the full run; the two that did not are red after their tests were
-  strengthened. Not covered, because nothing can observe them: that a clip is written under a
-  temporary name, and that `curl` retries
-- [x] The reviewer's probe films from all three rounds against the fixed tool: each now behaves
-  as its finding asked. Its two probes that are still flagged, a thin rule and a narrow circle
-  through the caption's words, are real overlaps
+- [x] `tests/mutate.py`: 44 fixes reverted one at a time in a copy of the tool; the self-test
+  goes red for all 44. Not covered, because nothing can observe them: that a clip is written
+  under a temporary name, and that `curl` retries. Not listed, per the reviewer: explicit
+  `Base.method(self)` resolution and the checksum check on a fresh download
+- [x] The reviewer's probe films from the first three rounds, and its fourth-round probes for
+  the four held findings, against the fixed tool: each now behaves as its finding asked. Its
+  two probes that are still flagged, a thin rule and a narrow circle through the caption's
+  words, are real overlaps
 - [x] The 034 film (not in this PR) rendered through the fixed tool: 8 scenes, 4 min 11 s, lint
   clean under the stronger checks, all 38 clips within 25 ms of their scheduled starts,
   -17.3 LUFS, peak -0.9 dBFS; `sheet` and `check` (which now decodes all 7,534 frames) pass
@@ -194,8 +199,8 @@ Checked by `tools/explainer/selftest.sh`. The first real test of the install pat
 - [x] `setup.sh --with-whisper` on the existing install: verifies the Kokoro checksums, skips
   what is there, provisions the Whisper model. A download of a missing file exits 1 and leaves
   nothing behind
-- [ ] Fourth-round re-check by the reviewer: 6 of 11 fixed, 5 not; 8 findings remain open and
-  are not fixed here, 4 of which the reviewer would hold the merge for (see Review)
+- [ ] The fixes for the four held findings have not been re-checked by the reviewer; the other
+  four findings of that round are open and recorded as known limits
 - [ ] `setup.sh` has not been run from a clean machine
 - [ ] Not run on x86_64; this box is aarch64
 - [ ] The narration has not been listened to by its author, only transcribed
