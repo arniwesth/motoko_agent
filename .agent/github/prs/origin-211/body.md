@@ -18,10 +18,11 @@ Motoko session, gets `explainer lint FILM` in place of looking.
 ## Changes
 
 - feat(tools): explainer, narrated Manim films with machine checks
-- chore(github): record PR #211
 - fix(tools): explainer — address the review of PR #211
+- fix(tools): explainer — address the reviewer's re-check of PR #211
+- three chore(github) commits recording this PR
 
-22 files under `tools/explainer/`:
+23 files under `tools/explainer/`:
 
 - **`explainer_kit/`**: the scene kit (`say()` puts a caption up and speaks it, `rest()` waits
   for both), Kokoro narration cached per caption, geometry lints from Manim's own geometry, and
@@ -43,16 +44,18 @@ to a session yet.
 
 ### Review
 
-An independent review by Codex (`gpt-6.1-sol`), read-only, found 18 defects; it reproduced 16
-and inferred two. The third commit addresses all 18.
+An independent, read-only review by Codex (`gpt-6.1-sol`) ran twice.
 
-**The reviewer's re-check found that only 8 of them are fully fixed** (1, 3, 8, 9, 13, 14, 15,
-17). For the other ten the original reproduction now passes but a nearby input still triggers the
-defect, and it lists 14 open items, four of them severe: a manifest that does not say which film
-it belongs to, text that loses its identity when one character is removed, background strokes,
-and a captions-only `check` that accepts a file that is not a movie. Two of the new regression
-tests would pass with their fix reverted. A further fix pass is in progress; until it lands, read
-the table below as what was attempted, not as what holds.
+**First round: 18 defects**, 16 reproduced and two inferred. The second commit addresses all of
+them; the table below says how.
+
+**Second round: the re-check.** It found 8 of the 18 fully fixed (1, 3, 8, 9, 13, 14, 15, 17).
+For the other ten the original reproduction passed but a nearby input still triggered the
+defect, and it listed 14 open items, including two regression tests that passed with their fix
+reverted. The third commit addresses all 14; the second table says how. That commit has not been
+re-checked by the reviewer.
+
+First round:
 
 | # | Finding | Fix |
 |---|---|---|
@@ -74,6 +77,30 @@ the table below as what was attempted, not as what holds.
 | 16 | The first `--transcribe` downloaded a model at render time | `setup.sh --with-whisper` provisions it; it is loaded from disk with downloads disabled |
 | 17 | `caption_cut` fired before the wait that kept the caption up | It is judged after that wait |
 | 18 | `say --scenes` printed the wrong scene beside each line | The listing and the phonemes come from the same filtered records |
+
+Second round:
+
+| # | Still open after the first fixes | Fix |
+|---|---|---|
+| 1 | A manifest did not say which film it belonged to: `check` passed on another film's render in a shared scratch directory | The manifest names its film; `check` refuses a mismatch |
+| 2 | Fading one character made Manim split a text into glyphs, which lint took for shapes; overlaps passed | Every glyph carries its text's record and loose glyphs are regrouped by it, for the kit's text, code lines and plain `Text` |
+| 3 | Background strokes were invisible to lint | Foreground and background strokes both count |
+| 4 | A captions-only `check` accepted a file that was not a movie | Every output is opened: a video stream, the length the render made, audio if narrated |
+| 5 | A Whisper model missing its tokenizer passed the readiness check, then downloaded one | All four model files are required; transcription runs with `HF_HUB_OFFLINE` set |
+| 6 | A clip with a valid header and truncated samples was trusted | A cached clip must hold every sample its header promises |
+| 7 | Every module-level helper counted for every scene | A scene's lines are those reachable from its `construct()`, through its methods and the functions it names |
+| 8 | `check --transcribe --json` printed a log line before the JSON | Commands write through one function; anything else printed goes to stderr |
+| 9 | Transparent images, and transparent padding, were flagged as ink | An image is the box of its non-transparent pixels |
+| 10 | `render --scenes` reported no loudness | Loudness is measured for each scene file |
+| 11 | A quote in the install path broke Whisper provisioning | The path is passed as an argument, not written into source |
+| 12 | The joined film was decoded once per scene | Expected starts are grouped by file; one decode |
+| 13 | The late-audio test passed on any non-zero exit | It requires exit 2 and `sync.ok` false; the other end-to-end checks require their exact exit code |
+| 14 | The cache test never ran synthesis against a damaged clip | It does, with a stand-in engine, and checks the clip is whole afterwards |
+
+One more defect turned up while reverting fixes in a copy of the tool to test the tests: run from
+the original's folder, the copy imported the original's code, because `python -m` puts the
+current directory first on the import path. The launcher and the per-scene processes now run
+with `-P`.
 
 ## Governing docs
 
@@ -97,30 +124,31 @@ Checked by `tools/explainer/selftest.sh`. The first real test of the install pat
 
 ## Test evidence
 
-- [x] `tools/explainer/selftest.sh --full`, about twenty seconds:
-  `geometry: ok, 12 seeded defects each flagged as its own kind, 3 clean scenes clean`,
-  `units: ok, 8 of 8 passed`,
-  `full: ok, fresh --json, narrated --scenes, late audio, missing film, crashed scene`
-- [x] The same tests against the first commit: none of the six new seeded defects is flagged,
-  the clean outline is falsely flagged, and no unit test passes
-- [x] The reviewer's own probe films against the fixed tool: its geometry probe goes from no
-  findings to five errors and a warning, its stroke probe to two errors; inherited and keyword
-  narration are collected; an unrelated bad scene no longer blocks `--scenes`
+- [x] `tools/explainer/selftest.sh --full`, about half a minute:
+  `geometry: ok, 16 seeded defects each flagged as its own kind, 4 clean scenes clean`,
+  `units: ok, 16 of 16 passed`,
+  `full: ok, fresh --json, narrated --scenes, late audio fails on sync, transcription as JSON,
+  slow narration, missing film, crashed scene`
+- [x] Each fix reverted, one at a time, in a copy of the tool: the self-test goes red for 13 of
+  13
+- [x] The reviewer's probe films from both rounds against the fixed tool: each now behaves as its
+  finding asked. Its two probes that are still flagged, a thin rule and a narrow circle through
+  the caption's words, are real overlaps
 - [x] The 034 film (not in this PR) rendered through the fixed tool: 8 scenes, 4 min 11 s, lint
   clean under the stronger checks, all 38 clips within 25 ms of their scheduled starts,
   -17.3 LUFS, peak -0.9 dBFS
-- [x] That render against the one from before the fixes, and against the hand-built pipeline's
-  last output: 7,534 frames at infinite PSNR and every audio sample equal
+- [x] That render against the one from before each round of fixes, and against the hand-built
+  pipeline's last output: 7,534 frames at infinite PSNR and every audio sample equal
 - [x] `render --transcribe` with `HF_HUB_OFFLINE=1`: 2 of 2 clips word for word, nothing fetched.
   Earlier, on the 034 film's 38 clips: 28 word for word, the rest homophones or digits for
   spelt-out numbers
 - [x] `setup.sh --with-whisper` on the existing install: verifies the Kokoro checksums, skips
   what is there, provisions the Whisper model. A download of a missing file exits 1 and leaves
   nothing behind
+- [ ] The second round of fixes has not been re-checked by the reviewer
 - [ ] `setup.sh` has not been run from a clean machine
 - [ ] Not run on x86_64; this box is aarch64
 - [ ] The narration has not been listened to by its author, only transcribed
-- [ ] Re-check by the reviewer: 8 of 18 fully fixed, 10 partly, 14 open items (see Review)
 - [ ] The lints see geometry at rest poses only: not balance, crowding, or anything mid-animation
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
