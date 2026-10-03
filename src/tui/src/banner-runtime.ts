@@ -45,12 +45,26 @@ function sourceRgb(x: number, y: number): { r: number; g: number; b: number } {
   return { r: pixels[i], g: pixels[i + 1], b: pixels[i + 2] };
 }
 
+// Area-average the source pixels covered by one target pixel. Nearest-neighbour
+// sampling picks a single source pixel per cell and makes the banner noisy.
 function sampleScaled(x: number, y: number, targetWidth: number, targetPixelHeight: number): { r: number; g: number; b: number } {
-  const sx = Math.floor(((x + 0.5) * BANNER_SOURCE_WIDTH) / targetWidth);
-  const sy = Math.floor(((y + 0.5) * BANNER_SOURCE_HEIGHT) / targetPixelHeight);
-  const clampedX = Math.min(Math.max(0, sx), BANNER_SOURCE_WIDTH - 1);
-  const clampedY = Math.min(Math.max(0, sy), BANNER_SOURCE_HEIGHT - 1);
-  return sourceRgb(clampedX, clampedY);
+  const x0 = Math.min(Math.floor((x * BANNER_SOURCE_WIDTH) / targetWidth), BANNER_SOURCE_WIDTH - 1);
+  const y0 = Math.min(Math.floor((y * BANNER_SOURCE_HEIGHT) / targetPixelHeight), BANNER_SOURCE_HEIGHT - 1);
+  const x1 = Math.min(Math.max(x0 + 1, Math.floor(((x + 1) * BANNER_SOURCE_WIDTH) / targetWidth)), BANNER_SOURCE_WIDTH);
+  const y1 = Math.min(Math.max(y0 + 1, Math.floor(((y + 1) * BANNER_SOURCE_HEIGHT) / targetPixelHeight)), BANNER_SOURCE_HEIGHT);
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  for (let sy = y0; sy < y1; sy += 1) {
+    for (let sx = x0; sx < x1; sx += 1) {
+      const c = sourceRgb(sx, sy);
+      r += c.r;
+      g += c.g;
+      b += c.b;
+    }
+  }
+  const n = (x1 - x0) * (y1 - y0);
+  return { r: Math.round(r / n), g: Math.round(g / n), b: Math.round(b / n) };
 }
 
 export function computeBannerWidth(columns?: number): number {

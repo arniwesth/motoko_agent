@@ -846,7 +846,7 @@ async function main(): Promise<void> {
     const bannerLines = renderBanner({ columns: process.stdout.columns });
     process.stdout.write(
       bannerLines.join("\n") +
-      "\nMotoko (AILANG built " +
+      "\nMotoko 素子 (AILANG built " +
       ailangVersion +
       ") TUI v" +
       pkgVersion +
