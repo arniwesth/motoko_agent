@@ -1,14 +1,23 @@
 # HANDOFF 2026-10-03 — Orchestrator for PLAN-001 (037): the skills extension, up to gate G1
 
-You are the **orchestrator** for the first half of `PLAN-001-implement-adr-001.md`: the
-operator's preconditions, the baseline (P0), and the throwaway prototype with its measurements
-(P1), ending at the operator's gate G1. You run in your own Herdr tab. You delegate every task
-to a fresh agent in a pane you open, you are the **single writer** of the dagr run file that
-shows the work, and you do not implement a task yourself. The operator supervises through the
-graph and may attach an observer.
+You are a Motoko session and the **orchestrator** for the first half of
+`PLAN-001-implement-adr-001.md`: the baseline (P0) and the throwaway prototype with its
+measurements (P1), ending at the operator's gate G1. You route the work. Delegates do it. The
+operator supervises through the dagr view.
 
 Parts P2 to P6 are **not yours yet**. The plan holds them in outline on purpose, because what
 the prototype measures can change what they build. When G1 is reached you stop and wait.
+
+## Check this first
+
+The plan file `.dagr/run-037-plan001.json` names pane `w8:p1` as this run's orchestrator with
+`mode: "delegate"`. If you are running in that pane, the herdr extension has put you in
+orchestrator mode, and your system prompt contains a section headed "Orchestrator mode" that
+names that file.
+
+If that section is not in your prompt, stop and tell the operator. The mode is decided when
+Motoko starts, so the plan file has to name your pane before you are launched. Do not try to
+work around it.
 
 ## Why the work is shaped this way
 
@@ -20,136 +29,150 @@ Treat a surprising result in P1 as the point of the exercise, not as an obstacle
 ## Read first, in this order
 
 Paths under `.agent/projects/037_skills_system/` are in the branch's worktree,
-`/workspaces/motoko_agent-skills`, where this project's documents are committed. The run file is
-in the shared checkout, `/workspaces/motoko_agent/.dagr/`.
+`/workspaces/motoko_agent-skills`, where this project's documents are committed.
 
 1. `.agent/projects/037_skills_system/PLAN-001-implement-adr-001.md` — §0 standing rules, §2 and
    §3 (your scope), §7 the open questions.
 2. `.agent/projects/037_skills_system/ADR-001-skills-system.md` — Accepted v0.3. Read D7, D10,
-   D4 and D9 closely: they are what P1 tests. §5 lists what earlier versions got wrong, so you
-   do not repeat it.
-3. `.dagr/run-037-plan001.json` — the graph. Twenty-one tasks, all queued. Each task's
-   `criteria` is its acceptance, taken from the plan.
-4. `.claude/skills/dagr-producer/SKILL.md` and `.claude/skills/herdr/SKILL.md` — you use both
-   throughout. `dagr --skill` prints the first if you cannot load it as a skill.
-5. `.agent/meta-decisions/sequence-implementation-handoffs-by-source-surface.md` and
+   D4 and D9 closely: they are what P1 tests. §5 lists what earlier versions got wrong.
+3. `/workspaces/motoko_agent/.dagr/run-037-plan001.json` — the plan as a graph. Each task's
+   `criteria` is its acceptance, taken from the plan. Read it. Never write it.
+4. `.agent/meta-decisions/sequence-implementation-handoffs-by-source-surface.md` and
    `re-ground-inherited-anchors-before-building.md`.
-6. `.agent/projects/037_skills_system/evidence/` — the probes already written (`m1` to `m8`).
-   P1's delegates should reuse them, not rewrite them. `m2_trigger_probe.py` holds the task set
-   P1.3b runs through the real runtime.
-7. `.agent/projects/031_system_one_decisions/HANDOFF-2026-09-20-orchestrator-release-line.md`
-   and one `LEG-*.md` beside it — the house shape for an orchestrator's records and for a
-   delegate's brief.
+5. `.agent/projects/037_skills_system/evidence/` — the probes already written (`m1` to `m8`).
+   Delegates reuse them. `m2_trigger_probe.py` holds the task set P1.3b runs through the real
+   runtime.
 
 Grounding: the shared checkout is on `main` at `cf54dff9`. Every path the ADR and the plan cite
 is unchanged since `21ba95c9`, where the research began. AILANG v0.47.2, extension ABI 8.0. Check
 both again before you write a brief.
 
+## How you delegate: the `Delegate` tool, and nothing else
+
+Every delegation goes through the `Delegate` tool and is followed with `DelegateCheck`. Do not
+split panes or start agents with the `herdr` command line, and do not write or edit any file
+under `.dagr/`. The herdr extension does that part: it keeps its own run file, seeded from the
+plan, records each attempt against the plan task you name, and opens the dagr view for the
+operator on your first delegation.
+
+Pass these on every `Delegate`:
+
+| Parameter | Value |
+| --- | --- |
+| `kind` | `"claude"`. It is required here: two kinds are permitted and there is no default. |
+| `model` | `"claude-opus-5-5"`. Always this, stated explicitly. |
+| `dagr_plan` | `".dagr/run-037-plan001.json"` on your first call; it is remembered after that. |
+| `dagr_task` | The plan task this work is, for example `"P0"` or `"P1.1"`. |
+| `task_kind` | `test` for the baseline, the probe and the measurements; `impl` for the prototype; `docs` for the results note. |
+| `cwd` | The worktree the task works in (see "The branch to use"). |
+| `prompt` | The whole task, standing alone: the delegate shares none of your context. Point it at its brief file and state the checks that end the task and what to send back. |
+
+- **One delegation in flight.** The plan file sets that limit, and the baseline's targets are
+  heavy on a machine other sessions share.
+- **A retry is `retry_of`,** naming the earlier delegation, so it is recorded as another attempt
+  at the same task and not as new work.
+- **If `Delegate` is refused,** report the refusal text to the operator. Do not fall back to the
+  command line.
+
+## Briefs and records
+
+- **The brief is a file,** `LEG-<task>.md` in the project folder in the worktree, written from
+  the plan's part and the task's `criteria`: what the task is for, the files and commands
+  involved, the checks that end it, where its evidence goes, and what to send back. Commit it on
+  the branch. Writing under `.agent/` is yours; edits under `src/`, `scripts/`, `packages/` and
+  `tools/` are refused to you by policy and belong to delegates.
+- **Write only the brief you can ground.** `P0` and `P1.1` now. `P1.2` after `P1.1` has an
+  answer. The measurements after the prototype exists.
+- **Check before you accept.** Read the evidence a delegate produced, or re-run its check
+  yourself, before you treat a task as done. A defect you find is a retry of the task, not an
+  edit of yours.
+- **Evidence is committed on the branch** by the delegate that produced it, under
+  `evidence/baseline/` for P0 and `evidence/p1/` for P1.
+
 ## The branch to use
 
 **Use `feat/skills-extension` for this work.** The operator created it for the implementation
 on 2026-10-03 and said it is the branch to use. It is cut from `main` at `cf54dff9` and checked
-out in its own worktree at `/workspaces/motoko_agent-skills`. Its first commit is this project's
-documents, together with the deletion of the design doc the ADR replaces.
+out in its own worktree at `/workspaces/motoko_agent-skills`.
 
 - Everything this project commits goes on that branch, in that worktree: the project's
-  documents, your briefs and records, the delegates' evidence, and from P2 onward the
-  implementation.
+  documents, your briefs, the delegates' evidence, and from P2 onward the implementation.
 - Do not create another branch for this work, do not commit any of it to `main`, and do not
   push unless the operator asks.
-- Do not switch the shared checkout onto it. Other sessions use that checkout and move it
-  between branches; a commit of theirs would land on this branch. Work on the branch through its
-  worktree.
-- The one exception is P1's prototype, which is throwaway. It gets a second worktree on a
-  scratch branch cut from `feat/skills-extension`, so it builds on the same base and cannot be
-  merged by accident. Its results (the scripts, the tables, the note) are committed on
-  `feat/skills-extension`; its code is not. The scratch branch and its worktree are removed
-  after G1.
+- Do not switch the shared checkout, `/workspaces/motoko_agent`, onto it. Other sessions use
+  that checkout and move it between branches.
+- The one exception is P1's prototype, which is throwaway. It has a second worktree,
+  `/workspaces/motoko_agent-p1proto`, on the scratch branch `scratch/p1-prototype`, cut from
+  `feat/skills-extension`. Its results (the scripts, the tables, the note) are committed on
+  `feat/skills-extension`; its code is not. The scratch branch and worktree are removed after
+  G1.
+
+So `cwd` is `/workspaces/motoko_agent-skills` for P0, the results note and anything that only
+reads the tree, and `/workspaces/motoko_agent-p1proto` for P1.1, P1.2 and the measurements.
 
 ## The state you inherit
 
-No task has started. This project's documents are committed on `feat/skills-extension`, and
-the copy in its worktree is the one of record: this file, the ADR, the plan, the research, the
-four reviews and `evidence/`. Write your briefs and records there.
+A first orchestrator was started earlier today and stopped by the operator before any task
+finished. It delegated through the `herdr` command line on the wrong model, edited the plan file
+by hand, and never opened the dagr view. This handoff has been rewritten to rule those out. What
+it left:
 
-The run file stays in the shared checkout, `/workspaces/motoko_agent/.dagr/run-037-plan001.json`.
-That checkout is shared with other live sessions, and nothing in its working tree is this
-project's any more:
+- **Commit `ecf7f48c` on the branch,** holding `LEG-P0.md` and `LEG-P1.1.md`. They were written
+  for the other way of delegating: they name pane `w8:p1` as the place to report, ask for a
+  typed envelope, and tell the delegate not to write evidence files. Read them, keep what is
+  sound, and rewrite the rest before you use them.
+- **The scratch worktree** described above, already created and at the same commit as the
+  branch.
+- **One lost attempt on `P0`** in the plan file. Its delegate's pane closed with no result. `P0`
+  is queued again and nothing of it was recorded.
 
-- **A separate, finished change to the code-graph tool:** `tools/code-graph/extractor/iface_pass.py`,
-  `tools/code-graph/tests/test_iface_parallel.py`, and the tool's `README.md` and `AGENTS.md`.
-  Which branch it gets is the operator's (`Q-CGRAPH`). It blocks nothing here; do not commit it.
-- **Other sessions' changes, leave alone:** `Makefile`, `ailang.lock`, the 030 research file,
-  and every other untracked path.
-
-The worktree `/workspaces/motoko_agent-fix3` belongs to another session. Other sessions also
-move the shared checkout between branches; do not switch it yourself.
+The shared checkout's working tree holds changes that are not this project's. Leave them alone:
+a finished change to the code-graph tool (four files under `tools/code-graph/`, waiting for the
+operator to name a branch), and other sessions' edits to `Makefile`, `ailang.lock` and other
+paths. The worktree `/workspaces/motoko_agent-fix3` belongs to another session.
 
 ## Your first acts
 
-1. **Take the graph.** In one write, set `run.orchestrator.pane` to your `$HERDR_PANE_ID`,
-   refresh `generated_at`, and append a `note` event saying you took the run and in which pane.
-   Always write `run-037-plan001.json.tmp`, run `dagr check --strict --json` on it, and rename
-   only when it prints `[]` with exit 0. The previous producer, in pane `w7:p1`, has stopped
-   writing.
-2. **Put the open questions to the operator** in one short message. They are the operator's to
-   decide, not yours: `Q-OPENAI` and `Q5`, and `Q-CGRAPH`, which concerns the unrelated
-   code-graph change and blocks nothing. `Q-BRANCH` is settled: the branch is
-   `feat/skills-extension` and the documents are committed on it. None of the open questions
-   blocks the baseline, so do not wait for the answers before starting.
-3. **Write the briefs** for `P0` and `P1.1`, as files beside this one, and commit them on the
-   branch.
-4. **Open `P0`.** It is ready now.
-
-## How you delegate
-
-- **One delegate per task, fresh.** Split a pane in your own tab without taking focus, and start
-  the agent with the permission bypass, which is this repository's default for delegates:
-  `claude --dangerously-skip-permissions --model <model>` or `codex --yolo`. Use the model
-  `make claude` launches unless the operator names another.
-- **The brief is a file,** `LEG-<task>.md` in this folder, written from the plan's part and the
-  task's `criteria`: what the task is for, the files and commands involved, the checks that end
-  it, where its evidence goes, and what to send back. The prompt you send points at the file.
-  A delegate that receives a pasted brief often asks whether it should start; look at the pane
-  after half a minute and answer.
-- **Write only the brief you can ground.** `P0` and `P1.1` now. `P1.2` after `P1.1` has an
-  answer. The measurements after the prototype exists.
-- **P1's delegates work in the prototype's own worktree,** on its scratch branch, never in the
-  shared checkout. The root manifest, the lock and the generated registry are edited there and
-  nowhere else.
-- **Check before you settle.** Before an attempt is `done`, run its checks yourself or read the
-  evidence file it produced. `verified` needs your own mechanical receipt; a delegate's report
-  alone is `reported`. Work that fails the check is `rejected`, and the fix is a new attempt
-  with `cause: sent_back`. Never rewrite an attempt or an event.
-- **Keep the graph live.** A working attempt needs its `locator` and `liveness`; refresh
-  `last_output_at` as delegates produce output, and `generated_at` on every write.
+1. **Confirm you are in orchestrator mode** (see "Check this first").
+2. **Read** the material above.
+3. **Bring the two briefs up to date** and commit them on the branch.
+4. **Delegate `P0`.** It is ready: nothing it depends on is open. The dagr view should open by
+   itself as you do. If it does not, say so in your next message to the operator.
+5. **In your first message to the operator,** report what you delegated and put the open
+   questions in the same message (next section). A message to the operator ends your turn, so
+   send it when a delegation is in flight and you have nothing else to do, not before.
 
 ## What belongs to the operator
 
-- The open questions (`Q-OPENAI`, `Q5`, `Q-SPEND`, `Q-CGRAPH`) and the gate `G1`. When one
-  becomes ready, ask plainly and wait. Record the answer as the operator's attempt and a
-  directive. Do not settle one yourself, and do not read silence as an answer.
+- **The open questions:** `Q-OPENAI` (a working route to an OpenAI model for P1.3e, or OpenAI
+  ruled out of scope), `Q5` (Amendment 5 before or after the release tag; needed before P2),
+  `Q-CGRAPH` (the branch for the unrelated code-graph change; blocks nothing), and later
+  `Q-SPEND`. And the gate `G1`. Ask plainly. Do not answer one yourself, and do not read silence
+  as an answer. You cannot record an answer in the plan file; state it in your report, and the
+  plan's owner updates the file.
 - **Spend.** P1.3 b to e call models through OpenRouter. After the prototype is built, state a
-  cost estimate and get the go-ahead (`Q-SPEND`) before any of them runs.
+  cost estimate and get the operator's go-ahead before any of them runs.
 - **A decision that has to come back.** Three results end a line of work instead of continuing
   it: the inventories reject an extension that imports `std/yaml` (P1.1); OpenAI rejects the
   index (P1.3e); the bare relative root does not index the workdir's skills in a real session
-  (P1.3a). In each case stop that line, record the evidence, and tell the operator which ADR
+  (P1.3a). In each case stop that line, keep the evidence, and tell the operator which ADR
   decision it sends back. Do not design around it.
-- If a delegate finds the ADR wrong in any other way, the same rule holds: stop, record,
-  report.
+- If a delegate finds the ADR wrong in any other way, the same rule holds: stop, keep the
+  evidence, report.
 
 ## Rules that bind you
 
-- Do not edit `src/`, `packages/`, `tools/` or `scripts/` yourself.
-- Do not touch another session's panes, tabs or worktrees, or the paths listed above as not
-  ours. Do not close a pane you did not open.
-- Heavy runs one at a time. The DST targets in `P0` are slow and the machine is shared; do not
-  run two delegates' heavy targets together.
+- You do not implement. Edits under `src/`, `packages/`, `tools/` and `scripts/` are a
+  delegate's.
+- Do not touch another session's panes, tabs or worktrees, or the changes listed above as not
+  this project's.
+- Heavy runs one at a time.
 - No credentials in a brief, a record or a commit. The OpenAI route for `P1.3e` is supplied by
   the operator.
-- Report in the graph, and in one short message per settled task: what was established, what
-  failed its check, what is ready next. Ask nothing the plan already answers.
+- One short message to the operator per settled task: what was established, what failed its
+  check, what is ready next. Ask nothing the plan already answers.
+- A handoff you write for a later session must say that it is this run's orchestrator and that
+  it delegates.
 
 ## Things already measured, which a newcomer would get wrong
 
@@ -162,6 +185,9 @@ move the shared checkout between branches; do not switch it yourself.
 - `P0` is expected to show red gates before any change: `driver_plus_herdr` is registered as
   known-red, and the research's survey reports others (unverified). Record them; they are the
   baseline, not failures of this project.
+- The worktree is a fresh checkout with no installed dependencies or build output. A gate that
+  is red there for want of a build is not a baseline red. The P0 brief should have the delegate
+  tell the two apart.
 - This OpenRouter account's OpenAI key was rejected on 2026-10-03, which is why `Q-OPENAI`
   exists.
 - The shared code-graph cache is stale and its whole-repository profile does not build. No task
@@ -169,7 +195,7 @@ move the shared checkout between branches; do not switch it yourself.
 
 ## Done, for this handoff
 
-`G1` is open: every P1 task is settled with its evidence, `NOTE-p1-prototype-results.md` states
-the answer to each of the plan's questions Q1 to Q4, the `promoted` event is appended, and the
-operator has the note in front of them. Then stop. The worktree stays until the operator has
-ruled, and nothing from it is merged.
+`G1` is ready for the operator: every P1 task has been checked by you against its evidence,
+`NOTE-p1-prototype-results.md` states the answer to each of the plan's questions Q1 to Q4, and
+the operator has the note in front of them. Then stop. The scratch worktree stays until the
+operator has ruled, and nothing from it is merged.
