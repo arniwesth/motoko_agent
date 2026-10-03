@@ -64,11 +64,12 @@ def run_scenes(film, scenes, media, run_dir, mode, voiced, dry, jobs):
     logs = media / "logs"
     logs.mkdir(parents=True, exist_ok=True)
     shutil.rmtree(run_dir, ignore_errors=True)
-    # -P as in the launcher. Manim itself puts the film's folder on the path to import it.
-    args = [sys.executable, "-P", "-m", "manim", "render", "-r", f"{width},{height}",
-            "--fps", str(fps),
-            "--media_dir", str(media), "--disable_caching", "-v", "WARNING",
-            "--progress_bar", "none"]
+    # -P as in the launcher. Manim then puts the film's folder first on the path to import the
+    # film, so the kit is imported before Manim starts: a file beside the film that happens to
+    # be called explainer_kit.py cannot take its place.
+    start = "import sys, explainer_kit; from manim.__main__ import main; sys.exit(main())"
+    args = [sys.executable, "-P", "-c", start, "render", "-r", f"{width},{height}",
+            "--fps", str(fps), "--disable_caching", "-v", "WARNING", "--progress_bar", "none"]
     if dry:  # -s draws only the last frame: animations jump to their ends, time still advances
         args.append("-s")
     failed, pending = [], list(scenes)
@@ -76,12 +77,15 @@ def run_scenes(film, scenes, media, run_dir, mode, voiced, dry, jobs):
     while pending or running:
         while pending and len(running) < jobs:
             name = pending.pop(0)
-            out = open(logs / f"{name}.log", "w")
-            running[name] = (subprocess.Popen(args + [str(film.path), name], cwd=film.path.parent,
-                                              env=env, stdout=out, stderr=subprocess.STDOUT), out)
-        name, (proc, out) = next(iter(running.items()))
+            logfile = open(logs / f"{name}.log", "w")
+            # A directory per scene: Manim caches the text it sets as files named by content,
+            # and two scenes setting the same words at once would delete each other's.
+            own = ["--media_dir", str(scene_media(media, name)), str(film.path), name]
+            running[name] = (subprocess.Popen(args + own, cwd=film.path.parent, env=env,
+                                              stdout=logfile, stderr=subprocess.STDOUT), logfile)
+        name, (proc, logfile) = next(iter(running.items()))
         proc.wait()
-        out.close()
+        logfile.close()
         del running[name]
         # A scene writes its report as its last act, so no report means it did not finish.
         if proc.returncode != 0 or not (run_dir / f"{name}.json").exists():
@@ -93,15 +97,21 @@ def scene_reports(run_dir, scenes):
     return [json.loads((run_dir / f"{name}.json").read_text()) for name in scenes]
 
 
+def scene_media(media, scene):
+    """The directory one scene's Manim process works in."""
+    return media / "manim" / scene
+
+
 def part_paths(film, media, mode, scenes):
     _, height, fps = MODES[mode]
-    return [media / "videos" / film.path.stem / f"{height}p{fps}" / f"{s}.mp4" for s in scenes]
+    return [scene_media(media, s) / "videos" / film.path.stem / f"{height}p{fps}" / f"{s}.mp4"
+            for s in scenes]
 
 
-def film_path(film, media, mode, out=None):
+def film_path(film, media, mode, named=None):
     """Where the joined film goes: beside the film file, or in scratch for a draft."""
-    if out:
-        return pathlib.Path.cwd() / out
+    if named:
+        return pathlib.Path.cwd() / named
     if mode == "draft":
         return media / "draft.mp4"
     return film.path.parent / (film.output or f"{film.path.stem}.mp4")
@@ -115,20 +125,26 @@ def video_seconds(path):
 
 
 def movie_problem(path, seconds, voiced):
-    """Why a file is not the movie a render should have left, or None if it is."""
+    """Why a file is not the movie a render should have left, or None if it is.
+
+    The picture is decoded, every frame: a file can keep its headers, and so its stated length,
+    after its video data has been cut off.
+    """
     import av
     try:
         with av.open(str(path)) as container:
             if not container.streams.video:
                 return "has no video stream"
-            stream = container.streams.video[0]
-            length = float(stream.frames / stream.average_rate)
             if voiced and not container.streams.audio:
                 return "has no audio stream, though the render was narrated"
+            stream = container.streams.video[0]
+            stream.thread_type = "AUTO"
+            rate = float(stream.average_rate)
+            frames = sum(1 for _ in container.decode(stream))
     except Exception as error:  # noqa: BLE001  (whatever PyAV raises, the file is not a movie)
-        return f"cannot be read as a movie ({type(error).__name__})"
-    if abs(length - seconds) > 0.2:
-        return f"runs {length:.1f} s where the render made {seconds:.1f} s"
+        return f"cannot be decoded as a movie ({type(error).__name__})"
+    if abs(frames / rate - seconds) > 0.2:
+        return f"decodes to {frames / rate:.1f} s where the render made {seconds:.1f} s"
     return None
 
 
@@ -142,10 +158,10 @@ def narrate(picture, placed, seconds, track, target):
 
 
 def loudness(path):
-    out = subprocess.run(["ffmpeg", "-hide_banner", "-nostats", "-i", str(path), "-af",
-                          "ebur128=peak=true", "-f", "null", "-"], capture_output=True,
-                         text=True).stderr
-    tail = out[out.rfind("Summary:"):]
+    said = subprocess.run(["ffmpeg", "-hide_banner", "-nostats", "-i", str(path), "-af",
+                           "ebur128=peak=true", "-f", "null", "-"], capture_output=True,
+                          text=True).stderr
+    tail = said[said.rfind("Summary:"):]
     integrated = re.search(r"I:\s+(-?[\d.]+) LUFS", tail)
     peak = re.search(r"Peak:\s+(-?[\d.]+) dBFS", tail)
     return {"integrated_lufs": float(integrated.group(1)) if integrated else None,
@@ -388,9 +404,10 @@ def cmd_render(args):
         outputs = []
         for name, part, r in zip(scenes, parts, reports):
             placed = [(e["t"], media / "voice" / e["wav"]) for e in r["timeline"]]
-            out = media / f"scenes-{mode}" / f"{name}.mp4"
-            narrate(part, placed, video_seconds(part), media / f"narration-{mode}-{name}.wav", out)
-            outputs.append(out)
+            target = media / f"scenes-{mode}" / f"{name}.mp4"
+            narrate(part, placed, video_seconds(part),
+                    media / f"narration-{mode}-{name}.wav", target)
+            outputs.append(target)
     else:
         outputs = parts
 
@@ -478,12 +495,12 @@ def cmd_sheet(args):
     mode = "draft" if args.draft else "final"
     run = last_run(film, media, mode)
     scenes = [s for s in run["scenes"] if not args.scenes or s in args.scenes]
-    out = media / "sheets"
-    out.mkdir(exist_ok=True)
+    sheets = media / "sheets"
+    sheets.mkdir(exist_ok=True)
     for name, part in zip(scenes, part_paths(film, media, mode, scenes)):
         count = max(1, math.ceil(video_seconds(part) / args.every))
         rows = math.ceil(count / args.columns)
-        sheet = out / f"{name}.png"
+        sheet = sheets / f"{name}.png"
         subprocess.run(QUIET + ["-i", str(part), "-vf",
                                 f"fps=1/{args.every}:start_time={args.every / 2},"
                                 f"scale={args.width}:-1,"

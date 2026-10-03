@@ -4,9 +4,16 @@ The narration has to exist before a scene renders, because the scene times itsel
 So the lines are taken from the source: say(...) and speak(...) calls whose text is a string
 literal. A line built at run time is reported as a problem instead of being silently unvoiced.
 
-A scene's lines are those it can reach: from its construct(), through the methods it calls on
-itself (its own or a base class's in this file) and the module-level functions it names. A
-helper nothing calls belongs to no scene, and a helper only scene A calls is not scene B's.
+A scene's lines are those it can reach. The walk starts at the methods Manim calls (construct,
+setup, tear_down) and follows, in the code that can run:
+
+- `self.x` and `anything.x`, to the method x the scene would actually get: the first definition
+  along its bases in this file, mixins included, so an overridden method is not followed;
+- `super().x`, to the next definition after the class the call is written in;
+- `Base.x`, to that class's own definition;
+- a name, to the module-level function or the nested function of that name.
+
+A nested function nobody names is not entered, and a helper nothing calls belongs to no scene.
 What is reached through another file is not seen; narration has to live in the film file.
 """
 
@@ -18,6 +25,7 @@ import pathlib
 from . import voice
 
 ENTRY = ("construct", "setup", "tear_down")  # what Manim itself calls on a scene
+DEFS = (ast.FunctionDef, ast.AsyncFunctionDef)
 
 
 def _spoken(node):
@@ -34,6 +42,23 @@ def _spoken(node):
     return (name, nodes) if nodes else None
 
 
+def _scope(definition):
+    """The nodes that run as part of a definition, and the functions defined inside it by name.
+
+    A nested function or class is a definition, not a call: its body is not part of this scope.
+    A lambda's body is, since a lambda cannot be named and reached later.
+    """
+    nodes, nested, todo = [], {}, list(ast.iter_child_nodes(definition))
+    while todo:
+        node = todo.pop()
+        if isinstance(node, DEFS):
+            nested[node.name] = node
+        elif not isinstance(node, ast.ClassDef):
+            nodes.append(node)
+            todo += ast.iter_child_nodes(node)
+    return nodes, nested
+
+
 class Film:
     def __init__(self, path):
         self.path = pathlib.Path(path).resolve()
@@ -41,30 +66,23 @@ class Film:
         self.say_table = self._literal(tree, "SAY", [])
         self.output = self._literal(tree, "OUTPUT", None)
         self.scenes = []  # in the order they play
-        self.bases = {}  # scene or base class -> its bases defined in this file
-        self.methods = {}  # class -> {method name: its definition}
+        self.bases = {}  # every class in the file -> its bases that are also in the file
+        self.methods = {}  # every class in the file -> {method name: its definition}
         self.functions = {}  # module-level function name -> its definition
-        self.owner = {}  # id of a definition -> the class it is in, or None
 
-        constructs = {}
+        explainers = set()
         for node in tree.body:
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if isinstance(node, DEFS):
                 self.functions[node.name] = node
-                self.owner[id(node)] = None
             if not isinstance(node, ast.ClassDef):
                 continue
             names = [b.id for b in node.bases if isinstance(b, ast.Name)]
-            if not any(b == "Explainer" or b in self.bases for b in names):
-                continue
             self.bases[node.name] = [b for b in names if b in self.bases]
-            self.methods[node.name] = {n.name: n for n in node.body
-                                       if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
-            for definition in self.methods[node.name].values():
-                self.owner[id(definition)] = node.name
-            constructs[node.name] = "construct" in self.methods[node.name] or any(
-                constructs[b] for b in self.bases[node.name])
-            if constructs[node.name] and not node.name.startswith("_"):
-                self.scenes.append(node.name)
+            self.methods[node.name] = {n.name: n for n in node.body if isinstance(n, DEFS)}
+            if "Explainer" in names or any(b in explainers for b in names):
+                explainers.add(node.name)
+                if self._find(node.name, "construct") and not node.name.startswith("_"):
+                    self.scenes.append(node.name)
 
     @staticmethod
     def _literal(tree, name, default):
@@ -74,43 +92,59 @@ class Film:
                 return ast.literal_eval(node.value)
         return default
 
-    def _lineage(self, scene):
-        """The scene and its bases in this file, nearest first."""
-        seen, todo = [], [scene]
-        while todo:
-            name = todo.pop(0)
-            if name not in seen:
-                seen.append(name)
-                todo += self.bases.get(name, [])
+    def _lineage(self, cls):
+        """A class and its bases in this file, in the order Python would look a method up."""
+        seen = [cls]
+        for base in self.bases.get(cls, []):
+            seen += [c for c in self._lineage(base) if c not in seen]
         return seen
 
+    def _find(self, cls, name, after=None):
+        """(class, definition) of the method a class gets for a name; past `after` for super()."""
+        lineage = self._lineage(cls)
+        if after in lineage:
+            lineage = lineage[lineage.index(after) + 1:]
+        for c in lineage:
+            if name in self.methods[c]:
+                return c, self.methods[c][name]
+        return None
+
     def _reached(self, scene):
-        """Every definition in this file that the scene's construct() can lead to."""
-        lineage = self._lineage(scene)
-
-        def named(name):  # every definition of a method along the lineage: super() reaches up
-            return [self.methods[c][name] for c in lineage if name in self.methods[c]]
-
-        seen, todo = {}, [d for name in ENTRY for d in named(name)]
+        """(class or None, definition) for everything the scene can run in this file."""
+        seen = {}
+        todo = [found for name in ENTRY if (found := self._find(scene, name))]
         while todo:
-            definition = todo.pop()
+            owner, definition = todo.pop()
             if id(definition) in seen:
                 continue
-            seen[id(definition)] = definition
-            for node in ast.walk(definition):
-                if isinstance(node, ast.Attribute):  # self.opening(), scene.opening, super().x()
-                    todo += named(node.attr)
-                elif isinstance(node, ast.Name) and node.id in self.functions:
-                    todo.append(self.functions[node.id])
+            seen[id(definition)] = (owner, definition)
+            nodes, nested = _scope(definition)
+            for node in nodes:
+                found = None
+                if isinstance(node, ast.Attribute):
+                    target = node.value
+                    if (isinstance(target, ast.Call) and isinstance(target.func, ast.Name)
+                            and target.func.id == "super"):
+                        found = self._find(scene, node.attr, after=owner)
+                    elif isinstance(target, ast.Name) and target.id in self.methods:
+                        found = self._find(target.id, node.attr)  # Base.method(self)
+                    else:
+                        found = self._find(scene, node.attr)
+                elif isinstance(node, ast.Name):
+                    if node.id in nested:
+                        found = (owner, nested[node.id])
+                    elif node.id in self.functions:
+                        found = (None, self.functions[node.id])
+                if found:
+                    todo.append(found)
         return list(seen.values())
 
     def _lines(self, scenes):
         """(records, problems) for the scenes: what they will say, and what cannot be voiced."""
         records, problems = {}, {}
         for scene in self.scenes if scenes is None else scenes:
-            for definition in self._reached(scene):
-                owner = self.owner[id(definition)]
-                for node in ast.walk(definition):
+            for owner, definition in self._reached(scene):
+                for node in _scope(definition)[0]:
                     found = _spoken(node)
                     if not found:
                         continue

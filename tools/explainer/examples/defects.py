@@ -194,6 +194,55 @@ class CodeLineLosesAGlyph(Explainer):
         self.end()
 
 
+class GlyphWithAChild(Explainer):
+    """A glyph something was attached to is still a glyph of its text."""
+
+    def construct(self):
+        self.say("The letter that is left has something hung on it.")
+        first = Text("AB", font_size=36).move_to([0, 1, 0])
+        second = Text("B", font_size=36).move_to(first[1])
+        first[1].add(VectorizedPoint(first[1].get_center()))
+        self.add(first, second)
+        self.play(FadeOut(first[0]), run_time=0.2)
+        self.rest()
+        self.end()
+
+
+class ScaledTextLosesAGlyph(Explainer):
+    """Shrunk after it was added, then taken apart: its size is what it is now."""
+
+    def construct(self):
+        self.say("A label was shrunk, and then lost a letter.")
+        label = Text("ABCDE", font_size=36)
+        self.add(label)
+        label.scale(0.2)
+        self.play(FadeOut(label[0]), run_time=0.2)
+        self.rest()
+        self.end()
+
+
+class ImageInCaption(Explainer):
+    def construct(self):
+        self.say("A picture has been put on top of these words.")
+        self.add(ImageMobject(np.full((8, 8, 3), 200, dtype=np.uint8)).scale_to_fit_width(1.5)
+                 .move_to([0, CAP_Y, 0]))
+        self.rest()
+        self.end()
+
+
+class CleanImageFrame(Explainer):
+    """A picture that is all border: the caption sits in its transparent middle."""
+
+    def construct(self):
+        self.say("A picture frames these words.")
+        pixels = np.zeros((40, 400, 4), dtype=np.uint8)
+        pixels[:2] = pixels[-2:] = pixels[:, :2] = pixels[:, -2:] = 255
+        self.add(ImageMobject(pixels).stretch_to_fit_width(10).stretch_to_fit_height(1.4)
+                 .move_to([0, CAP_Y, 0]))
+        self.rest()
+        self.end()
+
+
 class CleanTransparentImages(Explainer):
     """Pixels that are fully transparent are not ink: off the frame or over the caption."""
 

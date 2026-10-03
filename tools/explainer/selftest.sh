@@ -31,7 +31,9 @@ expected = {
     "ImageOffFrame": ["off_frame"], "CaptionLinesCollide": ["text_overlap"],
     "BackgroundStrokeInCaption": ["caption_overlap"],
     "PlainTextLosesAGlyph": ["text_overlap"], "KitTextLosesAGlyph": ["text_overlap"],
-    "CodeLineLosesAGlyph": ["text_overlap"],
+    "CodeLineLosesAGlyph": ["text_overlap"], "GlyphWithAChild": ["text_overlap"],
+    "ScaledTextLosesAGlyph": ["small_text"], "ImageInCaption": ["caption_overlap"],
+    "CleanImageFrame": [],
     "CleanTransparentImages": [],
 }
 found = {name: [] for name in expected}
@@ -59,13 +61,57 @@ PY
 PATH="$env/bin:$PATH" PYTHONPATH="$here" PYTHONDONTWRITEBYTECODE=1 \
   "$env/bin/python" "$here/tests/units.py"
 
+fail() { echo "FAIL $1"; exit 1; }
+
+# The tool imports its own kit even when run from a folder that holds another one.
+mkdir -p "$media/decoy/explainer_kit"
+echo 'raise ImportError("the kit in the current directory was imported")' \
+  >"$media/decoy/explainer_kit/__init__.py"
+( cd "$media/decoy" && "$explainer" doctor >/dev/null 2>&1 ) ||
+  fail "run from a folder holding another explainer_kit, the tool imported that one"
+
+# setup.sh's own checks, against a web server of our own: nothing is installed.
+(
+  source "$here/setup.sh"
+  site="$media/site"
+  mkdir -p "$site"
+  echo payload >"$site/file"
+  port=$(python3 -c "
+import socket
+s = socket.socket()
+s.bind(('127.0.0.1', 0))
+print(s.getsockname()[1])")
+  python3 -m http.server "$port" --bind 127.0.0.1 --directory "$site" >/dev/null 2>&1 &
+  server=$!
+  trap 'kill $server 2>/dev/null' EXIT
+  for _ in $(seq 50); do
+    curl -s -o /dev/null "http://127.0.0.1:$port/file" && break
+    sleep 0.1
+  done
+  fetch "http://127.0.0.1:$port/file" "$media/got"
+  [ "$(cat "$media/got.part")" = payload ] || exit 1
+  # A page that is not there must fail and leave nothing, not be saved as the download.
+  ( fetch "http://127.0.0.1:$port/missing" "$media/not" ) 2>/dev/null && exit 1
+  [ ! -e "$media/not.part" ] || exit 1
+  matches "$(sha256sum "$site/file" | cut -d" " -f1)" "$site/file" || exit 1
+  matches 0000 "$site/file" && exit 1
+  model="$media/it's a model"  # a quote in the path, as an install root might have
+  mkdir -p "$model"
+  echo x >"$model/model.bin"
+  echo x >"$model/tokenizer.json"
+  whisper_whole "$model" && exit 1  # two of the four files is not a model
+  echo x >"$model/config.json"
+  echo x >"$model/vocabulary.txt"
+  whisper_whole "$model"
+) || fail "setup.sh: a download or completeness check does not hold"
+echo "setup: ok, a failed download leaves nothing, checksums and model completeness hold"
+
 [ "${1:-}" = --full ] || exit 0
 
 film="$here/tests/film.py"
 m="$media/full"
-fail() { echo "FAIL $1"; exit 1; }
-# status COMMAND...: run it quietly and print its exit status, whatever that is.
-status() { set +e; "$@" >/dev/null 2>&1; echo $?; set -e; }
+# status COMMAND...: run it and print its exit status, whatever that is; stderr to $media/err.
+status() { set +e; "$@" >/dev/null 2>"$media/err"; echo $?; set -e; }
 
 # A first render makes its clips; --json must still be nothing but the report.
 "$explainer" render "$film" --draft --media "$m" --json >"$media/first.json" 2>"$media/first.err"
@@ -76,14 +122,24 @@ assert r['ok'] and r['voice']['clips'] == 3 and r['voice']['sync']['ok'], r['voi
 " || fail "a fresh render with --json did not print one valid, passing report"
 grep -q "voiced" "$media/first.err" || fail "the first render did not report making clips"
 
-# Some scenes only: each scene file carries its own narration and is checked.
-"$explainer" render "$film" --draft --media "$m" --scenes B --json >"$media/partial.json"
+# Each scene process worked in a directory of its own.
+[ -d "$m/manim/A" ] && [ -d "$m/manim/B" ] || fail "scenes did not get a Manim directory each"
+
+# Contact sheets of that render.
+sheet=$("$explainer" sheet "$film" --draft --media "$m" --scenes A) || fail "sheet did not run"
+[ -s "$sheet" ] || fail "sheet printed '$sheet', which is not a file it wrote"
+
+# Some scenes only: each scene file carries its own narration, and is checked and measured.
+"$explainer" render "$film" --draft --media "$m" --scenes B --json >"$media/partial.json" ||
+  true  # judged by its report, just below, so that a failure here says what failed
 python3 -c "
 import json, sys
 r = json.load(open('$media/partial.json'))
 assert r['output'] is None and len(r['scene_files']) == 1 and r['voice']['sync']['ok'], r
+loud = r['voice']['scene_loudness']
+assert len(loud) == 1 and loud[0]['integrated_lufs'] is not None, loud
 print(r['scene_files'][0])" >"$media/partial.path" ||
-  fail "render --scenes did not check its scene file"
+  fail "render --scenes did not check and measure its scene file"
 "$env/bin/ffprobe" -v error -select_streams a -show_entries stream=codec_name -of csv=p=0 \
   "$(cat "$media/partial.path")" | grep -q aac ||
   fail "render --scenes wrote a scene file with no audio"
@@ -119,6 +175,14 @@ else
   heard=""
 fi
 
+# A file beside the film that is named like the kit must not be imported in its place.
+mkdir -p "$media/shadow"
+cp "$here/examples/minimal.py" "$media/shadow/film.py"
+echo 'raise ImportError("the file beside the film was imported instead of the kit")' \
+  >"$media/shadow/explainer_kit.py"
+"$explainer" lint "$media/shadow/film.py" --media "$media/shadow-media" >/dev/null 2>&1 ||
+  fail "a file named explainer_kit.py beside the film shadowed the kit"
+
 # A caption that stayed up until its slow narration ended was not cut short.
 EXPLAINER_SPEED=0.5 "$explainer" render "$here/tests/slow.py" --draft --media "$media/slow" \
   --json >"$media/slow.json" 2>/dev/null || fail "the slow-narration film did not render clean"
@@ -130,13 +194,17 @@ assert r['lint']['findings'] == [] and r['voice']['clips'] == 2, r['lint']
 
 # A film that is gone, and a render in which a scene crashed: refused, exit 1, nothing approved.
 mv "$m/draft.mp4" "$media/kept.mp4"
+# The message is checked as well as the code: a crash of the tool would also exit 1.
 code=$(status "$explainer" check "$film" --draft --media "$m")
-[ "$code" = 1 ] || fail "check with the rendered film gone exited $code, not 1"
+[ "$code" = 1 ] && grep -q "is gone" "$media/err" ||
+  fail "check with the rendered film gone did not refuse it (exit $code)"
 mv "$media/kept.mp4" "$m/draft.mp4"
 code=$(EXPLAINER_TEST_CRASH=1 status "$explainer" render "$film" --draft --media "$m")
-[ "$code" = 1 ] || fail "a render in which a scene crashed exited $code, not 1"
+[ "$code" = 1 ] && grep -q "seeded crash" "$media/err" ||
+  fail "a render in which a scene crashed did not report it (exit $code)"
 code=$(status "$explainer" check "$film" --draft --media "$m")
-[ "$code" = 1 ] || fail "check after a render in which a scene crashed exited $code, not 1"
+[ "$code" = 1 ] && grep -q "no successful" "$media/err" ||
+  fail "check after a render in which a scene crashed did not refuse it (exit $code)"
 
-echo "full: ok, fresh --json, narrated --scenes, late audio fails on sync," \
-  "${heard}slow narration, missing film, crashed scene"
+echo "full: ok, fresh --json, a directory per scene, sheet, narrated and measured --scenes," \
+  "late audio fails on sync, ${heard}a shadowing file, slow narration, missing film, crashed scene"

@@ -33,8 +33,14 @@ def tag(mob, kind, text, size, ink=None):
     """Mark a mobject as one piece of text. `ink` is the submobject holding its glyphs."""
     mob.explainer_tag = {"kind": kind, "text": text, "size": size, "ink": ink,
                          "h0": mob.height or 1.0}
-    for glyph in (mob if ink is None else mob[ink]).get_family():
-        glyph.explainer_part = mob.explainer_tag
+    _mark(mob if ink is None else mob[ink], mob.explainer_tag)
+
+
+def _mark(ink, record):
+    """Give each glyph its text's record, and its own size now, to measure later scaling by."""
+    for glyph in ink.get_family():
+        glyph.explainer_part = record
+        glyph.explainer_extent = max(glyph.width, glyph.height)
 
 
 def mark_plain_text(mob):
@@ -45,26 +51,28 @@ def mark_plain_text(mob):
                 continue  # the Text inside a kit T(): its group is the text
             m.explainer_plain = {"kind": "text", "size": m.font_size, "scale": 1,
                                  "text": getattr(m, "original_text", None) or m.text}
-            for glyph in m.get_family():
-                glyph.explainer_part = m.explainer_plain
+            _mark(m, m.explainer_plain)
+
+
+def _image_pixels(m):
+    """(centres of an image's visible pixels as N x 2 scene points, half a pixel's size)."""
+    rows, cols = m.pixel_array.shape[:2]
+    seen = m.pixel_array[:, :, 3] > 5 if m.pixel_array.shape[2] == 4 else np.ones((rows, cols),
+                                                                                bool)
+    r, c = np.nonzero(seen)
+    top_left, top_right, bottom_left = m.points[0], m.points[1], m.points[2]
+    across, down = (top_right - top_left) / cols, (bottom_left - top_left) / rows
+    centres = top_left + np.outer(c + 0.5, across) + np.outer(r + 0.5, down)
+    return centres[:, :2], max(np.linalg.norm(across), np.linalg.norm(down)) / 2
 
 
 def _image_box(m):
     """The box of an image's visible pixels, or None if every pixel is transparent."""
-    alpha = m.pixel_array[:, :, 3] if m.pixel_array.shape[2] == 4 else None
-    rows, cols = m.pixel_array.shape[:2]
-    if alpha is None:
-        r0, r1, c0, c1 = 0, rows, 0, cols
-    else:
-        seen = alpha > 5
-        if not seen.any():
-            return None
-        ys, xs = np.flatnonzero(seen.any(axis=1)), np.flatnonzero(seen.any(axis=0))
-        r0, r1, c0, c1 = ys[0], ys[-1] + 1, xs[0], xs[-1] + 1
-    top_left, top_right, bottom_left = m.points[0], m.points[1], m.points[2]
-    across, down = (top_right - top_left) / cols, (bottom_left - top_left) / rows
-    corners = np.array([top_left + across * c + down * r for c in (c0, c1) for r in (r0, r1)])
-    return (corners[:, 0].min(), corners[:, 1].min(), corners[:, 0].max(), corners[:, 1].max())
+    centres, half = _image_pixels(m)
+    if len(centres) == 0:
+        return None
+    return (centres[:, 0].min() - half, centres[:, 1].min() - half,
+            centres[:, 0].max() + half, centres[:, 1].max() + half)
 
 
 def _half_stroke(m):
@@ -114,11 +122,17 @@ def _walk(mobs, loose):
                     "kind": "text", "scale": 1,
                     "text": getattr(mob, "original_text", None) or mob.text}
                 yield {"info": dict(plain, size=mob.font_size), "box": box}
-        elif getattr(mob, "explainer_part", None) is not None and not mob.submobjects:
+        elif getattr(mob, "explainer_part", None) is not None:
             own = _own(mob)
             if own:
                 part = mob.explainer_part
-                loose.setdefault(id(part), (part, []))[1].append(own[0])
+                was = getattr(mob, "explainer_extent", 0)
+                grown = max(mob.width, mob.height) / was if was > 1e-6 else None
+                boxes, scales = loose.setdefault(id(part), (part, [], []))[1:]
+                boxes.append(own[0])
+                if grown:
+                    scales.append(grown)
+            yield from _walk(mob.submobjects, loose)  # whatever else was hung on the glyph
         else:
             own = _own(mob)
             if own:
@@ -130,10 +144,12 @@ def _pieces(mobs):
     """Every piece of ink in the picture: text as a whole, everything else per mobject."""
     loose = {}
     yield from _walk(mobs, loose)
-    for part, boxes in loose.values():  # what is left of a text some of whose glyphs were removed
+    # What is left of a text some of whose glyphs were removed. Its scale is how far its glyphs
+    # have grown or shrunk since they were marked.
+    for part, boxes, scales in loose.values():
         box = (min(b[0] for b in boxes), min(b[1] for b in boxes),
                max(b[2] for b in boxes), max(b[3] for b in boxes))
-        yield {"info": dict(part, scale=part.get("scale", 1)), "box": box}
+        yield {"info": dict(part, scale=float(np.median(scales)) if scales else 1), "box": box}
 
 
 def _shared(a, b):
@@ -156,9 +172,12 @@ def _reaches(piece, box):
     dx, dy = _shared(piece["box"], box)
     if dx <= TOUCH or dy <= TOUCH:
         return False
-    if piece["filled"]:
+    if isinstance(piece["mob"], AbstractImageMobject):  # its visible pixels, not its rectangle
+        pts, half = _image_pixels(piece["mob"])
+    elif piece["filled"]:
         return True
-    half, pts = piece["half"], _outline(piece["mob"])
+    else:
+        half, pts = piece["half"], _outline(piece["mob"])
     inside = ((pts[:, 0] > box[0] - half + TOUCH) & (pts[:, 0] < box[2] + half - TOUCH)
               & (pts[:, 1] > box[1] - half + TOUCH) & (pts[:, 1] < box[3] + half - TOUCH))
     return bool(inside.any())
