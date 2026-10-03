@@ -61,7 +61,25 @@ reverted. The third commit addresses all 14; the second table says how.
 12, 13, 14) and 4 not (2, 4, 7, 9), leaving 13 of the original 18 fully fixed. It listed 11
 remaining findings, one severe, one of them a regression from the third commit (`explainer sheet`
 crashed), and two fixes that could be reverted with the self-test still green. The fourth commit
-addresses all 11; the third table says how. That commit has not been re-checked by the reviewer.
+addresses all 11; the third table says how.
+
+**Fourth round.** The reviewer re-checked that commit: 6 of the 11 fixed (2, 5, 6, 8, 9, 11) and
+5 not (1, 3, 4, 7, 10). It lists 8 remaining findings, none of which is fixed in this PR. They
+are recorded in the tool's README under "Known limits". The reviewer would hold the merge for
+the first four:
+
+1. `check` passes a movie with no decodable frames when the expected film is under 0.2 s
+2. stretched or rotated images are measured wrongly, giving both false and missed findings
+3. method lookup is depth-first, not Python's order, so diamond inheritance follows the wrong
+   method
+4. a nested function calling another nested function loses its narration
+
+and would accept the rest as recorded limits: name-based reachability (a shadowing local, an
+uncalled lambda), `sheet` on a very short scene, a glyph with an offset child hiding a
+small-text warning, and two fixes `tests/mutate.py` does not cover.
+
+Each round has found fewer and less severe problems (18, 14, 11, 8), but none has come back
+clean, and the review was stopped here.
 
 First round:
 
@@ -176,7 +194,8 @@ Checked by `tools/explainer/selftest.sh`. The first real test of the install pat
 - [x] `setup.sh --with-whisper` on the existing install: verifies the Kokoro checksums, skips
   what is there, provisions the Whisper model. A download of a missing file exits 1 and leaves
   nothing behind
-- [ ] The third round of fixes has not been re-checked by the reviewer
+- [ ] Fourth-round re-check by the reviewer: 6 of 11 fixed, 5 not; 8 findings remain open and
+  are not fixed here, 4 of which the reviewer would hold the merge for (see Review)
 - [ ] `setup.sh` has not been run from a clean machine
 - [ ] Not run on x86_64; this box is aarch64
 - [ ] The narration has not been listened to by its author, only transcribed
