@@ -19,8 +19,8 @@
 // call handle.hide() on cancel.  A new handle is created each time the
 // picker is shown.
 
-import chalk from "chalk";
-import { TUI, Text, Markdown, Editor, type EditorTheme, Box, Image, SelectList, ProcessTerminal, type OverlayHandle, type SelectItem, type MarkdownTheme, matchesKey } from "@mariozechner/pi-tui";
+import { theme } from "./theme.js";
+import { TUI, Text, Markdown, Editor, type EditorTheme, Box, Image, SelectList, ProcessTerminal, type OverlayHandle, type SelectItem, type MarkdownTheme, matchesKey, visibleWidth } from "@mariozechner/pi-tui";
 import type { AgentEvent } from "./runtime-process.js";
 import type { DelegatedCall, DelegatedResult, NativeToolResult } from "./runtime-process.js";
 import type { RuntimeProcess, SuspendedChild } from "./runtime-process.js";
@@ -139,8 +139,8 @@ const EXT_TO_LANG: Record<string, DiffInnerLang> = {
   zsh: "sh",
 };
 
-const DIFF_ADD_BG = (text: string): string => chalk.bgRgb(20, 64, 44)(text);
-const DIFF_DEL_BG = (text: string): string => chalk.bgRgb(72, 34, 34)(text);
+const DIFF_ADD_BG = (text: string): string => theme.diffAddBg(text);
+const DIFF_DEL_BG = (text: string): string => theme.diffDelBg(text);
 
 function isIdentStart(ch: string): boolean {
   return /[A-Za-z_$]/.test(ch);
@@ -179,22 +179,22 @@ function highlightTsLine(line: string, state: TsState): string {
 
     if (state.inBlockComment) {
       const end = line.indexOf("*/", i);
-      if (end === -1) return out + chalk.gray(line.slice(i));
-      out += chalk.gray(line.slice(i, end + 2));
+      if (end === -1) return out + theme.gray(line.slice(i));
+      out += theme.gray(line.slice(i, end + 2));
       i = end + 2;
       state.inBlockComment = false;
       continue;
     }
 
-    if (ch === "/" && next === "/") return out + chalk.gray(line.slice(i));
+    if (ch === "/" && next === "/") return out + theme.gray(line.slice(i));
 
     if (ch === "/" && next === "*") {
       const end = line.indexOf("*/", i + 2);
       if (end === -1) {
         state.inBlockComment = true;
-        return out + chalk.gray(line.slice(i));
+        return out + theme.gray(line.slice(i));
       }
-      out += chalk.gray(line.slice(i, end + 2));
+      out += theme.gray(line.slice(i, end + 2));
       i = end + 2;
       continue;
     }
@@ -221,7 +221,7 @@ function highlightTsLine(line: string, state: TsState): string {
         }
         j += 1;
       }
-      out += chalk.green(line.slice(i, j));
+      out += theme.green(line.slice(i, j));
       i = j;
       continue;
     }
@@ -230,8 +230,8 @@ function highlightTsLine(line: string, state: TsState): string {
       let j = i + 1;
       while (j < line.length && isIdentPart(line[j])) j += 1;
       const word = line.slice(i, j);
-      if (TS_KEYWORDS.has(word)) out += chalk.blueBright(word);
-      else if (TS_BUILTINS.has(word)) out += chalk.cyanBright(word);
+      if (TS_KEYWORDS.has(word)) out += theme.blueBright(word);
+      else if (TS_BUILTINS.has(word)) out += theme.cyanBright(word);
       else out += word;
       i = j;
       continue;
@@ -240,7 +240,7 @@ function highlightTsLine(line: string, state: TsState): string {
     if (/[0-9]/.test(ch)) {
       let j = i + 1;
       while (j < line.length && /[0-9A-Fa-f_xobn.]/.test(line[j])) j += 1;
-      out += chalk.magentaBright(line.slice(i, j));
+      out += theme.magentaBright(line.slice(i, j));
       i = j;
       continue;
     }
@@ -258,8 +258,8 @@ function highlightPyLine(line: string, state: PyState): string {
     if (state.inTripleQuote) {
       const q = state.inTripleQuote;
       const end = line.indexOf(q, i);
-      if (end === -1) return out + chalk.green(line.slice(i));
-      out += chalk.green(line.slice(i, end + 3));
+      if (end === -1) return out + theme.green(line.slice(i));
+      out += theme.green(line.slice(i, end + 3));
       i = end + 3;
       state.inTripleQuote = null;
       continue;
@@ -267,16 +267,16 @@ function highlightPyLine(line: string, state: PyState): string {
 
     const ch = line[i];
     const next3 = line.slice(i, i + 3);
-    if (ch === "#") return out + chalk.gray(line.slice(i));
+    if (ch === "#") return out + theme.gray(line.slice(i));
 
     if (next3 === '"""' || next3 === "'''") {
       const quote = next3 as '"""' | "'''";
       const end = line.indexOf(quote, i + 3);
       if (end === -1) {
         state.inTripleQuote = quote;
-        return out + chalk.green(line.slice(i));
+        return out + theme.green(line.slice(i));
       }
-      out += chalk.green(line.slice(i, end + 3));
+      out += theme.green(line.slice(i, end + 3));
       i = end + 3;
       continue;
     }
@@ -303,7 +303,7 @@ function highlightPyLine(line: string, state: PyState): string {
         }
         j += 1;
       }
-      out += chalk.green(line.slice(i, j));
+      out += theme.green(line.slice(i, j));
       i = j;
       continue;
     }
@@ -312,8 +312,8 @@ function highlightPyLine(line: string, state: PyState): string {
       let j = i + 1;
       while (j < line.length && isPyIdentPart(line[j])) j += 1;
       const word = line.slice(i, j);
-      if (PY_KEYWORDS.has(word)) out += chalk.blueBright(word);
-      else if (PY_BUILTINS.has(word)) out += chalk.cyanBright(word);
+      if (PY_KEYWORDS.has(word)) out += theme.blueBright(word);
+      else if (PY_BUILTINS.has(word)) out += theme.cyanBright(word);
       else out += word;
       i = j;
       continue;
@@ -322,7 +322,7 @@ function highlightPyLine(line: string, state: PyState): string {
     if (/[0-9]/.test(ch)) {
       let j = i + 1;
       while (j < line.length && /[0-9A-Fa-f_xob.]/.test(line[j])) j += 1;
-      out += chalk.magentaBright(line.slice(i, j));
+      out += theme.magentaBright(line.slice(i, j));
       i = j;
       continue;
     }
@@ -341,7 +341,7 @@ function highlightAilangLine(line: string, state: AilangState): string {
     const ch = line[i];
     const next = i + 1 < line.length ? line[i + 1] : "";
 
-    if ((ch === "-" && next === "-") || (ch === "/" && next === "/")) return out + chalk.gray(line.slice(i));
+    if ((ch === "-" && next === "-") || (ch === "/" && next === "/")) return out + theme.gray(line.slice(i));
 
     if (ch === '"' || ch === "'") {
       const quote = ch;
@@ -365,7 +365,7 @@ function highlightAilangLine(line: string, state: AilangState): string {
         }
         j += 1;
       }
-      out += chalk.green(line.slice(i, j));
+      out += theme.green(line.slice(i, j));
       i = j;
       continue;
     }
@@ -373,7 +373,7 @@ function highlightAilangLine(line: string, state: AilangState): string {
     let opMatched = false;
     for (const op of ops) {
       if (line.startsWith(op, i)) {
-        out += chalk.yellow(op);
+        out += theme.yellow(op);
         i += op.length;
         opMatched = true;
         break;
@@ -382,14 +382,14 @@ function highlightAilangLine(line: string, state: AilangState): string {
     if (opMatched) continue;
 
     if (ch === "!" || ch === "|" || ch === "\\") {
-      out += chalk.yellow(ch);
+      out += theme.yellow(ch);
       if (ch === "!") state.awaitEffectBrace = true;
       i += 1;
       continue;
     }
 
     if (ch === "(" && next === ")") {
-      out += chalk.magentaBright("()");
+      out += theme.magentaBright("()");
       i += 2;
       continue;
     }
@@ -421,13 +421,13 @@ function highlightAilangLine(line: string, state: AilangState): string {
       let j = i + 1;
       while (j < line.length && isAilangIdentPart(line[j])) j += 1;
       const word = line.slice(i, j);
-      if (AILANG_KEYWORDS.has(word)) out += chalk.blueBright(word);
-      else if (state.inEffectBlock && AILANG_EFFECTS.has(word)) out += chalk.cyanBright(word);
-      else if (AILANG_PRIMITIVE_TYPES.has(word)) out += chalk.cyanBright(word);
-      else if (AILANG_PRELUDE_FUNCS.has(word)) out += chalk.yellowBright(word);
-      else if (word.startsWith("_")) out += chalk.yellow(word);
-      else if (AILANG_STDLIB_TYPES.has(word)) out += chalk.cyan(word);
-      else if (isAilangConstructor(word)) out += chalk.cyan(word);
+      if (AILANG_KEYWORDS.has(word)) out += theme.blueBright(word);
+      else if (state.inEffectBlock && AILANG_EFFECTS.has(word)) out += theme.cyanBright(word);
+      else if (AILANG_PRIMITIVE_TYPES.has(word)) out += theme.cyanBright(word);
+      else if (AILANG_PRELUDE_FUNCS.has(word)) out += theme.yellowBright(word);
+      else if (word.startsWith("_")) out += theme.yellow(word);
+      else if (AILANG_STDLIB_TYPES.has(word)) out += theme.cyan(word);
+      else if (isAilangConstructor(word)) out += theme.cyan(word);
       else out += word;
       i = j;
       continue;
@@ -436,7 +436,7 @@ function highlightAilangLine(line: string, state: AilangState): string {
     if (/[0-9]/.test(ch)) {
       let j = i + 1;
       while (j < line.length && /[0-9.]/.test(line[j])) j += 1;
-      out += chalk.magentaBright(line.slice(i, j));
+      out += theme.magentaBright(line.slice(i, j));
       i = j;
       continue;
     }
@@ -453,11 +453,11 @@ function highlightShellLine(line: string): string {
   let commandStyled = false;
   while (i < line.length) {
     const ch = line[i];
-    if (ch === "#") return out + chalk.gray(line.slice(i));
+    if (ch === "#") return out + theme.gray(line.slice(i));
     if (ch === "$" && line[i + 1] === "{") {
       const end = line.indexOf("}", i + 2);
       if (end !== -1) {
-        out += chalk.cyanBright(line.slice(i, end + 1));
+        out += theme.cyanBright(line.slice(i, end + 1));
         i = end + 1;
         continue;
       }
@@ -465,7 +465,7 @@ function highlightShellLine(line: string): string {
     if (ch === "$") {
       const m = line.slice(i).match(/^\$[A-Za-z_][A-Za-z0-9_]*/);
       if (m) {
-        out += chalk.cyanBright(m[0]);
+        out += theme.cyanBright(m[0]);
         i += m[0].length;
         continue;
       }
@@ -474,9 +474,9 @@ function highlightShellLine(line: string): string {
       let j = i + 1;
       while (j < line.length && /[A-Za-z0-9_/-]/.test(line[j])) j += 1;
       const word = line.slice(i, j);
-      if (SHELL_KEYWORDS.has(word)) out += chalk.blueBright(word);
+      if (SHELL_KEYWORDS.has(word)) out += theme.blueBright(word);
       else if (!commandStyled && out.trim().length === 0) {
-        out += chalk.yellowBright(word);
+        out += theme.yellowBright(word);
         commandStyled = true;
       } else out += word;
       i = j;
@@ -521,7 +521,7 @@ function isDiffFileHeaderLine(line: string, prefix: "--- " | "+++ "): boolean {
 function formatDiffGutter(oldLine: number | null, newLine: number | null): string {
   const oldText = oldLine === null ? " ".repeat(4) : String(oldLine).padStart(4, " ");
   const newText = newLine === null ? " ".repeat(4) : String(newLine).padStart(4, " ");
-  return chalk.dim(`${oldText} ${newText} │ `);
+  return theme.dim(`${oldText} ${newText} │ `);
 }
 
 function highlightInnerDiffLine(content: string, state: DiffState): string {
@@ -533,7 +533,7 @@ function highlightInnerDiffLine(content: string, state: DiffState): string {
     case "ail":
       return highlightAilangLine(content, state.ailangState);
     case "lean":
-      return content.replace(/\b(theorem|lemma|def|abbrev|instance|example|axiom|import|by|where|match|with|if|then|else|let|have|show|calc|induction|cases|constructor|exact|apply|intro|intros|simp|omega|decide|rfl|native_decide)\b/g, (m) => chalk.cyan(m));
+      return content.replace(/\b(theorem|lemma|def|abbrev|instance|example|axiom|import|by|where|match|with|if|then|else|let|have|show|calc|induction|cases|constructor|exact|apply|intro|intros|simp|omega|decide|rfl|native_decide)\b/g, (m) => theme.cyan(m));
     case "sh":
       return highlightShellLine(content);
     default:
@@ -552,7 +552,7 @@ function highlightDiffLine(line: string, state: DiffState): string {
     state.inHunk = false;
     state.oldLine = null;
     state.newLine = null;
-    return formatDiffGutter(null, null) + chalk.dim(line);
+    return formatDiffGutter(null, null) + theme.dim(line);
   }
   if (!state.inHunk && isDiffFileHeaderLine(line, "+++ ")) {
     const inferred = inferDiffLangFromHeader(line);
@@ -561,7 +561,7 @@ function highlightDiffLine(line: string, state: DiffState): string {
     state.oldLine = null;
     state.newLine = null;
     resetDiffInnerState(state);
-    return formatDiffGutter(null, null) + chalk.greenBright.bold(line);
+    return formatDiffGutter(null, null) + theme.greenBright.bold(line);
   }
   if (!state.inHunk && isDiffFileHeaderLine(line, "--- ")) {
     const inferred = inferDiffLangFromHeader(line);
@@ -570,7 +570,7 @@ function highlightDiffLine(line: string, state: DiffState): string {
     state.oldLine = null;
     state.newLine = null;
     resetDiffInnerState(state);
-    return formatDiffGutter(null, null) + chalk.redBright.bold(line);
+    return formatDiffGutter(null, null) + theme.redBright.bold(line);
   }
   if (line.startsWith("@@")) {
     state.inHunk = true;
@@ -582,14 +582,14 @@ function highlightDiffLine(line: string, state: DiffState): string {
       state.oldLine = null;
       state.newLine = null;
     }
-    return formatDiffGutter(null, null) + chalk.cyanBright(line);
+    return formatDiffGutter(null, null) + theme.cyanBright(line);
   }
   if (line.startsWith("+")) {
     const old = null;
     const neu = state.newLine;
     if (state.newLine !== null) state.newLine += 1;
     const inner = highlightInnerDiffLine(line.slice(1), state);
-    const prefixed = `${chalk.greenBright.bold("+")}${inner}`;
+    const prefixed = `${theme.greenBright.bold("+")}${inner}`;
     return formatDiffGutter(old, neu) + applyBackgroundPreserveAnsi(prefixed, DIFF_ADD_BG);
   }
   if (line.startsWith("-")) {
@@ -597,7 +597,7 @@ function highlightDiffLine(line: string, state: DiffState): string {
     const neu = null;
     if (state.oldLine !== null) state.oldLine += 1;
     const inner = highlightInnerDiffLine(line.slice(1), state);
-    const prefixed = `${chalk.redBright.bold("-")}${inner}`;
+    const prefixed = `${theme.redBright.bold("-")}${inner}`;
     return formatDiffGutter(old, neu) + applyBackgroundPreserveAnsi(prefixed, DIFF_DEL_BG);
   }
   if (line.startsWith(" ")) {
@@ -632,8 +632,8 @@ export function highlightCodeLines(code: string, lang?: string): string[] {
       const commentAt = line.indexOf("--");
       const codePart = commentAt >= 0 ? line.slice(0, commentAt) : line;
       const comment = commentAt >= 0 ? line.slice(commentAt) : "";
-      const str = codePart.replace(/"([^"\\]|\\.)*"/g, (m) => chalk.green(m));
-      return str.replace(kw, (m) => chalk.cyan(m)) + (comment ? chalk.dim(comment) : "");
+      const str = codePart.replace(/"([^"\\]|\\.)*"/g, (m) => theme.green(m));
+      return str.replace(kw, (m) => theme.cyan(m)) + (comment ? theme.dim(comment) : "");
     });
   }
   if (["bash", "sh", "zsh", "shell"].includes(normalized)) {
@@ -654,49 +654,49 @@ export function highlightCodeLines(code: string, lang?: string): string[] {
     };
     return lines.map((line) => highlightDiffLine(line, state));
   }
-  return lines.map((line) => chalk.dim(line));
+  return lines.map((line) => theme.dim(line));
 }
 
 // ---------------------------------------------------------------------------
 // Minimal markdown theme: headings in bold, code in dim, rest unstyled.
 // ---------------------------------------------------------------------------
 const MINIMAL_THEME: MarkdownTheme = {
-  heading: (t) => chalk.bold(t),
-  link: (t) => chalk.underline(t),
-  linkUrl: (t) => chalk.dim(t),
-  code: (t) => chalk.dim(t),
-  codeBlock: (t) => chalk.dim(t),
-  codeBlockBorder: (t) => chalk.dim(t),
+  heading: (t) => theme.bold(t),
+  link: (t) => theme.underline(t),
+  linkUrl: (t) => theme.dim(t),
+  code: (t) => theme.dim(t),
+  codeBlock: (t) => theme.dim(t),
+  codeBlockBorder: (t) => theme.dim(t),
   quote: (t) => t,
-  quoteBorder: (t) => chalk.dim(t),
-  hr: (t) => chalk.dim(t),
+  quoteBorder: (t) => theme.dim(t),
+  hr: (t) => theme.dim(t),
   listBullet: (t) => t,
-  bold: (t) => chalk.bold(t),
-  italic: (t) => chalk.italic(t),
-  strikethrough: (t) => chalk.strikethrough(t),
-  underline: (t) => chalk.underline(t),
+  bold: (t) => theme.bold(t),
+  italic: (t) => theme.italic(t),
+  strikethrough: (t) => theme.strikethrough(t),
+  underline: (t) => theme.underline(t),
   highlightCode: (code, lang) => highlightCodeLines(code, lang),
 };
 
 // Minimal SelectList theme: highlight selected item in cyan bold.
 const SELECT_THEME = {
-  selectedPrefix: (t: string) => chalk.cyanBright(t),
-  selectedText: (t: string) => chalk.cyanBright.bold(t),
-  description: (t: string) => chalk.dim(t),
-  scrollInfo: (t: string) => chalk.dim(t),
-  noMatch: (t: string) => chalk.dim(t),
+  selectedPrefix: (t: string) => theme.cyanBright(t),
+  selectedText: (t: string) => theme.cyanBright.bold(t),
+  description: (t: string) => theme.dim(t),
+  scrollInfo: (t: string) => theme.dim(t),
+  noMatch: (t: string) => theme.dim(t),
 };
 
 // Minimal Editor theme: border colour + nested SelectList theme.
 const EDITOR_SELECT_THEME = {
-  selectedPrefix: (t: string) => chalk.cyanBright(t),
-  selectedText: (t: string) => chalk.cyanBright.bold(t),
-  description: (t: string) => chalk.dim(t),
-  scrollInfo: (t: string) => chalk.dim(t),
-  noMatch: (t: string) => chalk.dim(t),
+  selectedPrefix: (t: string) => theme.cyanBright(t),
+  selectedText: (t: string) => theme.cyanBright.bold(t),
+  description: (t: string) => theme.dim(t),
+  scrollInfo: (t: string) => theme.dim(t),
+  noMatch: (t: string) => theme.dim(t),
 };
 const EDITOR_THEME: EditorTheme = {
-  borderColor: (t: string) => chalk.dim(t),
+  borderColor: (t: string) => theme.dim(t),
   selectList: EDITOR_SELECT_THEME,
 } as const;
 
@@ -710,6 +710,38 @@ function styledText(content: string, style: (s: string) => string): Text {
 
 function plainText(content: string): Text {
   return new Text(content, 0, 0);
+}
+
+// History pane container. Each child added with addChild() is a separate entry
+// and gets one blank line above it; addJoined() attaches a child to the entry
+// before it (a card's body under its header, a tool row's output under the row,
+// the lines of one snippet). Children that render nothing take no gap.
+const HISTORY_PAD = 1;
+class HistoryBox extends Box {
+  private readonly joined = new WeakSet<object>();
+
+  addJoined(component: Parameters<Box["addChild"]>[0]): void {
+    this.joined.add(component);
+    this.addChild(component);
+  }
+
+  render(width: number): string[] {
+    const contentWidth = Math.max(1, width - HISTORY_PAD * 2);
+    const leftPad = " ".repeat(HISTORY_PAD);
+    const blank = " ".repeat(width);
+    const body: string[] = [];
+    for (const child of this.children) {
+      const lines = child.render(contentWidth);
+      if (lines.length === 0) continue;
+      if (body.length > 0 && !this.joined.has(child)) body.push(blank);
+      for (const line of lines) {
+        const padded = leftPad + line;
+        body.push(padded + " ".repeat(Math.max(0, width - visibleWidth(padded))));
+      }
+    }
+    if (body.length === 0) return [];
+    return [blank, ...body, blank];
+  }
 }
 
 function stripLikelyInlineToolBlob(text: string): string {
@@ -1054,8 +1086,8 @@ function stepFromRequestId(requestId: string): number | null {
 
 function colorizeStatusTags(text: string): string {
   return text
-    .replaceAll("[done]", chalk.green("[done]"))
-    .replaceAll("[failed]", chalk.red("[failed]"));
+    .replaceAll("[done]", theme.green("[done]"))
+    .replaceAll("[failed]", theme.red("[failed]"));
 }
 
 export function describeToolCallMeta(call: DelegatedCall): string {
@@ -1182,7 +1214,7 @@ function formatHighContrastErrorBox(
   const top = `${indent}+${"-".repeat(width + 2)}+`;
   const rows = body.map((line) => `${indent}| ${line.padEnd(width, " ")} |`);
   const bot = `${indent}+${"-".repeat(width + 2)}+`;
-  const paint = (s: string): string => chalk.bgRgb(120, 0, 0).white(s);
+  const paint = (s: string): string => theme.errorBox(s);
   return [paint(top), ...rows.map((r) => paint(r)), paint(bot)];
 }
 
@@ -1229,7 +1261,7 @@ function formatExpandedDiffLines(stats: DiffStats, maxWidth: number): string[] {
   const colored = highlightCodeLines(previewRaw.join("\n"), "diff").map((line) => `  ${line}`);
   const hidden = Math.max(0, stats.lines.length - previewRaw.length);
   if (hidden > 0) {
-    colored.push(chalk.dim(`  ... ${hidden} more diff lines (Ctrl+O to collapse)`));
+    colored.push(theme.dim(`  ... ${hidden} more diff lines (Ctrl+O to collapse)`));
   }
   return colored;
 }
@@ -1248,7 +1280,7 @@ export function formatToolDetailLines(
   const maxWidth = Math.max(8, maxLineWidth);
   const diffStats = isEditToolFamily(options.toolName) ? parseUnifiedDiff(details.stdout) : null;
   if (!expanded) {
-    if (diffStats) return [chalk.dim(formatCollapsedDiffSummary(diffStats))];
+    if (diffStats) return [theme.dim(formatCollapsedDiffSummary(diffStats))];
     return ["  ... output hidden (Ctrl+O to expand)"];
   }
 
@@ -1257,10 +1289,10 @@ export function formatToolDetailLines(
     const errPreview = stderrLines.slice(0, TOOL_STDERR_PREVIEW_LINES);
     const hiddenErr = Math.max(0, stderrLines.length - errPreview.length);
     for (const line of errPreview) {
-      rendered.push(chalk.red.dim(`  [stderr] ${hardTruncateLine(line, maxWidth - 11)}`));
+      rendered.push(theme.red.dim(`  [stderr] ${hardTruncateLine(line, maxWidth - 11)}`));
     }
     if (hiddenErr > 0) {
-      rendered.push(chalk.dim(`  ... ${hiddenErr} more stderr lines (Ctrl+O to collapse)`));
+      rendered.push(theme.dim(`  ... ${hiddenErr} more stderr lines (Ctrl+O to collapse)`));
     }
     return rendered;
   }
@@ -1271,13 +1303,13 @@ export function formatToolDetailLines(
 
   const rendered: string[] = [];
   for (const line of outPreview) {
-    rendered.push(chalk.dim(`  ${hardTruncateLine(line, maxWidth - 2)}`));
+    rendered.push(theme.dim(`  ${hardTruncateLine(line, maxWidth - 2)}`));
   }
   for (const line of errPreview) {
-    rendered.push(chalk.red.dim(`  [stderr] ${hardTruncateLine(line, maxWidth - 11)}`));
+    rendered.push(theme.red.dim(`  [stderr] ${hardTruncateLine(line, maxWidth - 11)}`));
   }
   if (hiddenCount > 0) {
-    rendered.push(chalk.dim(`  ... ${hiddenCount} more lines (Ctrl+O to collapse)`));
+    rendered.push(theme.dim(`  ... ${hiddenCount} more lines (Ctrl+O to collapse)`));
   }
   return rendered;
 }
@@ -1439,9 +1471,9 @@ export function parseScratchpadCellsJson(cellsJson: string): ScratchpadCellResul
 // Color a check/verify status word: green for the "good" outcome, red for a
 // definitive failure, yellow for inconclusive (unknown/timeout/skipped).
 function colorAilangStatus(status: string): string {
-  if (status === "passed" || status === "verified") return chalk.green(status);
-  if (status === "failed") return chalk.red(status);
-  return chalk.yellow(status);
+  if (status === "passed" || status === "verified") return theme.green(status);
+  if (status === "failed") return theme.red(status);
+  return theme.yellow(status);
 }
 
 function ailangStatusLines(meta: AilangCellMetadata): string[] {
@@ -1449,50 +1481,50 @@ function ailangStatusLines(meta: AilangCellMetadata): string[] {
   // the verifier, so "Z3 unavailable" would be misleading.
   const z3Unavailable = !meta.verifyAvailable && meta.check === "passed";
   const verifyCell = z3Unavailable
-    ? chalk.yellow(`${meta.verify} (Z3 unavailable)`)
+    ? theme.yellow(`${meta.verify} (Z3 unavailable)`)
     : colorAilangStatus(meta.verify);
   const parts = [
     `check ${colorAilangStatus(meta.check)}`,
     `verify ${verifyCell}`,
-    `committed ${meta.committed ? chalk.green("yes") : chalk.dim("no")}`,
+    `committed ${meta.committed ? theme.green("yes") : theme.dim("no")}`,
   ];
-  if (meta.ran) parts.push(`ran ${chalk.green("yes")}`);
-  const lines = [chalk.dim("ailang: ") + parts.join(chalk.dim(" · "))];
+  if (meta.ran) parts.push(`ran ${theme.green("yes")}`);
+  const lines = [theme.dim("ailang: ") + parts.join(theme.dim(" · "))];
   if (meta.functions && meta.functions.length > 0) {
     for (const f of meta.functions) {
-      lines.push(chalk.dim(`  ${f.function}: `) + colorAilangStatus(f.status));
+      lines.push(theme.dim(`  ${f.function}: `) + colorAilangStatus(f.status));
     }
   }
-  if (meta.notice) lines.push(chalk.yellow(`  ${meta.notice}`));
-  if (meta.teachPrompt) lines.push(chalk.dim("  (AILANG teaching guide loaded — see output)"));
+  if (meta.notice) lines.push(theme.yellow(`  ${meta.notice}`));
+  if (meta.teachPrompt) lines.push(theme.dim("  (AILANG teaching guide loaded — see output)"));
   return lines;
 }
 
 function colorLeanStatus(status: string): string {
-  if (status === "passed" || status === "verified") return chalk.green(status);
-  if (status === "failed" || status === "error" || status === "sorry") return chalk.red(status);
-  return chalk.yellow(status);
+  if (status === "passed" || status === "verified") return theme.green(status);
+  if (status === "failed" || status === "error" || status === "sorry") return theme.red(status);
+  return theme.yellow(status);
 }
 
 function leanStatusLines(meta: LeanCellMetadata): string[] {
   const parts = [
     `elaboration ${colorLeanStatus(meta.elaborated)}`,
     `proof ${colorLeanStatus(meta.proof)}`,
-    `committed ${meta.committed ? chalk.green("yes") : chalk.dim("no")}`,
+    `committed ${meta.committed ? theme.green("yes") : theme.dim("no")}`,
   ];
-  const lines = [chalk.dim("lean: ") + parts.join(chalk.dim(" · "))];
+  const lines = [theme.dim("lean: ") + parts.join(theme.dim(" · "))];
   if (meta.theorems && meta.theorems.length > 0) {
     for (const t of meta.theorems) {
-      const ax = t.axioms && t.axioms.length > 0 ? chalk.dim(` axioms=[${t.axioms.join(", ")}]`) : "";
-      lines.push(chalk.dim(`  ${t.name}: `) + colorLeanStatus(t.status) + ax);
+      const ax = t.axioms && t.axioms.length > 0 ? theme.dim(` axioms=[${t.axioms.join(", ")}]`) : "";
+      lines.push(theme.dim(`  ${t.name}: `) + colorLeanStatus(t.status) + ax);
     }
   }
   if (meta.unexpectedAxioms && meta.unexpectedAxioms.length > 0) {
-    lines.push(chalk.yellow(`  unexpected axioms: ${meta.unexpectedAxioms.join(", ")}`));
+    lines.push(theme.yellow(`  unexpected axioms: ${meta.unexpectedAxioms.join(", ")}`));
   }
-  if (typeof meta.sorries === "number" && meta.sorries > 0) lines.push(chalk.red(`  sorries: ${meta.sorries}`));
-  if (meta.notice) lines.push(chalk.yellow(`  ${meta.notice}`));
-  if (meta.teachPrompt) lines.push(chalk.dim("  (Lean 4 teaching guide loaded - see output)"));
+  if (typeof meta.sorries === "number" && meta.sorries > 0) lines.push(theme.red(`  sorries: ${meta.sorries}`));
+  if (meta.notice) lines.push(theme.yellow(`  ${meta.notice}`));
+  if (meta.teachPrompt) lines.push(theme.dim("  (Lean 4 teaching guide loaded - see output)"));
   return lines;
 }
 
@@ -1519,7 +1551,7 @@ function formatScratchpadOutputLines(
   const hidden = Math.max(0, lines.length - shown.length);
   const labelPrefix = label ? `[${label}] ` : "";
   const rendered = shown.map((line) => color(`${indent}${labelPrefix}${hardTruncateLine(line, maxWidth - indent.length - labelPrefix.length)}`));
-  if (hidden > 0) rendered.push(chalk.dim(`${indent}... ${hidden} more lines (Ctrl+O to ${expanded ? "collapse" : "expand"})`));
+  if (hidden > 0) rendered.push(theme.dim(`${indent}... ${hidden} more lines (Ctrl+O to ${expanded ? "collapse" : "expand"})`));
   return rendered;
 }
 
@@ -1535,7 +1567,7 @@ function renderScratchpadMarkdownLines(text: string, maxWidth: number, expanded:
       lines.push(...splitOutputLines(seg.text).map((line) => hardTruncateLine(line, maxWidth)));
     }
   }
-  if (trimmed.truncated) lines.push(chalk.dim(`... more markdown (Ctrl+O to ${expanded ? "collapse" : "expand"})`));
+  if (trimmed.truncated) lines.push(theme.dim(`... more markdown (Ctrl+O to ${expanded ? "collapse" : "expand"})`));
   return lines;
 }
 
@@ -1553,9 +1585,9 @@ function renderScratchpadDisplayBundle(bundle: ScratchpadDisplayBundle, maxWidth
     const width = bundle.width ?? numberValue(rec?.width, 0);
     const height = bundle.height ?? numberValue(rec?.height, 0);
     const dims = width > 0 && height > 0 ? ` (${width}x${height} ${mime})` : ` (${mime})`;
-    return [chalk.dim(`[image: ${path}${dims}]`)];
+    return [theme.dim(`[image: ${path}${dims}]`)];
   }
-  if (bundle.type === "status") return [chalk.dim(String(bundle.data ?? ""))];
+  if (bundle.type === "status") return [theme.dim(String(bundle.data ?? ""))];
   return splitOutputLines(String(bundle.data ?? "")).map((line) => hardTruncateLine(line, maxWidth));
 }
 
@@ -1627,7 +1659,7 @@ export function renderScratchpadCardLines(
     // cards default to expanded (see upsertScratchpadCard), so this is only seen after
     // a deliberate collapse.
     if (!expanded) {
-      pushLines(chalk.dim("  [image — Ctrl+O to expand]"));
+      pushLines(theme.dim("  [image — Ctrl+O to expand]"));
       return;
     }
     // Inline base64 is the real-image path; a record-shaped `data` (artifact
@@ -1687,23 +1719,23 @@ export function renderScratchpadCardLines(
     if (code.trim() !== "") {
       for (const line of highlightCodeLines(code, cell.language)) pushLines(`  ${line}`);
     }
-    pushLines(chalk.dim("  ─ Output"));
-    pushLines(...formatScratchpadOutputLines(splitOutputLines(cell.stdout), TOOL_STDOUT_PREVIEW_LINES, expanded, "  ", maxWidth, chalk.dim));
-    pushLines(...formatScratchpadOutputLines(splitOutputLines(cell.stderr), TOOL_STDERR_PREVIEW_LINES, expanded, "  ", maxWidth, chalk.red.dim, "stderr"));
+    pushLines(theme.dim("  ─ Output"));
+    pushLines(...formatScratchpadOutputLines(splitOutputLines(cell.stdout), TOOL_STDOUT_PREVIEW_LINES, expanded, "  ", maxWidth, theme.dim));
+    pushLines(...formatScratchpadOutputLines(splitOutputLines(cell.stderr), TOOL_STDERR_PREVIEW_LINES, expanded, "  ", maxWidth, theme.red.dim, "stderr"));
     cell.displays.forEach((display, di) => emitBundle(display, `${cell.index}:d${di}`));
     if (cell.result) emitBundle(cell.result, `${cell.index}:r`);
     if (cell.error) {
-      pushLines(chalk.red.dim(`  [error] ${cell.error.ename}: ${cell.error.evalue}`));
+      pushLines(theme.red.dim(`  [error] ${cell.error.ename}: ${cell.error.evalue}`));
       const traceback = expanded ? cell.error.traceback : cell.error.traceback.slice(0, 4);
-      for (const line of traceback) pushLines(chalk.red.dim(`  ${hardTruncateLine(line, maxWidth - 2)}`));
+      for (const line of traceback) pushLines(theme.red.dim(`  ${hardTruncateLine(line, maxWidth - 2)}`));
       const hidden = Math.max(0, cell.error.traceback.length - traceback.length);
-      if (hidden > 0) pushLines(chalk.dim(`  ... ${hidden} more lines (Ctrl+O to expand)`));
+      if (hidden > 0) pushLines(theme.dim(`  ... ${hidden} more lines (Ctrl+O to expand)`));
     }
-    if (cell.truncated) pushLines(chalk.dim("  [truncated]"));
+    if (cell.truncated) pushLines(theme.dim("  [truncated]"));
     pushLines("");
   }
   if (!expanded && cells.length > visibleCells.length) {
-    pushLines(chalk.dim(`... ${cells.length - visibleCells.length} more cells (Ctrl+O to expand)`));
+    pushLines(theme.dim(`... ${cells.length - visibleCells.length} more cells (Ctrl+O to expand)`));
   }
   flush();
   return segments;
@@ -1988,8 +2020,8 @@ export function colorizeContextUsageSegment(
 ): string {
   if (limit > 0) {
     const ratio = tokensEst / limit;
-    if (ratio >= 0.9) return chalk.red(segment);
-    if (ratio >= 0.75) return chalk.yellow(segment);
+    if (ratio >= 0.9) return theme.red(segment);
+    if (ratio >= 0.75) return theme.yellow(segment);
   }
   return baseColor(segment);
 }
@@ -2000,7 +2032,7 @@ export function colorizeContextUsageSegment(
 
 export class AgentUI {
   private tui:       TUI;
-  private history:   Box;
+  private history:   HistoryBox;
   private statusBar: Text;
   private cmdInput:  Editor;
   private step  = 0;
@@ -2143,8 +2175,8 @@ export class AgentUI {
     this.tui = new TUI(terminal);
 
 
-    // History pane: a plain Box; children accumulate downward.
-    this.history = new Box();
+    // History pane: a plain Box; children accumulate downward, one blank line between entries.
+    this.history = new HistoryBox();
 
     // Version line under startup banner space (banner is printed via
     // stdout in main() — not here, because raw ANSI inside Text children
@@ -2152,7 +2184,7 @@ export class AgentUI {
     // Remaining components
 
     // Status bar: dim styling via bgFn.
-    this.statusBar = styledText("", chalk.dim);
+    this.statusBar = styledText("", theme.dim);
 
     // Command input: Editor component (replaces Input) for slash-command
     // tab-complete.  Requires TUI reference for focus management.
@@ -2170,7 +2202,7 @@ export class AgentUI {
     this.tui.addChild(this.history);
     if (this.activityLogEnabled) {
       this.activityPane = new Box();
-      this.activityPane.addChild(styledText("[activity] enabled", chalk.dim));
+      this.activityPane.addChild(styledText("[activity] enabled", theme.dim));
       this.tui.addChild(this.activityPane);
     }
     this.tui.addChild(this.statusBar);
@@ -2201,7 +2233,7 @@ export class AgentUI {
           (this.runtimeProcess &&
             (this.runtimeProcess.isParked || (!this.taskDone && this.waitState.state !== "idle"))))
       ) {
-        this.appendHistoryStyled("Task interrupted", chalk.yellow);
+        this.appendHistoryStyled("Task interrupted", theme.yellow);
         this.tui.requestRender();
         this.onInterrupt?.();
         return { consume: true };
@@ -2278,7 +2310,7 @@ export class AgentUI {
     // One-line note of the detected inline-image protocol so it's obvious
     // whether scratchpad plots will render as pixels or the text fallback.
     if (this.scratchpadExtensionActive) {
-      this.appendHistoryStyled(`scratchpad images: ${scratchpadImageCapabilityLabel()}`, chalk.dim);
+      this.appendHistoryStyled(`scratchpad images: ${scratchpadImageCapabilityLabel()}`, theme.dim);
     }
     // Explicit render so children added before start() (e.g. version banner)
     // are visible immediately.
@@ -2292,7 +2324,7 @@ export class AgentUI {
   private addActivity(message: string): void {
     if (!this.activityPane) return;
     const ts = new Date().toISOString().slice(11, 19);
-    this.activityPane.addChild(styledText(`[${ts}] ${message}`, chalk.dim));
+    this.activityPane.addChild(styledText(`[${ts}] ${message}`, theme.dim));
   }
 
   private stamp(message: string): string {
@@ -2344,13 +2376,13 @@ export class AgentUI {
     const elapsedMs = Date.now() - this.waitState.sinceMs;
     if (this.waitState.state === "thinking" && elapsedMs >= 10_000 && !this.runStateHintsShown.has("thinking")) {
       this.runStateHintsShown.add("thinking");
-      this.appendHistoryStyled("Still waiting on model...", chalk.dim);
+      this.appendHistoryStyled("Still waiting on model...", theme.dim);
       this.lastUpdateMs = Date.now();
       return;
     }
     if ((this.waitState.state === "tools_wait" || this.waitState.state === "tools_run") && elapsedMs >= 20_000 && !this.runStateHintsShown.has("tools")) {
       this.runStateHintsShown.add("tools");
-      this.appendHistoryStyled("Tool batch taking longer than usual...", chalk.dim);
+      this.appendHistoryStyled("Tool batch taking longer than usual...", theme.dim);
       this.lastUpdateMs = Date.now();
     }
   }
@@ -2374,7 +2406,7 @@ export class AgentUI {
         this.refreshAllToolDetailRows();
         if (!this.taskDone && !this.awaitingTask) {
           if (this.waitState.state !== "thinking") {
-            this.appendHistoryStyled("Runtime is reasoning...", chalk.dim);
+            this.appendHistoryStyled("Runtime is reasoning...", theme.dim);
           }
           this.setRunState("thinking");
         } else {
@@ -2391,22 +2423,22 @@ export class AgentUI {
         // payload is present (i.e. the runtime-startup session_start from
         // rpc.ail). Conversational turns get a quieter status update.
         if (event.ailangBuilt && event.brainVersion) {
-          this.appendHistoryStyled(`AILANG built ${event.ailangBuilt} | Core Runtime v${event.brainVersion} | TUI v${this.version}`, chalk.dim);
+          this.appendHistoryStyled(`AILANG built ${event.ailangBuilt} | Core Runtime v${event.brainVersion} | TUI v${this.version}`, theme.dim);
         }
         if (Array.isArray(event.loaded_extensions)) {
           const names = event.loaded_extensions;
           const extText = names.length === 0 ? "(none)" : names.join(", ");
           this.loadedExtensions = extText;
           this.scratchpadExtensionActive = hasScratchpadExtension(names);
-          this.appendHistoryStyled(`Loaded extensions: ${extText}`, chalk.dim);
+          this.appendHistoryStyled(`Loaded extensions: ${extText}`, theme.dim);
         }
         break;
 
       case "thinking":
         if (this.waitState.state === "tools_wait" || this.waitState.state === "tools_run") {
-          this.appendHistoryStyled("Tool results received. Continuing reasoning...", chalk.dim);
+          this.appendHistoryStyled("Tool results received. Continuing reasoning...", theme.dim);
         } else if (this.waitState.state !== "thinking") {
-          this.appendHistoryStyled("Runtime is reasoning...", chalk.dim);
+          this.appendHistoryStyled("Runtime is reasoning...", theme.dim);
         }
         this.setRunState("thinking");
         this.step = event.step;
@@ -2442,14 +2474,14 @@ export class AgentUI {
       case "thinking_stream_start":
         if (isInternalComposeStream(event.stream_id)) break;
         if (this.waitState.state !== "thinking") {
-          this.appendHistoryStyled("Runtime is reasoning...", chalk.dim);
+          this.appendHistoryStyled("Runtime is reasoning...", theme.dim);
         }
         this.setRunState("thinking");
         this.step = event.step;
         this.streamedSteps.add(event.step);
         {
           if (!this.finalOnly) {
-            const row = styledText(this.stamp(""), chalk.reset);
+            const row = styledText(this.stamp(""), theme.reset);
             this.history.addChild(row);
             this.streamRows.set(event.stream_id, row);
           }
@@ -2505,7 +2537,7 @@ export class AgentUI {
         break;
       case "thinking_stream_error":
         if (isInternalComposeStream(event.stream_id)) break;
-        this.appendHistoryStyled(`Stream error: ${event.message}`, chalk.red.dim);
+        this.appendHistoryStyled(`Stream error: ${event.message}`, theme.red.dim);
         break;
       case "thinking_stream_end":
         if (isInternalComposeStream(event.stream_id)) break;
@@ -2538,7 +2570,7 @@ export class AgentUI {
             }
             this.appendHistoryStyled(
               event.status === "aborted" ? "Stream aborted" : "Stream ended with error",
-              chalk.dim,
+              theme.dim,
             );
           }
         }
@@ -2561,28 +2593,28 @@ export class AgentUI {
         break;
 
       case "proposed_cmd":
-        this.appendHistoryStyled(`$ ${event.cmd}`, chalk.cyanBright.bold);
+        this.appendHistoryStyled(`$ ${event.cmd}`, theme.cyanBright.bold);
         break;
 
       case "proposed_ailang": {
-        this.appendHistoryStyled("AILANG snippet:", chalk.cyanBright.bold);
+        this.appendHistoryStyled("AILANG snippet:", theme.cyanBright.bold);
         const lines = highlightCodeLines(event.code, "ailang");
         for (const line of lines) {
-          this.appendHistoryPlain(`  ${line}`);
+          this.history.addJoined(plainText(`  ${line}`));
         }
         break;
       }
 
       case "ailang_check":
         if (event.passed) {
-          this.appendHistoryStyled("  type-check passed", chalk.greenBright);
+          this.history.addJoined(styledText("  type-check passed", theme.greenBright));
         } else {
-          this.appendHistoryStyled(
+          this.history.addJoined(styledText(
             `  type-check failed (${event.attempt}/${event.max_attempts})`,
-            chalk.redBright,
-          );
+            theme.redBright,
+          ));
           const errBox = formatHighContrastErrorBox(event.errors, "  ", 5);
-          if (errBox.length > 0) this.appendHistoryStyled(errBox.join("\n"), chalk.redBright.bold);
+          if (errBox.length > 0) this.history.addJoined(styledText(errBox.join("\n"), theme.redBright.bold));
         }
         break;
       case "compose_start":
@@ -2784,10 +2816,10 @@ export class AgentUI {
       case "obs":
         if (event.stdout) {
           if (event.exit_code === 0) this.appendHistoryPlain(event.stdout);
-          else this.appendHistoryStyled(event.stdout, chalk.red.dim);
+          else this.appendHistoryStyled(event.stdout, theme.red.dim);
         }
         if (event.stderr) {
-          this.appendHistoryStyled(`[stderr] ${event.stderr}`, chalk.red.dim);
+          this.appendHistoryStyled(`[stderr] ${event.stderr}`, theme.red.dim);
         }
         break;
 
@@ -2818,12 +2850,12 @@ export class AgentUI {
         break;
 
       case "warning":
-        this.appendHistoryStyled(`Warning: ${event.message}`, chalk.yellow);
+        this.appendHistoryStyled(`Warning: ${event.message}`, theme.yellow);
         break;
       case "error":
         this.composeFooterStatus = "";
         this.setRunState("error");
-        this.appendHistoryStyled(`Error: ${event.message}`, chalk.redBright);
+        this.appendHistoryStyled(`Error: ${event.message}`, theme.redBright);
         // Runtime is still alive after an error; mark task done so the next
         // plain-text input routes to sendUserMessage in the live process.
         this.taskDone = true;
@@ -2859,8 +2891,8 @@ export class AgentUI {
         break;
       case "session_resume_view": {
         const lines = formatResumedHistory(this.resumeSeedMessages ?? [], event);
-        for (const line of lines.history) this.appendHistoryStyled(line.text, line.dim ? chalk.dim : (s: string) => s);
-        this.appendHistoryStyled(lines.marker, chalk.cyanBright);
+        for (const line of lines.history) this.appendHistoryStyled(line.text, line.dim ? theme.dim : (s: string) => s);
+        this.appendHistoryStyled(lines.marker, theme.cyanBright);
         this.resumePending = false;
         this.resumeSeedMessages = null;
         this.setRunState("idle");
@@ -2873,7 +2905,7 @@ export class AgentUI {
         this.resumeSeedMessages = null;
         this.appendHistoryStyled(
           `Resume refused (${event.refusal}): ${event.message} The next prompt starts a fresh run in this session.`,
-          chalk.redBright,
+          theme.redBright,
         );
         break;
       case "run_suspended":
@@ -2881,7 +2913,7 @@ export class AgentUI {
         this.setRunState("suspended");
         this.appendHistoryStyled(
           `Run suspended: ${event.reason} at step ${event.step}. Send a message ("continue") to resume this run with its history.`,
-          chalk.yellowBright,
+          theme.yellowBright,
         );
         this.taskDone = true;
         this.tui.setFocus(this.cmdInput);
@@ -2902,7 +2934,7 @@ export class AgentUI {
         break;
       case "tool_calls":
         this.setRunState("tools_wait");
-        this.appendHistoryStyled("Waiting for delegated tool results...", chalk.dim);
+        this.appendHistoryStyled("Waiting for delegated tool results...", theme.dim);
         this.renderToolCalls(this.resolveRequestIdForEvent("tool_calls", (event as { request_id?: string }).request_id), event.tool_calls);
         break;
       case "tool_results":
@@ -3067,7 +3099,7 @@ export class AgentUI {
       }
       const bodyBox = new Box(0, 0);
       card.bodyBox = bodyBox;
-      this.history.addChild(bodyBox);
+      this.history.addJoined(bodyBox);
     }
 
     this.renderScratchpadCard(card);
@@ -3115,10 +3147,10 @@ export class AgentUI {
   }
 
   private createComposeCard(event: Extract<AgentEvent, { type: "compose_start" }>): ComposeCardState {
-    const headerRow = styledText(this.stamp(`Compose ${event.compose_id} starting...`), chalk.cyanBright.bold);
+    const headerRow = styledText(this.stamp(`Compose ${event.compose_id} starting...`), theme.cyanBright.bold);
     const bodyRow = plainText("");
     this.history.addChild(headerRow);
-    this.history.addChild(bodyRow);
+    this.history.addJoined(bodyRow);
     const card: ComposeCardState = {
       composeId: event.compose_id,
       step: event.step,
@@ -3195,12 +3227,12 @@ export class AgentUI {
     const title = done
       ? `Compose ${card.composeId} · attempts=${card.resultAttempts ?? 0} · exit=${card.resultExitCode} · ${elapsedMs}ms`
       : `Compose ${card.composeId} · model=${card.model} · max_attempts=${card.maxAttempts}`;
-    card.headerRow.setText(this.stamp(chalk.cyanBright.bold(title)));
+    card.headerRow.setText(this.stamp(theme.cyanBright.bold(title)));
 
     if (!card.expanded) {
       const summaryOneLine = (card.summary || card.summaryDelta).split("\n").find((x) => x.trim().length > 0) ?? "";
       const collapsed = summaryOneLine !== "" ? `  ${summaryOneLine}` : "  ... output hidden (Ctrl+O to expand)";
-      card.bodyRow.setText(this.stamp(chalk.dim(collapsed)));
+      card.bodyRow.setText(this.stamp(theme.dim(collapsed)));
       return;
     }
 
@@ -3396,7 +3428,7 @@ export class AgentUI {
     const usesPlannedTimeline = this.requestsUsingPlannedTimeline.has(requestId);
     let header = this.toolBatchHeaders.get(requestId);
     if (!header) {
-      header = styledText(this.stamp(formatToolHeaderDone(requestId, results.length)), chalk.dim);
+      header = styledText(this.stamp(formatToolHeaderDone(requestId, results.length)), theme.dim);
       this.history.addChild(header);
       this.toolBatchHeaders.set(requestId, header);
     } else {
@@ -3427,7 +3459,7 @@ export class AgentUI {
         const newRow = plainText(this.stamp(this.renderToolRowLine(key, status, meta, r.exit_code, r.truncated ?? false)));
         const detailRow = plainText("");
         this.history.addChild(newRow);
-        this.history.addChild(detailRow);
+        this.history.addJoined(detailRow);
         this.toolRows.set(key, newRow);
         this.toolDetailRows.set(key, detailRow);
         this.toolRowToolNames.set(key, "unknown");
@@ -3467,11 +3499,11 @@ export class AgentUI {
     const charCount = thinkContent.length;
     const headerRow = styledText(
       this.renderThinkHeader(step, charCount, false),
-      chalk.reset,
+      theme.reset,
     );
-    const bodyRow = styledText("", chalk.reset);
+    const bodyRow = styledText("", theme.reset);
     this.history.addChild(headerRow);
-    this.history.addChild(bodyRow);
+    this.history.addJoined(bodyRow);
     this.thinkBlocks.set(step, { step, content: thinkContent, charCount, headerRow, bodyRow, expanded: false, kind: "think" });
     this.thinkStepOrder.push(step);
   }
@@ -3494,11 +3526,11 @@ export class AgentUI {
     const charCount = reasoningContent.length;
     const headerRow = styledText(
       this.renderReasoningHeader(step, charCount, false),
-      chalk.reset,
+      theme.reset,
     );
-    const bodyRow = styledText("", chalk.reset);
+    const bodyRow = styledText("", theme.reset);
     this.history.addChild(headerRow);
-    this.history.addChild(bodyRow);
+    this.history.addJoined(bodyRow);
     this.thinkBlocks.set(key, { step: key, content: reasoningContent, charCount, headerRow, bodyRow, expanded: false, kind: "reason" });
     this.thinkStepOrder.push(key);
   }
@@ -3506,21 +3538,21 @@ export class AgentUI {
   private renderReasoningHeader(step: number, charCount: number, expanded: boolean): string {
     const marker = expanded ? "▾" : "▸";
     return [
-      chalk.dim(`[${formatTimestamp()}]   `),
-      chalk.cyan("[reason]"),
+      theme.dim(`[${formatTimestamp()}]   `),
+      theme.cyan("[reason]"),
       // Display the integer step (the .5 offset is internal to thinkBlocks
       // map keying — exposing it would confuse users). ^t is the cycle key
       // for BOTH [think] and [reason] blocks (they share thinkStepOrder).
-      chalk.dim(` step ${Math.floor(step)} · ${charCount} chars  ${marker}  ^t`),
+      theme.dim(` step ${Math.floor(step)} · ${charCount} chars  ${marker}  ^t`),
     ].join("");
   }
 
   private renderThinkHeader(step: number, charCount: number, expanded: boolean): string {
     const marker = expanded ? "▾" : "▸";
     return [
-      chalk.dim(`[${formatTimestamp()}]   `),
-      chalk.magenta("[think]"),
-      chalk.dim(` step ${step} · ${charCount} chars  ${marker}  ^t`),
+      theme.dim(`[${formatTimestamp()}]   `),
+      theme.magenta("[think]"),
+      theme.dim(` step ${step} · ${charCount} chars  ${marker}  ^t`),
     ].join("");
   }
 
@@ -3548,19 +3580,19 @@ export class AgentUI {
       ? trimSegmentsForLiveRender(segmented, STREAM_VISIBLE_MAX_CHARS)
       : { segments: segmented, truncated: false };
     const lines: string[] = [];
-    if (trimmed.truncated) lines.push(chalk.dim("[stream tail]"));
+    if (trimmed.truncated) lines.push(theme.dim("[stream tail]"));
     for (const seg of trimmed.segments) {
       if (seg.kind === "json_bare") {
         const confidence = this.toolEnvelopeConfidence(seg.text);
         if (this.shouldHideToolJsonSegment(confidence, seg.text)) {
-          lines.push(chalk.dim("[tool json hidden; see Planned Tools]"));
+          lines.push(theme.dim("[tool json hidden; see Planned Tools]"));
           continue;
         }
         lines.push(...highlightJsonLines(seg.text));
         continue;
       }
       if (seg.kind === "plain") {
-        lines.push(chalk.dim(seg.text));
+        lines.push(theme.dim(seg.text));
         continue;
       }
       const jsonLang = normalizeJsonLang(seg.lang);
@@ -3568,14 +3600,14 @@ export class AgentUI {
       if (isJson) {
         const confidence = this.toolEnvelopeConfidence(seg.text);
         if (this.shouldHideToolJsonSegment(confidence, seg.text)) {
-          lines.push(chalk.dim("[tool json hidden; see Planned Tools]"));
+          lines.push(theme.dim("[tool json hidden; see Planned Tools]"));
           continue;
         }
       }
-      lines.push(chalk.dim("```" + (seg.lang ?? "")));
+      lines.push(theme.dim("```" + (seg.lang ?? "")));
       lines.push(...(isJson ? highlightJsonLines(seg.text) : highlightCodeLines(seg.text, seg.lang)));
-      if (seg.kind === "code_complete") lines.push(chalk.dim("```"));
-      else lines.push(chalk.dim("``` (streaming)"));
+      if (seg.kind === "code_complete") lines.push(theme.dim("```"));
+      else lines.push(theme.dim("``` (streaming)"));
     }
     return lines.join("\n");
   }
@@ -3649,7 +3681,7 @@ export class AgentUI {
 
   private ensurePlannedHeader(step: number): void {
     if (this.plannedToolHeaders.has(step)) return;
-    const header = styledText(this.stamp(`[planned] step-${step} Planned Tools (streaming)`), chalk.dim);
+    const header = styledText(this.stamp(`[planned] step-${step} Planned Tools (streaming)`), theme.dim);
     this.history.addChild(header);
     this.plannedToolHeaders.set(step, header);
     this.plannedToolOrderByStep.set(step, []);
@@ -3669,7 +3701,7 @@ export class AgentUI {
     const row = plainText(this.stamp(formatPlannedToolRow(status, meta)));
     const detailRow = plainText("");
     this.history.addChild(row);
-    this.history.addChild(detailRow);
+    this.history.addJoined(detailRow);
     this.plannedToolEntries.set(key, {
       step,
       identity,
@@ -3858,7 +3890,7 @@ export class AgentUI {
   private renderToolCalls(requestId: string, calls: DelegatedCall[], trackAsActiveBatch = true): void {
     let header = this.toolBatchHeaders.get(requestId);
     if (!header) {
-      header = styledText(this.stamp(formatToolHeaderQueued(requestId, calls.length)), chalk.dim);
+      header = styledText(this.stamp(formatToolHeaderQueued(requestId, calls.length)), theme.dim);
       this.history.addChild(header);
       this.toolBatchHeaders.set(requestId, header);
     } else {
@@ -3931,7 +3963,7 @@ export class AgentUI {
       const row = plainText(this.stamp(this.renderToolRowLine(key, "queued", meta)));
       const detailRow = plainText("");
       this.history.addChild(row);
-      this.history.addChild(detailRow);
+      this.history.addJoined(detailRow);
       this.toolRows.set(key, row);
       this.toolDetailRows.set(key, detailRow);
       this.toolRowMeta.set(key, meta);
@@ -3971,7 +4003,7 @@ export class AgentUI {
       const initialHeader = phase === "done"
         ? formatToolHeaderDone(requestId, results.length)
         : formatToolHeaderRunning(requestId, batch.done, batch.total, batch.failed);
-      header = styledText(this.stamp(initialHeader), chalk.dim);
+      header = styledText(this.stamp(initialHeader), theme.dim);
       this.history.addChild(header);
       this.toolBatchHeaders.set(requestId, header);
     }
@@ -4064,7 +4096,7 @@ export class AgentUI {
         row = plainText(this.stamp(this.renderToolRowLine(key, status, meta, result.exit_code, result.truncated)));
         const detailRow = plainText("");
         this.history.addChild(row);
-        this.history.addChild(detailRow);
+        this.history.addJoined(detailRow);
         this.toolRows.set(key, row);
         this.toolDetailRows.set(key, detailRow);
         this.toolRowToolNames.set(key, "unknown");
@@ -4124,7 +4156,7 @@ export class AgentUI {
         }
       }
       this.setRunState("thinking");
-      this.appendHistoryStyled("Tool results received. Continuing reasoning...", chalk.dim);
+      this.appendHistoryStyled("Tool results received. Continuing reasoning...", theme.dim);
       if (this.missingDelegatedRequestId === requestId) this.missingDelegatedRequestId = null;
     }
     this.updateReadFileGroupHeader(requestId);
@@ -4151,7 +4183,7 @@ export class AgentUI {
     this.appendHistoryStyled(
       `Parked (${suspended.request.request_id}) on ${n} open wait${n === 1 ? "" : "s"}: the runtime exited and the park ` +
         "is in the journal. The session resumes on the wake; a line typed here answers the park as operator input.",
-      chalk.cyan,
+      theme.cyan,
     );
     this.tui.setFocus(this.cmdInput);
     this.updateStatus();
@@ -4192,13 +4224,13 @@ export class AgentUI {
       const req = this.runtimeProcess?.wakeRequest;
       const suspended = this.suspendedChild;
       if (req && this.runtimeProcess?.sendWakeReply(operatorInputReply(req.request_id, value))) {
-        this.appendHistoryStyled(`> ${value}`, chalk.cyan);
+        this.appendHistoryStyled(`> ${value}`, theme.cyan);
       } else if (suspended && suspended.deliver(operatorInputReply(suspended.request.request_id, value))) {
         // P4 Part 4: no child to send it to. The owner holds the line as the park's one reply; what
         // it does with a reply is Part 5's (the `wake` entry, the `--resume` respawn).
-        this.appendHistoryStyled(`> ${value}`, chalk.cyan);
+        this.appendHistoryStyled(`> ${value}`, theme.cyan);
       } else {
-        this.appendHistoryStyled("The park this line answered has already resolved; the line was not sent.", chalk.dim);
+        this.appendHistoryStyled("The park this line answered has already resolved; the line was not sent.", theme.dim);
       }
       this.tui.requestRender();
       return;
@@ -4214,7 +4246,7 @@ export class AgentUI {
       // line is sent mid-task as a follow-up, and the runtime's session_start
       // forces the status line back to idle while the task runs.
       this.taskDone = false;
-      this.appendHistoryStyled(`> ${value}`, chalk.cyan);
+      this.appendHistoryStyled(`> ${value}`, theme.cyan);
       this.onInitialTask?.(value);
       // Go non-idle here rather than waiting for the runtime's first event. Even
       // with the boot pre-spawn that event is ~100ms away, and on the fallback
@@ -4223,31 +4255,31 @@ export class AgentUI {
       // on "idle" across that window reads as a hang. The follow-up branch below
       // has always done this.
       this.setRunState("thinking");
-      this.appendHistoryStyled("Runtime is reasoning...", chalk.dim);
+      this.appendHistoryStyled("Runtime is reasoning...", theme.dim);
       this.tui.requestRender();
       return;
     }
 
     // After task completion, plain text (not starting with '/') is a follow-up.
     if (route === "follow_up") {
-      this.appendHistoryStyled(`> ${value}`, chalk.cyan);
+      this.appendHistoryStyled(`> ${value}`, theme.cyan);
       this.onUserMessage?.(value);
       // Reset taskDone — runtime process is now processing again; next done re-enables it.
       this.taskDone = false;
       this.setRunState("thinking");
-      this.appendHistoryStyled("Runtime is reasoning...", chalk.dim);
+      this.appendHistoryStyled("Runtime is reasoning...", theme.dim);
       this.tui.requestRender();
       return;
     }
 
     if (route === "locked") {
-      this.appendHistoryStyled("Input locked: task still running. Use /abort to stop.", chalk.dim);
+      this.appendHistoryStyled("Input locked: task still running. Use /abort to stop.", theme.dim);
       this.tui.requestRender();
       return;
     }
 
     if (value) {
-      this.appendHistoryStyled(`Unknown command: "${value}". Try /model, /abort, or type a follow-up after the task is done.`, chalk.dim);
+      this.appendHistoryStyled(`Unknown command: "${value}". Try /model, /abort, or type a follow-up after the task is done.`, theme.dim);
       this.tui.requestRender();
     }
   }
@@ -4256,10 +4288,10 @@ export class AgentUI {
   // ---------------------------------------------------------------------------
 
   private readonly styleMap = new Map<string, (s: string) => string>([
-    ["dim", chalk.dim],
-    ["red", chalk.red],
-    ["green", chalk.green],
-    ["cyan", chalk.cyan],
+    ["dim", theme.dim],
+    ["red", theme.red],
+    ["green", theme.green],
+    ["cyan", theme.cyan],
   ]);
 
   /**
@@ -4279,7 +4311,7 @@ export class AgentUI {
    */
   switchModel(model: string): void {
     this.model = model;
-    this.appendHistoryStyled(`Model → ${model}`, chalk.cyan.dim);
+    this.appendHistoryStyled(`Model → ${model}`, theme.cyan.dim);
     this.onModelChange?.(model);
     this.updateStatus();
     this.tui.requestRender();
@@ -4297,7 +4329,7 @@ export class AgentUI {
    * Fires onRestart callback (no profile = current).
    */
   restartSession(): void {
-    this.appendHistoryStyled("Restarting session...", chalk.yellow.dim);
+    this.appendHistoryStyled("Restarting session...", theme.yellow.dim);
     this.onRestart?.();
   }
 
@@ -4306,7 +4338,7 @@ export class AgentUI {
    * Fires onRestart callback with the new profile name.
    */
   restartWithProfile(profile: string): void {
-    this.appendHistoryStyled(`Profile → ${profile}`, chalk.cyan.dim);
+    this.appendHistoryStyled(`Profile → ${profile}`, theme.cyan.dim);
     this.onRestart?.(profile);
   }
 
@@ -4322,7 +4354,7 @@ export class AgentUI {
     import("./profiles.js").then(({ fetchAvailableProfiles, currentProfile }) => {
       const profiles = fetchAvailableProfiles();
       if (profiles.length === 0) {
-        this.appendHistoryStyled("No profiles found in .motoko/config/", chalk.yellow);
+        this.appendHistoryStyled("No profiles found in .motoko/config/", theme.yellow);
         this.tui.requestRender();
         return;
       }
@@ -4429,18 +4461,18 @@ export class AgentUI {
     const extPart = this.loadedExtensions !== "" ? ` | ext: ${this.loadedExtensions}` : "";
     const line2Base = `    profile: ${this.profile} | model: ${this.model || "—"}${this.branch ? ` | branch: ${this.branch}` : ""}${extPart}`;
     const stateColor =
-      this.waitState.state === "thinking" ? ((s: string) => chalk.blueBright.bold(s)) :
-      (this.waitState.state === "tools_wait" || this.waitState.state === "tools_run") ? chalk.yellow :
-      this.waitState.state === "error" ? chalk.red :
+      this.waitState.state === "thinking" ? ((s: string) => theme.blueBright.bold(s)) :
+      (this.waitState.state === "tools_wait" || this.waitState.state === "tools_run") ? theme.yellow :
+      this.waitState.state === "error" ? theme.red :
       // Suspended is yellow, with `tools_wait`: both mean "stopped, waiting on someone else".
       // The fall-through below is the IDLE green, which would show a run holding an unfinished
       // turn in the same colour as one holding nothing.
-      this.waitState.state === "suspended" ? chalk.yellow :
+      this.waitState.state === "suspended" ? theme.yellow :
       // A park, live or with its child gone, is the same "waiting on someone else" yellow; the
       // resume in between is the cyan the resume marker line uses.
-      (this.waitState.state === "parked" || this.waitState.state === "suspended_child") ? chalk.yellow :
-      this.waitState.state === "resuming" ? chalk.cyan :
-      ((s: string) => chalk.greenBright.bold(s));
+      (this.waitState.state === "parked" || this.waitState.state === "suspended_child") ? theme.yellow :
+      this.waitState.state === "resuming" ? theme.cyan :
+      ((s: string) => theme.greenBright.bold(s));
     let line2 = stateColor(line2Base);
     if (this.latestContextUsage) {
       const { tokensEst, limit } = this.latestContextUsage;

@@ -103,6 +103,10 @@ Per-extension JSON files are optional; if missing, hardcoded defaults apply.
 `--process-timeout`, the wall for `BashExec`/`RunTests` (30 s if unset); the
 `MOTOKO_PROCESS_TIMEOUT` env var overrides it for one run.
 
+Top-level `theme` picks the TUI colour scheme: `"tokyo-night"`, or unset for
+the default PI colours (which follow your terminal's palette). The
+`MOTOKO_THEME` env var overrides it for one run.
+
 Precedence: hardcoded defaults < profile JSON < CLI args. API keys are always env vars.
 
 ### Model identifiers
