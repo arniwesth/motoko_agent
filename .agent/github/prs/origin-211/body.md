@@ -52,8 +52,14 @@ them; the table below says how.
 **Second round: the re-check.** It found 8 of the 18 fully fixed (1, 3, 8, 9, 13, 14, 15, 17).
 For the other ten the original reproduction passed but a nearby input still triggered the
 defect, and it listed 14 open items, including two regression tests that passed with their fix
-reverted. The third commit addresses all 14; the second table says how. That commit has not been
-re-checked by the reviewer.
+reverted. The third commit addresses all 14; the second table says how.
+
+**Third round.** The reviewer re-checked that commit: 10 of the 14 are fixed (1, 3, 5, 6, 8, 10,
+11, 12, 13, 14) and 4 are not (2, 4, 7, 9), which leaves 13 of the original 18 fully fixed. It
+lists 11 remaining findings, one severe: `check` reads a movie's headers without decoding it.
+One is a regression from the third commit: `explainer sheet` crashes. Two more fixes can be
+reverted with the self-test still green, so "13 of 13 reverted fixes turn it red" below covers
+the thirteen that were tried, not every fix. A further fix pass is in progress.
 
 First round:
 
@@ -145,7 +151,8 @@ Checked by `tools/explainer/selftest.sh`. The first real test of the install pat
 - [x] `setup.sh --with-whisper` on the existing install: verifies the Kokoro checksums, skips
   what is there, provisions the Whisper model. A download of a missing file exits 1 and leaves
   nothing behind
-- [ ] The second round of fixes has not been re-checked by the reviewer
+- [ ] Third-round re-check by the reviewer: 10 of 14 fixed, 4 not, 11 remaining findings (see
+  Review)
 - [ ] `setup.sh` has not been run from a clean machine
 - [ ] Not run on x86_64; this box is aarch64
 - [ ] The narration has not been listened to by its author, only transcribed
