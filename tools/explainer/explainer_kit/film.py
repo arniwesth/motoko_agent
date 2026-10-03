@@ -1,12 +1,13 @@
-"""Read a film file without running it: its scenes in order, and every line it will speak.
+"""Read a film file without running it: its scenes in order, and every line each will speak.
 
 The narration has to exist before a scene renders, because the scene times itself by the clip.
 So the lines are taken from the source: say(...) and speak(...) calls whose text is a string
-literal, wherever in the file they are. A line built at run time is reported as a problem
-instead of being silently unvoiced.
+literal. A line built at run time is reported as a problem instead of being silently unvoiced.
 
-A scene may speak from its own methods, from a base class in the same file, or from a function
-at module level, so a scene's lines are its own plus those of its bases plus the module's.
+A scene's lines are those it can reach: from its construct(), through the methods it calls on
+itself (its own or a base class's in this file) and the module-level functions it names. A
+helper nothing calls belongs to no scene, and a helper only scene A calls is not scene B's.
+What is reached through another file is not seen; narration has to live in the film file.
 """
 
 from __future__ import annotations
@@ -15,6 +16,8 @@ import ast
 import pathlib
 
 from . import voice
+
+ENTRY = ("construct", "setup", "tear_down")  # what Manim itself calls on a scene
 
 
 def _spoken(node):
@@ -38,41 +41,30 @@ class Film:
         self.say_table = self._literal(tree, "SAY", [])
         self.output = self._literal(tree, "OUTPUT", None)
         self.scenes = []  # in the order they play
-        self.bases = {}  # class -> its bases defined in this file
-        self.records = []  # (owner, line number, spoken text); owner None is module level
-        self.problems = []  # (owner, message)
+        self.bases = {}  # scene or base class -> its bases defined in this file
+        self.methods = {}  # class -> {method name: its definition}
+        self.functions = {}  # module-level function name -> its definition
+        self.owner = {}  # id of a definition -> the class it is in, or None
 
         constructs = {}
         for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                self.functions[node.name] = node
+                self.owner[id(node)] = None
             if not isinstance(node, ast.ClassDef):
-                self._collect(node, None)
                 continue
             names = [b.id for b in node.bases if isinstance(b, ast.Name)]
             if not any(b == "Explainer" or b in self.bases for b in names):
-                self._collect(node, None)
                 continue
             self.bases[node.name] = [b for b in names if b in self.bases]
-            own = any(isinstance(n, ast.FunctionDef) and n.name == "construct" for n in node.body)
-            constructs[node.name] = own or any(constructs[b] for b in self.bases[node.name])
+            self.methods[node.name] = {n.name: n for n in node.body
+                                       if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+            for definition in self.methods[node.name].values():
+                self.owner[id(definition)] = node.name
+            constructs[node.name] = "construct" in self.methods[node.name] or any(
+                constructs[b] for b in self.bases[node.name])
             if constructs[node.name] and not node.name.startswith("_"):
                 self.scenes.append(node.name)
-            self._collect(node, node.name)
-        self.records.sort(key=lambda r: r[1])
-
-    def _collect(self, tree, owner):
-        for node in ast.walk(tree):
-            found = _spoken(node)
-            if not found:
-                continue
-            name, nodes = found
-            if not all(isinstance(n, ast.Constant) and isinstance(n.value, str) for n in nodes):
-                self.problems.append((owner, (
-                    f"{self.path.name}:{node.lineno}: {name}() needs string literals, so its "
-                    "narration can be made before the scene renders")))
-                continue
-            strings = [n.value for n in nodes]
-            text = voice.spoken(strings, self.say_table) if name == "say" else strings[0]
-            self.records.append((owner, node.lineno, text))
 
     @staticmethod
     def _literal(tree, name, default):
@@ -82,23 +74,65 @@ class Film:
                 return ast.literal_eval(node.value)
         return default
 
-    def _owners(self, scenes):
-        """The classes whose lines a set of scenes can speak, and None for the module's."""
-        owners, todo = {None}, list(self.scenes if scenes is None else scenes)
+    def _lineage(self, scene):
+        """The scene and its bases in this file, nearest first."""
+        seen, todo = [], [scene]
         while todo:
-            name = todo.pop()
-            if name not in owners:
-                owners.add(name)
+            name = todo.pop(0)
+            if name not in seen:
+                seen.append(name)
                 todo += self.bases.get(name, [])
-        return owners
+        return seen
+
+    def _reached(self, scene):
+        """Every definition in this file that the scene's construct() can lead to."""
+        lineage = self._lineage(scene)
+
+        def named(name):  # every definition of a method along the lineage: super() reaches up
+            return [self.methods[c][name] for c in lineage if name in self.methods[c]]
+
+        seen, todo = {}, [d for name in ENTRY for d in named(name)]
+        while todo:
+            definition = todo.pop()
+            if id(definition) in seen:
+                continue
+            seen[id(definition)] = definition
+            for node in ast.walk(definition):
+                if isinstance(node, ast.Attribute):  # self.opening(), scene.opening, super().x()
+                    todo += named(node.attr)
+                elif isinstance(node, ast.Name) and node.id in self.functions:
+                    todo.append(self.functions[node.id])
+        return list(seen.values())
+
+    def _lines(self, scenes):
+        """(records, problems) for the scenes: what they will say, and what cannot be voiced."""
+        records, problems = {}, {}
+        for scene in self.scenes if scenes is None else scenes:
+            for definition in self._reached(scene):
+                owner = self.owner[id(definition)]
+                for node in ast.walk(definition):
+                    found = _spoken(node)
+                    if not found:
+                        continue
+                    name, nodes = found
+                    key = (node.lineno, node.col_offset)
+                    if not all(isinstance(n, ast.Constant) and isinstance(n.value, str)
+                               for n in nodes):
+                        problems[key] = (
+                            f"{self.path.name}:{node.lineno}: {name}() needs string literals, so "
+                            "its narration can be made before the scene renders")
+                        continue
+                    strings = [n.value for n in nodes]
+                    text = voice.spoken(strings, self.say_table) if name == "say" else strings[0]
+                    records[key] = (owner, node.lineno, text)
+        return ([records[k] for k in sorted(records)], [problems[k] for k in sorted(problems)])
 
     def records_for(self, scenes=None):
-        owners = self._owners(scenes)
-        return [r for r in self.records if r[0] in owners]
+        """(class or None for module level, line number, spoken text), in source order."""
+        return self._lines(scenes)[0]
 
     def texts(self, scenes=None):
         return [text for _, _, text in self.records_for(scenes)]
 
     def problems_for(self, scenes=None):
-        owners = self._owners(scenes)
-        return [message for owner, message in self.problems if owner in owners]
+        return self._lines(scenes)[1]

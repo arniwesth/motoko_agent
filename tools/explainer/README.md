@@ -72,15 +72,15 @@ them, so keep a scene's content above y = -2.6 and the header's row (y = 3.5) cl
 | `lint FILM` | Runs every scene's timeline without drawing it; reports durations and geometry findings. | 27 s |
 | `render FILM` | Makes missing narration clips, renders scenes in parallel, joins them, mixes and levels the voice, then checks. Writes the film beside its file. | 2.5 min |
 | `render FILM --draft` | The same at 854×480, 15 fps, kept in scratch. | under a minute |
-| `check FILM` | Re-runs the checks on the last successful render. Refuses (exit 1) if a scene failed or the film is gone. | seconds |
+| `check FILM` | Re-runs the checks on the last successful render. Refuses (exit 1) if a scene failed, the film is gone or is not the movie the render made, or the scratch directory holds another film's render. | seconds |
 | `say FILM` | Prints each spoken line and how it will be pronounced. | seconds |
 | `sheet FILM` | Contact sheets of the last render, for an author who can look. | seconds |
 | `doctor` | Says what is installed and what is missing. | |
 
 Flags: `--scenes A B` limits a command to some scenes: no joined film is written, and each scene
-is narrated into its own file in scratch and checked there. `--no-voice` renders captions only;
-`--transcribe` adds the speech-to-text check; `--json` prints the report alone; `-o` names the
-output; `--media` moves the scratch directory. Progress goes to stderr, so stdout is only ever
+is narrated into its own file in scratch and checked there for sync and loudness. `--no-voice`
+renders captions only; `--transcribe` adds the speech-to-text check; `--json` prints the report
+alone; `-o` names the output; `--media` moves the scratch directory. Progress goes to stderr, so stdout is only ever
 the report. The first render of a film synthesizes its clips at about five seconds a line; after
 that only changed lines are re-made.
 
@@ -94,9 +94,9 @@ transcription results. `ok` is false if any error-level finding or sync failure 
 
 | Check | Level | What it catches |
 |---|---|---|
-| `off_frame` | error | Any ink past the frame: shapes with their stroke thickness, arrows, images, text. |
-| `text_overlap` | error | Two pieces of text printed over each other: the kit's text, plain Manim `Text`, or two lines of one caption. |
-| `caption_overlap` | error | A filled shape, an image or a stroke reaching into the caption. An empty outline around it is fine. |
+| `off_frame` | error | Any ink past the frame: shapes with their stroke thickness (foreground or background), arrows, the visible pixels of an image, text. |
+| `text_overlap` | error | Two pieces of text printed over each other: the kit's text, plain Manim `Text`, or two lines of one caption. A text stays one text after Manim takes it apart to remove a glyph. |
+| `caption_overlap` | error | A filled shape, the visible pixels of an image, or a stroke reaching into the caption. An empty outline around it, or a transparent image over it, is fine. |
 | `narration_cut` | error | A scene ending while its last line is still being said. |
 | `unspeakable` | error | A `say()` or `speak()` in a rendered scene whose text is built at run time, so no clip can be made for it. |
 | `near_edge` | warning | Text within 0.12 units of the frame edge. |
@@ -107,12 +107,13 @@ transcription results. `ok` is false if any error-level finding or sync failure 
 | loudness | reported | Integrated LUFS and true peak of the finished track. |
 | transcription | reported | Whisper's reading of each clip against its line. Homophones and digits for spelt-out numbers are expected differences. |
 
-`selftest.sh` holds the checks to account. `examples/defects.py` has twelve scenes with one
-seeded defect each, and the test fails unless each is flagged as its own kind and the clean
-scenes stay clean. `tests/units.py` covers what is not geometry: which lines a film speaks, a
-damaged clip cache, a late audio track, a render that never finished. That much draws nothing and
-takes about eight seconds. `selftest.sh --full` also renders a small narrated film and checks
-what only a real render shows; about twenty seconds in all.
+`selftest.sh` holds the checks to account. `examples/defects.py` has a scene for each seeded
+defect, and the test fails unless each is flagged as its own kind and the clean scenes stay
+clean. `tests/units.py` covers what is not geometry: which lines a scene can reach, a damaged
+clip cache, a late audio track, a render that never finished or belongs to another film, a file
+that is not a movie. That much draws nothing and takes about ten seconds. `selftest.sh --full`
+also renders small narrated films and checks what only a real render shows; about half a minute
+in all. A test here earns its place by going red when the fix it covers is reverted.
 
 **What the checks do not see.** They work from geometry at the poses where a scene rests. They
 do not judge balance, crowding, colour, or whether an arrow points at the right thing, and they
@@ -128,11 +129,14 @@ check shows the words are intelligible and correct, not that the delivery sounds
 
 ## How it works
 
-- **Narration first.** `film.py` reads the film's source for `say(...)` and `speak(...)` literals,
-  wherever they are: a scene's own methods, a base class in the same file, a module-level
-  function. `voice.py` synthesizes one Kokoro clip per line, cached by text, voice and speed, and
-  written whole or not at all. A scene times itself by the clip's length, which is why a spoken
-  line cannot be built at run time.
+- **Narration first.** `film.py` reads the film's source for the `say(...)` and `speak(...)`
+  literals each scene can reach: from its `construct()`, through the methods it calls on itself
+  (its own or a base class's in the same file) and the module-level functions it names. A helper
+  nothing calls belongs to no scene. Narration reached through another file is not seen, so it
+  has to live in the film file. `voice.py` synthesizes one Kokoro clip per line, cached by text,
+  voice and speed, written whole or not at all, and re-made if the cached file is damaged. A
+  scene times itself by the clip's length, which is why a spoken line cannot be built at run
+  time.
 - **One Manim process per scene**, in parallel. Each writes a small report: its length, when each
   clip starts, and what `lint` found.
 - **One track.** The clips are laid at the recorded times, levelled at +6 dB under a limiter

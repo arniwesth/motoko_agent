@@ -71,12 +71,16 @@ if [ "${1:-}" = --with-whisper ]; then
     "$root/env/bin/pip" install --quiet faster-whisper
   # Provisioned here so that --transcribe never downloads anything at render time.
   whisper=$root/models/whisper/small.en
-  if [ ! -s "$whisper/model.bin" ]; then
+  if [ ! -s "$whisper/model.bin" ] || [ ! -s "$whisper/tokenizer.json" ]; then
     rm -rf "$whisper.part"
-    "$root/env/bin/python" -c "
+    # The path goes in as an argument: written into the source, a quote in it would end the string.
+    "$root/env/bin/python" -c '
+import sys
 from faster_whisper import download_model
-download_model('small.en', output_dir='$whisper.part')" >/dev/null
-    [ -s "$whisper.part/model.bin" ] || die "the Whisper model did not download" "$whisper.part"
+download_model("small.en", output_dir=sys.argv[1])' "$whisper.part" >/dev/null
+    for f in model.bin config.json tokenizer.json vocabulary.txt; do
+      [ -s "$whisper.part/$f" ] || die "the Whisper model came without $f" "$whisper.part"
+    done
     mkdir -p "$(dirname "$whisper")"
     rm -rf "$whisper"
     mv "$whisper.part" "$whisper"

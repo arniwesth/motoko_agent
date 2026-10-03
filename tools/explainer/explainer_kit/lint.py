@@ -5,8 +5,13 @@ ink that left the frame, text printed over other text, and anything in the capti
 does not judge balance, crowding, colour, or whether an arrow points at the right thing.
 
 What counts as ink: every mobject's own outline, not only its leaves (an Arrow's shaft is the
-parent of its tip); a stroke's thickness, not only its path; images; and text, which is the kit's
-T() and code() lines or a plain Manim Text.
+parent of its tip); a stroke's thickness, foreground or background, not only its path; the
+pixels of an image that are not transparent; and text, which is the kit's T() and code() lines
+or a plain Manim Text.
+
+Text keeps its identity when Manim takes it apart. Removing one glyph from a scene replaces the
+text's group by its remaining glyphs, so every glyph carries a reference to its text's record,
+and glyphs found loose are put back together by it.
 """
 
 from __future__ import annotations
@@ -28,20 +33,57 @@ def tag(mob, kind, text, size, ink=None):
     """Mark a mobject as one piece of text. `ink` is the submobject holding its glyphs."""
     mob.explainer_tag = {"kind": kind, "text": text, "size": size, "ink": ink,
                          "h0": mob.height or 1.0}
+    for glyph in (mob if ink is None else mob[ink]).get_family():
+        glyph.explainer_part = mob.explainer_tag
+
+
+def mark_plain_text(mob):
+    """Give every plain Manim Text under a mobject a record its glyphs can be regrouped by."""
+    for m in mob.get_family():
+        if isinstance(m, (Text, MarkupText)) and not hasattr(m, "explainer_plain"):
+            if getattr(m, "explainer_part", None) is not None:
+                continue  # the Text inside a kit T(): its group is the text
+            m.explainer_plain = {"kind": "text", "size": m.font_size, "scale": 1,
+                                 "text": getattr(m, "original_text", None) or m.text}
+            for glyph in m.get_family():
+                glyph.explainer_part = m.explainer_plain
+
+
+def _image_box(m):
+    """The box of an image's visible pixels, or None if every pixel is transparent."""
+    alpha = m.pixel_array[:, :, 3] if m.pixel_array.shape[2] == 4 else None
+    rows, cols = m.pixel_array.shape[:2]
+    if alpha is None:
+        r0, r1, c0, c1 = 0, rows, 0, cols
+    else:
+        seen = alpha > 5
+        if not seen.any():
+            return None
+        ys, xs = np.flatnonzero(seen.any(axis=1)), np.flatnonzero(seen.any(axis=0))
+        r0, r1, c0, c1 = ys[0], ys[-1] + 1, xs[0], xs[-1] + 1
+    top_left, top_right, bottom_left = m.points[0], m.points[1], m.points[2]
+    across, down = (top_right - top_left) / cols, (bottom_left - top_left) / rows
+    corners = np.array([top_left + across * c + down * r for c in (c0, c1) for r in (r0, r1)])
+    return (corners[:, 0].min(), corners[:, 1].min(), corners[:, 0].max(), corners[:, 1].max())
+
+
+def _half_stroke(m):
+    """Half the thickness of the widest visible stroke, foreground or background."""
+    widths = [m.get_stroke_width(background) for background in (False, True)
+              if m.get_stroke_opacity(background) > 0.02 and m.get_stroke_width(background) > 0]
+    return max(widths) * STROKE / 2 if widths else 0.0
 
 
 def _own(m):
     """A mobject's own ink as (box, filled, half stroke), ignoring its children; None if none."""
     if isinstance(m, AbstractImageMobject):
-        if len(m.points) == 0 or getattr(m, "fill_opacity", 1) <= 0.02:
-            return None
-        xs, ys = m.points[:, 0], m.points[:, 1]
-        return (xs.min(), ys.min(), xs.max(), ys.max()), True, 0.0
+        box = _image_box(m) if len(m.points) else None
+        return (box, True, 0.0) if box else None
     if not isinstance(m, VMobject) or len(m.points) == 0:
         return None
     filled = m.get_fill_opacity() > 0.02
-    stroked = m.get_stroke_opacity() > 0.02 and m.get_stroke_width() > 0
-    half = m.get_stroke_width() * STROKE / 2 if stroked else 0.0
+    half = _half_stroke(m)
+    stroked = half > 0
     xs, ys = m.points[:, 0], m.points[:, 1]
     if not stroked and (not filled or (np.ptp(xs) < 1e-6 and np.ptp(ys) < 1e-6)):
         return None  # invisible, or one of the zero-size glyphs Text keeps for whitespace
@@ -57,8 +99,8 @@ def _union(mob):
             max(b[2] for b in boxes), max(b[3] for b in boxes))
 
 
-def _pieces(mobs):
-    """Every piece of ink in the picture: text as a whole, everything else per mobject."""
+def _walk(mobs, loose):
+    """Whole texts and separate shapes; glyphs found outside their text are put in `loose`."""
     for mob in mobs:
         info = getattr(mob, "explainer_tag", None)
         if info is not None:
@@ -68,14 +110,30 @@ def _pieces(mobs):
         elif isinstance(mob, (Text, MarkupText)):
             box = _union(mob)
             if box:
-                text = getattr(mob, "original_text", None) or getattr(mob, "text", "")
-                yield {"info": {"kind": "text", "text": text, "size": mob.font_size, "scale": 1},
-                       "box": box}
+                plain = getattr(mob, "explainer_plain", None) or {
+                    "kind": "text", "scale": 1,
+                    "text": getattr(mob, "original_text", None) or mob.text}
+                yield {"info": dict(plain, size=mob.font_size), "box": box}
+        elif getattr(mob, "explainer_part", None) is not None and not mob.submobjects:
+            own = _own(mob)
+            if own:
+                part = mob.explainer_part
+                loose.setdefault(id(part), (part, []))[1].append(own[0])
         else:
             own = _own(mob)
             if own:
                 yield {"info": None, "box": own[0], "filled": own[1], "half": own[2], "mob": mob}
-            yield from _pieces(mob.submobjects)
+            yield from _walk(mob.submobjects, loose)
+
+
+def _pieces(mobs):
+    """Every piece of ink in the picture: text as a whole, everything else per mobject."""
+    loose = {}
+    yield from _walk(mobs, loose)
+    for part, boxes in loose.values():  # what is left of a text some of whose glyphs were removed
+        box = (min(b[0] for b in boxes), min(b[1] for b in boxes),
+               max(b[2] for b in boxes), max(b[3] for b in boxes))
+        yield {"info": dict(part, scale=part.get("scale", 1)), "box": box}
 
 
 def _shared(a, b):

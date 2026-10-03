@@ -12,4 +12,6 @@ if [ ! -x "$env/bin/python" ]; then
 fi
 export PATH="$env/bin:$PATH" PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONDONTWRITEBYTECODE=1  # no __pycache__ beside a project's film file
-exec python -m explainer_kit.cli "$@"
+# -P keeps the current directory off the import path: run from a folder that happens to hold
+# another explainer_kit, or a file named like a library, the tool must still import its own.
+exec python -P -m explainer_kit.cli "$@"

@@ -140,3 +140,71 @@ class CleanOutline(Explainer):
         self.play(FadeIn(frame), run_time=0.4)
         self.rest()
         self.end()
+
+
+# These came out of the reviewer's re-check: cases next to the ones above that still got through.
+
+
+class BackgroundStrokeInCaption(Explainer):
+    """A stroke drawn behind the fill is as visible as one drawn in front."""
+
+    def construct(self):
+        self.say("A background stroke runs through this caption.")
+        rule = Line([-3, CAP_Y, 0], [3, CAP_Y, 0], stroke_width=0)
+        rule.set_stroke(RED, width=20, background=True)
+        self.play(FadeIn(rule), run_time=0.4)
+        self.rest()
+        self.end()
+
+
+class PlainTextLosesAGlyph(Explainer):
+    """Removing one glyph makes Manim replace a Text by its remaining glyphs."""
+
+    def construct(self):
+        self.say("One letter of an overlapped label has been faded out.")
+        first = Text("ABCDE", font_size=36).move_to([0, 1, 0])
+        second = Text("BCDE", font_size=36).move_to(first)
+        self.add(first, second)
+        self.play(FadeOut(first[0]), run_time=0.2)
+        self.rest()
+        self.end()
+
+
+class KitTextLosesAGlyph(Explainer):
+    def construct(self):
+        self.say("The same, with the kit's own text.")
+        first = T("ABCDE", size=36).move_to([0, 1, 0])
+        second = T("BCDE", size=36).move_to(first)
+        self.add(first, second)
+        self.play(FadeOut(first[0][0]), run_time=0.2)
+        self.rest()
+        self.end()
+
+
+class CodeLineLosesAGlyph(Explainer):
+    """A code line is glyphs lifted out of a Text; only the kit's own record can regroup them."""
+
+    def construct(self):
+        self.say("And the same again, with a line of code.")
+        line = code(["exit_code: 1"], size=30)[0].move_to([0, 1, 0])
+        label = T("exit_code", size=30).move_to(line, aligned_edge=LEFT)
+        self.add(line, label)
+        self.play(FadeOut(line[-1]), run_time=0.2)
+        self.rest()
+        self.end()
+
+
+class CleanTransparentImages(Explainer):
+    """Pixels that are fully transparent are not ink: off the frame or over the caption."""
+
+    def construct(self):
+        self.say("Two invisible pictures are here, and neither is in the way.")
+        nothing = np.zeros((20, 20, 4), dtype=np.uint8)
+        dot = nothing.copy()
+        dot[9:11, 9:11] = 255  # one small visible square in transparent padding
+        self.add(ImageMobject(nothing).move_to([0, CAP_Y, 0]),
+                 ImageMobject(np.full((20, 20, 3), 255, dtype=np.uint8)).set_opacity(0)
+                 .move_to([8, 0, 0]),
+                 ImageMobject(dot).scale_to_fit_width(4).move_to([6, 1, 0]))
+        self.rest()
+        self.end()

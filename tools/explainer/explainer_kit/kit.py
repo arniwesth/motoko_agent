@@ -207,6 +207,11 @@ class Explainer(Scene):
             name.write_text(json.dumps(report, indent=1))
         super().tear_down()
 
+    def add(self, *mobjects):
+        for mob in mobjects:
+            lint.mark_plain_text(mob)  # so a plain Text stays one text if Manim takes it apart
+        return super().add(*mobjects)
+
     # -- narration and captions ---------------------------------------------------------------
 
     def speak(self, text, lead=0.2):

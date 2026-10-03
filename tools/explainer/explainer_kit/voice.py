@@ -55,10 +55,12 @@ def seconds(path):
 
 
 def clip_ok(path):
-    """Whether a cached clip is a readable, non-empty WAV. An interrupted write leaves one not."""
+    """Whether a cached clip is whole: our format, and every sample its header promises."""
     try:
         with wave.open(str(path)) as w:
-            return w.getnframes() > 0
+            frames = w.getnframes()
+            ours = (w.getnchannels(), w.getsampwidth(), w.getframerate()) == (1, 2, RATE)
+            return ours and frames > 0 and len(w.readframes(frames)) == frames * 2
     except (OSError, EOFError, wave.Error):
         return False
 
@@ -89,17 +91,21 @@ def _to_stderr(message):
     print(message, file=sys.stderr)
 
 
-def synth(texts, voice_dir, log=_to_stderr):
-    """Make the clips that are missing or damaged. Returns how many were made."""
+def synth(texts, voice_dir, log=_to_stderr, engine=None):
+    """Make the clips that are missing or damaged. Returns how many were made.
+
+    `engine` is anything with Kokoro's create(); the tests pass a stand-in.
+    """
     import numpy as np
     out = pathlib.Path(voice_dir)
     out.mkdir(parents=True, exist_ok=True)
     todo = [t for t in dict.fromkeys(texts) if not clip_ok(clip_path(t, out))]
     if not todo:
         return 0
-    from kokoro_onnx import Kokoro
-    _quiet()
-    engine = Kokoro(str(MODELS / "kokoro-v1.0.onnx"), str(MODELS / "voices-v1.0.bin"))
+    if engine is None:
+        from kokoro_onnx import Kokoro
+        _quiet()
+        engine = Kokoro(str(MODELS / "kokoro-v1.0.onnx"), str(MODELS / "voices-v1.0.bin"))
     for text in todo:
         samples, rate = engine.create(text, voice=VOICE, speed=SPEED, lang=_lang())
         assert rate == RATE, rate
@@ -142,10 +148,19 @@ def phonemes(texts):
     return [tokenizer.phonemize(text, _lang()) for text in texts]
 
 
+WHISPER_FILES = ("model.bin", "config.json", "tokenizer.json", "vocabulary.txt")
+
+
 def whisper_model(model_name="small.en"):
-    """The directory of a provisioned Whisper model, or None. setup.sh --with-whisper fills it."""
+    """The directory of a provisioned Whisper model, or None. setup.sh --with-whisper fills it.
+
+    Every file must be there: given a model without its tokenizer, faster-whisper quietly
+    downloads one.
+    """
     path = WHISPER / model_name
-    return path if (path / "model.bin").exists() else None
+    whole = all((path / name).is_file() and (path / name).stat().st_size > 0
+                for name in WHISPER_FILES)
+    return path if whole else None
 
 
 def transcribe(texts, voice_dir, model_name="small.en"):
@@ -155,9 +170,12 @@ def transcribe(texts, voice_dir, model_name="small.en"):
     spelt-out numbers are expected differences; a wrong or missing word is not.
     """
     import difflib
+    import logging
     import numpy as np
+    os.environ["HF_HUB_OFFLINE"] = "1"  # before the import below reads it: no network, ever
     from faster_whisper import WhisperModel
     from scipy.signal import resample_poly
+    logging.getLogger("faster_whisper").setLevel(logging.WARNING)
 
     digits = {"zero": "0", "one": "1", "two": "2", "three": "3", "four": "4", "five": "5",
               "six": "6", "seven": "7", "eight": "8", "nine": "9", "ten": "10", "twelve": "12"}

@@ -14,6 +14,7 @@ The report goes to stdout; progress goes to stderr, so `--json` output is always
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import math
@@ -31,6 +32,13 @@ from .film import Film
 KIT = pathlib.Path(__file__).resolve().parent.parent
 MODES = {"final": (1920, 1080, 30), "draft": (854, 480, 15)}
 QUIET = ["ffmpeg", "-y", "-loglevel", "error"]
+# main() points sys.stdout at stderr while a command runs, so that nothing a library prints can
+# get in front of the report. What a command means to print goes through out().
+STDOUT = sys.stdout
+
+
+def out(text):
+    print(text, file=STDOUT)
 
 
 def log(message):
@@ -56,7 +64,9 @@ def run_scenes(film, scenes, media, run_dir, mode, voiced, dry, jobs):
     logs = media / "logs"
     logs.mkdir(parents=True, exist_ok=True)
     shutil.rmtree(run_dir, ignore_errors=True)
-    args = [sys.executable, "-m", "manim", "render", "-r", f"{width},{height}", "--fps", str(fps),
+    # -P as in the launcher. Manim itself puts the film's folder on the path to import it.
+    args = [sys.executable, "-P", "-m", "manim", "render", "-r", f"{width},{height}",
+            "--fps", str(fps),
             "--media_dir", str(media), "--disable_caching", "-v", "WARNING",
             "--progress_bar", "none"]
     if dry:  # -s draws only the last frame: animations jump to their ends, time still advances
@@ -104,13 +114,31 @@ def video_seconds(path):
         return float(stream.frames / stream.average_rate)
 
 
-def narrate(picture, placed, seconds, track, out):
+def movie_problem(path, seconds, voiced):
+    """Why a file is not the movie a render should have left, or None if it is."""
+    import av
+    try:
+        with av.open(str(path)) as container:
+            if not container.streams.video:
+                return "has no video stream"
+            stream = container.streams.video[0]
+            length = float(stream.frames / stream.average_rate)
+            if voiced and not container.streams.audio:
+                return "has no audio stream, though the render was narrated"
+    except Exception as error:  # noqa: BLE001  (whatever PyAV raises, the file is not a movie)
+        return f"cannot be read as a movie ({type(error).__name__})"
+    if abs(length - seconds) > 0.2:
+        return f"runs {length:.1f} s where the render made {seconds:.1f} s"
+    return None
+
+
+def narrate(picture, placed, seconds, track, target):
     """Lay the clips on one track, level it, and mux it onto the picture."""
     voice.mix(placed, seconds, track)
-    out.parent.mkdir(parents=True, exist_ok=True)
+    target.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(QUIET + ["-i", str(picture), "-i", str(track), "-map", "0:v", "-map", "1:a",
                             "-af", voice.MASTER, "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
-                            "-ar", "48000", "-movflags", "+faststart", str(out)], check=True)
+                            "-ar", "48000", "-movflags", "+faststart", str(target)], check=True)
 
 
 def loudness(path):
@@ -170,12 +198,6 @@ def sync(path, starts):
     return offsets
 
 
-def has_audio(path):
-    import av
-    with av.open(str(path)) as container:
-        return bool(container.streams.audio)
-
-
 def build_report(film, run, reports, transcribe, media):
     """The report for a run: `run` says what was rendered, `reports` what each scene recorded."""
     mode, scenes = run["mode"], run["scenes"]
@@ -198,34 +220,37 @@ def build_report(film, run, reports, transcribe, media):
     }
     ok = report["lint"]["errors"] == 0
     if run["voiced"]:
-        # Each file that was written, with the clips it should hold at the times it should.
-        files, offset, overlaps, clips = [], 0.0, 0, []
+        # Each file that was written, with the times its clips should start at. A joined film
+        # is one file holding every scene's clips, so it is decoded once, not once per scene.
+        starts, offset, overlaps, clips = {}, 0.0, 0, []
         for index, r in enumerate(reports):
-            end, placed = 0.0, []
+            end = 0.0
             for entry in r["timeline"]:
                 clip = media / "voice" / entry["wav"]
                 overlaps += entry["t"] < end - 1e-6
                 end = entry["t"] + voice.seconds(clip)
-                placed.append((entry["t"], clip))
-            clips += placed
+                clips.append(clip)
+                if run["outputs"]:
+                    path = run["outputs"][0 if run["joined"] else index]
+                    starts.setdefault(path, []).append(offset + entry["t"])
             if run["joined"]:
-                files.append((run["outputs"][0], [(offset + t, c) for t, c in placed]))
                 offset += r["seconds"]
-            elif run["outputs"]:
-                files.append((run["outputs"][index], placed))
         info = {"engine": "kokoro-v1.0", "voice": voice.VOICE, "clips": len(clips),
-                "speech_seconds": round(sum(voice.seconds(c) for _, c in clips), 1),
+                "speech_seconds": round(sum(voice.seconds(c) for c in clips), 1),
                 "overlaps": overlaps}
         ok = ok and overlaps == 0
-        if files:
-            offsets = [o for path, placed in files for o in sync(path, [t for t, _ in placed])]
+        if run["outputs"]:
+            offsets = [o for path, times in starts.items() for o in sync(path, times)]
             missing = sum(o is None for o in offsets)
             worst = max((abs(o) for o in offsets if o is not None), default=0.0)
             info["sync"] = {"worst_ms": round(worst * 1000), "silent_clips": missing,
                             "ok": missing == 0 and worst < 0.08}
             ok = ok and info["sync"]["ok"]
-        if run["joined"]:
-            info["loudness"] = loudness(run["outputs"][0])
+            measured = [dict(loudness(path), file=path) for path in run["outputs"]]
+            if run["joined"]:
+                info["loudness"] = {k: v for k, v in measured[0].items() if k != "file"}
+            else:
+                info["scene_loudness"] = measured
         if transcribe:
             exact, diffs = voice.transcribe(film.texts(scenes), media / "voice")
             info["transcription"] = {"exact": exact, "of": exact + len(diffs),
@@ -237,38 +262,39 @@ def build_report(film, run, reports, transcribe, media):
 
 def print_report(report, as_json):
     if as_json:
-        print(json.dumps(report, indent=1))
+        out(json.dumps(report, indent=1))
         return
     minutes, seconds = divmod(report["seconds"], 60)
-    print(f"{len(report['scenes'])} scenes, {int(minutes)} min {seconds:.0f} s, "
+    out(f"{len(report['scenes'])} scenes, {int(minutes)} min {seconds:.0f} s, "
           f"{report['resolution']} at {report['fps']} fps ({report['mode']})")
     for scene in report["scenes"]:
-        print(f"  {scene['name']:<14} {scene['seconds']:6.1f} s  {scene['captions']} captions")
+        out(f"  {scene['name']:<14} {scene['seconds']:6.1f} s  {scene['captions']} captions")
     lint = report["lint"]
-    print(f"lint: {lint['errors']} errors, {lint['warnings']} warnings")
+    out(f"lint: {lint['errors']} errors, {lint['warnings']} warnings")
     for f in lint["findings"]:
         where = f"{f['scene']} at {f['t']} s" if f["scene"] else "film"
-        print(f"  {f['severity']:<7} {f['kind']:<15} {where}: {f['detail']}")
+        out(f"  {f['severity']:<7} {f['kind']:<15} {where}: {f['detail']}")
         for text in f["what"]:
-            print(f"            \"{text}\"")
+            out(f"            \"{text}\"")
     v = report["voice"]
     if v:
-        print(f"voice: {v['clips']} clips, {v['speech_seconds']} s of speech, "
+        out(f"voice: {v['clips']} clips, {v['speech_seconds']} s of speech, "
               f"{v['overlaps']} overlaps ({v['voice']})")
         if "sync" in v:
-            print(f"  sync: worst {v['sync']['worst_ms']} ms, "
+            out(f"  sync: worst {v['sync']['worst_ms']} ms, "
                   f"{v['sync']['silent_clips']} clips not found where their scene put them")
-        if "loudness" in v:
-            print(f"  loudness: {v['loudness']['integrated_lufs']} LUFS, "
-                  f"peak {v['loudness']['true_peak_dbfs']} dBFS")
+        for measure in [v["loudness"]] if "loudness" in v else v.get("scene_loudness", []):
+            name = f" of {pathlib.Path(measure['file']).name}" if "file" in measure else ""
+            out(f"  loudness{name}: {measure['integrated_lufs']} LUFS, "
+                  f"peak {measure['true_peak_dbfs']} dBFS")
         if "transcription" in v:
             t = v["transcription"]
-            print(f"  transcription: {t['exact']} of {t['of']} clips word for word")
+            out(f"  transcription: {t['exact']} of {t['of']} clips word for word")
             for d in t["diffs"]:
-                print(f"    said   {d['said']}\n    heard  {d['heard']}")
+                out(f"    said   {d['said']}\n    heard  {d['heard']}")
     for path in [report["output"]] if report["output"] else report["scene_files"]:
-        print(path)
-    print("ok" if report["ok"] else "CHECKS FAILED")
+        out(path)
+    out("ok" if report["ok"] else "CHECKS FAILED")
 
 
 def pick_scenes(film, wanted):
@@ -368,8 +394,8 @@ def cmd_render(args):
     else:
         outputs = parts
 
-    run = {"mode": mode, "scenes": scenes, "voiced": voiced, "joined": joined,
-           "outputs": [str(p) for p in outputs]}
+    run = {"film": str(film.path), "mode": mode, "scenes": scenes, "voiced": voiced,
+           "joined": joined, "outputs": [str(p) for p in outputs]}
     manifest.write_text(json.dumps(run, indent=1))
     report = build_report(film, run, reports, args.transcribe, media)
     (media / f"report-{mode}.json").write_text(json.dumps(report, indent=1))
@@ -384,6 +410,9 @@ def last_run(film, media, mode):
         sys.exit(f"no successful {mode} render of {film.path.name} to look at: "
                  f"run `explainer render {film.path}{' --draft' if mode == 'draft' else ''}`")
     run = json.loads(manifest.read_text())
+    if run.get("film") != str(film.path):  # a scratch directory shared between films
+        sys.exit(f"the last {mode} render in {media} was of {run.get('film')}, not of "
+                 f"{film.path}; render this film again")
     run_dir = media / f"run-{mode}"
     needed = [run_dir / f"{s}.json" for s in run["scenes"]]
     needed += part_paths(film, media, mode, run["scenes"])
@@ -407,12 +436,13 @@ def cmd_check(args):
     missing = [p for p in run["outputs"] if not pathlib.Path(p).exists()]
     if missing:
         sys.exit("nothing to check: the rendered file is gone\n  " + "\n  ".join(missing))
-    if run["voiced"]:
-        silent = [p for p in run["outputs"] if not has_audio(p)]
-        if silent:
-            sys.exit("the render was narrated, but this file has no audio stream\n  "
-                     + "\n  ".join(silent))
     reports = scene_reports(media / f"run-{mode}", run["scenes"])
+    lengths = [video_seconds(p) for p in part_paths(film, media, mode, run["scenes"])]
+    expected = [sum(lengths)] if run["joined"] else lengths
+    wrong = [f"{path} {problem}" for path, seconds in zip(run["outputs"], expected)
+             if (problem := movie_problem(path, seconds, run["voiced"]))]
+    if wrong:
+        sys.exit("nothing to check: not the movie the render made\n  " + "\n  ".join(wrong))
     report = build_report(film, run, reports, args.transcribe, media)
     (media / f"report-{mode}.json").write_text(json.dumps(report, indent=1))
     print_report(report, args.json)
@@ -431,14 +461,14 @@ def cmd_say(args):
     lines = [{"scene": owner, "line": line, "text": text, "phonemes": sound}
              for (owner, line, text), sound in zip(records, sounds)]
     if args.json:
-        print(json.dumps({"lines": lines, "problems": problems}, indent=1))
+        out(json.dumps({"lines": lines, "problems": problems}, indent=1))
     else:
         for problem in problems:
-            print(problem)
+            out(problem)
         for item in lines:
-            print(f"{item['scene'] or '(module)'}:{item['line']}  {item['text']}")
+            out(f"{item['scene'] or '(module)'}:{item['line']}  {item['text']}")
             if item["phonemes"]:
-                print(f"    {item['phonemes']}")
+                out(f"    {item['phonemes']}")
     return 1 if problems else 0
 
 
@@ -459,7 +489,7 @@ def cmd_sheet(args):
                                 f"scale={args.width}:-1,"
                                 f"tile={args.columns}x{rows}:padding=4:color=0x444444",
                                 "-frames:v", "1", str(sheet)], check=True)
-        print(sheet)
+        out(sheet)
     return 0
 
 
@@ -469,7 +499,7 @@ def cmd_doctor(_args):
     def line(good, what, fix=""):
         nonlocal ok
         ok = ok and good
-        print(f"  {'ok     ' if good else 'MISSING'} {what}{'' if good else '  -> ' + fix}")
+        out(f"  {'ok     ' if good else 'MISSING'} {what}{'' if good else '  -> ' + fix}")
 
     setup = f"run {KIT / 'setup.sh'}"
     try:
@@ -494,7 +524,7 @@ def cmd_doctor(_args):
     except ImportError:
         ready = False
     state = "ok     " if ready else "absent "
-    print(f"  {state} faster-whisper and its model (optional: --transcribe)"
+    out(f"  {state} faster-whisper and its model (optional: --transcribe)"
           f"{'' if ready else '  -> ' + setup + ' --with-whisper'}")
     return 0 if ok else 1
 
@@ -540,7 +570,8 @@ def main(argv=None):
     sub.add_parser("doctor").set_defaults(func=cmd_doctor)
 
     args = parser.parse_args(argv)
-    return args.func(args)
+    with contextlib.redirect_stdout(sys.stderr):
+        return args.func(args)
 
 
 if __name__ == "__main__":

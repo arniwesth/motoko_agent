@@ -29,6 +29,10 @@ expected = {
     "ArrowOffFrame": ["off_frame"], "ThickLineInCaption": ["caption_overlap"],
     "PlainTextOverlap": ["text_overlap"], "PlainSmallText": ["small_text"],
     "ImageOffFrame": ["off_frame"], "CaptionLinesCollide": ["text_overlap"],
+    "BackgroundStrokeInCaption": ["caption_overlap"],
+    "PlainTextLosesAGlyph": ["text_overlap"], "KitTextLosesAGlyph": ["text_overlap"],
+    "CodeLineLosesAGlyph": ["text_overlap"],
+    "CleanTransparentImages": [],
 }
 found = {name: [] for name in expected}
 for f in defects["lint"]["findings"]:
@@ -60,6 +64,8 @@ PATH="$env/bin:$PATH" PYTHONPATH="$here" PYTHONDONTWRITEBYTECODE=1 \
 film="$here/tests/film.py"
 m="$media/full"
 fail() { echo "FAIL $1"; exit 1; }
+# status COMMAND...: run it quietly and print its exit status, whatever that is.
+status() { set +e; "$@" >/dev/null 2>&1; echo $?; set -e; }
 
 # A first render makes its clips; --json must still be nothing but the report.
 "$explainer" render "$film" --draft --media "$m" --json >"$media/first.json" 2>"$media/first.err"
@@ -82,21 +88,55 @@ print(r['scene_files'][0])" >"$media/partial.path" ||
   "$(cat "$media/partial.path")" | grep -q aac ||
   fail "render --scenes wrote a scene file with no audio"
 
-# The same film with its audio a second late must fail the sync check.
-"$explainer" render "$film" --draft --media "$m" >/dev/null
+# The same film with its audio a second late must fail, and fail on sync: exit 2, sync not ok.
+# Any other way of failing (a crash, a refusal) would also be non-zero, so the code is checked.
+"$explainer" render "$film" --draft --media "$m" >/dev/null 2>&1
 "$env/bin/ffmpeg" -y -loglevel error -i "$m/picture-draft.mp4" -itsoffset 1 -i "$m/draft.mp4" \
   -map 0:v -map 1:a -c copy "$media/late.mp4"
-( cd "$media" && "$explainer" check "$film" --draft --media "$m" -o late.mp4 >/dev/null ) &&
-  fail "check passed a film whose narration is one second late"
+set +e
+( cd "$media" && "$explainer" check "$film" --draft --media "$m" -o late.mp4 --json \
+  >"$media/late.json" 2>/dev/null )
+code=$?
+set -e
+[ "$code" = 2 ] || fail "check of a film with late narration exited $code, not 2"
+python3 -c "
+import json
+r = json.load(open('$media/late.json'))
+assert r['voice']['sync']['ok'] is False and r['lint']['errors'] == 0, r['voice']
+" || fail "check of a film with late narration did not fail on sync"
 
-# A film that is gone, and a render in which a scene crashed, are not something to approve.
+# With the speech-to-text check on, stdout is still the report alone.
+if "$explainer" doctor 2>/dev/null | grep -q "ok.*faster-whisper"; then
+  "$explainer" check "$film" --draft --media "$m" --transcribe --json \
+    >"$media/heard.json" 2>/dev/null
+  python3 -c "
+import json
+r = json.load(open('$media/heard.json'))
+assert r['voice']['transcription']['of'] == 3, r['voice']
+" || fail "check --transcribe --json did not print one valid report"
+  heard="transcription as JSON, "
+else
+  heard=""
+fi
+
+# A caption that stayed up until its slow narration ended was not cut short.
+EXPLAINER_SPEED=0.5 "$explainer" render "$here/tests/slow.py" --draft --media "$media/slow" \
+  --json >"$media/slow.json" 2>/dev/null || fail "the slow-narration film did not render clean"
+python3 -c "
+import json
+r = json.load(open('$media/slow.json'))
+assert r['lint']['findings'] == [] and r['voice']['clips'] == 2, r['lint']
+" || fail "a caption kept up by its narration was reported as cut"
+
+# A film that is gone, and a render in which a scene crashed: refused, exit 1, nothing approved.
 mv "$m/draft.mp4" "$media/kept.mp4"
-"$explainer" check "$film" --draft --media "$m" >/dev/null 2>&1 &&
-  fail "check passed although the rendered film is gone"
+code=$(status "$explainer" check "$film" --draft --media "$m")
+[ "$code" = 1 ] || fail "check with the rendered film gone exited $code, not 1"
 mv "$media/kept.mp4" "$m/draft.mp4"
-EXPLAINER_TEST_CRASH=1 "$explainer" render "$film" --draft --media "$m" >/dev/null 2>&1 &&
-  fail "render succeeded although a scene crashed"
-"$explainer" check "$film" --draft --media "$m" >/dev/null 2>&1 &&
-  fail "check passed after a render in which a scene crashed"
+code=$(EXPLAINER_TEST_CRASH=1 status "$explainer" render "$film" --draft --media "$m")
+[ "$code" = 1 ] || fail "a render in which a scene crashed exited $code, not 1"
+code=$(status "$explainer" check "$film" --draft --media "$m")
+[ "$code" = 1 ] || fail "check after a render in which a scene crashed exited $code, not 1"
 
-echo "full: ok, fresh --json, narrated --scenes, late audio, missing film, crashed scene"
+echo "full: ok, fresh --json, narrated --scenes, late audio fails on sync," \
+  "${heard}slow narration, missing film, crashed scene"
