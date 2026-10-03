@@ -55,7 +55,12 @@ def mark_plain_text(mob):
 
 
 def _image_pixels(m):
-    """(centres of an image's visible pixels as N x 2 scene points, half a pixel's size)."""
+    """(centres of an image's visible pixels as N x 2 scene points, half a pixel's box).
+
+    The half box is (x, y): what one pixel covers along each axis once the image has been
+    stretched or turned. A pixel of a stretched image is far from square, and a turned one
+    reaches further along an axis than half its side.
+    """
     rows, cols = m.pixel_array.shape[:2]
     seen = m.pixel_array[:, :, 3] > 5 if m.pixel_array.shape[2] == 4 else np.ones((rows, cols),
                                                                                 bool)
@@ -63,7 +68,8 @@ def _image_pixels(m):
     top_left, top_right, bottom_left = m.points[0], m.points[1], m.points[2]
     across, down = (top_right - top_left) / cols, (bottom_left - top_left) / rows
     centres = top_left + np.outer(c + 0.5, across) + np.outer(r + 0.5, down)
-    return centres[:, :2], max(np.linalg.norm(across), np.linalg.norm(down)) / 2
+    half = (np.abs(across) + np.abs(down))[:2] / 2
+    return centres[:, :2], half
 
 
 def _image_box(m):
@@ -71,8 +77,8 @@ def _image_box(m):
     centres, half = _image_pixels(m)
     if len(centres) == 0:
         return None
-    return (centres[:, 0].min() - half, centres[:, 1].min() - half,
-            centres[:, 0].max() + half, centres[:, 1].max() + half)
+    return (centres[:, 0].min() - half[0], centres[:, 1].min() - half[1],
+            centres[:, 0].max() + half[0], centres[:, 1].max() + half[1])
 
 
 def _half_stroke(m):
@@ -177,9 +183,9 @@ def _reaches(piece, box):
     elif piece["filled"]:
         return True
     else:
-        half, pts = piece["half"], _outline(piece["mob"])
-    inside = ((pts[:, 0] > box[0] - half + TOUCH) & (pts[:, 0] < box[2] + half - TOUCH)
-              & (pts[:, 1] > box[1] - half + TOUCH) & (pts[:, 1] < box[3] + half - TOUCH))
+        pts, half = _outline(piece["mob"]), (piece["half"], piece["half"])
+    inside = ((pts[:, 0] > box[0] - half[0] + TOUCH) & (pts[:, 0] < box[2] + half[0] - TOUCH)
+              & (pts[:, 1] > box[1] - half[1] + TOUCH) & (pts[:, 1] < box[3] + half[1] - TOUCH))
     return bool(inside.any())
 
 

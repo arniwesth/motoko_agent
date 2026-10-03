@@ -143,8 +143,11 @@ def movie_problem(path, seconds, voiced):
             frames = sum(1 for _ in container.decode(stream))
     except Exception as error:  # noqa: BLE001  (whatever PyAV raises, the file is not a movie)
         return f"cannot be decoded as a movie ({type(error).__name__})"
-    if abs(frames / rate - seconds) > 0.2:
-        return f"decodes to {frames / rate:.1f} s where the render made {seconds:.1f} s"
+    # Counted in frames and exactly. A tolerance, in time or in frames, is room for a short
+    # film to pass with no picture at all, and joining scenes neither adds nor drops a frame.
+    made = round(seconds * rate)
+    if frames != made:
+        return f"decodes to {frames} frames where the render made {made}"
     return None
 
 

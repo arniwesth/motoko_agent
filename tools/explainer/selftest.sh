@@ -33,7 +33,8 @@ expected = {
     "PlainTextLosesAGlyph": ["text_overlap"], "KitTextLosesAGlyph": ["text_overlap"],
     "CodeLineLosesAGlyph": ["text_overlap"], "GlyphWithAChild": ["text_overlap"],
     "ScaledTextLosesAGlyph": ["small_text"], "ImageInCaption": ["caption_overlap"],
-    "CleanImageFrame": [],
+    "CleanImageFrame": [], "RotatedPixelOffFrame": ["off_frame"],
+    "CleanStretchedFrame": [], "CleanBanner": [],
     "CleanTransparentImages": [],
 }
 found = {name: [] for name in expected}

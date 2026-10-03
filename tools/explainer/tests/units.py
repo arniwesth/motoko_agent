@@ -200,6 +200,36 @@ class Loud(Explainer):
     assert f.texts(["Quiet"]) == ["Fine."] and f.texts(["Loud"]) == ["From inside."]
 
 
+def test_method_lookup_follows_pythons_order():
+    f = film('''
+class _Root:
+    def opening(self):
+        self.say("The root, which Python would not reach.")
+class _Left(_Root):
+    pass
+class _Right(_Root):
+    def opening(self):
+        self.say("The right-hand base.")
+class Child(_Left, _Right, Explainer):
+    def construct(self):
+        self.opening()
+''')
+    assert f.texts() == ["The right-hand base."], f.texts()
+
+
+def test_a_nested_function_sees_its_neighbours():
+    f = film('''
+class Child(Explainer):
+    def construct(self):
+        def inner():
+            self.say("From the inner one.")
+        def outer():
+            inner()
+        outer()
+''')
+    assert f.texts() == ["From the inner one."] and f.problems_for() == [], f.texts()
+
+
 def test_a_clip_with_missing_samples_is_not_trusted():
     path = TMP / "short.wav"
     with wave.open(str(path), "wb") as w:
@@ -230,16 +260,16 @@ def test_synth_remakes_a_damaged_clip_and_leaves_a_good_one():
     assert voice.synth(["A line."], cache, log=lambda _: None, engine=_Tone()) == 0
 
 
-def _rendered(name, joined_output, voiced=False, film_path=None):
+def _rendered(name, joined_output, voiced=False, film_path=None, part=None):
     """A scratch directory as a finished one-scene draft render would leave it."""
     f = film('class A(Explainer):\n    def construct(self):\n        pass\n', f"{name}.py")
     media = TMP / f"{name}-media"
     (media / "run-draft").mkdir(parents=True)
     (media / "run-draft" / "A.json").write_text(json.dumps(
         {"scene": "A", "seconds": 2.0, "captions": 0, "timeline": [], "lint": []}))
-    part = cli.part_paths(f, media, "draft", ["A"])[0]
-    part.parent.mkdir(parents=True)
-    part.write_bytes(_movie(f"{name}-part.mp4", 0).read_bytes())
+    made = cli.part_paths(f, media, "draft", ["A"])[0]
+    made.parent.mkdir(parents=True)
+    made.write_bytes((part or _movie(f"{name}-part.mp4", 0)).read_bytes())
     (media / "render-draft.json").write_text(json.dumps(
         {"film": film_path or str(f.path), "mode": "draft", "scenes": ["A"], "voiced": voiced,
          "joined": True, "outputs": [str(joined_output)]}))
@@ -278,7 +308,21 @@ def test_check_refuses_a_movie_of_the_wrong_length():
     subprocess.run(cli.QUIET + ["-f", "lavfi", "-i", "color=c=black:s=160x90:r=15:d=3",
                                 "-c:v", "libx264", str(longer)], check=True)
     result = _exits(cli.cmd_check, _rendered("longer", longer))
-    assert isinstance(result, str) and "decodes to 3.0 s" in result, result
+    assert isinstance(result, str) and "decodes to 45 frames" in result, result
+
+
+def test_check_refuses_a_short_movie_with_no_picture():
+    short = TMP / "short.mp4"  # one frame: inside any tolerance one could give, in time or frames
+    subprocess.run(cli.QUIET + ["-f", "lavfi", "-i", "color=c=black:s=160x90:r=15",
+                                "-frames:v", "1", "-c:v", "libx264", "-movflags", "+faststart",
+                                str(short)], check=True)
+    assert cli.video_seconds(short) < 0.1
+    data = short.read_bytes()
+    empty = TMP / "empty.mp4"
+    empty.write_bytes(data[:data.index(b"mdat") + 4])  # every header, and none of the picture
+    result = _exits(cli.cmd_check, _rendered("empty", empty, part=short))
+    assert isinstance(result, str) and "not the movie" in result, result
+    assert _exits(cli.cmd_check, _rendered("short", short, part=short)) == 0
 
 
 def test_whisper_is_ready_only_with_every_file():

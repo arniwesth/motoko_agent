@@ -53,6 +53,9 @@ MUTATIONS = [
      '            if a["info"]["kind"] == b["info"]["kind"] == "caption":\n'
      '                continue\n'
      '            dx, dy = _shared(a["box"], b["box"])', False),
+    ("a pixel is taken for a circle", "explainer_kit/lint.py",
+     "    half = (np.abs(across) + np.abs(down))[:2] / 2",
+     "    half = np.full(2, max(np.linalg.norm(across), np.linalg.norm(down)) / 2)", False),
     ("glyphs carry no text record", "explainer_kit/lint.py",
      "        glyph.explainer_part = record", "        pass", False),
     ("plain text is not marked", "explainer_kit/kit.py",
@@ -80,6 +83,11 @@ MUTATIONS = [
      "            self.bases[node.name] = []", False),
     ("an overridden method is followed", "explainer_kit/film.py",
      "        for c in lineage:", "        for c in reversed(lineage):", False),
+    ("method lookup is depth-first", "explainer_kit/film.py",
+     "            head = next((r[0] for r in rows if not any(r[0] in other[1:] for other in "
+     "rows)), None)", "            head = None", False),
+    ("a nested function cannot see its neighbours", "explainer_kit/film.py",
+     "            visible = {**enclosing, **nested}", "            visible = dict(nested)", False),
     ("nested functions are always entered", "explainer_kit/film.py",
      "        if isinstance(node, DEFS):\n            nested[node.name] = node",
      "        if False:\n            nested[node.name] = node", False),
@@ -108,7 +116,11 @@ MUTATIONS = [
      "            frames = sum(1 for _ in container.decode(stream))",
      "            frames = stream.frames", False),
     ("any length of movie will do", "explainer_kit/cli.py",
-     "    if abs(frames / rate - seconds) > 0.2:", "    if False:", False),
+     "    if frames != made:", "    if False:", False),
+    ("a movie's length is judged in time", "explainer_kit/cli.py",
+     "    if frames != made:", "    if abs(frames - made) / rate > 0.2:", False),
+    ("a movie may be a frame short", "explainer_kit/cli.py",
+     "    if frames != made:", "    if abs(frames - made) > 1:", False),
     ("a joined film is decoded per scene", "explainer_kit/cli.py",
      "            offsets = [o for path, times in starts.items() for o in sync(path, times)]",
      "            offsets = [o for path, times in starts.items() for t in times\n"

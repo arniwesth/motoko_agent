@@ -8,10 +8,12 @@ A scene's lines are those it can reach. The walk starts at the methods Manim cal
 setup, tear_down) and follows, in the code that can run:
 
 - `self.x` and `anything.x`, to the method x the scene would actually get: the first definition
-  along its bases in this file, mixins included, so an overridden method is not followed;
+  in Python's own lookup order over its bases in this file, mixins included, so an overridden
+  method is not followed;
 - `super().x`, to the next definition after the class the call is written in;
 - `Base.x`, to that class's own definition;
-- a name, to the module-level function or the nested function of that name.
+- a name, to the nested function of that name in this or an enclosing function, or else to the
+  module-level function.
 
 A nested function nobody names is not entered, and a helper nothing calls belongs to no scene.
 What is reached through another file is not seen; narration has to live in the film file.
@@ -93,11 +95,23 @@ class Film:
         return default
 
     def _lineage(self, cls):
-        """A class and its bases in this file, in the order Python would look a method up."""
-        seen = [cls]
-        for base in self.bases.get(cls, []):
-            seen += [c for c in self._lineage(base) if c not in seen]
-        return seen
+        """A class and its bases in this file, in the order Python looks a method up (C3).
+
+        Depth-first is not that order: for Child(Left, Right) with both deriving from Root,
+        Python tries Right before Root, and a method Right overrides must be the one followed.
+        """
+        bases = self.bases.get(cls, [])
+        rows = [self._lineage(base) for base in bases] + [list(bases)]
+        order = [cls]
+        while any(rows):
+            rows = [row for row in rows if row]
+            # the next class is the first row's head that no other row still has waiting behind
+            head = next((r[0] for r in rows if not any(r[0] in other[1:] for other in rows)), None)
+            if head is None:  # no consistent order; Python would refuse to build the class
+                head = rows[0][0]
+            order.append(head)
+            rows = [[c for c in row if c != head] for row in rows]
+        return order
 
     def _find(self, cls, name, after=None):
         """(class, definition) of the method a class gets for a name; past `after` for super()."""
@@ -112,13 +126,14 @@ class Film:
     def _reached(self, scene):
         """(class or None, definition) for everything the scene can run in this file."""
         seen = {}
-        todo = [found for name in ENTRY if (found := self._find(scene, name))]
+        todo = [found + ({},) for name in ENTRY if (found := self._find(scene, name))]
         while todo:
-            owner, definition = todo.pop()
+            owner, definition, enclosing = todo.pop()
             if id(definition) in seen:
                 continue
             seen[id(definition)] = (owner, definition)
             nodes, nested = _scope(definition)
+            visible = {**enclosing, **nested}  # the functions this code can call by name
             for node in nodes:
                 found = None
                 if isinstance(node, ast.Attribute):
@@ -130,11 +145,12 @@ class Film:
                         found = self._find(target.id, node.attr)  # Base.method(self)
                     else:
                         found = self._find(scene, node.attr)
+                    found = found and found + ({},)
                 elif isinstance(node, ast.Name):
-                    if node.id in nested:
-                        found = (owner, nested[node.id])
+                    if node.id in visible:  # a nested function also sees its neighbours
+                        found = (owner, visible[node.id], visible)
                     elif node.id in self.functions:
-                        found = (None, self.functions[node.id])
+                        found = (None, self.functions[node.id], {})
                 if found:
                     todo.append(found)
         return list(seen.values())

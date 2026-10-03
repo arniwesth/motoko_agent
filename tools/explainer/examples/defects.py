@@ -243,6 +243,42 @@ class CleanImageFrame(Explainer):
         self.end()
 
 
+class RotatedPixelOffFrame(Explainer):
+    """Turned through 45 degrees, a pixel reaches further along an axis than half its side."""
+
+    def construct(self):
+        self.say("One corner of a turned square is outside the picture.")
+        square = ImageMobject(np.full((1, 1, 4), 255, dtype=np.uint8))
+        square.stretch_to_fit_width(1).stretch_to_fit_height(1)
+        self.add(square.rotate(PI / 4).move_to([6.6, 0, 0]))
+        self.rest()
+        self.end()
+
+
+class CleanStretchedFrame(Explainer):
+    """Its pixels are a unit wide and a thousandth tall: a border, with the caption inside."""
+
+    def construct(self):
+        self.say("A stretched picture frames these words.")
+        pixels = np.zeros((1000, 10, 4), dtype=np.uint8)
+        pixels[0, :] = pixels[-1, :] = pixels[:, 0] = pixels[:, -1] = 255
+        frame = ImageMobject(pixels).stretch_to_fit_width(12).stretch_to_fit_height(1)
+        self.add(frame.move_to([0, CAP_Y, 0]))
+        self.rest()
+        self.end()
+
+
+class CleanBanner(Explainer):
+    """A stretched picture that is inside the frame, near its edge."""
+
+    def construct(self):
+        self.say("A banner runs along the top.")
+        banner = ImageMobject(np.full((100, 10, 4), 255, dtype=np.uint8))
+        self.add(banner.stretch_to_fit_width(10).stretch_to_fit_height(0.2).move_to([0, 3.75, 0]))
+        self.rest()
+        self.end()
+
+
 class CleanTransparentImages(Explainer):
     """Pixels that are fully transparent are not ink: off the frame or over the caption."""
 

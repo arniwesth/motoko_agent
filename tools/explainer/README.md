@@ -72,7 +72,7 @@ them, so keep a scene's content above y = -2.6 and the header's row (y = 3.5) cl
 | `lint FILM` | Runs every scene's timeline without drawing it; reports durations and geometry findings. | 27 s |
 | `render FILM` | Makes missing narration clips, renders scenes in parallel, joins them, mixes and levels the voice, then checks. Writes the film beside its file. | 2.5 min |
 | `render FILM --draft` | The same at 854×480, 15 fps, kept in scratch. | under a minute |
-| `check FILM` | Re-runs the checks on the last successful render. Refuses (exit 1) if a scene failed, the film is gone, it does not decode to the length the render made, or the scratch directory holds another film's render. | seconds |
+| `check FILM` | Re-runs the checks on the last successful render. Refuses (exit 1) if a scene failed, the film is gone, it does not decode to exactly the frames the render made, or the scratch directory holds another film's render. | seconds |
 | `say FILM` | Prints each spoken line and how it will be pronounced. | seconds |
 | `sheet FILM` | Contact sheets of the last render, for an author who can look. | seconds |
 | `doctor` | Says what is installed and what is missing. | |
@@ -134,19 +134,9 @@ check shows the words are intelligible and correct, not that the delivery sounds
 
 ## Known limits
 
-Found in the fourth round of review and not fixed. The reviewer would hold a merge for the first
-four and accept the rest as recorded limits.
+Found in the fourth round of review and not fixed. The reviewer was content to see these
+recorded and not hold a merge for them.
 
-- **A movie with no decodable frames can pass `check`** if the film it expects is shorter than
-  0.2 s, because the length tolerance is applied before asking whether anything decoded.
-- **Images that are stretched unevenly or rotated are measured wrongly.** Each visible pixel is
-  given one radius, so a stretched border image can be flagged as covering the caption it
-  frames, and a rotated pixel past the frame can be missed.
-- **Method lookup is depth-first, not Python's order.** With diamond inheritance
-  (`Child(_Left, _Right)`, both deriving from `_Root`) the wrong method is followed and its
-  narration is not made, so the render stops on a missing clip.
-- **A nested function that calls another nested function loses sight of it**, so the second
-  one's narration is not collected.
 - **Reachability goes by names.** A local variable named like a module-level helper counts as a
   call to it, and a lambda's body is always entered. Either can report a line as unspeakable in
   a scene that never says it.
@@ -161,13 +151,13 @@ four and accept the rest as recorded limits.
 
 - **Narration first.** `film.py` reads the film's source for the `say(...)` and `speak(...)`
   literals each scene can reach: from its `construct()`, through the methods it would actually
-  get (its own, a base class's or a mixin's in the same file; `super()` to the next one up) and
-  the module-level or nested functions it names. An overridden method, a nested function nobody
-  names, and a helper nothing calls belong to no scene. Narration reached through another file is
-  not seen, so it has to live in the film file. `voice.py` synthesizes one Kokoro clip per line,
-  cached by text, voice and speed, written whole or not at all, and re-made if the cached file is
-  damaged. A scene times itself by the clip's length, which is why a spoken line cannot be built
-  at run time.
+  get (its own, a base class's or a mixin's in the same file, in Python's lookup order; `super()`
+  to the next one up) and the module-level or nested functions it names. An overridden method, a
+  nested function nobody names, and a helper nothing calls belong to no scene. Narration reached
+  through another file is not seen, so it has to live in the film file. `voice.py` synthesizes
+  one Kokoro clip per line, cached by text, voice and speed, written whole or not at all, and
+  re-made if the cached file is damaged. A scene times itself by the clip's length, which is why
+  a spoken line cannot be built at run time.
 - **One Manim process per scene**, in parallel, each in a directory of its own so that their
   text caches cannot collide, and each with the kit imported before the film is. Each writes a
   small report: its length, when each clip starts, and what `lint` found.
