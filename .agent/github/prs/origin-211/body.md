@@ -20,7 +20,7 @@ Motoko session, gets `explainer lint FILM` in place of looking.
 - feat(tools): explainer, narrated Manim films with machine checks
 - fix(tools): explainer — address the review of PR #211
 - fix(tools): explainer — address the reviewer's re-check of PR #211
-- three chore(github) commits recording this PR
+- chore(github) commits recording this PR
 
 23 files under `tools/explainer/`:
 
