@@ -1,0 +1,112 @@
+exit=0
+source revision    501cd8794be089454f8b4af90730f1cb70952ce9
+compiler           AILANG v0.47.2
+producer           ailang.iface/v1 (.ailang/cache/compile/modules/std__*/iface.json)
+schemas seen       ailang.iface/v1
+
+CACHE PRECONDITION -- every extension root compiled, so every std module its
+closure imports has a cached interface.  Established by this tool via
+`AILANG_RELAX_MODULES=1 ailang check <package>/register.ail`, not assumed.
+  RESOLUTION       18/18 std modules (100%) imported by the fifteen closures
+
+extensions resolved through ailang.toml: 19
+  a2a                      packages/motoko-ext-a2a                      closure  5
+  agentcli                 packages/motoko-ext-agentcli                 closure  4
+  ailang_docs              packages/motoko-ext-ailang-docs              closure 10
+  ailang_tools             packages/motoko-ext-ailang-tools             closure  3
+  compaction_ai            packages/motoko-ext-compaction-ai            closure  4
+  compaction_structural    packages/motoko-ext-compaction-structural    closure  3
+  compose                  packages/motoko-ext-compose                  closure 18
+  context_mode             packages/motoko-ext-context-mode             closure  7
+  decision_framework       packages/motoko-ext-decision-framework       closure  2
+  empty_stop_guard         packages/motoko-ext-empty-stop-guard         closure  3
+  exa_search               packages/motoko-ext-exa-search               closure 10
+  herdr                    packages/motoko-ext-herdr                    closure  6
+  mcp                      packages/motoko-ext-mcp                      closure  5
+  microrag                 packages/motoko-ext-microrag                 closure  2
+  omnigraph                packages/motoko-ext-omnigraph                closure  8
+  progress_contract_guard  packages/motoko-ext-progress-contract-guard  closure  3
+  repetition_guard         packages/motoko-ext-repetition-guard         closure  3
+  scratchpad               packages/motoko_scratchpad                   closure  8
+  test_dummy               packages/motoko-ext-test-dummy               closure  2
+
+PORT-MEDIATED (4 of 19): compaction_structural, decision_framework, empty_stop_guard, progress_contract_guard
+    every effect these can perform arrives through an ExtPorts field call:
+    their closures import no effect-bearing std symbol and call no
+    effect-bearing builtin.
+AMBIENT (15): a2a, agentcli, ailang_docs, ailang_tools, compaction_ai, compose, context_mode, exa_search, herdr, mcp, microrag, omnigraph, repetition_guard, scratchpad, test_dummy
+UNRESOLVED (0): -
+
+  a2a -- 6 ambient source(s), 0 ExtPorts field call(s) in closure, 15 port-view projection(s)
+      packages/motoko-ext-a2a/a2a.ail:4  std/net.httpGet  {Net}
+      packages/motoko-ext-a2a/a2a.ail:4  std/net.httpPost  {Net}
+      packages/motoko-ext-a2a/a2a.ail:6  std/rand.uuid4  {Rand}
+      packages/motoko-ext-a2a/config.ail:3  std/fs.fileExists  {FS}
+      packages/motoko-ext-a2a/config.ail:3  std/fs.readFile  {FS}
+      packages/motoko-ext-a2a/register.ail:3  std/env.getEnvOr  {Env}
+  agentcli -- 2 ambient source(s), 3 ExtPorts field call(s) in closure, 15 port-view projection(s)
+      packages/motoko-ext-agentcli/agentcli.ail:40  std/process.exec  {Process}
+      packages/motoko-ext-agentcli/register.ail:3  std/env.getEnvOr  {Env}
+  ailang_docs -- 4 ambient source(s), 0 ExtPorts field call(s) in closure, 15 port-view projection(s)
+      packages/motoko-ext-ailang-docs/ailang_docs.ail:4  std/fs.fileExists  {FS}
+      packages/motoko-ext-ailang-docs/register.ail:3  std/env.getEnvOr  {Env}
+      packages/motoko-ext-mcp/assets.ail:13  std/package.assetPath  {FS}
+      packages/motoko-ext-mcp/exec.ail:6  std/process.exec  {Process}
+  ailang_tools -- 6 ambient source(s), 0 ExtPorts field call(s) in closure, 15 port-view projection(s)
+      packages/motoko-ext-ailang-tools/register.ail:29  std/process.exec  {Process}
+      packages/motoko-ext-ailang-tools/register.ail:30  std/fs.readFileResult  {FS}
+      packages/motoko-ext-ailang-tools/register.ail:30  std/fs.writeFileResult  {FS}
+      packages/motoko-ext-ailang-tools/register.ail:30  std/fs.mkdirAllResult  {FS}
+      packages/motoko-ext-ailang-tools/register.ail:30  std/fs.isDir  {FS}
+      packages/motoko-ext-ailang-tools/register.ail:33  std/env.getEnvOr  {Env}
+  compaction_ai -- 2 ambient source(s), 1 ExtPorts field call(s) in closure, 15 port-view projection(s)
+      packages/motoko-ext-compaction-ai/register.ail:6  std/env.getEnvOr  {Env}
+      packages/motoko-ext-compaction-ai/register.ail:8  std/fs.readFileResult  {FS}
+  compose -- 8 ambient source(s), 36 ExtPorts field call(s) in closure, 21 port-view projection(s)
+      packages/motoko-ext-ai-compat/ai_compat.ail:44  std/ai.stepWithStream  {AI}
+      packages/motoko-ext-ai-compat/ai_compat.ail:45  std/io.println  {IO}
+      packages/motoko-ext-compose/author_loop.ail:4  std/io.println  {IO}
+      packages/motoko-ext-compose/claimcheck.ail:4  std/io.println  {IO}
+      packages/motoko-ext-compose/compose.ail:31  std/io.println  {IO}
+      packages/motoko-ext-compose/config.ail:3  std/fs.fileExists  {FS}
+      ... 2 more
+  context_mode -- 6 ambient source(s), 0 ExtPorts field call(s) in closure, 15 port-view projection(s)
+      packages/motoko-ext-context-mode/context_mode.ail:6  std/sem.store_frame  {SharedMem}
+      packages/motoko-ext-context-mode/context_mode.ail:6  std/sem.load_frame  {SharedMem}
+      packages/motoko-ext-context-mode/exec.ail:6  std/process.exec  {Process}
+      packages/motoko-ext-context-mode/prompts.ail:3  std/fs.fileExists  {FS}
+      packages/motoko-ext-context-mode/prompts.ail:3  std/fs.readFile  {FS}
+      packages/motoko-ext-context-mode/register.ail:3  std/env.getEnvOr  {Env}
+  exa_search -- 5 ambient source(s), 0 ExtPorts field call(s) in closure, 15 port-view projection(s)
+      packages/motoko-ext-exa-search/prompts.ail:3  std/fs.fileExists  {FS}
+      packages/motoko-ext-exa-search/prompts.ail:3  std/fs.readFile  {FS}
+      packages/motoko-ext-exa-search/register.ail:3  std/env.getEnvOr  {Env}
+      packages/motoko-ext-mcp/assets.ail:13  std/package.assetPath  {FS}
+      packages/motoko-ext-mcp/exec.ail:6  std/process.exec  {Process}
+  herdr -- 4 ambient source(s), 50 ExtPorts field call(s) in closure, 15 port-view projection(s)
+      packages/motoko-ext-herdr/register.ail:26  std/env.getEnvOr  {Env}
+      packages/motoko-ext-herdr/register.ail:31  std/fs.listDir  {FS}
+      packages/motoko-ext-herdr/register.ail:31  std/fs.isDir  {FS}
+      packages/motoko-ext-herdr/register.ail:31  std/fs.readFileResult  {FS}
+  mcp -- 3 ambient source(s), 0 ExtPorts field call(s) in closure, 15 port-view projection(s)
+      packages/motoko-ext-mcp/mcp.ail:3  std/fs.fileExists  {FS}
+      packages/motoko-ext-mcp/mcp.ail:3  std/fs.readFile  {FS}
+      packages/motoko-ext-mcp/register.ail:3  std/env.getEnvOr  {Env}
+  microrag -- 2 ambient source(s), 0 ExtPorts field call(s) in closure, 15 port-view projection(s)
+      packages/motoko-ext-microrag/register.ail:31  std/process.exec  {Process}
+      packages/motoko-ext-microrag/register.ail:32  std/fs.writeFileResult  {FS}
+  omnigraph -- 5 ambient source(s), 0 ExtPorts field call(s) in closure, 15 port-view projection(s)
+      packages/motoko-ext-omnigraph/exec.ail:5  std/process.exec  {Process}
+      packages/motoko-ext-omnigraph/prompts.ail:3  std/fs.fileExists  {FS}
+      packages/motoko-ext-omnigraph/prompts.ail:3  std/fs.readFile  {FS}
+      packages/motoko-ext-omnigraph/register.ail:3  std/env.getEnvOr  {Env}
+      packages/motoko-ext-omnigraph/register.ail:4  std/extension.requireWorkdirFile  {FS}
+  repetition_guard -- 1 ambient source(s), 0 ExtPorts field call(s) in closure, 15 port-view projection(s)
+      packages/motoko-ext-repetition-guard/register.ail:16  std/env.getEnvOr  {Env}
+  scratchpad -- 2 ambient source(s), 0 ExtPorts field call(s) in closure, 15 port-view projection(s)
+      packages/motoko_scratchpad/register.ail:3  std/env.getEnvOr  {Env}
+      src/core/env_client.ail:21  std/net.httpPost  {Net}
+  test_dummy -- 1 ambient source(s), 0 ExtPorts field call(s) in closure, 15 port-view projection(s)
+      packages/motoko-ext-test-dummy/register.ail:16  std/env.getEnvOr  {Env}
+
+RESULT: PASS -- 19/19 extensions resolved, 18/18 std modules resolved, 0 unresolved symbols.
