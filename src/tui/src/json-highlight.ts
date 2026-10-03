@@ -1,4 +1,4 @@
-import chalk from "chalk";
+import { theme } from "./theme.js";
 
 function splitLines(text: string): string[] {
   return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
@@ -33,14 +33,14 @@ function highlightJsonLine(line: string): string {
       let k = j;
       while (k < line.length && /\s/.test(line[k]!)) k += 1;
       const isKey = k < line.length && line[k] === ":";
-      out += isKey ? chalk.cyanBright(line.slice(i, j)) : chalk.green(line.slice(i, j));
+      out += isKey ? theme.cyanBright(line.slice(i, j)) : theme.green(line.slice(i, j));
       i = j;
       continue;
     }
     if (/[0-9-]/.test(ch)) {
       let j = i + 1;
       while (j < line.length && /[0-9eE+.-]/.test(line[j]!)) j += 1;
-      out += chalk.magentaBright(line.slice(i, j));
+      out += theme.magentaBright(line.slice(i, j));
       i = j;
       continue;
     }
@@ -50,12 +50,12 @@ function highlightJsonLine(line: string): string {
         : line.startsWith("false", i)
           ? "false"
           : "null";
-      out += chalk.yellowBright(token);
+      out += theme.yellowBright(token);
       i += token.length;
       continue;
     }
     if ("{}[]:,".includes(ch)) {
-      out += chalk.gray(ch);
+      out += theme.gray(ch);
       i += 1;
       continue;
     }

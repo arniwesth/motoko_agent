@@ -22,6 +22,7 @@ import * as path from "path";
 import { systemPromptForWorkspace, materializeSystemPromptArg } from "./system-prompt.js";
 import { execSync } from "child_process";
 import { renderBanner } from "./banner-runtime.js";
+import { applyTerminalTheme, setTheme, THEME_NAMES } from "./theme.js";
 import { startEnvServer } from "./env-server.js";
 import { RuntimeProcess, abortSuspendedChild, installSuspendedWake, interruptRuntime, journalExitReason, resolveDelegatedExec, type SuspendedChild } from "./runtime-process.js";
 import { AgentUI, parseScratchpadCellsJson } from "./ui.js";
@@ -236,6 +237,8 @@ type ProfileAgentConfig = {
   scratchpadWsLoopback?: boolean;
   /** `tools.process_timeout`, a Go duration such as "300s": the runtime's --process-timeout. */
   processTimeout?: string;
+  /** Top-level `theme`: the TUI colour scheme (see theme.ts); unset keeps PI's colours. */
+  theme?: string;
   clickstack?: {
     enabled?: boolean;
     endpoint?: string;
@@ -350,6 +353,7 @@ function applyToolProfileConfig(
   // The runtime's --process-timeout, read by RuntimeProcess from the env so a
   // shell-set MOTOKO_PROCESS_TIMEOUT beats the profile like every key above.
   setFromProfile(protectedKeys, "MOTOKO_PROCESS_TIMEOUT", profile.processTimeout);
+  setFromProfile(protectedKeys, "MOTOKO_THEME", profile.theme);
 }
 
 function resolveProfileAgentConfig(workdir: string, profile: string): ProfileAgentConfig {
@@ -357,6 +361,7 @@ function resolveProfileAgentConfig(workdir: string, profile: string): ProfileAge
   if (configPath === null) return {};
   try {
     const parsed = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
+      theme?: unknown;
       agent?: {
         model?: unknown;
         openai_base_url?: unknown;
@@ -404,6 +409,7 @@ function resolveProfileAgentConfig(workdir: string, profile: string): ProfileAge
       processTimeout: typeof parsed.tools?.process_timeout === "string" && parsed.tools.process_timeout.trim() !== ""
         ? parsed.tools.process_timeout.trim()
         : undefined,
+      theme: nonEmptyString(parsed.theme)?.trim(),
       clickstack: {
         enabled: typeof parsed.clickstack?.enabled === "boolean"
           ? parsed.clickstack.enabled
@@ -842,7 +848,13 @@ async function main(): Promise<void> {
   } catch {}
 
   // Future improvement: regenerate/reflow banner on terminal resize events.
+  if (!setTheme(process.env.MOTOKO_THEME)) {
+    process.stderr.write(
+      `Motoko: unknown theme "${process.env.MOTOKO_THEME}" — using the default PI colours (known: ${THEME_NAMES.join(", ")}).\n`,
+    );
+  }
   if (!jsonlOutput && !headlessOutput) {
+    applyTerminalTheme();
     const bannerLines = renderBanner({ columns: process.stdout.columns });
     process.stdout.write(
       bannerLines.join("\n") +
