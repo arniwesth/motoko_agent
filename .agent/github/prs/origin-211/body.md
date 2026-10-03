@@ -23,6 +23,7 @@ Motoko session, gets `explainer lint FILM` in place of looking.
 - fix(tools): explainer — address the third round of review on PR #211
 - fix(tools): explainer — fix the four findings the reviewer would hold the merge for
 - docs(tools): explainer — record the fourth review round's open findings as known limits
+- fix(tools): explainer — a rested caption is not a cut one at draft frame rate
 - chore(github) commits recording this PR
 
 24 files under `tools/explainer/`:
@@ -84,6 +85,21 @@ very short scene, a glyph with an offset child hiding a small-text warning, and 
 
 Each round found fewer and less severe problems (18, 14, 11, 8), but none came back clean, and
 the review was stopped here.
+
+**Used by a second agent.** Codex (`gpt-6-astra`), which had not seen the tool, was asked to make
+an explainer of Motoko's DST with it and to report on the tool. It produced a 4 min 8 s narrated
+film in 17 minutes with 3 lint runs, 2 drafts and 1 final render, without editing the tool (the
+film is not in this PR). What that run found is fixed in the last commit:
+
+- its first draft reported three `caption_cut` warnings although every caption had its `rest()`.
+  A wait is rounded down to whole frames, and at draft's 15 fps that can be 67 ms, more than the
+  50 ms the check allowed. It now allows one frame
+- the README's quick start mixed paths from the repository root and from the tool's folder, and
+  the helpers' optional arguments were not documented
+
+It also reported that lint flagged nothing in its film, and that cramped padding, arrows that
+looked detached and garbled text during a morph were found only by looking at contact sheets.
+That is the limit the README already states: lint does not judge appearance or see mid-animation.
 
 First round:
 
@@ -178,10 +194,11 @@ Checked by `tools/explainer/selftest.sh`. The first real test of the install pat
   `units: ok, 28 of 28 passed`,
   `setup: ok, a failed download leaves nothing, checksums and model completeness hold`,
   `full: ok, fresh --json, a directory per scene, sheet, narrated and measured --scenes, late
-  audio fails on sync, transcription as JSON, a shadowing file, slow narration, missing film,
-  crashed scene`
-- [x] `tests/mutate.py`: 44 fixes reverted one at a time in a copy of the tool; the self-test
-  goes red for all 44. Not covered, because nothing can observe them: that a clip is written
+  audio fails on sync, transcription as JSON, a shadowing file, a rested caption at draft rate,
+  slow narration, missing film, crashed scene`
+- [x] `tests/mutate.py`: 45 fixes reverted one at a time in a copy of the tool. The full run,
+  before the last commit, was red for all 44 it then held; the one that commit added, and the
+  one it changed, are red after it. Not covered, because nothing can observe them: that a clip is written
   under a temporary name, and that `curl` retries. Not listed, per the reviewer: explicit
   `Base.method(self)` resolution and the checksum check on a fresh download
 - [x] The reviewer's probe films from the first three rounds, and its fourth-round probes for
