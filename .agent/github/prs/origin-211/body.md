@@ -20,9 +20,10 @@ Motoko session, gets `explainer lint FILM` in place of looking.
 - feat(tools): explainer, narrated Manim films with machine checks
 - fix(tools): explainer — address the review of PR #211
 - fix(tools): explainer — address the reviewer's re-check of PR #211
+- fix(tools): explainer — address the third round of review on PR #211
 - chore(github) commits recording this PR
 
-23 files under `tools/explainer/`:
+24 files under `tools/explainer/`:
 
 - **`explainer_kit/`**: the scene kit (`say()` puts a caption up and speaks it, `rest()` waits
   for both), Kokoro narration cached per caption, geometry lints from Manim's own geometry, and
@@ -34,7 +35,9 @@ Motoko session, gets `explainer lint FILM` in place of looking.
   `~/.local/share/manim-env-root` (about 1.5 GB). Downloads are verified before they take their
   place.
 - **`selftest.sh`**, **`examples/`**, **`tests/`**: seeded defects for every geometry check, unit
-  checks for the rest, and with `--full` a small narrated render.
+  checks for the rest, `setup.sh`'s checks against a local web server, and with `--full` small
+  narrated renders. `tests/mutate.py` reverts each fix in turn and requires the self-test to go
+  red.
 - **Seven Computer Modern fonts** (3.6 MB of binary files) with their SIL Open Font License.
   There is no LaTeX; all text is Pango `Text`.
 
@@ -54,12 +57,11 @@ For the other ten the original reproduction passed but a nearby input still trig
 defect, and it listed 14 open items, including two regression tests that passed with their fix
 reverted. The third commit addresses all 14; the second table says how.
 
-**Third round.** The reviewer re-checked that commit: 10 of the 14 are fixed (1, 3, 5, 6, 8, 10,
-11, 12, 13, 14) and 4 are not (2, 4, 7, 9), which leaves 13 of the original 18 fully fixed. It
-lists 11 remaining findings, one severe: `check` reads a movie's headers without decoding it.
-One is a regression from the third commit: `explainer sheet` crashes. Two more fixes can be
-reverted with the self-test still green, so "13 of 13 reverted fixes turn it red" below covers
-the thirteen that were tried, not every fix. A further fix pass is in progress.
+**Third round.** The reviewer re-checked that commit: 10 of the 14 fixed (1, 3, 5, 6, 8, 10, 11,
+12, 13, 14) and 4 not (2, 4, 7, 9), leaving 13 of the original 18 fully fixed. It listed 11
+remaining findings, one severe, one of them a regression from the third commit (`explainer sheet`
+crashed), and two fixes that could be reverted with the self-test still green. The fourth commit
+addresses all 11; the third table says how. That commit has not been re-checked by the reviewer.
 
 First round:
 
@@ -108,6 +110,25 @@ the original's folder, the copy imported the original's code, because `python -m
 current directory first on the import path. The launcher and the per-scene processes now run
 with `-P`.
 
+Third round:
+
+| # | Remaining after the second fixes | Fix |
+|---|---|---|
+| 1 | `check` read a movie's headers without decoding it: a file with its video data cut off passed | Every frame is decoded and the decoded length compared with what the render made |
+| 2 | A surviving glyph with a child was not regrouped into its text | A glyph is regrouped whether or not it has children |
+| 3 | Narration in a same-file mixin was not collected | Every class in the file is catalogued, not only those derived from `Explainer` |
+| 4 | Reachability included code that cannot run: overridden methods, uncalled nested functions | The method a scene would actually get is followed; `super()` goes one up; a nested function is entered only if named |
+| 5 | Parallel scene processes shared Manim's text cache and deleted each other's files | Each scene's process works in a directory of its own |
+| 6 | `sheet` crashed: a local variable shadowed the output function | Renamed; the name is used for the function alone |
+| 7 | An image with a transparent middle around a caption was flagged | An image reaches into a caption only where its pixels are visible |
+| 8 | `setup.sh` checked two of the four Whisper files before skipping | It checks all four, the same four the tool requires |
+| 9 | A file named `explainer_kit.py` beside the film shadowed the tool | The kit is imported before Manim imports the film |
+| 10 | Text scaled and then taken apart kept its original size | Each glyph remembers its size when marked; a regrouped text is scaled by how its glyphs have changed |
+| 11 | Two fixes could be reverted with the self-test green | Per-scene loudness and Whisper completeness are asserted; `tests/mutate.py` now reverts 39 fixes |
+
+`tests/mutate.py` itself found two more tests that did not hold their fix to account (the
+movie-length check and the stdout guard); both were strengthened.
+
 ## Governing docs
 
 None. No ADR governs this tool. It came out of an experiment in
@@ -130,19 +151,23 @@ Checked by `tools/explainer/selftest.sh`. The first real test of the install pat
 
 ## Test evidence
 
-- [x] `tools/explainer/selftest.sh --full`, about half a minute:
-  `geometry: ok, 16 seeded defects each flagged as its own kind, 4 clean scenes clean`,
-  `units: ok, 16 of 16 passed`,
-  `full: ok, fresh --json, narrated --scenes, late audio fails on sync, transcription as JSON,
-  slow narration, missing film, crashed scene`
-- [x] Each fix reverted, one at a time, in a copy of the tool: the self-test goes red for 13 of
-  13
-- [x] The reviewer's probe films from both rounds against the fixed tool: each now behaves as its
-  finding asked. Its two probes that are still flagged, a thin rule and a narrow circle through
-  the caption's words, are real overlaps
+- [x] `tools/explainer/selftest.sh --full`, about a minute:
+  `geometry: ok, 19 seeded defects each flagged as its own kind, 5 clean scenes clean`,
+  `units: ok, 25 of 25 passed`,
+  `setup: ok, a failed download leaves nothing, checksums and model completeness hold`,
+  `full: ok, fresh --json, a directory per scene, sheet, narrated and measured --scenes, late
+  audio fails on sync, transcription as JSON, a shadowing file, slow narration, missing film,
+  crashed scene`
+- [x] `tests/mutate.py`: 39 fixes reverted one at a time in a copy of the tool. 37 turned the
+  self-test red in the full run; the two that did not are red after their tests were
+  strengthened. Not covered, because nothing can observe them: that a clip is written under a
+  temporary name, and that `curl` retries
+- [x] The reviewer's probe films from all three rounds against the fixed tool: each now behaves
+  as its finding asked. Its two probes that are still flagged, a thin rule and a narrow circle
+  through the caption's words, are real overlaps
 - [x] The 034 film (not in this PR) rendered through the fixed tool: 8 scenes, 4 min 11 s, lint
   clean under the stronger checks, all 38 clips within 25 ms of their scheduled starts,
-  -17.3 LUFS, peak -0.9 dBFS
+  -17.3 LUFS, peak -0.9 dBFS; `sheet` and `check` (which now decodes all 7,534 frames) pass
 - [x] That render against the one from before each round of fixes, and against the hand-built
   pipeline's last output: 7,534 frames at infinite PSNR and every audio sample equal
 - [x] `render --transcribe` with `HF_HUB_OFFLINE=1`: 2 of 2 clips word for word, nothing fetched.
@@ -151,8 +176,7 @@ Checked by `tools/explainer/selftest.sh`. The first real test of the install pat
 - [x] `setup.sh --with-whisper` on the existing install: verifies the Kokoro checksums, skips
   what is there, provisions the Whisper model. A download of a missing file exits 1 and leaves
   nothing behind
-- [ ] Third-round re-check by the reviewer: 10 of 14 fixed, 4 not, 11 remaining findings (see
-  Review)
+- [ ] The third round of fixes has not been re-checked by the reviewer
 - [ ] `setup.sh` has not been run from a clean machine
 - [ ] Not run on x86_64; this box is aarch64
 - [ ] The narration has not been listened to by its author, only transcribed
