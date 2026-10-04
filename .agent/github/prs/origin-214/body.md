@@ -9,8 +9,9 @@ title: "docs(readme): lead with the agent sandbox and the dev container"
 ## Summary
 
 Brings `README.md` up to date. The Installation section becomes **Running Motoko** and opens with
-the two easiest ways to run it, side by side: the `agent_confined` sandbox, driven from a host
-shell with `agent.sh`, and the VS Code dev container. The native install stays as a third option.
+the two easiest ways to run it, side by side: the agent sandbox in `.devcontainer/agent_sandbox/`,
+driven from a host shell with `agent.sh`, and the VS Code dev container. The native install stays
+as a third option.
 
 The rest of the README is corrected where it no longer matched the tree, most of all the
 instructions for adding an extension, which pointed at tooling that does not fit this repo.
@@ -18,8 +19,10 @@ instructions for adding an extension, which pointed at tooling that does not fit
 ## Changes
 
 - docs(readme): lead with the agent sandbox and the dev container
+- docs(readme): the sandbox directory is agent_sandbox
+- chore(github) commits recording this PR
 
-1 file changed.
+1 file changed, plus this record.
 
 - **Running Motoko**: a comparison table of the two containers, one `.env` step shared by all
   three paths, then a section each. The sandbox section gives the first-run commands, the
@@ -56,16 +59,19 @@ listing.
 Checked by following the sandbox steps on a host with no `motoko_agent_confined/dev:1.0` image.
 That has not been done; see below.
 
-Two things for whoever merges:
+One thing for whoever merges:
 
 - **The first-run order differs from the profile's own README.** This README says `agent.sh build`,
-  then `bootstrap`, then `agent.sh`. `.devcontainer/agent_confined/README.md` and the `agent.sh`
+  then `bootstrap`, then `agent.sh`. `.devcontainer/agent_sandbox/README.md` and the `agent.sh`
   header say `bootstrap` builds the image, but `ensure_up` runs `docker image inspect "$IMAGE"`
   and exits before `compose up -d` when the image is absent. The same README also says Motoko
   reads `.env` directly, while the compose file masks it with `/dev/null`. Neither is fixed here:
   `.devcontainer/**` is read-only inside the agent container, so that is a host-side change.
-- **#194 renames `.devcontainer/agent_confined/` to `.devcontainer/agent/`.** This README uses the
-  path on `main` in five places. Whichever of the two lands second has to carry the rename.
+**The sandbox paths follow #194**, which merged after this PR was opened and named the directory
+`.devcontainer/agent_sandbox/`. The rename is path only: the image, the compose project and the
+`make agent_confined_*` targets keep the name `agent_confined`, and the README says so in one
+sentence. This branch was cut before #194 and has not been merged with `main`, so the five
+sandbox paths do not exist on the branch itself; they resolve once this lands.
 
 ## Test evidence
 
@@ -73,7 +79,12 @@ Two things for whoever merges:
   `check_core`, `test`, `test_integration`, `verify_core`, `dst`, `registry_gen`, `init-config`,
   `install`, `studio`.
 - [x] Every relative link and every path named in the text exists, and all 13 in-page anchors
-  match a heading.
+  match a heading. The sandbox paths were checked against `origin/main` at b863ee20, after #194:
+  `.devcontainer/agent_sandbox/agent.sh` and `.devcontainer/agent_sandbox/README.md` exist there
+  and `.devcontainer/agent_confined/` does not.
+- [x] On `origin/main` after #194: `agent.sh` still runs `docker image inspect "$IMAGE"` before
+  `compose up -d`, and the `agent_confined_check`, `agent_confined_r7` and `studio` targets keep
+  their names.
 - [x] The extension table against `src/core/ext/registry_generated.ail`: the only registered name
   not in the table is `test_dummy`.
 - [x] `ailang init motoko-extension --name probe/motoko_ext_probe --tools "Tool1" --effects "FS"`
