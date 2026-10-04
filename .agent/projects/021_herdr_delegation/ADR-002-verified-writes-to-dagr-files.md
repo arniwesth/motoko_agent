@@ -1,8 +1,12 @@
 # ADR-002: Verified writes to dagr files — a tool for operator input, and the fork with `dagr apply`
 
 Date: 2026-10-04
-Status: **Proposed, v0.1. D1 and D2 are the operator's rulings of 2026-10-04. D3 to D9 are this
-document's proposal for carrying them out and have not been ruled on.** Not reviewed.
+Status: **Accepted 2026-10-04; nothing below is executed.** D1 and D2 are the operator's rulings.
+D3 to D9 were this document's proposal for carrying them out. The operator then ruled the four
+questions of §7 as proposed, the same day: *"I will go with your recommendations for above"*, in
+reply to a summary that listed the four and described the tool, the quote check, the receipt and
+the first fork release. That is read here as accepting D3 to D9. D6, D7 and D8 were not in that
+summary and were not discussed separately. Not reviewed by a second agent.
 Grounded at: branch `feat/dagr-verified-writes`, cut from `origin/main` at `b863ee20`;
 `dagr 0.3.1 (contract v3; reads v1/v2)`; fork `motoko-agent/herdr-dagr`, branch `apply-command` at
 `ca248980`. Every `file:line` below was read at that HEAD.
@@ -105,7 +109,8 @@ DESIGN §10.6 ends on, and it reverses F2 of 008 ADR-001. That ADR's D7 named th
 be planned.)* An operator's answer or ruling reaches the run file through the extension, by the
 path that is already verified, and so reaches the view.
 
-**D3. The first fork release is `v0.3.1` plus `apply`, and nothing else from upstream.** A release
+**D3. The first fork release is `v0.3.1` plus `apply`, and nothing else from upstream.** *(Ruled,
+§7 Q1.)* A release
 branch on the fork is cut from the `v0.3.1` tag and takes the `apply` commit, without the seven
 unreleased view commits. The binary then differs from the one running today by one command. It
 also takes three small changes: `scripts/install.sh` downloads from `motoko-agent/herdr-dagr`; the
@@ -113,7 +118,7 @@ version in `Cargo.toml` and `herdr-plugin.toml` becomes `0.3.1-motoko.1`, so `da
 which binary it is; and the bundled producer skill gains a section on `apply` (D9). The contract
 is unchanged, so every document stays readable by an upstream binary.
 
-**D4. The tool is `RunRecord`, and it does three things.**
+**D4. The tool is `RunRecord`, and it does three things.** *(The name is ruled, §7 Q2.)*
 
 | `kind` | Needs | Writes | Changes state |
 |---|---|---|---|
@@ -216,9 +221,8 @@ identical to the one the binary prints with `dagr --skill` today, and the two st
 - **Catching a claim that nothing backs.** D4 makes the claim checkable: "recorded" with no
   `RunRecord` call in the journal is false. Checking it mechanically is the correspondence pass of
   ADR-001 D5, which has no home yet.
-- **The name `RunRecord`.**
 
-## 6. Costs, and what to settle before building
+## 6. Costs
 
 - **We own a build.** CI and the container stop fetching a binary upstream published and fetch one
   our fork built. Each upstream release we want is a rebase we do. `apply` is a compare-and-set and
@@ -231,19 +235,23 @@ identical to the one the binary prints with `dagr --skill` today, and the two st
   (`orchestrator.ail:44` says so of itself). D7 removes the reason to, and D8 reports the result.
 - **The same files are about to be edited twice.** 008 ADR-001's WI-2 changes `orchestrator.ail`,
   `register.ail`, `dagr.ail` and the producer skill. So does this. One has to land first and the
-  other re-ground. This ADR's change is the smaller and depends on nothing in 008, so it is
-  proposed first. The operator decides.
+  other re-ground. This ADR's change is the smaller and depends on nothing in 008, so it lands
+  first (§7 Q3), and 008's WI-2 re-grounds against it.
 - **008 ADR-001 now says something its operator has overruled.** Its F2, its D7 and its WI-5 still
-  read "not now". That document is on another session's branch and is not edited from here.
+  read "not now". That document is on another session's branch and is not edited from here. The
+  session that owns PR #215 amends it (§7 Q4). Until it does, the two documents disagree, and this
+  one is the later ruling.
 
-## 7. Open questions for the operator
+## 7. Questions, closed by the operator 2026-10-04
 
-| # | Question | Proposed |
+Each was ruled as proposed.
+
+| # | Question | Ruled |
 |---|---|---|
 | Q1 | What the first fork release contains, and its version string | `v0.3.1` plus `apply` only; `0.3.1-motoko.1` (D3) |
 | Q2 | The tool's name | `RunRecord` |
 | Q3 | Which lands first on the extension: this, or 008's WI-2 | This |
-| Q4 | Who amends 008 ADR-001 to record that F2 was reversed | The session that owns PR #215 |
+| Q4 | Who amends 008 ADR-001 to record that F2 was reversed | The session that owns PR #215. **Still owed:** that session has not been told from here. |
 
 ## Evidence
 

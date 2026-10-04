@@ -1,8 +1,8 @@
 # PLAN-001: implement ADR-002 — the fork with `dagr apply`, and the `RunRecord` tool
 
-Date: 2026-10-04. Status: **Proposed — not started.** It implements
-[`ADR-002`](ADR-002-verified-writes-to-dagr-files.md), which is Proposed v0.1: its D1 and D2 are
-ruled, and D3 to D9 are not. **Nothing here starts before the operator has ruled on ADR-002 §7.**
+Date: 2026-10-04. Status: **Ready to start — no part has begun.** It implements
+[`ADR-002`](ADR-002-verified-writes-to-dagr-files.md), Accepted 2026-10-04. The operator ruled the
+four questions of ADR-002 §7 as proposed that day, which was this plan's condition for starting.
 Grounded at `b863ee20` on branch `feat/dagr-verified-writes`, in the worktree
 `/workspaces/motoko_agent-dagr-writes`. `dagr 0.3.1`; fork `motoko-agent/herdr-dagr`, branch
 `apply-command` at `ca248980`. AILANG v0.47.2, extension ABI 8.0.
@@ -72,13 +72,14 @@ In `motoko-agent/herdr-dagr`.
    need a small resolution. If it needs more than the usage text, stop and report: D3 assumed the
    commit stands alone.
 2. `scripts/install.sh`: the download repository becomes `motoko-agent/herdr-dagr`.
-3. The version becomes the one the operator ruled (proposed `0.3.1-motoko.1`) in `Cargo.toml`,
+3. The version becomes `0.3.1-motoko.1` (ruled, ADR-002 §7 Q1) in `Cargo.toml`,
    `Cargo.lock` and `herdr-plugin.toml`. The release workflow refuses a tag that does not equal
    `v` plus the Cargo version, and a plugin version that differs from it.
 4. `skills/dagr-producer/SKILL.md`: a section on `apply`, per D9. Keep `tests/skill_examples.rs`
    green: it holds the skill's examples strict-clean.
 5. Push the branch and let the fork's `ci.yml` run. Then push the tag. **Pushing the tag publishes
-   a release on a public repository. It is done once the operator has ruled on Q1, not before.**
+   a release on a public repository.** The operator has ruled what it contains. It is pushed only
+   after the check below and a green `ci.yml`.
 
 **Check before the tag:** `herdr plugin install` and `cargo` both accept the version string. A
 pre-release version is the kind of thing one of them could reject, and finding out after the tag
@@ -197,7 +198,7 @@ claimed write happened.
 | Q2 | Do `cargo` and `herdr plugin install` accept the version string? | P1, before the tag | The operator rules another string |
 | Q3 | Is the operator's message in `history_slice` at a tool call, after compaction too? | P4 step 2 | D5 returns to the operator |
 | Q4 | Does adding a tool move a pinned catalogue or digest in a profile? | P4 re-grounding | The part regenerates it and records which |
-| Q5 | Which lands first on the extension: this plan's P3 and P4, or 008 ADR-001's WI-2? | The operator (ADR-002 §7 Q3) | The later one re-grounds against the earlier |
+| Q5 | Which lands first on the extension: this plan's P3 and P4, or 008 ADR-001's WI-2? | **Ruled 2026-10-04: this plan's.** | 008's WI-2 re-grounds against it |
 
 ## Related records
 
