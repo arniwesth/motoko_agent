@@ -2,6 +2,7 @@
 
 Date: 2026-10-04
 Status: Research note. No decision taken. Candidate follow-ons are listed in §6.
+Amended the same day with §9, on Midspiral, and candidates 11 to 13.
 Grounded at: AILANG upstream `sunholo-data/ailang`, branch `dev`, commit `2a1f3f295` (2026-10-03),
 read from a sparse clone that is not in this tree. Motoko `main` at `cf54dff9`.
 Supersedes: the "Upstream comparison" section of `NOTE-docs-system-design-discussion.md`, surveyed
@@ -326,6 +327,9 @@ Candidates, not decisions. "ADR-001" is the plan-structure ADR in this directory
 | 8 | Status lives in validated content, never in a path | §3.8, §3.9 | Consistent with D2 | Belongs to the owed convention ADR |
 | 9 | A pick-time reality check before a plan starts: already landed, died mid-flight, premise still true | §3.3 | Complements D4 | Not built |
 | 10 | Generate and gate documentation where a generator exists; do not rely on advisory checks | §3.8 | None | Not built |
+| 11 | A round-trip check between a plan's prose and its dagr document: one model reads only the dagr document and says what will be done and what counts as done; a second compares that with the ADR's decisions | §9 | Guards the split D3 makes | Not built. The informalizer and comparator exist in `packages/motoko-ext-compose/claimcheck.ail` |
+| 12 | A report generated per ADR from the dagr documents: each decision, its tasks, their evidence tier, the commit. It also checks coverage both ways | §9 | Replaces hand-written status | Not built |
+| 13 | Every check gets its opposite direction, for example "every decision has a task" beside "no plan contains attempts" | §9 | Applies to its §6 | Not built |
 
 Not to take: a markdown queue; status by directory; a hand-maintained index; rules added as prose
 amendments; and the scheduled-loop infrastructure, which is specific to AILANG's always-on rig.
@@ -347,8 +351,8 @@ amendments; and the scheduled-loop infrastructure, which is specific to AILANG's
   `sprint-evaluator`), and `internal/server`.
 - **Negative findings are scoped.** "No caller" and "never set" cover only the directories that
   were checked out.
-- **Twelve statements carry [checked].** They are the ones this document leans on hardest; the
-  rest rest on the readers.
+- **Twelve statements in §3 carry [checked].** They are the ones this document leans on hardest;
+  the rest rest on the readers. The quotes in §9 were checked separately.
 - **Side effect during the read:** three readers ran a tree-wide search on the scratch clone,
   which fetched extra objects into it. Its working tree was unchanged and no result depends on it.
 
@@ -367,3 +371,52 @@ All under `evidence/ailang-survey/`, filed verbatim as the readers wrote them.
 | `evidence/ailang-survey/coordinator.md` | 1,050 | Task model, storage, approvals, pipelines, verification |
 | `evidence/ailang-survey/messaging.md` | 898 | Message model, stores, GitHub sync, triage |
 | `evidence/ailang-survey/docs-site.md` | 748 | Site structure, sync mechanisms, the docs mission, retros |
+
+## 9. Addendum: Midspiral (2026-10-04)
+
+Added the same day at the operator's suggestion. Midspiral (midspiral.com/blog) builds formal
+verification tools for AI-written code: lemmafit, claimcheck and LemmaScript.
+
+How it was read: eight of its ten posts through a summarising fetch tool; then five were fetched
+directly and every passage quoted below was found word for word **[checked]**. The posts on React
+state and on reconciliation in collaborative apps were not read.
+
+Motoko already took one technique from it. claimcheck is in
+`packages/motoko-ext-compose/claimcheck.ail`, and
+`../../research/Claimcheck_for_system_prompts.md` adapts it to system prompt assembly.
+
+Four ideas bear on the planning system.
+
+1. **The executor adjusts the spec.** "LLMs, when faced with a spec they can’t prove, will
+   sometimes adjust the spec itself. This isn’t inherently bad. … But it requires vigilance. The
+   human must review the final specification." This became D8 of the plan-structure ADR.
+2. **Round-trip informalization.** One model reads only the formal artifact and says in plain
+   English what it guarantees: "The model does not see the original requirement; it works only
+   from the formal code." A second model compares that with the requirement. The measurement: "36
+   requirement-lemma pairs, including 8 deliberately bogus lemmas", and "96.3% accuracy across 108
+   comparisons (3 runs × 36 pairs)". The stated limit: "Coverage is not checked." Candidate 11.
+3. **A generated guarantees report.** lemmafit keeps requirements as structured entries and
+   generates "a human-readable report mapping each spec requirement to its corresponding proof",
+   showing "what’s been mathematically verified, what relies on assumptions, and what’s still
+   unproven." Its stated limit: "The proofs are only as good as the specs." Candidate 12.
+4. **Completeness, not only soundness.** A planted bug that rejected a valid outcome survived
+   property tests: "We ran 50,000 random action sequences against the buggy kernel with zero
+   failures. The tests passed because they check invariants". A test that asked "if a valid
+   interpretation exists, did dispatch find it?" did not miss: "we caught the bug 100% of the
+   time." This is outside support for rule 3 of the review-loop meta-decision. Candidate 13.
+
+On rules kept as prose it says "markdown files are just fancy prompts", against "You cannot modify
+constraints to fit your code. You must modify your code to fit constraints." That agrees with §4.4.
+
+LemmaScript and the Antithesis workshop recap are about verification, not planning. They belong
+with projects 027 to 029 and 035, and were not analysed here.
+
+Sources, all under midspiral.com/blog/:
+- `claimcheck-narrowing-the-gap-between-proof-and-intent/`
+- `intent-envelope-proofs-for-completeness-not-just-soundness/`
+- `constraint-driven-programming/`
+- `introducing-lemmafit-a-verifier-in-the-ai-loop/`
+- `from-intent-to-proof-dafny-verification-for-web-apps/`
+- `formally-verified-ai-generated-code-is-already-here/` (summary only)
+- `lemmascript-a-verification-toolchain-for-typescript/` (summary only)
+- `talking-software-correctness-at-antithesis-sf/` (summary only)

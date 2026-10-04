@@ -8,6 +8,9 @@ The operator's ruling, the same day: *"I will go with your recommendations"*, in
 that listed D1–D7, named D4 as the decision most worth scrutiny, and gave a recommendation for each
 of F1–F4. That is read here as accepting D1–D7 and closing F1–F4 as recommended (§7). D4 was not
 discussed separately.
+**Amended 2026-10-04 with D8**, proposed after reading Midspiral (§2.4) and approved by the operator
+the same day (*"yes, do that"*, in reply to a proposal to add it as a dated amendment). D1–D7 are
+unchanged in wording except for one pointer at the end of D4, which D8 narrows.
 Grounded at: branch `main`, HEAD `cf54dff9`; `dagr 0.3.1 (contract v3; reads v1/v2)`; the Linear
 workspace as read through its MCP server on 2026-10-04.
 Provenance: authored in the session that re-read `NOTE-docs-system-design-discussion.md` against
@@ -146,6 +149,16 @@ Cursor's planner/worker runs (cursor.com/blog/scaling-agents) report that shared
 failed and that removing roles helped. All three are self-reported. They support the direction and
 say nothing about dagr specifically.
 
+Midspiral (midspiral.com/blog), read 2026-10-04, builds formal verification tools for AI-written
+code. Two of its observations bear on D8. From its Dafny work: "LLMs, when faced with a spec they
+can’t prove, will sometimes adjust the spec itself. This isn’t inherently bad. … But it requires
+vigilance. The human must review the final specification"
+(midspiral.com/blog/from-intent-to-proof-dafny-verification-for-web-apps). And on rules kept as
+prose, "markdown files are just fancy prompts", against the rule it proposes instead: "You cannot
+modify constraints to fit your code. You must modify your code to fit constraints"
+(midspiral.com/blog/constraint-driven-programming). Both passages were checked against the pages.
+Motoko already uses one Midspiral technique: `packages/motoko-ext-compose/claimcheck.ail`.
+
 ## 3. Options considered
 
 - **O1. Keep Linear as the tracker and dagr as a view.** The status quo. Rejected by the operator,
@@ -190,6 +203,7 @@ seeded task is never touched again. Attempts, events, liveness and the states th
 the run's and are never overwritten by the plan. At close-out the settled run is committed beside
 the plan as the durable record of what happened, as was done by hand for
 `.agent/projects/013_core_architecture_for_dst/evidence/plan004-v2/run-plan004-v2.json`.
+D8 narrows this for the acceptance fields of a task that has been started.
 
 **D5. The binding leaves the plan.** `run.orchestrator` (with `mode` and `max_in_flight`) and
 `run.observer` name panes and grant authority for one session. They move to a local binding
@@ -214,6 +228,25 @@ name now what would.** §2.3 shows D2–D6 need nothing upstream lacks. Four thi
 Adopting the fork changes the supply chain: CI stops fetching a published upstream binary by
 digest and runs one built from `motoko-agent/herdr-dagr`. That is a larger commitment than any
 feature in the table. F2 ruled it out for now (§7).
+
+**D8. Once a task has been started, the terms it is judged by change only by directive.** *Added
+2026-10-04, after acceptance; see the Status line.* A task's acceptance fields are `criteria`,
+`deps`, `inputs`, `kind` and `policy`. While a task has no attempt, the plan may change them
+freely. Once it has one, a change to any of them, or cancelling the task, must be matched by a
+`directive` event that names the task, from the operator or from an observer acting inside a
+recorded grant. The agent executing a plan may add work. It may not redefine what finished means
+for work it has begun. A producer does not carry an unmatched change into the run, and every
+unmatched change is listed for the operator at close-out.
+
+The reason is a gap in D1–D7. D2 has the orchestrator edit the committed plan during a run and D4
+carries those edits into the run, so nothing stopped an agent loosening a task's `criteria` until
+the task could settle. §2.4 gives the outside evidence that agents do this.
+
+What D8 does not buy. The check sees that the terms changed, not whether they became weaker. And a
+`directive` event is itself written by an agent, because dagr "carries no fencing, no CAS, no
+capabilities" (§2.2). So D8 makes such an edit visible, attributable and refused by default; it
+does not make it impossible. What the operator reviews is the diff of `PLAN-NNN.dagr.json` in the
+pull request, with these edits called out.
 
 ## 5. Consequences
 
@@ -240,6 +273,9 @@ feature in the table. F2 ruled it out for now (§7).
   contract says it carries no CAS. This is an inference: no pull request has been opened to test
   it.
 - **What Linear gave that nothing here replaces:** a web and mobile view, and notifications.
+- **Under D8 the orchestrator loses a shortcut it has today.** Between the two versions of
+  PLAN-004's plan file, the criteria of 2 of the 13 started tasks were rewritten with no directive
+  naming them (§6). Both read as wording updates for a plan revision; the check cannot tell.
 
 ## 6. Checks this ADR names, and whether they exist
 
@@ -249,9 +285,18 @@ feature in the table. F2 ruled it out for now (§7).
 | A committed plan contains no attempts, events or pane ids | Not built |
 | The structural fields of a run equal its plan's (D4) | Not built |
 | At close-out, the settled run and the plan agree on task ids and deps | Not built |
+| A started task's acceptance fields changed with no directive naming it (D8) | Smallest version built in the amending session, `.agent/projects/008_docs_system/evidence/spec_edit_probe.py`. Not wired into anything. |
 
-The last three are named, not specified. Each should be built as its smallest working version
-before any document relies on it.
+The second, third and fourth are named, not specified. Each should be built as its smallest working
+version before any document relies on it.
+
+The D8 probe compares an earlier and a later document for one plan. On `.dagr/run-plan004.json`
+against `.dagr/run-plan004-v2.json` (31 tasks in common, 13 started in the earlier file) it found
+10 tasks with an acceptance field changed, 2 of them started, both in `criteria`, neither with a
+directive naming the task. On two other pairs, a settled snapshot against its live file and the
+tracked evidence copy of plan004-v2 against the local one, it found no change. It covers
+`criteria`, `deps`, `inputs` and `kind`; it does not cover `policy` or cancellation. Its inputs
+are gitignored files on one machine, so the run cannot be repeated from the tree.
 
 ## 7. Forks, closed by the operator 2026-10-04
 
@@ -278,6 +323,8 @@ Each was ruled as recommended.
   ids and dependencies at close-out.
 - (c) `.agent/issues/herdr-extension-run-file-drifts-from-operator-plan-file.md` closes and no issue of the same
   shape opens.
+- (d) No settled run committed under this ADR shows an acceptance field changed on a started
+  task without a directive naming it (D8).
 - **Kill criterion:** if, in the first two plans run under this ADR, the orchestrator makes
   structural edits in a `.dagr/` copy that never reach the committed plan, D2 has failed and this
   question reopens.
@@ -289,6 +336,9 @@ Each was ruled as recommended.
 - Any index over documents, including `../036_chdb_memory/`.
 - The binding document's format (D5) and the mechanism of D4's re-projection. Those belong to the
   implementation plan, written fresh against the source.
+- A round-trip check that a plan's dagr document says what its prose intends, and a generated
+  report from each decision to its tasks and their evidence. Both are candidates in
+  `RESEARCH-ailang-planning-system-implications.md` §9.
 
 ## Appendix A: the 24 open Linear issues (as read 2026-10-04)
 
@@ -331,10 +381,10 @@ Clustered by shared source surface. The plan is authored fresh from a handoff, n
 - **WI-1, the plan document convention and its check (D2, D3).** Reads the tree; independent of
   the others. Includes the first check in §6 as a `make` target and the smallest version of the
   second.
-- **WI-2, the extension: binding and re-projection (D4, D5).** `packages/motoko-ext-herdr/`
-  (`orchestrator.ail`, `register.ail`, `dagr.ail`), the observer skill, the dagr-producer skill.
-  Ends in `make verify_dagr_producer` green.
-- **WI-4, close-out snapshot (D4).** After WI-2.
+- **WI-2, the extension: binding and re-projection (D4, D5), with D8's refusal.**
+  `packages/motoko-ext-herdr/` (`orchestrator.ail`, `register.ail`, `dagr.ail`), the observer
+  skill, the dagr-producer skill. Ends in `make verify_dagr_producer` green.
+- **WI-4, close-out snapshot (D4), with D8's list of unmatched changes.** After WI-2.
 - **WI-5, the fork (D7).** Out of scope under F2's ruling, until that question is reopened.
 - **The Linear triage (F1).** Not a work item for an agent to run unattended: it files public
   issues and closes Linear ones, and which of the 24 are wanted is the operator's call.
