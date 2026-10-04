@@ -490,7 +490,7 @@ RUN echo "installing agent CLIs at npm latest (cache-bust: ${AGENTS_CACHE_BUST:-
 # logs and runtime state into this same directory as `motoko` — so without this the container starts and
 # then fails to log, which is a confusing way to discover a permissions problem.
 RUN mkdir -p /home/${USERNAME}/.config/herdr
-COPY --chown=${USERNAME}:${USERNAME} .devcontainer/agent_confined/herdr.toml \
+COPY --chown=${USERNAME}:${USERNAME} .devcontainer/agent_sandbox/herdr.toml \
      /home/${USERNAME}/.config/herdr/config.toml
 
 # The integrations, attempted at build time. Failures are reported and tolerated for two distinct reasons: an
@@ -586,7 +586,7 @@ RUN version="$(sed -nE 's/^DAGR_VERSION \?= ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' /tm
 # for anyone who wants them.
 RUN printf '%s\n' \
       '' \
-      '# --- hand tools (baked in by .devcontainer/agent_confined/Dockerfile) ---' \
+      '# --- hand tools (baked in by .devcontainer/agent_sandbox/Dockerfile) ---' \
       '# zoxide: adds `z <partial>` to jump to a directory you have visited. `cd` is untouched.' \
       'command -v zoxide >/dev/null && eval "$(zoxide init bash)"' \
       '# fzf: CTRL-T (paste a file path), CTRL-R (fuzzy history), ALT-C (cd), and ** completion.' \

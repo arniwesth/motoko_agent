@@ -8,9 +8,9 @@
 # inside it would misreport — which is also why the git-configuration audit (r7_git_audit.py) is assigned to
 # a human rather than folded in here:
 #
-#     .devcontainer/agent_confined/agent.sh check      # preferred: refuses from inside a container,
+#     .devcontainer/agent_sandbox/agent.sh check      # preferred: refuses from inside a container,
 #                                                      #   refuses when the service is down
-#     .devcontainer/agent_confined/checks/r9-container.sh
+#     .devcontainer/agent_sandbox/checks/r9-container.sh
 #
 # It runs the host-side legs itself, then re-invokes itself inside the service with --in-container.
 # --in-container can also be run directly to probe the shell you are already in — which is how the gap was
@@ -20,7 +20,8 @@
 
 set -uo pipefail
 
-PROFILE_DIR_NAME="agent_confined"
+PROFILE_DIR_NAME="agent_sandbox"
+PROFILE_NAME="agent_confined"  # compose project, image and MOTOKO_CONTAINER_PROFILE keep the old name
 SERVICE="agent"
 CONTAINER_USER="motoko"
 WORKDIR="/workspaces/motoko_agent"
@@ -193,8 +194,8 @@ in_container() {
   fi
 
   # leg 5 — the image is the one this profile builds, and the harness it was given is present.
-  if [[ "${MOTOKO_CONTAINER_PROFILE:-}" == "$PROFILE_DIR_NAME" ]]; then
-    pass "leg5: MOTOKO_CONTAINER_PROFILE=${PROFILE_DIR_NAME}"
+  if [[ "${MOTOKO_CONTAINER_PROFILE:-}" == "$PROFILE_NAME" ]]; then
+    pass "leg5: MOTOKO_CONTAINER_PROFILE=${PROFILE_NAME}"
   else
     fail "leg5: MOTOKO_CONTAINER_PROFILE is '${MOTOKO_CONTAINER_PROFILE:-<unset>}' — wrong image or wrong service"
   fi
@@ -331,7 +332,7 @@ on_host() {
   local referrers=() f
   for f in "${repo_root}"/.devcontainer/*/devcontainer.json; do
     [[ -e "$f" ]] || continue
-    if grep -qE "${PROFILE_DIR_NAME}" "$f"; then
+    if grep -qE "/${PROFILE_DIR_NAME}/|${PROFILE_NAME}" "$f"; then
       referrers+=("$f")
     fi
   done
