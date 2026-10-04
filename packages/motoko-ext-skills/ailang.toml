@@ -19,6 +19,12 @@ modules = [
 "sunholo/motoko_ext_compaction_structural" = { path = "../motoko-ext-compaction-structural", version = "1.1.0" }
 "sunholo/motoko_ext_compaction_ai" = { path = "../motoko-ext-compaction-ai", version = "0.3.0" }
 
+# The eleven effects are `ToolProvider`'s row. `skills_handle` has to declare
+# that row exactly (the capability's row is closed, and a narrower one does not
+# unify with it), and this ceiling has to cover what a function declares:
+# with `max = ["Env", "FS"]` the package does not check. What is performed is
+# less: `Env` and `FS` at registration, and one read through
+# `ctx.ports.file_read` per call (037 evidence/p4/logs/effects_max_narrowed.out).
 [effects]
 max = ["IO", "Process", "FS", "AI", "Env", "Net", "SharedMem", "Clock", "Stream", "Rand", "Trace"]
 
