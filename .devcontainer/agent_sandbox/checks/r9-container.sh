@@ -8,9 +8,9 @@
 # inside it would misreport — which is also why the git-configuration audit (r7_git_audit.py) is assigned to
 # a human rather than folded in here:
 #
-#     .devcontainer/agent/agent.sh check      # preferred: refuses from inside a container,
+#     .devcontainer/agent_sandbox/agent.sh check      # preferred: refuses from inside a container,
 #                                                      #   refuses when the service is down
-#     .devcontainer/agent/checks/r9-container.sh
+#     .devcontainer/agent_sandbox/checks/r9-container.sh
 #
 # It runs the host-side legs itself, then re-invokes itself inside the service with --in-container.
 # --in-container can also be run directly to probe the shell you are already in — which is how the gap was
@@ -20,7 +20,7 @@
 
 set -uo pipefail
 
-PROFILE_DIR_NAME="agent"
+PROFILE_DIR_NAME="agent_sandbox"
 PROFILE_NAME="agent_confined"  # compose project, image and MOTOKO_CONTAINER_PROFILE keep the old name
 SERVICE="agent"
 CONTAINER_USER="motoko"

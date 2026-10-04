@@ -1,8 +1,8 @@
 # agent_confined — the agent's compose stack.
 #
 # Started and driven from a HOST shell, never by VS Code:
-#   docker compose --env-file .env -f .devcontainer/agent/docker-compose.yml up -d
-#   docker compose --env-file .env -f .devcontainer/agent/docker-compose.yml \
+#   docker compose --env-file .env -f .devcontainer/agent_sandbox/docker-compose.yml up -d
+#   docker compose --env-file .env -f .devcontainer/agent_sandbox/docker-compose.yml \
 #       exec -u motoko -w /workspaces/motoko_agent agent herdr
 #
 # There is deliberately no devcontainer.json beside this file. Read README.md before adding one — the whole
@@ -19,11 +19,11 @@ name: motoko_agent_confined
 services:
   agent:
     build:
-      # The repository root, because .devcontainer/agent/Dockerfile copies the tree and runs
+      # The repository root, because .devcontainer/agent_sandbox/Dockerfile copies the tree and runs
       # scripts/install-prerequisites.sh against it — the same context .devcontainer/docker-compose.yml uses,
       # and the same root .dockerignore applies.
       context: ../..
-      dockerfile: .devcontainer/agent/Dockerfile
+      dockerfile: .devcontainer/agent_sandbox/Dockerfile
       args:
         # HERDR_VERSION, HERDR_SHA256 and AGENT_BROWSER_VERSION have no defaults, and that is the design.
         # A pinned value baked into the Dockerfile does not track anything: the instruction text never

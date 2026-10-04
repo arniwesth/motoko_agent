@@ -54,8 +54,8 @@ inside a dev container.
 
 ```sh
 cd <your host checkout>            # the folder that is /workspaces/motoko_agent inside either container
-.devcontainer/agent/agent.sh bootstrap   # FIRST RUN ONLY — builds the image, then src/tui + herdr integrations
-.devcontainer/agent/agent.sh             # attach; detach with ctrl+b q
+.devcontainer/agent_sandbox/agent.sh bootstrap   # FIRST RUN ONLY — builds the image, then src/tui + herdr integrations
+.devcontainer/agent_sandbox/agent.sh             # attach; detach with ctrl+b q
 ```
 
 The first run builds the image and takes several minutes: it runs `scripts/install-prerequisites.sh` (Go,
@@ -120,16 +120,16 @@ Note that herdr cannot *launch* Motoko (`agent start --kind` is a fixed list) �
 ### The other commands
 
 ```sh
-.devcontainer/agent/agent.sh session=review   # a second, independent herdr server
-.devcontainer/agent/agent.sh sessions         # which exist (does not start the container)
-.devcontainer/agent/agent.sh session=review kill
-.devcontainer/agent/agent.sh shell            # a bash prompt, outside herdr
-.devcontainer/agent/agent.sh run make test    # one-shot; dies with this terminal
-.devcontainer/agent/agent.sh build            # rebuild: pins reproduced, CLIs re-resolved at latest
-.devcontainer/agent/agent.sh upgrade          # re-resolve every pinned version, rewrite versions.env, rebuild
-.devcontainer/agent/agent.sh stop             # stop and remove the container
-.devcontainer/agent/agent.sh check            # the R9 sweep
-.devcontainer/agent/agent.sh help             # the header block of the script, coloured
+.devcontainer/agent_sandbox/agent.sh session=review   # a second, independent herdr server
+.devcontainer/agent_sandbox/agent.sh sessions         # which exist (does not start the container)
+.devcontainer/agent_sandbox/agent.sh session=review kill
+.devcontainer/agent_sandbox/agent.sh shell            # a bash prompt, outside herdr
+.devcontainer/agent_sandbox/agent.sh run make test    # one-shot; dies with this terminal
+.devcontainer/agent_sandbox/agent.sh build            # rebuild: pins reproduced, CLIs re-resolved at latest
+.devcontainer/agent_sandbox/agent.sh upgrade          # re-resolve every pinned version, rewrite versions.env, rebuild
+.devcontainer/agent_sandbox/agent.sh stop             # stop and remove the container
+.devcontainer/agent_sandbox/agent.sh check            # the R9 sweep
+.devcontainer/agent_sandbox/agent.sh help             # the header block of the script, coloured
 ```
 
 A **session** is a whole herdr server with its own panes, sockets and persisted state. You usually want one,
@@ -230,7 +230,7 @@ what makes this worth porting: it is a boundary you can regression-test.
 
 ```sh
 # R9 — the container is the one this profile describes. Run it THROUGH THE WRAPPER, from a host shell.
-.devcontainer/agent/agent.sh check
+.devcontainer/agent_sandbox/agent.sh check
 make agent_confined_check                    # the same thing
 #   host legs:      no devcontainer.json, no profile references it, bind sources exist AND are :ro,
 #                   versions.env present, .env present
@@ -243,13 +243,13 @@ make agent_confined_check                    # the same thing
 
 # R7 — the git-configuration and frozen-content audit. Owner: a human, from a host terminal.
 #   RECORD ONLY AFTER SANITISING: a baseline taken over a planted directive approves it.
-.devcontainer/agent/checks/r7_git_audit.py --root "$PWD" --record ~/r7-baseline.json
-.devcontainer/agent/checks/r7_git_audit.py --root "$PWD" --verify ~/r7-baseline.json
+.devcontainer/agent_sandbox/checks/r7_git_audit.py --root "$PWD" --record ~/r7-baseline.json
+.devcontainer/agent_sandbox/checks/r7_git_audit.py --root "$PWD" --verify ~/r7-baseline.json
 make agent_confined_r7 R7_BASELINE=~/r7-baseline.json     # the verify leg
 
 # Is a forwarded agent socket a conduit or an actual oracle? Read-only; no signature is requested.
 #   Run it in the OPERATOR's attached container — this profile should have no socket at all (R9 leg 3).
-.devcontainer/agent/checks/agent-socket-probe.py
+.devcontainer/agent_sandbox/checks/agent-socket-probe.py
 ```
 
 **`checks/r9-container.sh` exits `2` and prints `R9 INCOMPLETE` when it cannot reach the service.** Treat `2`
