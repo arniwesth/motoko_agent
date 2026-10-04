@@ -1,0 +1,110 @@
+-- 037 P4 evidence driver: registers the skills extension against the sandboxed
+-- workdir (the real `register_with_config`, so the real `std/fs` discovery),
+-- prints `config` and the catalogue, and drives the `ToolProvider` handler with
+-- a port that reads the real file. Run from the root of a tree where the
+-- package is wired into the root manifest; not part of the package.
+--
+--   P4_CASE     a label, printed
+--   P4_CALL     a skill name to call, or empty for no call
+--   P4_WORKDIR  the handler's ctx.workdir (default ".")
+--   P4_LIMIT    the handler's ctx.context_limit (default 0)
+module scratch/skills_shell_probe
+
+import std/io (println)
+import std/env (getEnvOr)
+import std/fs (readFileResult, isDir, listDir)
+import std/json (Json, jo, kv, js, encode, getString)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/string (length, concat, intToStr, stringToInt, split, join, substring)
+import pkg/sunholo/motoko_ext_abi/types (Capability, DescribeTools, ToolProvider, ToolSchema,
+  ToolCallEnvelope, ToolHandleOutcome, Handled, ExtFileRead, ExtWorld,
+  pure_ctx, provider_ctx, empty_ext_world)
+import pkg/sunholo/motoko_ext_skills/register (register_with_config)
+import pkg/sunholo/motoko_ext_skills/skills (in_name_order, skills_root)
+import src/core/ext/ctx_defaults (noop_ext_ports)
+
+-- The file, through std/fs: the live adapter's answer for a present file and
+-- for an absent one.
+func real_read(w: ExtWorld, path: string) -> ExtFileRead ! {FS} {
+  match readFileResult(path) {
+    Ok(t) => { present: true, content: t, next_state: w },
+    Err(_) => { present: false, content: "", next_state: w }
+  }
+}
+
+func first_line(s: string) -> string {
+  match split(s, "\n") { [] => "", l :: _ => l }
+}
+
+func clip(s: string) -> string {
+  if length(s) > 700 then concat([substring(s, 0, 700), " ...[", intToStr(length(s)), " chars]"]) else s
+}
+
+func show_outcome(label: string, o: ToolHandleOutcome) -> () ! {IO} {
+  match o.decision {
+    Handled(env) => println(concat([
+      "CALL ", label, " => tool=", env.tool, " exit_code=", intToStr(env.exit_code),
+      " stdout_chars=", intToStr(length(env.stdout)),
+      " stdout_line1=[", first_line(env.stdout), "]",
+      " stderr=[", clip(env.stderr), "]"
+    ])),
+    _ => println(concat(["CALL ", label, " => NOT HANDLED"]))
+  }
+}
+
+func int_or(s: string, fallback: int) -> int {
+  match stringToInt(s) { Some(n) => n, None => fallback }
+}
+
+func call_skill(caps: [Capability], cfg: Json, skill: string, workdir: string, limit: int)
+  -> () ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  match caps {
+    [] => println("CALL => no ToolProvider"),
+    ToolProvider(_, h) :: _ => {
+      let ports = { noop_ext_ports() | file_read: real_read };
+      let ctx = { provider_ctx(pure_ctx(cfg), ports, empty_ext_world()) | context_limit: limit, workdir: workdir };
+      let call: ToolCallEnvelope = { id: "call_0123456789abcdef0123456789abcdef", tool: "Skill", arguments: jo([kv("name", js(skill))]) };
+      show_outcome(concat([skill, " workdir=", workdir, " limit=", intToStr(limit)]), h(ctx, call))
+    },
+    _ :: rest => call_skill(rest, cfg, skill, workdir, limit)
+  }
+}
+
+func show_caps(caps: [Capability], cfg: Json) -> () ! {IO} {
+  match caps {
+    [] => (),
+    DescribeTools(f) :: rest => {
+      match f(cfg) {
+        [s] => {
+          println(concat(["CAP DescribeTools: one schema, name=", s.name, " description_chars=", intToStr(length(s.description))]));
+          println(concat(["DESCRIPTION ", clip(s.description)]));
+          println(concat(["PARAMETERS ", clip(s.parameters)]))
+        },
+        _ => println("CAP DescribeTools: schema count != 1")
+      };
+      show_caps(rest, cfg)
+    },
+    ToolProvider(names, _) :: rest => {
+      println(concat(["CAP ToolProvider names=[", join(",", names), "]"]));
+      show_caps(rest, cfg)
+    },
+    _ :: rest => { println("CAP <another kind>"); show_caps(rest, cfg) }
+  }
+}
+
+func caps_count(caps: [Capability]) -> int {
+  match caps { [] => 0, _ :: rest => 1 + caps_count(rest) }
+}
+
+export func main() -> () ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  println(concat(["CASE ", getEnvOr("P4_CASE", "")]));
+  let reg = register_with_config(());
+  println(concat(["CONFIG ", clip(encode(reg.config))]));
+  println(concat(["REFUSAL ", match getString(reg.config, "registration_refusal") { Some(s) => s, None => "<none>" }]));
+  println(concat(["CAPS ", intToStr(caps_count(reg.caps))]));
+  show_caps(reg.caps, reg.config);
+  if isDir(skills_root()) then println(concat(["LISTDIR ", join(",", listDir(skills_root())), " in_name_order=", if in_name_order(listDir(skills_root())) then "true" else "false"])) else println("LISTDIR <root is not a directory>");
+  let skill = getEnvOr("P4_CALL", "");
+  if skill == "" then () else call_skill(reg.caps, reg.config, skill, getEnvOr("P4_WORKDIR", "."), int_or(getEnvOr("P4_LIMIT", "0"), 0))
+}
