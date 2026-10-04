@@ -55,15 +55,17 @@ The default profile uses an OpenRouter model, so that one key is enough to start
 
 ### Agent sandbox
 
-`agent_confined` is a container built for an agent rather than for a person. VS Code cannot attach to it, and everything the agent needs is baked into the image: the AILANG toolchain, herdr, the `claude`, `codex` and `omp` CLIs, and a headless browser. You drive it from a terminal on the host with `agent.sh`.
+The sandbox in `.devcontainer/agent_sandbox/` is a container built for an agent rather than for a person. VS Code cannot attach to it, and everything the agent needs is baked into the image: the AILANG toolchain, herdr, the `claude`, `codex` and `omp` CLIs, and a headless browser. You drive it from a terminal on the host with `agent.sh`.
+
+Its image, compose project and `make` targets still carry the profile's earlier name, `agent_confined`, so that is the name you will see in `docker ps` and in `agent.sh` output.
 
 You need Docker on the host (OrbStack or Docker Desktop) and the `.env` file above; the launcher refuses to start without one.
 
 ```bash
 # In a terminal on your machine, from the repo root. Not inside a container.
-.devcontainer/agent_confined/agent.sh build       # first run only: build the image (several minutes) and start it
-.devcontainer/agent_confined/agent.sh bootstrap   # first run only: TUI dependencies and herdr integrations
-.devcontainer/agent_confined/agent.sh             # attach; detach with ctrl+b q
+.devcontainer/agent_sandbox/agent.sh build       # first run only: build the image (several minutes) and start it
+.devcontainer/agent_sandbox/agent.sh bootstrap   # first run only: TUI dependencies and herdr integrations
+.devcontainer/agent_sandbox/agent.sh             # attach; detach with ctrl+b q
 ```
 
 Attaching puts you in herdr, a terminal multiplexer for coding agents. Start Motoko in a pane:
@@ -95,7 +97,7 @@ What the sandbox takes away, and why it is where agents run:
 
 The boundary is around the container, not the working tree: the checkout is shared with the host, so anything an agent writes there is on your disk too. `.devcontainer/`, `.vscode/` and `.git/hooks` are mounted read-only inside, which means changes to the sandbox itself are made from the host.
 
-Full details, the acceptance checks and the known gaps are in [.devcontainer/agent_confined/README.md](./.devcontainer/agent_confined/README.md).
+Full details, the acceptance checks and the known gaps are in [.devcontainer/agent_sandbox/README.md](./.devcontainer/agent_sandbox/README.md).
 
 ### VS Code dev container
 
@@ -341,7 +343,7 @@ motoko_agent/
 ├── scripts/                    Install, run, smoke and verification scripts
 ├── tools/                      Repo tooling (PR pipeline, registry generator, code graph, inventories)
 ├── benchmarks/                 Benchmark harness
-├── .devcontainer/              Dev container profiles and the agent_confined sandbox
+├── .devcontainer/              Dev container profiles and the agent sandbox
 ├── .motoko/config/             JSON profile configs
 ├── .agent/                     Design archive (projects, ADRs, plans, summaries, PR records)
 ├── omnigraph/                  Graph schema, queries, seed
