@@ -24,7 +24,7 @@ module scripts/dst/registry_multiplicity_dst
 import std/io (println, exit)
 import std/list as List (length)
 import std/result (Result, Ok, Err)
-import std/json (Json, jo)
+import std/json (Json, jo, kv, js, encode)
 import pkg/sunholo/motoko_ext_abi/types (
   PureCtx, AiCtx, ProviderCtx, InterceptCtx, ProcessCtx, FsCtx, PromptPatch, BudgetPlan, BudgetPatch, Msg, PreStepOutcome, ToolSchema,
   ToolCallEnvelope, ToolPolicyDecision, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome
@@ -190,6 +190,35 @@ func scenario_whole_registry(label: string) -> bool ! {IO} {
   rejects && names
 }
 
+-- ---------------------------------------------------------------------------
+-- 037 ADR-001 D2 -- THE ARTIFACT 031 ADR-001's Amendment 5 cites.
+--
+-- A registration whose `config` carries the key `registration_refusal`, set to
+-- a non-empty string, on the clean capability list: ONE mutation from the
+-- negative control, and the mutation is in `config`, which no rule at this
+-- boundary reads today. The row records what the host does with it AS IT
+-- STANDS: accepts it, and carries the config onto the entry byte for byte. So
+-- an extension that has found its own configuration broken has no way to make
+-- the host refuse to start -- `ExtRegistration` is `{ config, caps }` and has
+-- no error channel. This is the row that turns red when the check lands.
+-- ---------------------------------------------------------------------------
+pure func refusal_text() -> string {
+  "fixture: this extension found its own root broken and lists every violation here (one; two)"
+}
+pure func refusing_config() -> Json { jo([kv("registration_refusal", js(refusal_text()))]) }
+
+func scenario_refusal_key_as_the_host_stands(label: string) -> bool ! {IO} {
+  match normalize_registration("refuse#6", refusing_config(), clean()) {
+    Ok(e) => {
+      let ok = e.id == "refuse#6" && encode(e.config) == encode(refusing_config()) && kinds_of(e.caps) == kinds_of(clean());
+      let _ = if ok then println("  ✓ ${label}: ACCEPTED -- the host as it stands does not read `registration_refusal`; the entry carries config ${encode(e.config)} unchanged and all ${show(List.length(e.caps))} atoms")
+              else println("  ✗ ${label}: accepted, but the entry does not carry the registration's config and atoms unchanged");
+      ok
+    },
+    Err(r) => { let _ = println("  ✗ ${label}: expected acceptance by the host as it stands, got ${rejection_message(r)}"); false }
+  }
+}
+
 export func main() -> () ! {IO} {
   let _ = println("=== registry_multiplicity_dst (ADR-001 B4; D3 decided, D4 open = ${show(fold_kind_repeats_allowed())}, D7 omits = ${show(empty_registration_omits())}) ===");
   let _ = println("  -- the negative control --");
@@ -206,6 +235,8 @@ export func main() -> () ! {IO} {
   let r5 = scenario_fold_kind("second Compactor (fold kind)");
   let r6 = assert_rejected("a third ExitIntent reusing the label 'panes'", "duplicate-exit-label", "exit#5", duplicate_exit_label(),
     \r. match r { DuplicateExitLabel(_, l, p) => l == "panes" && p == 11, _ => false });
+  let _ = println("  -- 037 D2: a registration whose config carries registration_refusal --");
+  let a5 = scenario_refusal_key_as_the_host_stands("config carries registration_refusal (non-empty string)");
   let _ = println("  -- the whole build --");
   let w = scenario_whole_registry("registry of good + empty + bad");
   -- the harness's own control: the boundary must be able to reject at all
@@ -213,7 +244,7 @@ export func main() -> () ! {IO} {
     && (match normalize_registration("x", jo([]), clean()) { Ok(_) => true, Err(_) => false });
   let _ = if control then println("  ✓ control: the boundary both accepts and rejects")
           else println("  ✗ control: the boundary never rejects -- every row above is vacuous");
-  if c && r1 && r2 && r3 && r4 && r5 && r6 && w && control
+  if c && r1 && r2 && r3 && r4 && r5 && r6 && a5 && w && control
   then println("registry_multiplicity_dst PASS")
   else { let _ = println("registry_multiplicity_dst FAIL"); exit(1) }
 }
