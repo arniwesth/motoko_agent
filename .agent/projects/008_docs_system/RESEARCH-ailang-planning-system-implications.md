@@ -2,7 +2,8 @@
 
 Date: 2026-10-04
 Status: Research note. No decision taken. Candidate follow-ons are listed in §6.
-Amended the same day with §9, on Midspiral, and candidates 11 to 13.
+Amended the same day with §9, on Midspiral, and candidates 11 to 13; and with §10, on a public
+skills repository, and candidates 14 to 19.
 Grounded at: AILANG upstream `sunholo-data/ailang`, branch `dev`, commit `2a1f3f295` (2026-10-03),
 read from a sparse clone that is not in this tree. Motoko `main` at `cf54dff9`.
 Supersedes: the "Upstream comparison" section of `NOTE-docs-system-design-discussion.md`, surveyed
@@ -330,6 +331,12 @@ Candidates, not decisions. "ADR-001" is the plan-structure ADR in this directory
 | 11 | A round-trip check between a plan's prose and its dagr document: one model reads only the dagr document and says what will be done and what counts as done; a second compares that with the ADR's decisions | §9 | Guards the split D3 makes | Not built. The informalizer and comparator exist in `packages/motoko-ext-compose/claimcheck.ail` |
 | 12 | A report generated per ADR from the dagr documents: each decision, its tasks, their evidence tier, the commit. It also checks coverage both ways | §9 | Replaces hand-written status | Not built |
 | 13 | Every check gets its opposite direction, for example "every decision has a task" beside "no plan contains attempts" | §9 | Applies to its §6 | Not built |
+| 14 | Parallel work happens in separate git worktrees: one task, one worktree, one branch, stated in `AGENTS.md`, with a script, a status report and a commit hook | §10 | None | Drafted as PR #218 at the operator's request. The hook is not installed |
+| 15 | A short `AGENTS.md` that states the workflow, since every harness here loads it | §10 | None | Started by PR #218, which states the worktree rule only |
+| 16 | An overlap check before starting: which open pull requests and which uncommitted work touch the paths a task needs | §10 | Complements candidate 9 | Built as `tools/worktree/status.sh` in PR #218 |
+| 17 | `untested` as a first-class result, and a stamped evidence file per outcome (commit, branch, environment) | §10 | Supports D8 and dagr's evidence tiers | Not built |
+| 18 | Capture the "before" state before the fix, when it is cheapest | §10 | None | Not built |
+| 19 | A provenance table for vendored skills: source, licence, what was changed | §10 | None | Not built |
 
 Not to take: a markdown queue; status by directory; a hand-maintained index; rules added as prose
 amendments; and the scheduled-loop infrastructure, which is specific to AILANG's always-on rig.
@@ -420,3 +427,58 @@ Sources, all under midspiral.com/blog/:
 - `formally-verified-ai-generated-code-is-already-here/` (summary only)
 - `lemmascript-a-verification-toolchain-for-typescript/` (summary only)
 - `talking-software-correctness-at-antithesis-sf/` (summary only)
+
+## 10. Addendum: a public skills repository (2026-10-04)
+
+Added the same day at the operator's suggestion. `github.com/michaelshimeles/skills`, read at
+`4b72f46` (2026-09-17), is seven agent skills and an `AGENTS.md` that sequences them into four
+steps: isolate in a worktree, build, prove with evidence, ship with before-and-after proof and a
+review loop.
+
+Read in full: its `AGENTS.md` and `README.md`, and the skills `new-feature`,
+`evidence-driven-testing`, `greploop` and `unslop`. Of the evidence recorder
+(`evidence-driven-testing/scripts/evidence.py`) only its session states were read. `code-structure`
+and `before-and-after` were not read; they are specific to application and UI code.
+
+What bears on Motoko:
+
+1. **One task, one worktree, one branch.** Its `new-feature` skill starts every task in a fresh
+   worktree cut from `origin/main` and forbids reusing another agent's. The operator made this a
+   rule for this repository the same day. Measured here that day **[measured]**: nineteen agent
+   processes had been started in the shared checkout against one in a worktree, and the shared
+   checkout held 8 modified tracked files. Nothing an agent loads stated the rule; `AGENTS.md` was
+   empty. Candidate 14, drafted as PR #218.
+2. **A short `AGENTS.md` that states the workflow.** Theirs is 5 KB: the four steps, the
+   multi-agent rules and a completion checklist, with slots for what is specific to a repository.
+   Claude Code, Codex and Motoko all load the root `AGENTS.md` here, Motoko through
+   `src/core/agents_md.ail`. Candidate 15.
+3. **An overlap check before starting.** "Skim open PRs' changed files … and look for uncommitted
+   work in shared checkouts. On overlap, stop and ask for direction." Run on this repository
+   **[measured]**: 16 open pull requests, 181 files touched by more than one, `Makefile` in seven.
+   The same check found PR #216, whose operator ruling reversed part of F2 in the plan-structure
+   ADR; that became the ADR's second amendment. Candidate 16.
+4. **`untested` is a result.** Its recorder accepts `passed`, `failed` or `untested` and stamps
+   each session with the commit, branch and environment: "If a test cannot run … mark it
+   `untested` with the reason — never skip silently." In the seven local plan run files
+   **[measured]**: 155 outcomes, of which 79 are `verified`, 64 `reported` and 12 `heuristic`; 140
+   carry a receipt and every receipt is free text; 15 carry none. A `verified` outcome cannot
+   today be re-checked from its receipt. Candidate 17.
+5. **Capture the before state first.** "Capture the **before** state while reproducing the issue —
+   prior to fixing it, when it is cheapest". Candidate 18.
+6. **Say where a vendored skill came from.** Its `AGENTS.md` ends with a table of each skill's
+   source and what was changed. Of the five skills under `.claude/skills/` here, `dagr-producer`,
+   `herdr` and `observer` state no source **[measured]**. The `dagr-producer` copy is identical to
+   what the installed binary prints. Candidate 19.
+
+Not taken:
+
+- **The review loop.** It stops at a fixed ten rounds and resolves a thread it judges a false
+  positive. The disposition records of `tools/pr` and the convergence rule in the review-loop
+  meta-decision are stricter.
+- **The prose-cleanup skill.** A style decision for the operator, not a finding.
+
+One thing building candidate 14 turned up, recorded in PR #218: a commit hook cannot be installed
+through the repository's git config here, because the R7 audit
+(`.devcontainer/agent_confined/checks/r7_git_audit.py` on this branch; moved to
+`.devcontainer/agent_sandbox/checks/` on `main` since) names `core.hooksPath` among the settings
+through which agent-writable configuration runs as the operator on the host.
