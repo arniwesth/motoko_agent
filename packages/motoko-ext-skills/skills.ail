@@ -78,9 +78,12 @@ export pure func index_budget_chars() -> int { 16000 }
 export pure func size_check_pct() -> int { 25 }
 
 -- V7 is measured on the message the harness builds from the handler's result,
--- and that message carries the tool-call id. Registration has no call, so the
--- startup scan measures with an id of the length seen in session journals:
--- `call_` and 32 hex digits, 37 chars (ADR D8).
+-- and that message carries the tool-call id. Registration has no call, so V7
+-- measures with an id of the length seen in session journals: `call_` and 32
+-- hex digits, 37 chars (ADR D8). It uses this id at call time too, so V7 is a
+-- property of the file alone and a file that passed at startup passes on every
+-- call until it is edited. D8's size check, which is about one call, measures
+-- with that call's own id.
 export pure func nominal_call_id() -> string
   tests [((), "call_00000000000000000000000000000000")]
   { "call_00000000000000000000000000000000" }
@@ -323,8 +326,8 @@ export pure func envelope_message_chars(env: ToolResultEnvelope) -> int {
   length(envelope_message(env))
 }
 
-pure func size_violations(dir_name: string, text: string, call_id: string) -> [Violation] {
-  let n = envelope_message_chars(skill_result_envelope(call_id, dir_name, text));
+pure func size_violations(dir_name: string, text: string) -> [Violation] {
+  let n = envelope_message_chars(skill_result_envelope(nominal_call_id(), dir_name, text));
   if n > envelope_max_chars() then
     [violation(V7, skill_md_path(dir_name), concat(["the skill is too large to deliver whole: ", intToStr(n), " chars encoded, over the limit of ", intToStr(envelope_max_chars())]))]
   else []
@@ -335,9 +338,9 @@ pure func size_violations(dir_name: string, text: string, call_id: string) -> [V
 -- same rules as startup). Every rule the file breaks is returned: V7 is
 -- measured whether or not the frontmatter decodes, and V5 and V6 are
 -- independent of each other.
-export pure func check_skill_md(dir_name: string, text: string, call_id: string) -> Result[Skill, [Violation]] {
+export pure func check_skill_md(dir_name: string, text: string) -> Result[Skill, [Violation]] {
   let path = skill_md_path(dir_name);
-  let size = size_violations(dir_name, text, call_id);
+  let size = size_violations(dir_name, text);
   match decode_frontmatter(text) {
     Err(detail) => Err(violation(V4, path, detail) :: size),
     Ok(mapping) => {
@@ -472,7 +475,7 @@ pure func entry_outcome(entry: RootEntry) -> EntryOutcome {
     DirWithoutSkillMd(n) => { skills: [], violations: [violation(V1, skill_dir(n), concat(["the directory has no ", skill_md_name(), " (exact case)"]))] },
     DirUnreadableSkillMd(n, why) => { skills: [], violations: [violation(V3, skill_md_path(n), concat(["cannot be read: ", why]))] },
     DirWithSkillMd(n, text) =>
-      match check_skill_md(n, text, nominal_call_id()) {
+      match check_skill_md(n, text) {
         Ok(s) => { skills: [s], violations: [] },
         Err(found) => { skills: [], violations: found }
       }
@@ -588,10 +591,11 @@ export pure func size_error(skill: string, tokens: int, declared_limit: int) -> 
 }
 
 -- What a `Skill` call returns for text the handler has just read (D10): the
--- per-file rules, then the size check. `Ok` is the envelope to return; `Err`
--- is the text of the tool error, naming each rule broken.
+-- per-file rules, then the size check on the message this call would produce.
+-- `Ok` is the envelope to return; `Err` is the text of the tool error, naming
+-- each rule broken.
 export pure func load_skill(dir_name: string, text: string, call_id: string, declared_limit: int) -> Result[ToolResultEnvelope, string] {
-  match check_skill_md(dir_name, text, call_id) {
+  match check_skill_md(dir_name, text) {
     Err(found) => Err(join(" ", map(violation_text, found))),
     Ok(_) => {
       let env = skill_result_envelope(call_id, dir_name, text);
@@ -621,21 +625,21 @@ pure func rules_of(found: [Violation]) -> string {
 
 -- The rules a file breaks, as `V4,V7`; the empty string when it is valid.
 pure func file_rules(dir_name: string, text: string) -> string {
-  match check_skill_md(dir_name, text, nominal_call_id()) {
+  match check_skill_md(dir_name, text) {
     Ok(_) => "",
     Err(found) => rules_of(found)
   }
 }
 
 pure func file_detail(dir_name: string, text: string) -> string {
-  match check_skill_md(dir_name, text, nominal_call_id()) {
+  match check_skill_md(dir_name, text) {
     Ok(_) => "",
     Err(found) => join(" ", map(violation_text, found))
   }
 }
 
 pure func file_description(dir_name: string, text: string) -> string {
-  match check_skill_md(dir_name, text, nominal_call_id()) {
+  match check_skill_md(dir_name, text) {
     Ok(s) => s.description,
     Err(_) => "<refused>"
   }
@@ -916,6 +920,24 @@ pure func test_v7_reproduces_the_prototype_measurement() -> bool
     let text = concat(["---\nname: workdir-stamp\ndescription: x\n---\n", repeat("0123456789", 6100)]);
     envelope_message_chars(skill_result_envelope("call_0123456789abcdef0123456789abcdef", "workdir-stamp", text)) == 61200
       && file_rules("workdir-stamp", text) == "V7"
+  }
+
+-- V7 is the file's, not the call's: a file at the limit loads under a longer
+-- call id, and the message it produces is still far under the harness's cut at
+-- 65,536 chars. The size check is the call's, and does see the longer id.
+pure func test_v7_does_not_move_with_the_call_id() -> bool
+  tests [((), true)]
+  {
+    let at = md_of_message_chars(60000);
+    let long_id = repeat("c", 137);
+    (match load_skill("a", at, long_id, 0) {
+      Ok(env) => envelope_message_chars(env) == 60100 && env.tool_call_id == long_id,
+      Err(_) => false
+    })
+      -- 60,000 chars is 15,000 tokens and 60,100 is 15,025: one loads at a
+      -- declared 60,004, the other does not
+      && (match load_skill("a", at, nominal_call_id(), 60004) { Ok(_) => true, Err(_) => false })
+      && (match load_skill("a", at, long_id, 60004) { Ok(_) => false, Err(why) => startsWith(why, "Skill 'a' does not fit") })
   }
 
 pure func test_v7_is_reported_beside_the_other_rules() -> bool

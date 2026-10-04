@@ -1,0 +1,50 @@
+-- 037 P3 evidence driver: the pure core on the five real skills in
+-- .claude/skills, read from disk by this driver (the package itself reads
+-- nothing). Run from packages/motoko-ext-skills; not part of the package.
+module sunholo/motoko_ext_skills/zz_real_skills
+
+import std/io (println)
+import std/fs (readFileResult)
+import std/list (map, foldl)
+import std/result (Result, Ok, Err)
+import std/string (concat, intToStr, length, join)
+import pkg/sunholo/motoko_ext_skills/skills (
+  RootEntry, RootEntries, RegularFile, DirWithSkillMd, DirUnreadableSkillMd,
+  ScanResult, Accepted, Refused, Skill,
+  scan, refusal_of, index_text, skill_names, skill_tool_description, in_name_order,
+  skill_result_envelope, envelope_message_chars, estimate_tokens, nominal_call_id,
+  load_skill
+)
+
+func entry(dir_name: string) -> RootEntry ! {FS} {
+  match readFileResult(concat(["../../.claude/skills/", dir_name, "/SKILL.md"])) {
+    Ok(text) => DirWithSkillMd(dir_name, text),
+    Err(why) => DirUnreadableSkillMd(dir_name, why)
+  }
+}
+
+func size_row(e: RootEntry) -> string {
+  match e {
+    DirWithSkillMd(n, text) => {
+      let chars = envelope_message_chars(skill_result_envelope(nominal_call_id(), n, text));
+      let at_20000 = match load_skill(n, text, nominal_call_id(), 20000) { Ok(_) => "loads", Err(_) => "refused" };
+      concat(["  ", n, ": file ", intToStr(length(text)), " chars, message ", intToStr(chars), " chars, ", intToStr(estimate_tokens(chars)), " tokens; at a declared limit of 20000: ", at_20000])
+    },
+    _ => "  (not a skill file)"
+  }
+}
+
+export func main() -> () ! {IO, FS} {
+  let names = ["ailang-feedback", "dagr-producer", "herdr", "observer", "pr-review-loop"];
+  let entries = [entry("ailang-feedback"), entry("dagr-producer"), entry("herdr"), entry("observer"), entry("pr-review-loop")];
+  println(concat(["listing in name order: ", if in_name_order(names) then "true" else "false"]));
+  match scan(RootEntries(RegularFile("README.md") :: entries)) {
+    Refused(found) => println(concat(["REFUSED: ", refusal_of(Refused(found))])),
+    Accepted(skills) => {
+      println(concat(["accepted: ", join(", ", skill_names(skills))]));
+      println(concat(["index: ", intToStr(length(index_text(skills))), " chars of a 16000 budget; Skill description: ", intToStr(length(skill_tool_description(skills))), " chars"]));
+      println(index_text(skills))
+    }
+  };
+  println(join("\n", map(size_row, entries)))
+}
