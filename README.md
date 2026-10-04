@@ -11,7 +11,7 @@ Things are going to break.
 ## Table of Contents
 
 - [Highlights](#highlights)
-- [Installation](#installation)
+- [Running Motoko](#running-motoko)
 - [Configuration](#configuration)
 - [Usage](#usage)
 - [Extensions](#extensions)
@@ -23,35 +23,119 @@ Things are going to break.
 ## Highlights
 
 - **Autonomous execution** — plans and runs commands without pausing for approval
-- **Loadable extensions** — context-aware execution, web search, graph-based code ops, multi-agent composition, MCP bridge
-- **Terminal UI** — inline session rendering, `/model` picker, abort at any step
+- **Two ready-made environments** — a confined agent container for letting agents work, and a VS Code dev container for hands-on work
+- **Loadable extensions** — context-aware execution, web search, scratchpad cells, compaction, loop guards, MCP bridge
+- **Delegation** — hands sub-tasks to other coding agents (`claude`, `codex`, `omp`) running in [herdr](https://herdr.dev) panes
+- **Terminal UI** — inline session rendering, `/model` and `/profile` pickers, abort at any step
 - **JSON profiles** — named configs under `.motoko/config/` for per-project or per-provider setups
-- **VS Code dev container** — one-click development environment
+- **Self-verification** — Z3 contracts on the pure core modules and a deterministic simulation testing (DST) sweep of the runtime
 
-## Installation
+## Running Motoko
 
-### Prerequisites
+The two easiest ways to run Motoko are containers that come with the whole toolchain installed. They work on the same checkout, so you can use them side by side.
+
+| | [Agent sandbox](#agent-sandbox) | [VS Code dev container](#vs-code-dev-container) |
+|---|---|---|
+| What it is | A confined container that Motoko and its delegates live in | A regular VS Code dev container |
+| Good for | Letting agents work, including unattended | Editing, reading and reviewing with VS Code attached |
+| Started from | A terminal on the host | *Reopen in Container* in VS Code |
+| Privileges | No `sudo`, SSH or Docker socket; egress only through a proxy; GitHub only as a bot account | `sudo`, and VS Code forwards your own GitHub credentials |
+
+A [native install](#native-install) is the third option, for when you would rather not use Docker.
+
+### API keys
+
+All three read provider keys from a `.env` file in the repo root (gitignored):
+
+```bash
+OPENROUTER_API_KEY=sk-or-...
+```
+
+The default profile uses an OpenRouter model, so that one key is enough to start. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY` and `EXA_API_KEY` (web search) are picked up the same way. [Model identifiers](#model-identifiers) lists which key each model string needs.
+
+### Agent sandbox
+
+`agent_confined` is a container built for an agent rather than for a person. VS Code cannot attach to it, and everything the agent needs is baked into the image: the AILANG toolchain, herdr, the `claude`, `codex` and `omp` CLIs, and a headless browser. You drive it from a terminal on the host with `agent.sh`.
+
+You need Docker on the host (OrbStack or Docker Desktop) and the `.env` file above; the launcher refuses to start without one.
+
+```bash
+# In a terminal on your machine, from the repo root. Not inside a container.
+.devcontainer/agent_confined/agent.sh build       # first run only: build the image (several minutes) and start it
+.devcontainer/agent_confined/agent.sh bootstrap   # first run only: TUI dependencies and herdr integrations
+.devcontainer/agent_confined/agent.sh             # attach; detach with ctrl+b q
+```
+
+Attaching puts you in herdr, a terminal multiplexer for coding agents. Start Motoko in a pane:
+
+```bash
+make run
+```
+
+Panes keep running after you detach, and running `agent.sh` again re-attaches to them.
+
+| Command | What it does |
+|---|---|
+| `agent.sh shell` | A bash prompt in the container, outside herdr |
+| `agent.sh run <command>` | A one-shot command in the container, e.g. `agent.sh run make test` |
+| `agent.sh session=<name>` | Start or re-attach to a second, independent herdr session |
+| `agent.sh stop` | Stop and remove the container, ending every session |
+| `agent.sh build` | Rebuild the image and restart |
+| `agent.sh check` | Assert that the container still has the properties below |
+| `agent.sh help` | Everything else |
+| `make studio` | Start Herdr Studio in the container and print its browser URL (run on the host) |
+
+What the sandbox takes away, and why it is where agents run:
+
+- **No VS Code attach.** Attaching is what forwards your GitHub login and ssh-agent socket into a container, so this profile has no `devcontainer.json` and never appears in the *Reopen in Container* picker.
+- **No `sudo`, no SSH client, no Docker socket.** The agent cannot install its way around a missing tool; new tools are an image rebuild from the host.
+- **One way out.** The container sits on an internal network and reaches the internet only through a forward proxy that refuses private and reserved address ranges.
+- **A bot identity.** Git and GitHub operations act as a machine user (`MOTOKO_BOT_GH_TOKEN`), never as you.
+- **Keys from the environment only.** `.env` reads as empty inside the container; a curated list of keys is injected when the container is created. After editing `.env`, run `agent.sh stop` and start again.
+
+The boundary is around the container, not the working tree: the checkout is shared with the host, so anything an agent writes there is on your disk too. `.devcontainer/`, `.vscode/` and `.git/hooks` are mounted read-only inside, which means changes to the sandbox itself are made from the host.
+
+Full details, the acceptance checks and the known gaps are in [.devcontainer/agent_confined/README.md](./.devcontainer/agent_confined/README.md).
+
+### VS Code dev container
+
+A normal dev container, for working in the repo yourself.
+
+1. Open the repo folder in VS Code with the Dev Containers extension installed and run **Dev Containers: Reopen in Container**.
+2. Pick a profile:
+   - **Motoko Agent** — the default, just the app container.
+   - **Motoko Agent Observability** — adds ClickStack/HyperDX and a log collector, for shipping Motoko logs and traces.
+3. When the container is ready, run Motoko from the integrated terminal:
+
+```bash
+make run
+```
+
+The image build installs every prerequisite and the post-create step builds the TUI. `.env` is optional here and is passed into the container whole.
+
+This container has `sudo`, and VS Code forwards your own credentials into it, so treat it as your workspace rather than as a place to leave an agent unattended. Ports, GitHub credentials and the observability setup are covered in [.devcontainer/README.md](./.devcontainer/README.md).
+
+### Native install
+
+For Debian/Ubuntu and macOS, without Docker:
+
+```bash
+./scripts/install-prerequisites.sh    # or: make install
+export OPENROUTER_API_KEY=sk-or-...   # or put it in .env
+make run
+```
+
+The script installs everything Motoko needs:
 
 | Dependency | Version |
 |---|---|
 | Go | >= 1.22 |
 | Bun | >= 1.x |
 | Node.js | >= 18 |
+| AILANG | built from source at the tag pinned as `AILANG_REF` in the script |
+| Z3, DuckDB, GitHub CLI, `context-mode` | installed by the script |
 
-Rust is optional (Omnigraph extension only). The install script handles all dependencies.
-
-### Quick start
-
-```bash
-./scripts/install-prerequisites.sh   # Installs Go, Bun, Node, AILANG, TUI deps
-export OPENROUTER_API_KEY=sk-or-...
-make run
-make run TASK="Fix the off-by-one error in parse_config"
-```
-
-### VS Code Dev Container
-
-Open the repo in VS Code with the Dev Containers extension. The container pre-installs everything and builds the TUI automatically. Run `make run` inside.
+Optional extras: `--with-omnigraph` (Omnigraph CLI, needs Rust), `--with-lean` and `--with-lean-mathlib` (Lean 4 backend for scratchpad cells).
 
 ## Configuration
 
@@ -75,6 +159,7 @@ make init-config PROFILE=myprofile
 .motoko/config/
   default/
     config.json          Model, workdir, max_steps, extensions
+    compaction_ai.json   (optional)
     compose.json         (optional)
     context_mode.json    (optional)
     exa_search.json      (optional)
@@ -148,9 +233,38 @@ id in AILANG's routing rules, not the direct Vertex form. Use bare
 
 ## Usage
 
+The same commands work in the sandbox, the dev container and a native install:
+
+```bash
+make run                                                   # build, then open the TUI and ask for a task
+make run TASK="Fix the off-by-one error in parse_config"   # start with a task
+make motoko                                                # start without rebuilding
+PROFILE=openrouter make run                                # pick a config profile
+MODEL=anthropic/claude-sonnet-4-6 make run                 # override the model for one run
+```
+
+`make run` rebuilds first: it syncs the extension packages, type-checks the core and builds the TUI. Once that has passed, `make motoko` skips straight to the TUI.
+
+Inside the TUI:
+
+| Command | What it does |
+|---|---|
+| `/model` | Switch model; opens a picker, or `/model <name>` switches directly |
+| `/profile` | Switch profile; opens a picker, or `/profile <name>` switches directly |
+| `/restart` | Restart the session, optionally with a different profile |
+| `/abort` | Stop the runtime process |
+
+For scripted runs, call the launcher directly:
+
+```bash
+./scripts/run-agent.sh --headless "Add unit tests for the parser"   # plain output, exits when done
+./scripts/run-agent.sh --oneshot "Add unit tests for the parser"    # one task with the TUI, then exit
+WORKDIR=/path/to/repo ./scripts/run-agent.sh                        # operate on another repo
+```
+
 ### How it works
 
-1. The TUI spawns the AILANG runtime as a child process
+1. The TUI starts an environment server and spawns the AILANG runtime as a child process
 2. The runtime loops up to `max_steps`:
    - Calls the LLM with full conversation history
    - Extracts and executes tool calls (bash, file ops, search, tests, extensions)
@@ -159,41 +273,56 @@ id in AILANG's routing rules, not the direct Vertex form. Use bare
 
 ## Extensions
 
-| Extension | Purpose | Requires | Notes |
-|---|---|---|---|
-| context_mode | Context-efficient tool execution | `context-mode` npm package | |
-| exa_search | Web search via Exa API | `EXA_API_KEY` | |
-| omnigraph | Graph-based code operations | `omnigraph` CLI | |
-| compose | Multi-agent composition | Subagent model (optional) | Highly experimental, partly non-functional |
-| mcp | MCP protocol bridge | MCP server endpoints | |
+Extensions are AILANG packages under `packages/`. Enable one by listing it in `extensions.order` in your profile's `config.json`. Those marked ✓ are on in the default profile.
 
-Enable by listing in `extensions.order` in your profile's `config.json`.
+| Extension | Default | Purpose | Requires |
+|---|---|---|---|
+| context_mode | ✓ | Context-efficient tool execution | `context-mode` npm package |
+| exa_search | ✓ | Web search via Exa API | `EXA_API_KEY` |
+| scratchpad | ✓ | Persistent evaluation cells in Python, JS, AILANG and Lean | Lean cells need `--with-lean` |
+| compaction_ai | ✓ | AI-powered conversation compaction | |
+| compaction_structural | ✓ | Structural conversation compaction | |
+| empty_stop_guard | ✓ | Continues once when a model returns an empty stop response | |
+| progress_contract_guard | ✓ | Continues when a stop candidate reports the task as still in progress | |
+| repetition_guard | ✓ | Breaks no-progress loops of repeated tool calls or answers | |
+| herdr | ✓ | Delegates sub-tasks to coding agents in herdr panes | A herdr pane; inert anywhere else |
+| agentcli | | Delegates sub-tasks to subscription-authenticated coding-agent CLIs | `codex` or `claude` CLI |
+| a2a | | Delegates to configured A2A agents | Agent endpoints |
+| compose | | Multi-agent composition | Subagent model (optional). Highly experimental, partly non-functional |
+| mcp | | MCP protocol bridge | MCP server endpoints |
+| omnigraph | | Graph-based code operations | `omnigraph` CLI |
+| microrag | | Just-in-time knowledge retrieval via `ailang micro-rag` | |
+| ailang_docs | | AILANG documentation lookups as typed tools | A workdir with an `ailang.toml` |
+| ailang_tools | | AILANG-aware file tools: `ailang check` after every `.ail` write or edit | |
+| decision_framework | | Injects a four-decision ladder into the system prompt | |
 
 ### Adding a new extension
 
-The fastest path (AILANG ≥ 0.18.5) — scaffold a working extension package in one command:
+Extensions are path dependencies of the root package, so a new one is added in this repo:
+
+1. Copy `packages/motoko-ext-test-dummy/`, a minimal no-op extension, to `packages/motoko-ext-<name>/` and rename its package and module to `motoko_ext_<name>`.
+2. Add it to `ailang.toml` twice: under `[dependencies]` (the path) and in `[extensions].packages` (name and version).
+3. List `<name>` in your profile's `extensions.order`.
+4. Regenerate the registry and build:
 
 ```bash
-cd ../ailang-packages
-ailang init motoko-extension \
-  --name <yourorg>/motoko_ext_<name> \
-  --tools "Tool1,Tool2" \
-  --effects "FS,Process,Env"
-# → packages/motoko-ext-<name>/ ready to type-check, all 8 hooks no-op'd
+make registry_gen   # rewrites src/core/ext/registry_generated.ail from ailang.toml
+make build          # syncs packages, type-checks, boot-probes the profile's extensions
 ```
 
-Then edit `<name>.ail` to fill in the real tool logic, wire the package into `motoko_agent/ailang.toml` (`[dependencies]` + `[extensions].packages`), and run `ailang generate-extension-registry`.
+Use `make registry_gen`, not the upstream `ailang generate-extension-registry`, which emits an older registry shape. The `ailang init motoko-extension` scaffolder has the same limitation: it targets extension ABI 2.x, while the packages here are on ABI 8.0 (`packages/motoko-ext-abi`). The ABI's design record is in `.agent/projects/017_extension_handling/`.
 
-Full walkthrough (incl. file-by-file content + common pitfalls): [Build Your First motoko Extension](https://ailang.sunholo.com/docs/guides/build-a-motoko-extension).
-
-For publishing your extension to the AILANG package registry: [Publishing Your Package](https://ailang.sunholo.com/docs/guides/package-publishing).
+For publishing an extension to the AILANG package registry: [Publishing Your Package](https://ailang.sunholo.com/docs/guides/package-publishing).
 
 ## Development
 
 ```bash
-make test          # Core runtime tests
-make check_core    # Type-check all .ail modules
-make build         # Full build: sync + check + build_tui
+make build              # Full build: sync packages + check_core + build_tui
+make check_core         # Type-check src/core and boot-probe the active profile's extensions
+make test               # Core runtime tests
+make test_integration   # Integration tests
+make verify_core        # Z3 contract verification of the pure core modules
+make dst                # Deterministic simulation testing sweep
 ```
 
 TypeScript frontend tests: `cd src/tui && bun run test`.
@@ -203,13 +332,18 @@ TypeScript frontend tests: `cd src/tui && bun run test`.
 ```
 motoko_agent/
 ├── src/
-│   ├── core/                   AILANG runtime (rpc, parse, prompts, supervisor)
-│   │   └── ext/                Extensions (compose, context_mode, exa_search, mcp, omnigraph)
-│   ├── tui/                    TypeScript terminal UI (pi-tui)
+│   ├── core/                   AILANG runtime (agent loop, session, journal, tools, DST drivers)
+│   │   └── ext/                Extension host and the generated registry
+│   ├── tui/                    TypeScript terminal UI and launcher (pi-tui)
+│   ├── eval/                   Journal evaluation (admission runs, candidate checks)
 │   └── examples/
-├── scripts/                    Install, run, sync-extension scripts
+├── packages/                   Extension packages (motoko-ext-*), the extension ABI, conformance suite
+├── scripts/                    Install, run, smoke and verification scripts
+├── tools/                      Repo tooling (PR pipeline, registry generator, code graph, inventories)
+├── benchmarks/                 Benchmark harness
+├── .devcontainer/              Dev container profiles and the agent_confined sandbox
 ├── .motoko/config/             JSON profile configs
-├── .agent/                     Design archive (plans, summaries)
+├── .agent/                     Design archive (projects, ADRs, plans, summaries, PR records)
 ├── omnigraph/                  Graph schema, queries, seed
 └── papers/                     Research paper reading list
 ```
