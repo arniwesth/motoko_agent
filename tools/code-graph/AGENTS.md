@@ -15,7 +15,8 @@ The default profile is `core`: `src/core/**`, excluding smoke scripts, examples,
 `*_test.ail`, and `src/core/test/**`. Use `--profile=all` for the broad graph
 (`src/**`, `scripts/**`, `examples/**`, and `packages/**`) or `--include-tests` to include core tests. The full typed/effect pass uses
 `ailang iface`; run `ailang lock` first when registry hydration is needed. Generated
-artifacts live in `tools/code-graph/.out/`.
+artifacts live in `tools/code-graph/.out/`. The `ailang iface` calls run in parallel
+(`CODE_GRAPH_JOBS`, default up to 8); the emitted tables do not depend on it.
 
 Query examples:
 

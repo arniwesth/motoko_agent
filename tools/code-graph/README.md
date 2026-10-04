@@ -26,6 +26,10 @@ python3 tools/code-graph/viz/visualize.py --core-extensions
 tools/code-graph/smoke.sh
 ```
 
+The typed pass runs `ailang iface` once per module, eight at a time by default
+(fewer on a smaller machine). Set `CODE_GRAPH_JOBS=<n>` to change that; `1` runs them
+one after another. The emitted tables are the same at any setting.
+
 Default extraction uses the `core` profile: `src/core/**`, excluding smoke scripts,
 examples, `*_test.ail`, and `src/core/test/**`. `--profile=all` builds the broad
 repo graph over `src/**`, `scripts/**`, `examples/**`, and `packages/**`;
