@@ -46,14 +46,14 @@ reserves one key of `config` and states what the host does with it.
 record the ABI exports no constructor for gains no field in 8.x (the ABI header's rule 1,
 `packages/motoko-ext-abi/types.ail:27`). So an extension that finds at registration that it must
 not be started had no way to say so — the case that raised it is 037 ADR-001 D1, a skill root that
-breaks a rule. 037 PLAN-001 P2 put the gap in a fixture in the
-registration-boundary script (`scripts/dst/registry_multiplicity_dst.ail`): a registration on the
-clean capability list whose `config` is `{"registration_refusal": "<a non-empty string>"}`. At
-`cfdf74c1`, against the host as it stood, `make registry_multiplicity` reported that row
-**accepted**, the entry carrying the config unchanged and all eleven atoms
-(`../037_skills_system/evidence/p2/amendment-5/ARTIFACT.txt`, with both raw logs). The key was
-unused: no match for it under `src`, `packages`, `scripts` or `tools` at `18065e4a`. The same row
-went red when the check landed (`fdeda2cc`) and now asserts the refusal.
+breaks a rule. 037 PLAN-001 P2 put the gap in a fixture in the registration-boundary script
+(`scripts/dst/registry_multiplicity_dst.ail`): a registration on the clean capability list whose
+`config` is `{"registration_refusal": "<a non-empty string>"}`. At `cfdf74c1`, against the host as
+it stood, `make registry_multiplicity` reported that row **accepted**, the entry carrying the
+config unchanged and all eleven atoms (`../037_skills_system/evidence/p2/amendment-5/ARTIFACT.txt`,
+with both raw logs). The key was unused: no match for it under `src`, `packages`, `scripts` or
+`tools` at `18065e4a`. The same row went red when the check landed (`fdeda2cc`) and now asserts
+the refusal.
 
 **The rule.** The top-level key `registration_refusal` of `ExtRegistration.config` is reserved,
 and an extension uses it for nothing else. An extension that refuses sets it and still returns its
