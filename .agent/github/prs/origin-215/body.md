@@ -36,6 +36,7 @@ This PR adds documents and one evidence script only. Nothing the ADR decides is 
 - docs(008): research — AILANG's planning and docs system read in full, with the readers' notes
 - docs(008): amend ADR-001 with D8 — a started task's acceptance terms change only by directive
 - docs(008): amend ADR-001 again — F2 is reversed in part, the dagr fork is adopted
+- docs(008): research — candidates from a public skills repository, with worktree isolation first
 - chore(github) commits recording this PR
 
 12 files under `.agent/projects/008_docs_system/`: the ADR, the research note, nine evidence
@@ -66,9 +67,12 @@ What the research note adds, in short:
 - Its decision ledger, a marked block a script validates, is the part that held up.
 - Status encoded in a directory path drifts both ways there: 27 completed sprints' design docs
   still sit in `planned/`, and 51 sprint files point at a path that no longer exists.
-- Thirteen candidate follow-ons for Motoko are listed in the note's §6. None is decided by this PR.
+- Nineteen candidate follow-ons for Motoko are listed in the note's §6. None is decided by this PR.
+  One, the worktree rule, is drafted separately as PR #218 at the operator's request.
 - An addendum (§9) covers Midspiral, the source of the observation behind D8. Motoko already uses
   its claimcheck technique in `packages/motoko-ext-compose/claimcheck.ail`.
+- A second addendum (§10) covers a public skills repository, `michaelshimeles/skills`. Its overlap
+  check, run here, is what found PR #216.
 
 ## Governing docs
 
@@ -133,6 +137,13 @@ What was checked while writing the second amendment:
 - 51 local paths in the amended ADR were checked. One does not resolve on this branch, as the ADR
   says: 021's ADR-002, which is on PR #216's branch.
 
+What was checked while writing the skills-repository addendum:
+
+- The repository was read at `4b72f46`; six of its files in full.
+- Counts marked `[measured]` in §10 came from scripts in the session: agent processes by working
+  directory, modified files in the shared checkout, files shared between open pull requests, and
+  the evidence tiers and receipts in the local plan run files.
+
 Not done:
 
 - [ ] `make verify_dagr_producer` was not re-run
@@ -149,6 +160,8 @@ Not done:
 - [ ] Where an operator's ruling lives between sessions is open
 - [ ] Which of the two ADRs' extension changes lands first is not ruled
 - [ ] Three of Midspiral's ten posts were read only as summaries and two were not read
+- [ ] Two of the skills repository's skills and its recorder's code were not read
+- [ ] The receipt counts come from gitignored local files and cannot be repeated from the tree
 - [ ] Most statements in the research note rest on a reader's notes and were not re-checked
 - [ ] AILANG's incident numbers are its own records; none was checked against logs or CI
 - [ ] The AILANG clone had no git history, so claims about change over time come from dates in
