@@ -3,7 +3,7 @@ repo: arniwesth/motoko_agent
 pr: 215
 branch: arniwesth/008-plan-structure-in-dagr
 ticket: null
-title: "docs(008): ADR-001 — plan structure lives in a committed dagr document, Linear is retired"
+title: "docs(008): ADR-001 — plan structure lives in a committed dagr document, Linear is retired; with the AILANG planning research"
 ---
 
 ## Summary
@@ -13,14 +13,22 @@ structure. The structure of planned work is written in three places today (Linea
 prose, and gitignored `.dagr/` files) and none is authoritative; the ADR gives each plan one
 committed `PLAN-NNN.dagr.json` and keeps run state local.
 
-This PR adds the document only. Nothing it decides is executed here: the Linear coupling in
+It also adds a research note on how upstream AILANG runs its planning and documentation, read
+after the ADR was accepted, with the nine readers' notes filed as evidence. The note is outside
+evidence for the ADR's D2 and D3: AILANG's one machine-checked planning block held, and its prose
+queue did not.
+
+This PR adds documents only. Nothing the ADR decides is executed here: the Linear coupling in
 `tools/pr`, `.mcp.json` and the devcontainer is still in the tree.
 
 ## Changes
 
 - docs(008): ADR-001 — plan structure lives in a committed dagr document, Linear is retired
+- docs(008): research — AILANG's planning and docs system read in full, with the readers' notes
+- chore(github) commits recording this PR
 
-1 file changed.
+11 files under `.agent/projects/008_docs_system/`: the ADR, the research note, and nine evidence
+files (about 525 KB) under `evidence/ailang-survey/`.
 
 What the ADR decides, in short:
 
@@ -37,9 +45,19 @@ What the ADR decides, in short:
 The operator closed the four forks on 2026-10-04, each as recommended. One thing is still owed
 from that ruling: which of the 24 open Linear issues are still wanted (Appendix A).
 
+What the research note adds, in short:
+
+- AILANG's queue of planned work is 749 KB of prose that a program cannot parse for open work.
+  AILANG itself dropped "open queue rows" as its progress measure.
+- Its decision ledger, a marked block a script validates, is the part that held up.
+- Status encoded in a directory path drifts both ways there: 27 completed sprints' design docs
+  still sit in `planned/`, and 51 sprint files point at a path that no longer exists.
+- Ten candidate follow-ons for Motoko are listed in the note's §6. None is decided by this PR.
+
 ## Governing docs
 
 - `.agent/projects/008_docs_system/ADR-001-plan-structure-in-dagr-and-retiring-linear.md`
+- `.agent/projects/008_docs_system/RESEARCH-ailang-planning-system-implications.md`
 - `.agent/projects/021_herdr_delegation/DESIGN-dagr-as-delegation-view.md` §10 — the plan/run split
   this builds on, and the rule D4 changes
 - `.agent/issues/herdr-extension-run-file-drifts-from-operator-plan-file.md` — the open issue D2,
@@ -58,9 +76,11 @@ plan and the settled run agree on task ids and dependencies at close-out; and th
 issue closes. Its kill criterion: if the orchestrator makes structural edits in a `.dagr/` copy
 that never reach the committed plan during the first two plans run this way, D2 has failed.
 
+The research note makes no prediction. Its candidates become checkable only if one is taken up.
+
 ## Test evidence
 
-No code changed, so there is nothing to build. What was checked while writing:
+No code changed, so there is nothing to build. What was checked while writing the ADR:
 
 - `dagr check --strict` (0.3.1) on structure-only projections of the seven existing plan files:
   clean on the 28-task and 40-task plans once `generated_at` is present; W100 without it.
@@ -71,6 +91,15 @@ No code changed, so there is nothing to build. What was checked while writing:
   missing.
 - Linear was read through its MCP server on 2026-10-04: 137 issues, 24 not closed.
 
+What was checked while writing the research note:
+
+- AILANG was read at `sunholo-data/ailang` `dev` `2a1f3f295` from a sparse clone.
+- Twelve statements the note leans on were re-read in the AILANG source and all held. They are
+  marked `[checked]` in the note.
+- Counts marked `[measured]` were produced by scripts in the session.
+- Every local path the note cites resolves in this branch.
+- The evidence files were scanned for emails, tokens and home-directory paths: none found.
+
 Not done:
 
 - [ ] `make verify_dagr_producer` was not re-run
@@ -79,5 +108,11 @@ Not done:
 - [ ] Three of the four checks the ADR names (§6) do not exist yet
 - [ ] Only MOT-136 and MOT-134 of the 24 open Linear issues were compared with the tree
 - [ ] The probe scripts are not in the tree
+- [ ] Most statements in the research note rest on a reader's notes and were not re-checked
+- [ ] AILANG's incident numbers are its own records; none was checked against logs or CI
+- [ ] The AILANG clone had no git history, so claims about change over time come from dates in
+      the text
+- [ ] Parts of AILANG's coordinator, messaging and docs site were not opened; the note's §7 lists
+      them
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
