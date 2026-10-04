@@ -339,13 +339,31 @@ Decided for v1:
   tokens of the message the harness will build from its result, which is the JSON-encoded
   envelope and is what the compactor measures, with the compactor's own arithmetic (chars over
   four). It returns a tool error instead of the text if that is 25% of the limit or more. The error says
-  the skill does not fit this model's context. The threshold sits under the compactor's 30% so
-  that a skill the handler does return is never cut by that rule. With the limit unknown (0)
+  the skill does not fit this model's context. With the limit unknown (0)
   the skill loads.
+
+  The check compares against the declared window, which is what the handler is given
+  (`raw_window_of`, `src/core/session.ail:3601`, `:3645`). The structural compactor caps a
+  tool result at 30% of a smaller working limit — the declared window less 65,536 tokens
+  of output allowance and less the system prefix, floored at 0 (`working_budget_for_ext`,
+  `src/core/context_limit.ail:91`). So a skill the handler returns can still be capped:
+  the 25% threshold sits under the compactor's 30% only when the two limits are close.
+  Shown in P1 (`NOTE-p1-prototype-results.md` §6.1, recorder session `dry/cap-80000`,
+  archived in `evidence/p1/captures/`): at a declared 80,000 (working limit 12,528)
+  `dagr-producer` loaded at 7.6% of the declared window and was capped in the next
+  request at 48% of the working limit, with a reload capped again as the newest tool
+  result. By the arithmetic of the two rules, the affected declared windows are about
+  67,500 to 87,700 for a skill that size, and up to about 117,500 for a skill at V7's
+  60,000-char limit. (Operator ruling 2026-10-04: keep the declared-window check; the
+  alternative — handing the handler the working limit — is a core change that would
+  switch the check off at declared windows of about 67,500 or less, where P1.3d showed
+  it working.)
 - **The standing instruction**, as before.
 - **A deterministic check** (A6b) that a skill within both size bounds, loaded as the newest
-  tool result, is whole in the next request at any usage. That holds for the structural
-  compactor. `compaction_ai` can fold even the newest message when it alone exceeds the tail
+  tool result, is whole in the next request at any usage. Each side is tested with the
+  limit it is actually given — the handler with the declared window, the compactor with
+  the working limit — so the split above is documented, not hidden. That holds for the structural
+  compactor only where the two limits are close (see the size check). `compaction_ai` can fold even the newest message when it alone exceeds the tail
   budget (`keep_recent_tokens`; `compaction_ai.ail:264`, `:273`). At the default, and at the
   20,000 that three profiles set, a skill within V7 is safe; under a smaller budget it is not.
   A6b tests that split as well.
