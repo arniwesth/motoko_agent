@@ -1,0 +1,1215 @@
+-- The pure core of the skills extension (037 ADR-001; PLAN-001 P3).
+--
+-- Everything here is a function of a directory LISTING and FILE CONTENTS that
+-- the caller has already read. Nothing in this module touches the filesystem,
+-- the environment or a port, so every rule is testable inline. The effectful
+-- shell -- discovery at registration, the `Skill` handler -- is `register.ail`
+-- (PLAN-001 P4), and it passes what it read to the functions below.
+--
+-- What is here, by ADR decision:
+--   D9   `frontmatter_block`, `decode_frontmatter`  the block and its decoding
+--   D1   `scan`, `check_skill_md`                   R1 and V1..V8
+--   D4   `index_text`, `skill_tool_description`     the index and its budget
+--   D8   `size_check`, `load_skill`                 the call-time size check
+--   D2   `refusal_message`, `registration_refusal_key`
+--
+-- The inventories read hook-reachable text, so this module keeps to what they
+-- resolve: no `import std/x as X`, no helper whose name starts with `_`, no
+-- `*E` list function, and no `show` or string interpolation (`concat` and
+-- `intToStr` instead).
+
+module sunholo/motoko_ext_skills/skills
+
+import std/json (Json, JNull, JBool, JNumber, JString, JArray, JObject, jo, kv, js, jint, get, encode)
+import std/list (foldl, map, filter, flatMap, sortBy, range)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/string (length, substring, startsWith, endsWith, contains, find, split, join, concat, words, trim, chars, charCode, compare, intToStr, repeat)
+import std/yaml (decode)
+import pkg/sunholo/motoko_ext_abi/types (ToolResultEnvelope)
+
+-- ============================================================================
+-- The fixed strings and numbers.
+-- ============================================================================
+
+-- D7: the root has ONE spelling, the bare relative path. Discovery, the
+-- handler's read, a deterministic world's file table and the directory line
+-- the model is shown all use it.
+export pure func skills_root() -> string
+  tests [((), ".motoko/skills")]
+  { ".motoko/skills" }
+
+-- V1: the file name, exact case.
+export pure func skill_md_name() -> string
+  tests [((), "SKILL.md")]
+  { "SKILL.md" }
+
+export pure func skill_dir(dir_name: string) -> string
+  tests [("observer", ".motoko/skills/observer")]
+  { concat([skills_root(), "/", dir_name]) }
+
+export pure func skill_md_path(dir_name: string) -> string
+  tests [("observer", ".motoko/skills/observer/SKILL.md")]
+  { concat([skill_dir(dir_name), "/", skill_md_name()]) }
+
+-- D2: the reserved `config` key the host reads at the registration boundary.
+-- The host's copy is `registration_refusal_key` in
+-- `src/core/ext/registry_normalize.ail`. A package cannot import `src/core`,
+-- and the ABI package exports neither side, so the extension writes the same
+-- literal; a row in `scripts/dst/registry_multiplicity_dst.ail` imports both
+-- and asserts they are one string (PLAN-001 P5 points that row at this export).
+export pure func registration_refusal_key() -> string
+  tests [((), "registration_refusal")]
+  { "registration_refusal" }
+
+export pure func name_max_chars() -> int { 64 }
+
+export pure func description_max_chars() -> int { 1024 }
+
+-- V7. Tool message content is cut at 65,536 chars (`cap_tool_message_content`,
+-- `src/core/phase_vocab.ail`); this sits under it.
+export pure func envelope_max_chars() -> int { 60000 }
+
+-- V8, D4.
+export pure func index_budget_chars() -> int { 16000 }
+
+-- D8: a skill loads only when its message is under this share of the declared
+-- window.
+export pure func size_check_pct() -> int { 25 }
+
+-- V7 is measured on the message the harness builds from the handler's result,
+-- and that message carries the tool-call id. Registration has no call, so the
+-- startup scan measures with an id of the length seen in session journals:
+-- `call_` and 32 hex digits, 37 chars (ADR D8).
+export pure func nominal_call_id() -> string
+  tests [((), "call_00000000000000000000000000000000")]
+  { "call_00000000000000000000000000000000" }
+
+-- ============================================================================
+-- The rules, as data.
+-- ============================================================================
+
+export type Rule = R1 | V1 | V2 | V3 | V4 | V5 | V6 | V7 | V8
+
+export pure func rule_id(r: Rule) -> string {
+  match r {
+    R1 => "R1",
+    V1 => "V1",
+    V2 => "V2",
+    V3 => "V3",
+    V4 => "V4",
+    V5 => "V5",
+    V6 => "V6",
+    V7 => "V7",
+    V8 => "V8"
+  }
+}
+
+-- One finding: the rule, the path it was found at, and what was wrong.
+export type Violation = { rule: Rule, path: string, detail: string }
+
+pure func violation(rule: Rule, path: string, detail: string) -> Violation {
+  { rule: rule, path: path, detail: detail }
+}
+
+-- A skill that passed every per-file rule. `name` is the directory name (V5
+-- ties the two). `description` is the decoded value, uncollapsed.
+export type Skill = { name: string, description: string }
+
+pure func count[a](xs: [a]) -> int {
+  foldl(\n x. n + 1, 0, xs)
+}
+
+-- ============================================================================
+-- D9: the frontmatter block.
+--
+-- The text between a first line `---` and the next line `---`. One leading
+-- byte-order mark is ignored, and a delimiter line may end in a carriage
+-- return. Nothing else is a delimiter: `--- ` and `----` are ordinary lines.
+-- ============================================================================
+
+export type FrontmatterBlock = NoFrontmatter | Unterminated | Block(string)
+
+pure func strip_bom(text: string) -> string {
+  if startsWith(text, "\u{FEFF}") then substring(text, 1, length(text)) else text
+}
+
+pure func is_delimiter(line: string) -> bool {
+  line == "---" || line == "---\r"
+}
+
+-- The walk keeps offsets, not lines: the block is cut out of the text once, at
+-- the end, so a long file costs one pass.
+type BlockWalk = { index: int, offset: int, opened: bool, start: int, stop: int }
+
+pure func walk_line(w: BlockWalk, line: string) -> BlockWalk {
+  let after = w.offset + length(line) + 1;
+  let next = { w | index: w.index + 1, offset: after };
+  if w.index == 0 then
+    (if is_delimiter(line) then { next | opened: true, start: after } else next)
+  else if w.opened && w.stop < 0 && is_delimiter(line) then { next | stop: w.offset }
+  else next
+}
+
+export pure func frontmatter_block(text: string) -> FrontmatterBlock {
+  let body = strip_bom(text);
+  let w = foldl(walk_line, { index: 0, offset: 0, opened: false, start: 0, stop: 0 - 1 }, split(body, "\n"));
+  if not w.opened then NoFrontmatter
+  else if w.stop < 0 then Unterminated
+  else Block(substring(body, w.start, w.stop))
+}
+
+pure func json_kind(j: Json) -> string {
+  match j {
+    JNull => "null",
+    JBool(_) => "a boolean",
+    JNumber(_) => "a number",
+    JString(_) => "a string",
+    JArray(_) => "a sequence",
+    JObject(_) => "a mapping"
+  }
+}
+
+-- V4's four cases, each with its own text: no block, a block that is not
+-- terminated, a block that does not decode, and a block that decodes to
+-- something other than a mapping. `Ok` carries the mapping.
+export pure func decode_frontmatter(text: string) -> Result[Json, string] {
+  match frontmatter_block(text) {
+    NoFrontmatter => Err("no frontmatter block: the first line is not `---`"),
+    Unterminated => Err("the frontmatter block is not terminated: no later line is `---`"),
+    Block(block) =>
+      match decode(block) {
+        Err(why) => Err(concat(["the frontmatter block does not decode as YAML: ", why])),
+        Ok(j) =>
+          match j {
+            JObject(_) => Ok(j),
+            _ => Err(concat(["the frontmatter block decodes to ", json_kind(j), ", not a mapping"]))
+          }
+      }
+  }
+}
+
+-- ============================================================================
+-- V5: `name`.
+-- ============================================================================
+
+pure func is_name_char(c: string) -> bool {
+  let code = charCode(c);
+  (code >= 97 && code <= 122) || (code >= 48 && code <= 57) || code == 45
+}
+
+pure func all_name_chars(s: string) -> bool {
+  foldl(\ok c. ok && is_name_char(c), true, chars(s))
+}
+
+type Clause = { broken: bool, text: string }
+
+pure func clause_broken(c: Clause) -> bool { c.broken }
+
+pure func clause_text(c: Clause) -> string { c.text }
+
+pure func broken_clauses(clauses: [Clause]) -> [string] {
+  map(clause_text, filter(clause_broken, clauses))
+}
+
+-- The naming rule: 1 to 64 chars of `a-z`, `0-9` and hyphens, with no leading,
+-- trailing or doubled hyphen. Returns every clause the name breaks; an empty
+-- list is a valid name.
+export pure func name_rule_breaks(skill_name: string) -> [string] {
+  let n = length(skill_name);
+  broken_clauses([
+    { broken: n == 0, text: "is empty" },
+    { broken: n > name_max_chars(), text: concat(["is ", intToStr(n), " chars, over the limit of ", intToStr(name_max_chars())]) },
+    { broken: not all_name_chars(skill_name), text: "has a character outside `a-z`, `0-9` and the hyphen" },
+    { broken: startsWith(skill_name, "-"), text: "starts with a hyphen" },
+    { broken: n > 1 && endsWith(skill_name, "-"), text: "ends with a hyphen" },
+    { broken: contains(skill_name, "--"), text: "has a doubled hyphen" }
+  ])
+}
+
+pure func name_violations(path: string, dir_name: string, mapping: Json) -> [Violation] {
+  match get(mapping, "name") {
+    None => [violation(V5, path, "`name` is missing")],
+    Some(JString(s)) => {
+      let breaks = broken_clauses([
+        { broken: s != dir_name, text: concat(["differs from the directory name `", dir_name, "`"]) }
+      ]) ++ name_rule_breaks(s);
+      match breaks {
+        [] => [],
+        _ => [violation(V5, path, concat(["`name` (`", s, "`) ", join("; ", breaks)]))]
+      }
+    },
+    Some(JNumber(_)) => [violation(V5, path, "`name` is not a string: it decodes as a number, so a name made only of digits has to be quoted")],
+    Some(other) => [violation(V5, path, concat(["`name` is not a string: it decodes as ", json_kind(other)]))]
+  }
+}
+
+-- ============================================================================
+-- V6: `description`. Limits are measured on the decoded value.
+-- ============================================================================
+
+pure func description_violations(path: string, mapping: Json) -> [Violation] {
+  match get(mapping, "description") {
+    None => [violation(V6, path, "`description` is missing")],
+    Some(JString(s)) =>
+      if trim(s) == "" then [violation(V6, path, "`description` is empty after trimming")]
+      else if length(s) > description_max_chars() then
+        [violation(V6, path, concat(["`description` is ", intToStr(length(s)), " chars after decoding, over the limit of ", intToStr(description_max_chars())]))]
+      else [],
+    Some(other) => [violation(V6, path, concat(["`description` is not a string: it decodes as ", json_kind(other)]))]
+  }
+}
+
+pure func description_of(mapping: Json) -> string {
+  match get(mapping, "description") {
+    Some(JString(s)) => s,
+    _ => ""
+  }
+}
+
+-- ============================================================================
+-- D10, V7: what the handler returns, and the message the harness builds from it.
+-- ============================================================================
+
+-- The result text: one line giving the skill's directory, then the whole file.
+export pure func skill_result_text(dir_name: string, text: string) -> string {
+  concat([skill_dir(dir_name), "\n", text])
+}
+
+export pure func skill_result_envelope(call_id: string, dir_name: string, text: string) -> ToolResultEnvelope {
+  {
+    tool_call_id: call_id,
+    tool: "Skill",
+    exit_code: 0,
+    stdout: skill_result_text(dir_name, text),
+    stderr: "",
+    metadata: jo([])
+  }
+}
+
+pure func model_keeps_field(field: { key: string, value: Json }) -> bool {
+  not (field.key == "cells" || field.key == "images" || field.key == "jsonOutputs")
+}
+
+pure func model_metadata(metadata: Json) -> Json {
+  match metadata {
+    JObject(fields) => JObject(filter(model_keeps_field, fields)),
+    _ => metadata
+  }
+}
+
+-- The tool message the harness sends the model for an extension-handled call:
+-- the whole envelope, JSON-encoded, in this field order. It is what V7 and D8
+-- measure and what the compactors see.
+--
+-- THIS IS A COPY of `result_to_model_json` (`src/core/tool_contract.ail`),
+-- which `handled_tool_message` (`src/core/phase_vocab.ail`) encodes. A package
+-- cannot import `src/core`, so the two are held equal by the pinned strings in
+-- `test_envelope_message_is_the_harness_encoding` below, which were printed by
+-- the core's own function (037 evidence/p3). A change to the core's encoding
+-- has to be made here too.
+export pure func envelope_message(env: ToolResultEnvelope) -> string {
+  encode(jo([
+    kv("tool_call_id", js(env.tool_call_id)),
+    kv("tool", js(env.tool)),
+    kv("exit_code", jint(env.exit_code)),
+    kv("stdout", js(env.stdout)),
+    kv("stderr", js(env.stderr)),
+    kv("metadata", model_metadata(env.metadata))
+  ]))
+}
+
+export pure func envelope_message_chars(env: ToolResultEnvelope) -> int {
+  length(envelope_message(env))
+}
+
+pure func size_violations(dir_name: string, text: string, call_id: string) -> [Violation] {
+  let n = envelope_message_chars(skill_result_envelope(call_id, dir_name, text));
+  if n > envelope_max_chars() then
+    [violation(V7, skill_md_path(dir_name), concat(["the skill is too large to deliver whole: ", intToStr(n), " chars encoded, over the limit of ", intToStr(envelope_max_chars())]))]
+  else []
+}
+
+-- The per-file rules, V4 to V7, on one `SKILL.md`. Registration and the
+-- handler both call this (D10: the text is validated on every call with the
+-- same rules as startup). Every rule the file breaks is returned: V7 is
+-- measured whether or not the frontmatter decodes, and V5 and V6 are
+-- independent of each other.
+export pure func check_skill_md(dir_name: string, text: string, call_id: string) -> Result[Skill, [Violation]] {
+  let path = skill_md_path(dir_name);
+  let size = size_violations(dir_name, text, call_id);
+  match decode_frontmatter(text) {
+    Err(detail) => Err(violation(V4, path, detail) :: size),
+    Ok(mapping) => {
+      let found = name_violations(path, dir_name, mapping) ++ description_violations(path, mapping) ++ size;
+      match found {
+        [] => Ok({ name: dir_name, description: description_of(mapping) }),
+        _ => Err(found)
+      }
+    }
+  }
+}
+
+-- ============================================================================
+-- D4: the index.
+-- ============================================================================
+
+-- A folded or literal YAML scalar decodes with newlines in it; every run of
+-- whitespace becomes one space, and the ends are trimmed.
+export pure func collapse_whitespace(s: string) -> string
+  tests [
+    ("a  b", "a b"),
+    (" line one\n  line two\n", "line one line two"),
+    ("tab\there\r\nnext", "tab here next"),
+    ("", "")
+  ]
+  { join(" ", words(s)) }
+
+export pure func index_line(s: Skill) -> string {
+  concat(["- ", s.name, ": ", collapse_whitespace(s.description)])
+}
+
+pure func compare_skill_names(a: Skill, b: Skill) -> int {
+  compare(a.name, b.name)
+}
+
+-- Name order, by `std/string.compare`. `listDir` already returns names in this
+-- order (`in_name_order` is the assertion), so on a real listing the sort
+-- changes nothing; the index is in name order whatever it is handed.
+export pure func sort_by_name(skills: [Skill]) -> [Skill] {
+  sortBy(compare_skill_names, skills)
+}
+
+type OrderWalk = { ok: bool, first: bool, last: string }
+
+pure func order_step(w: OrderWalk, next: string) -> OrderWalk {
+  { ok: w.ok && (w.first || compare(w.last, next) < 0), first: false, last: next }
+}
+
+-- True when the names are strictly ascending: the order `listDir` returns, and
+-- the order the index is in.
+export pure func in_name_order(names: [string]) -> bool {
+  foldl(order_step, { ok: true, first: true, last: "" }, names).ok
+}
+
+pure func skill_name(s: Skill) -> string { s.name }
+
+-- The `enum` of the `name` parameter (D4), in index order.
+export pure func skill_names(skills: [Skill]) -> [string] {
+  map(skill_name, sort_by_name(skills))
+}
+
+-- One line per skill, `- <name>: <description>`, in name order, joined by
+-- newlines. V8's budget is the length of this text.
+export pure func index_text(skills: [Skill]) -> string {
+  join("\n", map(index_line, sort_by_name(skills)))
+}
+
+pure func index_violations(skills: [Skill]) -> [Violation] {
+  let n = length(index_text(skills));
+  if n > index_budget_chars() then
+    [violation(V8, skills_root(), concat(["the index is ", intToStr(n), " chars for ", intToStr(count(skills)), " skills, over the budget of ", intToStr(index_budget_chars())]))]
+  else []
+}
+
+-- The fixed instruction ahead of the index. This is the wording PLAN-001 P1
+-- measured (`evidence/p1/p1.2_skill_description.txt`); rows b and d of
+-- `NOTE-p1-prototype-results.md` describe this text and no other.
+export pure func skill_tool_instruction() -> string {
+  "Load a skill by name. Skills are task-specific instructions. Before starting a task that matches a skill's description, call Skill with its name to load the instructions. Do not load a skill that does not match the task. The first line of the result is the skill's directory, relative to the working directory; file paths in the skill's text are relative to that directory. If an earlier Skill result shows as elided or cut short and you still need that skill, call Skill again with the same name."
+}
+
+-- D12: with no skills the tool is still registered, and its description says so.
+export pure func no_skills_description() -> string {
+  concat(["Load a skill by name. No skills are installed in this workspace (", skills_root(), " holds none), so there is nothing to load. Do not call this tool."])
+}
+
+-- The `Skill` tool's description: the instruction, then the index (D4).
+export pure func skill_tool_description(skills: [Skill]) -> string {
+  match skills {
+    [] => no_skills_description(),
+    _ => concat([skill_tool_instruction(), "\n\nAvailable skills:\n", index_text(skills)])
+  }
+}
+
+-- ============================================================================
+-- D1: the listing, and the scan over it.
+--
+-- The conditions are stated as `std/fs` reports them under `AILANG_FS_SANDBOX`
+-- set to the workdir (ADR D1; research M1): a symlink that leaves the workdir,
+-- or has an absolute target, is in its parent's `listDir` and is neither
+-- `isDir` nor `isFile`.
+-- ============================================================================
+
+-- One entry directly under the root, as the caller found it. Each constructor
+-- is one outcome of the rules.
+export type RootEntry
+  = RegularFile(string)                    -- name. Not refused.
+  | OtherEntry(string)                     -- name. Neither a file nor a directory: V2.
+  | DirWithoutSkillMd(string)              -- name. `has_skill_md` is false for its listing: V1.
+  | DirUnreadableSkillMd(string, string)   -- name, the read error. V3.
+  | DirWithSkillMd(string, string)         -- name, the text of its SKILL.md. V4..V7.
+
+-- The root itself, from the listing of the directory that should hold it.
+export type RootListing
+  = RootAbsent                 -- no entry named `skills`: no skills, and not a refusal.
+  | RootIsFile                 -- R1: a regular file of that name.
+  | RootIsNeither              -- R1: an entry that is neither a directory nor a file.
+  | RootEntries([RootEntry])   -- a directory, with its entries in `listDir` order.
+
+-- V1: whether a skill directory's own listing holds `SKILL.md`, exact case.
+-- `skill.md` and `Skill.md` are not it.
+export pure func has_skill_md(children: [string]) -> bool {
+  foldl(\seen child. seen || child == skill_md_name(), false, children)
+}
+
+type EntryOutcome = { skills: [Skill], violations: [Violation] }
+
+pure func entry_outcome(entry: RootEntry) -> EntryOutcome {
+  match entry {
+    RegularFile(_) => { skills: [], violations: [] },
+    OtherEntry(n) => { skills: [], violations: [violation(V2, skill_dir(n), "is neither a regular file nor a directory (under the sandbox a symlink that leaves the workdir, or has an absolute target, reads this way)")] },
+    DirWithoutSkillMd(n) => { skills: [], violations: [violation(V1, skill_dir(n), concat(["the directory has no ", skill_md_name(), " (exact case)"]))] },
+    DirUnreadableSkillMd(n, why) => { skills: [], violations: [violation(V3, skill_md_path(n), concat(["cannot be read: ", why]))] },
+    DirWithSkillMd(n, text) =>
+      match check_skill_md(n, text, nominal_call_id()) {
+        Ok(s) => { skills: [s], violations: [] },
+        Err(found) => { skills: [], violations: found }
+      }
+  }
+}
+
+pure func outcome_skills(o: EntryOutcome) -> [Skill] { o.skills }
+
+pure func outcome_violations(o: EntryOutcome) -> [Violation] { o.violations }
+
+-- `Accepted` carries the valid skills in name order, and is what the index is
+-- built from. `Refused` carries every violation found, in listing order, with
+-- V8 last.
+export type ScanResult = Accepted([Skill]) | Refused([Violation])
+
+-- R1 and V1..V8 over one listing. A refusal names every violation, not the
+-- first: each entry is checked whatever its neighbours did, and V8 is measured
+-- over the entries that passed.
+export pure func scan(listing: RootListing) -> ScanResult {
+  match listing {
+    RootAbsent => Accepted([]),
+    RootIsFile => Refused([violation(R1, skills_root(), "is a regular file, not a directory")]),
+    RootIsNeither => Refused([violation(R1, skills_root(), "is neither a directory nor a regular file: a symlink that leaves the workdir, or has an absolute target, reads this way under the sandbox")]),
+    RootEntries(entries) => {
+      let outcomes = map(entry_outcome, entries);
+      let skills = sort_by_name(flatMap(outcome_skills, outcomes));
+      let found = flatMap(outcome_violations, outcomes) ++ index_violations(skills);
+      match found {
+        [] => Accepted(skills),
+        _ => Refused(found)
+      }
+    }
+  }
+}
+
+-- ============================================================================
+-- D1, D2: the refusal message.
+-- ============================================================================
+
+-- `<rule>: <path>: <detail>`, on one line. A YAML error can span lines; the
+-- message travels as one JSONL event, so its whitespace is collapsed.
+export pure func violation_text(v: Violation) -> string {
+  concat([rule_id(v.rule), ": ", v.path, ": ", collapse_whitespace(v.detail)])
+}
+
+-- A fold, not `zipWith` over `range`: `std/list.zipWith` runs under `ailang
+-- run` and fails under `ailang test` at v0.47.2 ("no pattern matched in match
+-- expression"), and this text has to be testable inline.
+type Numbering = { next: int, text: string }
+
+pure func number_violation(w: Numbering, v: Violation) -> Numbering {
+  { next: w.next + 1, text: concat([w.text, " [", intToStr(w.next), "] ", violation_text(v)]) }
+}
+
+-- The string for the `registration_refusal` key: every violation, each with
+-- its rule and path, in one message. No violations is the empty string, which
+-- the host reads as no refusal.
+export pure func refusal_message(found: [Violation]) -> string {
+  match found {
+    [] => "",
+    _ => {
+      let n = count(found);
+      concat([
+        "skills: ", intToStr(n), (if n == 1 then " violation" else " violations"),
+        " under ", skills_root(), "; startup is refused until every one is fixed (037 ADR-001 D1).",
+        foldl(number_violation, { next: 1, text: "" }, found).text
+      ])
+    }
+  }
+}
+
+export pure func refusal_of(result: ScanResult) -> string {
+  match result {
+    Accepted(_) => "",
+    Refused(found) => refusal_message(found)
+  }
+}
+
+-- ============================================================================
+-- D8: the size check.
+-- ============================================================================
+
+-- The compactors' arithmetic: chars over four, rounded up.
+export pure func estimate_tokens(char_count: int) -> int
+  tests [(0, 0), (1, 1), (4, 1), (5, 2), (60000, 15000)]
+  { (char_count + 3) / 4 }
+
+export type SizeVerdict = SizeFits | SizeTooLarge(int, int)   -- tokens, the limit
+
+-- `declared_limit` is the handler's `ctx.context_limit`: the model's DECLARED
+-- window. The skill does not load when its message is 25% of that or more.
+-- With the limit unknown (0) the skill loads.
+--
+-- This is not the limit the structural compactor caps against. That is a
+-- smaller working limit, so a skill that passes here can still be capped where
+-- the two are far apart (ADR D8 as revised 2026-10-04; `a6b_test.ail`).
+export pure func size_check(message_chars: int, declared_limit: int) -> SizeVerdict {
+  let tokens = estimate_tokens(message_chars);
+  if declared_limit <= 0 then SizeFits
+  else if tokens * 100 / declared_limit >= size_check_pct() then SizeTooLarge(tokens, declared_limit)
+  else SizeFits
+}
+
+-- The tool error for a skill that does not fit. The wording is the one
+-- PLAN-001 P1.3d measured.
+export pure func size_error(skill: string, tokens: int, declared_limit: int) -> string {
+  concat([
+    "Skill '", skill, "' does not fit this model's context: about ", intToStr(tokens),
+    " tokens against a context limit of ", intToStr(declared_limit),
+    ", and a skill is loaded only when it is under ", intToStr(size_check_pct()),
+    "% of the limit. It was not loaded. Do not call Skill for it again in this session."
+  ])
+}
+
+-- What a `Skill` call returns for text the handler has just read (D10): the
+-- per-file rules, then the size check. `Ok` is the envelope to return; `Err`
+-- is the text of the tool error, naming each rule broken.
+export pure func load_skill(dir_name: string, text: string, call_id: string, declared_limit: int) -> Result[ToolResultEnvelope, string] {
+  match check_skill_md(dir_name, text, call_id) {
+    Err(found) => Err(join(" ", map(violation_text, found))),
+    Ok(_) => {
+      let env = skill_result_envelope(call_id, dir_name, text);
+      match size_check(envelope_message_chars(env), declared_limit) {
+        SizeFits => Ok(env),
+        SizeTooLarge(tokens, limit) => Err(size_error(dir_name, tokens, limit))
+      }
+    }
+  }
+}
+
+-- ============================================================================
+-- Inline tests.
+-- ============================================================================
+
+pure func skill_md(front: string, body: string) -> string {
+  concat(["---\n", front, "---\n", body])
+}
+
+pure func plain_md(skill: string, description: string) -> string {
+  skill_md(concat(["name: ", skill, "\ndescription: ", description, "\n"]), "# Body\n")
+}
+
+pure func rules_of(found: [Violation]) -> string {
+  join(",", map(\v. rule_id(v.rule), found))
+}
+
+-- The rules a file breaks, as `V4,V7`; the empty string when it is valid.
+pure func file_rules(dir_name: string, text: string) -> string {
+  match check_skill_md(dir_name, text, nominal_call_id()) {
+    Ok(_) => "",
+    Err(found) => rules_of(found)
+  }
+}
+
+pure func file_detail(dir_name: string, text: string) -> string {
+  match check_skill_md(dir_name, text, nominal_call_id()) {
+    Ok(_) => "",
+    Err(found) => join(" ", map(violation_text, found))
+  }
+}
+
+pure func file_description(dir_name: string, text: string) -> string {
+  match check_skill_md(dir_name, text, nominal_call_id()) {
+    Ok(s) => s.description,
+    Err(_) => "<refused>"
+  }
+}
+
+pure func scan_rules(listing: RootListing) -> string {
+  match scan(listing) {
+    Accepted(_) => "",
+    Refused(found) => rules_of(found)
+  }
+}
+
+pure func scan_names(listing: RootListing) -> string {
+  match scan(listing) {
+    Accepted(skills) => join(",", skill_names(skills)),
+    Refused(_) => "<refused>"
+  }
+}
+
+pure func block_of(text: string) -> string {
+  match frontmatter_block(text) {
+    NoFrontmatter => "<none>",
+    Unterminated => "<unterminated>",
+    Block(b) => b
+  }
+}
+
+-- ---- D9: the block ---------------------------------------------------------
+
+pure func test_block_is_the_text_between_the_delimiters() -> bool
+  tests [((), true)]
+  {
+    block_of("---\nname: a\ndescription: d\n---\n# Body\n") == "name: a\ndescription: d\n"
+      && block_of("---\n---\nbody") == ""
+      && block_of("---\nname: a\n---") == "name: a\n"
+      -- the NEXT delimiter ends the block; a later one is body
+      && block_of("---\na: 1\n---\nbody\n---\nmore\n") == "a: 1\n"
+  }
+
+pure func test_block_ignores_one_bom_and_tolerates_cr() -> bool
+  tests [((), true)]
+  {
+    block_of("\u{FEFF}---\nname: a\n---\n") == "name: a\n"
+      && block_of("---\r\nname: a\r\n---\r\nbody\r\n") == "name: a\r\n"
+      && block_of("\u{FEFF}---\r\nname: a\r\n---\r\n") == "name: a\r\n"
+      -- ONE mark: a second is part of the first line, which is then no delimiter
+      && block_of("\u{FEFF}\u{FEFF}---\nname: a\n---\n") == "<none>"
+  }
+
+pure func test_block_missing_or_unterminated() -> bool
+  tests [((), true)]
+  {
+    block_of("# no frontmatter here\n") == "<none>"
+      && block_of("") == "<none>"
+      && block_of("\n---\nname: a\n---\n") == "<none>"
+      && block_of("--- \nname: a\n---\n") == "<none>"
+      && block_of("----\nname: a\n---\n") == "<none>"
+      && block_of("---\nname: a\ndescription: d\n\nbody\n") == "<unterminated>"
+      && block_of("---") == "<unterminated>"
+      -- a closing line with anything after the dashes does not terminate
+      && block_of("---\nname: a\n--- \n") == "<unterminated>"
+      && block_of("---\nname: a\n----\n") == "<unterminated>"
+  }
+
+-- ---- V4: its four cases ----------------------------------------------------
+
+pure func test_v4_no_frontmatter_block() -> bool
+  tests [((), true)]
+  {
+    file_rules("a", "# no frontmatter here\n") == "V4"
+      && contains(file_detail("a", "# no frontmatter here\n"), "V4: .motoko/skills/a/SKILL.md: no frontmatter block")
+  }
+
+pure func test_v4_block_not_terminated() -> bool
+  tests [((), true)]
+  {
+    file_rules("a", "---\nname: a\ndescription: d\n\nbody\n") == "V4"
+      && contains(file_detail("a", "---\nname: a\ndescription: d\n\nbody\n"), "is not terminated")
+  }
+
+pure func test_v4_block_does_not_decode() -> bool
+  tests [((), true)]
+  {
+    let text = skill_md("name: a\ndescription: [unclosed\n", "");
+    file_rules("a", text) == "V4" && contains(file_detail("a", text), "does not decode as YAML")
+  }
+
+pure func test_v4_block_is_not_a_mapping() -> bool
+  tests [((), true)]
+  {
+    file_rules("a", skill_md("- a\n- b\n", "")) == "V4"
+      && contains(file_detail("a", skill_md("- a\n- b\n", "")), "decodes to a sequence, not a mapping")
+      && contains(file_detail("a", skill_md("", "body\n")), "decodes to null, not a mapping")
+      && contains(file_detail("a", skill_md("# only a comment\n", "")), "decodes to null, not a mapping")
+      && contains(file_detail("a", skill_md("just text\n", "")), "decodes to a string, not a mapping")
+  }
+
+-- ---- D9: the edge shapes of evidence/m5_yaml_probe.sh ----------------------
+
+pure func test_m5_decode_errors_are_v4() -> bool
+  tests [((), true)]
+  {
+    -- a duplicate key
+    file_rules("observer", skill_md("name: observer\nname: other\ndescription: d\n", "")) == "V4"
+      -- a tab indent
+      && file_rules("observer", skill_md("name: observer\nmetadata:\n\tauthor: x\ndescription: d\n", "")) == "V4"
+      -- `key: a: b` in a plain scalar
+      && file_rules("observer", skill_md("name: observer\ndescription: a: b\n", "")) == "V4"
+      && file_rules("observer", skill_md("name: observer\ndescription: Use when: the user asks.\n", "")) == "V4"
+      -- YAML that JSON cannot represent, in a field Motoko would ignore (D3)
+      && file_rules("observer", skill_md("name: observer\ndescription: d\n? [a, b]\n: y\n", "")) == "V4"
+  }
+
+pure func test_m5_non_string_values_decode_and_refuse() -> bool
+  tests [((), true)]
+  {
+    -- digits only: fits V5's pattern, decodes as a number
+    file_rules("123", skill_md("name: 123\ndescription: d\n", "")) == "V5"
+      && contains(file_detail("123", skill_md("name: 123\ndescription: d\n", "")), "has to be quoted")
+      && file_rules("123", skill_md("name: \"123\"\ndescription: d\n", "")) == ""
+      && file_rules("true", skill_md("name: true\ndescription: d\n", "")) == "V5"
+      && contains(file_detail("true", skill_md("name: true\ndescription: d\n", "")), "decodes as a boolean")
+      && file_rules("observer", skill_md("name: observer\ndescription:\n", "")) == "V6"
+      && file_rules("observer", skill_md("name: observer\ndescription: {a: b}\n", "")) == "V6"
+      && file_rules("observer", skill_md("name: observer\ndescription: 12\n", "")) == "V6"
+  }
+
+pure func test_m5_crlf_and_bom_are_accepted() -> bool
+  tests [((), true)]
+  {
+    file_rules("observer", "---\r\nname: observer\r\ndescription: d\r\n---\r\n# Body\r\n") == ""
+      && file_description("observer", "---\r\nname: observer\r\ndescription: d\r\n---\r\n# Body\r\n") == "d"
+      && file_rules("observer", concat(["\u{FEFF}", plain_md("observer", "d")])) == ""
+      && file_rules("observer", "\u{FEFF}---\r\nname: observer\r\ndescription: d\r\n---\r\n") == ""
+  }
+
+pure func test_m5_anchors_tags_comments_and_quoting() -> bool
+  tests [((), true)]
+  {
+    -- an anchor and its alias
+    file_description("observer", skill_md("name: &n observer\ndescription: *n\n", "")) == "observer"
+      -- a tag
+      && file_rules("observer", skill_md("name: !!str observer\ndescription: d\n", "")) == ""
+      -- a trailing ` # comment` is a comment; `#` without the space is text
+      && file_rules("observer", skill_md("name: observer # a comment\ndescription: Supervise a run.\n", "")) == ""
+      && file_description("observer", skill_md("name: observer\ndescription: Issue#12 is the reference.\n", "")) == "Issue#12 is the reference."
+      && file_description("observer", skill_md("name: observer\ndescription: 'It''s quoted: yes # still text'\n", "")) == "It's quoted: yes # still text"
+      && file_description("observer", skill_md("name: observer\ndescription: \"Tab\\there: yes # still text\"\n", "")) == "Tab\there: yes # still text"
+  }
+
+pure func test_m5_block_scalars_decode_as_yaml_defines() -> bool
+  tests [((), true)]
+  {
+    file_description("observer", skill_md("name: observer\ndescription: >\n  line one\n  line two\n", "")) == "line one line two\n"
+      && file_description("observer", skill_md("name: observer\ndescription: >-\n  line one\n  line two\n", "")) == "line one line two"
+      && file_description("observer", skill_md("name: observer\ndescription: |\n  line one\n  line two\n", "")) == "line one\nline two\n"
+      && file_description("observer", skill_md("name: observer\ndescription: line one\n  line two\n", "")) == "line one line two"
+  }
+
+-- ---- V5 --------------------------------------------------------------------
+
+pure func test_v5_missing_or_not_a_string() -> bool
+  tests [((), true)]
+  {
+    file_rules("a", skill_md("description: d\n", "")) == "V5"
+      && contains(file_detail("a", skill_md("description: d\n", "")), "`name` is missing")
+      && file_rules("a", skill_md("name:\ndescription: d\n", "")) == "V5"
+      && file_rules("a", skill_md("name: [a]\ndescription: d\n", "")) == "V5"
+  }
+
+pure func test_v5_naming_rule() -> bool
+  tests [((), true)]
+  {
+    name_rule_breaks("a") == []
+      && name_rule_breaks("pr-review-loop") == []
+      && name_rule_breaks("a1") == []
+      && name_rule_breaks("1a") == []
+      && name_rule_breaks("123") == []
+      && name_rule_breaks(repeat("a", 64)) == []
+      && count(name_rule_breaks(repeat("a", 65))) == 1
+      && count(name_rule_breaks("")) == 1
+      && count(name_rule_breaks("Observer")) == 1
+      && count(name_rule_breaks("a_b")) == 1
+      && count(name_rule_breaks("a b")) == 1
+      && count(name_rule_breaks("a.b")) == 1
+      && count(name_rule_breaks("a/b")) == 1
+      && count(name_rule_breaks("caf\u{00E9}")) == 1
+      && name_rule_breaks("-a") == ["starts with a hyphen"]
+      && name_rule_breaks("a-") == ["ends with a hyphen"]
+      && name_rule_breaks("a--b") == ["has a doubled hyphen"]
+      && name_rule_breaks("-") == ["starts with a hyphen"]
+      && count(name_rule_breaks("-A--b-")) == 4
+  }
+
+pure func test_v5_refuses_each_broken_name() -> bool
+  tests [((), true)]
+  {
+    file_rules("Observer", plain_md("Observer", "d")) == "V5"
+      && file_rules("-a", plain_md("-a", "d")) == "V5"
+      && file_rules("a-", plain_md("a-", "d")) == "V5"
+      && file_rules("a--b", plain_md("a--b", "d")) == "V5"
+      && file_rules("caf\u{00E9}", plain_md("caf\u{00E9}", "d")) == "V5"
+      && file_rules(repeat("a", 65), plain_md(repeat("a", 65), "d")) == "V5"
+      && file_rules(repeat("a", 64), plain_md(repeat("a", 64), "d")) == ""
+      && file_rules("a", skill_md("name: \"\"\ndescription: d\n", "")) == "V5"
+  }
+
+pure func test_v5_name_differs_from_directory() -> bool
+  tests [((), true)]
+  {
+    file_rules("workdir-stamp", plain_md("other-name", "d")) == "V5"
+      && contains(file_detail("workdir-stamp", plain_md("other-name", "d")), "differs from the directory name `workdir-stamp`")
+      -- a name that both differs and breaks the rule is one V5 naming both
+      && file_rules("a", plain_md("B-", "d")) == "V5"
+      && contains(file_detail("a", plain_md("B-", "d")), "differs from the directory name")
+      && contains(file_detail("a", plain_md("B-", "d")), "ends with a hyphen")
+  }
+
+-- ---- V6 --------------------------------------------------------------------
+
+pure func test_v6_missing_not_string_blank_or_over_long() -> bool
+  tests [((), true)]
+  {
+    file_rules("a", skill_md("name: a\n", "")) == "V6"
+      && contains(file_detail("a", skill_md("name: a\n", "")), "`description` is missing")
+      && file_rules("a", skill_md("name: a\ndescription: [x]\n", "")) == "V6"
+      && file_rules("a", skill_md("name: a\ndescription: \"   \"\n", "")) == "V6"
+      && contains(file_detail("a", skill_md("name: a\ndescription: \"   \"\n", "")), "empty after trimming")
+      && file_rules("a", skill_md("name: a\ndescription: \"\"\n", "")) == "V6"
+      && file_rules("a", skill_md("name: a\ndescription: \" \\n\\t \"\n", "")) == "V6"
+      && file_rules("a", plain_md("a", repeat("d", 1024))) == ""
+      && file_rules("a", plain_md("a", repeat("d", 1025))) == "V6"
+      && contains(file_detail("a", plain_md("a", repeat("d", 1025))), "1025 chars after decoding")
+  }
+
+-- The limit is on the DECODED value: a folded scalar's trailing newline counts,
+-- and its indentation does not.
+pure func test_v6_measures_the_decoded_value() -> bool
+  tests [((), true)]
+  {
+    let folded = \n. skill_md(concat(["name: a\ndescription: >\n  ", repeat("d", n), "\n"]), "");
+    file_rules("a", folded(1023)) == "" && file_rules("a", folded(1024)) == "V6"
+  }
+
+-- ---- V7 --------------------------------------------------------------------
+
+-- A valid file for directory `a` whose harness message is exactly `n` chars.
+pure func md_of_message_chars(n: int) -> string {
+  let empty = envelope_message_chars(skill_result_envelope(nominal_call_id(), "a", plain_md("a", "d")));
+  concat([plain_md("a", "d"), repeat("x", n - empty)])
+}
+
+pure func test_v7_limit_is_exact() -> bool
+  tests [((), true)]
+  {
+    let at = md_of_message_chars(60000);
+    let over = md_of_message_chars(60001);
+    envelope_message_chars(skill_result_envelope(nominal_call_id(), "a", at)) == 60000
+      && file_rules("a", at) == ""
+      && file_rules("a", over) == "V7"
+      && contains(file_detail("a", over), "V7: .motoko/skills/a/SKILL.md: the skill is too large to deliver whole: 60001 chars encoded, over the limit of 60000")
+  }
+
+-- V7 is on the ENCODED length: a newline is two chars of JSON, so a file under
+-- the limit in chars can be over it encoded.
+pure func test_v7_measures_the_encoded_envelope() -> bool
+  tests [((), true)]
+  {
+    let text = concat([plain_md("a", "d"), repeat("\n", 31000)]);
+    length(text) < 60000 && file_rules("a", text) == "V7"
+  }
+
+-- The prototype's case (evidence/p1/p1.2/handler_probe.out, row 16): 61,000
+-- chars of body under the same frontmatter is 61,200 chars encoded.
+pure func test_v7_reproduces_the_prototype_measurement() -> bool
+  tests [((), true)]
+  {
+    let text = concat(["---\nname: workdir-stamp\ndescription: x\n---\n", repeat("0123456789", 6100)]);
+    envelope_message_chars(skill_result_envelope("call_0123456789abcdef0123456789abcdef", "workdir-stamp", text)) == 61200
+      && file_rules("workdir-stamp", text) == "V7"
+  }
+
+pure func test_v7_is_reported_beside_the_other_rules() -> bool
+  tests [((), true)]
+  {
+    let big = repeat("x", 61000);
+    file_rules("a", concat(["# no frontmatter\n", big])) == "V4,V7"
+      && file_rules("a", skill_md("name: b\ndescription: \" \"\n", big)) == "V5,V6,V7"
+  }
+
+-- The strings were printed by the core's own `result_env_model_content`
+-- (evidence/p3/envelope_parity.out); this is what holds the copy equal.
+pure func test_envelope_message_is_the_harness_encoding() -> bool
+  tests [((), true)]
+  {
+    let env = skill_result_envelope("call_0123456789abcdef0123456789abcdef", "observer", "---\nname: observer\ndescription: \"Say \\\"hi\\\"\"\n---\n# Body <&> \u{00E9}\n");
+    let message = envelope_message(env);
+    message == "{\"tool_call_id\":\"call_0123456789abcdef0123456789abcdef\",\"tool\":\"Skill\",\"exit_code\":0,\"stdout\":\".motoko/skills/observer\\n---\\nname: observer\\ndescription: \\\"Say \\\\\\\"hi\\\\\\\"\\\"\\n---\\n# Body <&> \u{00E9}\\n\",\"stderr\":\"\",\"metadata\":{}}"
+      -- ADR D8: the text starts 58 chars plus the call id into the message
+      && find(message, ".motoko/skills/observer") == 58 + 37
+      && envelope_message({ env | metadata: jo([kv("cells", js("c")), kv("kept", js("k")), kv("images", js("i")), kv("jsonOutputs", js("j"))]) })
+        == "{\"tool_call_id\":\"call_0123456789abcdef0123456789abcdef\",\"tool\":\"Skill\",\"exit_code\":0,\"stdout\":\".motoko/skills/observer\\n---\\nname: observer\\ndescription: \\\"Say \\\\\\\"hi\\\\\\\"\\\"\\n---\\n# Body <&> \u{00E9}\\n\",\"stderr\":\"\",\"metadata\":{\"kept\":\"k\"}}"
+  }
+
+-- ---- not refused -----------------------------------------------------------
+
+pure func test_extra_frontmatter_keys_are_ignored() -> bool
+  tests [((), true)]
+  {
+    file_rules("observer", skill_md("name: observer\ndescription: d\nmetadata:\n  author: someone\n  version: \"1.0\"\nallowed-tools:\n  - Bash\n  - Read\nlicense: Apache-2.0\n", "")) == ""
+      -- a malformed optional field: the reference validator rejects it, Motoko ignores it (D3)
+      && file_rules("observer", skill_md("name: observer\ndescription: d\ncompatibility: 12\nallowed-tools: {not: a list}\n", "")) == ""
+  }
+
+pure func test_oversized_body_is_not_refused() -> bool
+  tests [((), true)]
+  {
+    -- far over the specification's recommended size, and under V7
+    file_rules("a", skill_md("name: a\ndescription: d\n", repeat("0123456789", 5000))) == ""
+  }
+
+pure func test_regular_files_in_the_root_are_not_refused() -> bool
+  tests [((), true)]
+  {
+    scan_names(RootEntries([RegularFile("README.md"), DirWithSkillMd("a", plain_md("a", "d")), RegularFile("notes.txt")])) == "a"
+      && scan_names(RootEntries([RegularFile("README.md")])) == ""
+  }
+
+-- ---- the root, and the entries: R1, V1, V2, V3 -----------------------------
+
+pure func test_absent_root_is_no_skills_and_no_refusal() -> bool
+  tests [((), true)]
+  {
+    scan_names(RootAbsent) == "" && refusal_of(scan(RootAbsent)) == ""
+      && scan_names(RootEntries([])) == "" && refusal_of(scan(RootEntries([]))) == ""
+  }
+
+pure func test_r1_root_is_not_a_directory() -> bool
+  tests [((), true)]
+  {
+    scan_rules(RootIsFile) == "R1"
+      && scan_rules(RootIsNeither) == "R1"
+      && contains(refusal_of(scan(RootIsFile)), "R1: .motoko/skills: is a regular file, not a directory")
+      && contains(refusal_of(scan(RootIsNeither)), "R1: .motoko/skills: is neither a directory nor a regular file")
+      && contains(refusal_of(scan(RootIsNeither)), "leaves the workdir")
+      && contains(refusal_of(scan(RootIsNeither)), "absolute target")
+  }
+
+pure func test_v1_directory_without_skill_md() -> bool
+  tests [((), true)]
+  {
+    scan_rules(RootEntries([DirWithoutSkillMd("empty")])) == "V1"
+      && contains(refusal_of(scan(RootEntries([DirWithoutSkillMd("empty")]))), "V1: .motoko/skills/empty: the directory has no SKILL.md (exact case)")
+  }
+
+pure func test_v1_skill_md_is_exact_case() -> bool
+  tests [((), true)]
+  {
+    has_skill_md(["SKILL.md"])
+      && has_skill_md(["examples", "SKILL.md", "notes.txt"])
+      && not has_skill_md([])
+      && not has_skill_md(["skill.md"])
+      && not has_skill_md(["Skill.md"])
+      && not has_skill_md(["SKILL.MD"])
+      && not has_skill_md(["SKILL.md.bak", "README.md"])
+  }
+
+pure func test_v2_neither_file_nor_directory() -> bool
+  tests [((), true)]
+  {
+    scan_rules(RootEntries([OtherEntry("linked")])) == "V2"
+      && contains(refusal_of(scan(RootEntries([OtherEntry("linked")]))), "V2: .motoko/skills/linked: is neither a regular file nor a directory")
+  }
+
+pure func test_v3_unreadable_skill_md() -> bool
+  tests [((), true)]
+  {
+    scan_rules(RootEntries([DirUnreadableSkillMd("locked", "open SKILL.md: permission denied")])) == "V3"
+      && contains(refusal_of(scan(RootEntries([DirUnreadableSkillMd("locked", "open SKILL.md: permission denied")]))), "V3: .motoko/skills/locked/SKILL.md: cannot be read: open SKILL.md: permission denied")
+  }
+
+pure func test_per_file_rules_refuse_at_scan() -> bool
+  tests [((), true)]
+  {
+    scan_rules(RootEntries([DirWithSkillMd("a", "# no frontmatter\n")])) == "V4"
+      && scan_rules(RootEntries([DirWithSkillMd("a", plain_md("b", "d"))])) == "V5"
+      && scan_rules(RootEntries([DirWithSkillMd("a", plain_md("a", "\" \""))])) == "V6"
+      && scan_rules(RootEntries([DirWithSkillMd("a", md_of_message_chars(60001))])) == "V7"
+      && scan_rules(RootEntries([DirWithSkillMd("a", md_of_message_chars(60000))])) == ""
+  }
+
+-- ---- D4: the index, and V8 -------------------------------------------------
+
+pure func test_index_lines_collapse_whitespace() -> bool
+  tests [((), true)]
+  {
+    index_line({ name: "observer", description: "line one\nline two\n" }) == "- observer: line one line two"
+      && index_line({ name: "a", description: "  tab\tand   spaces \r\n" }) == "- a: tab and spaces"
+      -- from the file: a literal block scalar decodes with newlines in it
+      && index_text(match scan(RootEntries([DirWithSkillMd("a", skill_md("name: a\ndescription: |\n  first\n  second\n", ""))])) { Accepted(s) => s, Refused(_) => [] }) == "- a: first second"
+  }
+
+pure func test_index_is_in_name_order() -> bool
+  tests [((), true)]
+  {
+    let a = DirWithSkillMd("a", plain_md("a", "one"));
+    let a_b = DirWithSkillMd("a-b", plain_md("a-b", "two"));
+    let a1 = DirWithSkillMd("a1", plain_md("a1", "three"));
+    let ab = DirWithSkillMd("ab", plain_md("ab", "four"));
+    -- `listDir` order: the hyphen sorts before digits, digits before letters
+    scan_names(RootEntries([a, a_b, a1, ab])) == "a,a-b,a1,ab"
+      -- and the index is in name order whatever order it is handed
+      && scan_names(RootEntries([ab, a1, a, a_b])) == "a,a-b,a1,ab"
+      && index_text([{ name: "b", description: "two" }, { name: "a", description: "one" }]) == "- a: one\n- b: two"
+      && skill_names([{ name: "b", description: "two" }, { name: "a", description: "one" }]) == ["a", "b"]
+  }
+
+pure func test_in_name_order_is_listdir_order() -> bool
+  tests [((), true)]
+  {
+    in_name_order([])
+      && in_name_order(["a"])
+      && in_name_order(["README.md", "a", "a-b", "a1", "ab", "b"])
+      && not in_name_order(["b", "a"])
+      && not in_name_order(["a", "a"])
+      && not in_name_order(["a1", "a-b"])
+  }
+
+pure func numbered_name(i: int) -> string {
+  concat(["s", (if i < 10 then "0" else ""), intToStr(i)])
+}
+
+-- 16 skills whose index is 15,015 chars plus the last line: fifteen lines of
+-- exactly 1,000 chars, their fifteen newlines, and a last line of
+-- `7 + last_description_chars`.
+pure func budget_listing(last_description_chars: int) -> RootListing {
+  let full = map(\i. DirWithSkillMd(numbered_name(i), plain_md(numbered_name(i), repeat("d", 993))), range(1, 16));
+  RootEntries(full ++ [DirWithSkillMd("s16", plain_md("s16", repeat("d", last_description_chars)))])
+}
+
+pure func test_v8_budget_is_exact() -> bool
+  tests [((), true)]
+  {
+    let at = scan(budget_listing(978));
+    let over = scan(budget_listing(979));
+    (match at { Accepted(skills) => length(index_text(skills)) == 16000 && count(skills) == 16, Refused(_) => false })
+      && (match over { Accepted(_) => false, Refused(found) => rules_of(found) == "V8" })
+      && contains(refusal_of(over), "V8: .motoko/skills: the index is 16001 chars for 16 skills, over the budget of 16000")
+  }
+
+pure func test_tool_description() -> bool
+  tests [((), true)]
+  {
+    let two = [{ name: "b", description: "two" }, { name: "a", description: "one\nline" }];
+    skill_tool_description(two) == concat([skill_tool_instruction(), "\n\nAvailable skills:\n- a: one line\n- b: two"])
+      -- the measured text: 517 chars ahead of the index
+      && length(concat([skill_tool_instruction(), "\n\nAvailable skills:\n"])) == 517
+      -- D12
+      && skill_tool_description([]) == "Load a skill by name. No skills are installed in this workspace (.motoko/skills holds none), so there is nothing to load. Do not call this tool."
+  }
+
+-- ---- the refusal message ---------------------------------------------------
+
+pure func test_refusal_names_every_violation_with_path_and_rule() -> bool
+  tests [((), true)]
+  {
+    let listing = RootEntries([
+      RegularFile("README.md"),
+      DirWithoutSkillMd("empty"),
+      DirWithSkillMd("good", plain_md("good", "fine")),
+      OtherEntry("linked"),
+      DirUnreadableSkillMd("locked", "permission denied"),
+      DirWithSkillMd("twice", skill_md("name: other\ndescription: \" \"\n", ""))
+    ]);
+    let message = refusal_of(scan(listing));
+    scan_rules(listing) == "V1,V2,V3,V5,V6"
+      && startsWith(message, "skills: 5 violations under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V1: .motoko/skills/empty: ")
+      && contains(message, " [2] V2: .motoko/skills/linked: ")
+      && contains(message, " [3] V3: .motoko/skills/locked/SKILL.md: ")
+      && contains(message, " [4] V5: .motoko/skills/twice/SKILL.md: ")
+      && contains(message, " [5] V6: .motoko/skills/twice/SKILL.md: ")
+      -- the valid skill is not named
+      && not contains(message, "good")
+  }
+
+pure func test_refusal_is_one_line_and_empty_when_nothing_is_wrong() -> bool
+  tests [((), true)]
+  {
+    -- a duplicate key: the decoder's error spans two lines
+    let message = refusal_of(scan(RootEntries([DirWithSkillMd("a", skill_md("name: a\nname: b\ndescription: d\n", ""))])));
+    startsWith(message, "skills: 1 violation under .motoko/skills; ")
+      && contains(message, "[1] V4: .motoko/skills/a/SKILL.md: the frontmatter block does not decode as YAML: ")
+      && contains(message, "already defined")
+      && not contains(message, "\n")
+      && refusal_message([]) == ""
+      && refusal_of(scan(RootEntries([DirWithSkillMd("a", plain_md("a", "d"))]))) == ""
+  }
+
+-- ---- D8: the size check ----------------------------------------------------
+
+pure func fits(message_chars: int, declared_limit: int) -> bool {
+  match size_check(message_chars, declared_limit) {
+    SizeFits => true,
+    SizeTooLarge(_, _) => false
+  }
+}
+
+-- The prototype's boundary (evidence/p1/p1.2/handler_probe.out, rows 05a and
+-- 05b): a message of 6,077 tokens loads at a limit of 24,309 and not at 24,308.
+pure func test_size_check_boundary_is_exact() -> bool
+  tests [((), true)]
+  {
+    estimate_tokens(24305) == 6077
+      && fits(24305, 24309)
+      && not fits(24305, 24308)
+      && not fits(24305, 20000)
+      && fits(24305, 200000)
+      -- 25% exactly does not load; one token under does
+      && not fits(4000, 4000)
+      && not fits(1000, 1000)
+      && fits(996, 1000)
+      && not fits(997, 1000)
+  }
+
+pure func test_size_check_loads_when_the_limit_is_unknown() -> bool
+  tests [((), true)]
+  {
+    fits(24305, 0) && fits(60000, 0) && fits(60000, 0 - 1)
+  }
+
+pure func test_size_check_reports_tokens_and_limit() -> bool
+  tests [((), true)]
+  {
+    (match size_check(24305, 24308) { SizeTooLarge(tokens, limit) => tokens == 6077 && limit == 24308, SizeFits => false })
+      && size_error("dagr-producer", 6077, 24308) == "Skill 'dagr-producer' does not fit this model's context: about 6077 tokens against a context limit of 24308, and a skill is loaded only when it is under 25% of the limit. It was not loaded. Do not call Skill for it again in this session."
+  }
+
+-- ---- D10: what a call returns ----------------------------------------------
+
+pure func loaded_stdout(dir_name: string, text: string, call_id: string, declared_limit: int) -> string {
+  match load_skill(dir_name, text, call_id, declared_limit) {
+    Ok(env) => env.stdout,
+    Err(why) => concat(["<error> ", why])
+  }
+}
+
+pure func test_load_returns_the_directory_line_then_the_whole_file() -> bool
+  tests [((), true)]
+  {
+    let text = plain_md("workdir-stamp", "Stamp the working directory.");
+    loaded_stdout("workdir-stamp", text, "call_1", 0) == concat([".motoko/skills/workdir-stamp\n", text])
+      && (match load_skill("workdir-stamp", text, "call_1", 200000) {
+        Ok(env) => env.tool_call_id == "call_1" && env.tool == "Skill" && env.exit_code == 0 && env.stderr == "",
+        Err(_) => false
+      })
+  }
+
+pure func test_load_validates_what_was_read() -> bool
+  tests [((), true)]
+  {
+    startsWith(loaded_stdout("a", "# no frontmatter here\n", "call_1", 0), "<error> V4: .motoko/skills/a/SKILL.md: ")
+      && startsWith(loaded_stdout("a", plain_md("renamed", "d"), "call_1", 0), "<error> V5: .motoko/skills/a/SKILL.md: ")
+      && startsWith(loaded_stdout("a", plain_md("a", "\"  \""), "call_1", 0), "<error> V6: .motoko/skills/a/SKILL.md: ")
+      && startsWith(loaded_stdout("a", md_of_message_chars(60001), nominal_call_id(), 0), "<error> V7: .motoko/skills/a/SKILL.md: ")
+  }
+
+pure func test_load_applies_the_size_check_to_the_message() -> bool
+  tests [((), true)]
+  {
+    -- a message of 24,305 chars: 6,077 tokens
+    let text = md_of_message_chars(24305);
+    startsWith(loaded_stdout("a", text, nominal_call_id(), 24309), ".motoko/skills/a\n")
+      && loaded_stdout("a", text, nominal_call_id(), 24308) == concat(["<error> ", size_error("a", 6077, 24308)])
+      && startsWith(loaded_stdout("a", text, nominal_call_id(), 0), ".motoko/skills/a\n")
+      -- a rule failure is reported ahead of the size check
+      && startsWith(loaded_stdout("a", md_of_message_chars(60001), nominal_call_id(), 1000), "<error> V7: ")
+  }
