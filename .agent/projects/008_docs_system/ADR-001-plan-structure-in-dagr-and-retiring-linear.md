@@ -11,6 +11,14 @@ discussed separately.
 **Amended 2026-10-04 with D8**, proposed after reading Midspiral (§2.4) and approved by the operator
 the same day (*"yes, do that"*, in reply to a proposal to add it as a dated amendment). D1–D7 are
 unchanged in wording except for one pointer at the end of D4, which D8 narrows.
+**Amended a second time 2026-10-04: F2 is reversed in part.** In another session that day the
+operator ruled that the tree runs our fork of dagr, pinned: *"We will not do upstream PRs for now.
+This is a very good reason to move to our own fork and pin it."* The ruling is recorded as D1 of
+021's ADR-002 (see "Relates to"). The words were checked against the operator's own message in the
+session that received them (2026-10-04 09:52 UTC; a local transcript, not in the tree). The
+operator approved recording it here (*"I will go with your recommendations"*, in reply to a
+proposal for this amendment). F2, D7, D8, §5, §9 and Appendix B carry the changes, each marked
+with the date. The text they amend is left in place.
 Grounded at: branch `main`, HEAD `cf54dff9`; `dagr 0.3.1 (contract v3; reads v1/v2)`; the Linear
 workspace as read through its MCP server on 2026-10-04.
 Provenance: authored in the session that re-read `NOTE-docs-system-design-discussion.md` against
@@ -40,6 +48,11 @@ Relates to:
 - `../021_herdr_delegation/DESIGN-dagr-as-delegation-view.md` §10 — the plan/run split (option A2,
   built 2026-09-08) that D2 and D4 build on, and §10.6, the fork. D4 changes one rule that section
   set.
+- `../021_herdr_delegation/ADR-002-verified-writes-to-dagr-files.md` — **not on `main`**: it is on
+  branch `feat/dagr-verified-writes`, draft PR #216, read at `11e52dc8`. Its D1 is the operator
+  ruling that reverses the timing half of F2 here. Its D3 to D9, including the `RunRecord` tool
+  that bears on D8, are proposals the operator has not ruled on; this ADR cites them and does not
+  adopt them.
 - `../../issues/herdr-extension-run-file-drifts-from-operator-plan-file.md` — open. It says nothing
   migrates an operator with a hand-maintained plan file. D2, D4 and D5 are that migration.
 - `../016_github_ops/ADR-001-github-pr-ops-pipeline.md` D4 — the PR record's frontmatter. The
@@ -229,6 +242,18 @@ Adopting the fork changes the supply chain: CI stops fetching a published upstre
 digest and runs one built from `motoko-agent/herdr-dagr`. That is a larger commitment than any
 feature in the table. F2 ruled it out for now (§7).
 
+*Amended 2026-10-04.* The condition D7 named has been met for one row of the table: the operator
+adopted the fork for `dagr apply` (021 ADR-002 D1). For this ADR that means:
+
+- **D2–D6 still need nothing beyond the upstream contract.** The fork's first release is proposed
+  as upstream 0.3.1 plus `apply`, with the contract unchanged (021 ADR-002 D3, not yet ruled). A
+  committed plan therefore stays readable by an upstream binary, and §2.3 still describes what a
+  plan must satisfy.
+- **The `dagr apply` row is now adopted.** Its release and pin are 021's work. The other three
+  rows are unchanged: not built.
+- **The supply-chain change described above is no longer hypothetical.** It is 021's to carry
+  out, not this ADR's.
+
 **D8. Once a task has been started, the terms it is judged by change only by directive.** *Added
 2026-10-04, after acceptance; see the Status line.* A task's acceptance fields are `criteria`,
 `deps`, `inputs`, `kind` and `policy`. While a task has no attempt, the plan may change them
@@ -248,6 +273,12 @@ capabilities" (§2.2). So D8 makes such an edit visible, attributable and refuse
 does not make it impossible. What the operator reviews is the diff of `PLAN-NNN.dagr.json` in the
 pull request, with these edits called out.
 
+*Amended 2026-10-04.* 021 ADR-002 proposes a tool, `RunRecord`, through which an operator's ruling
+reaches the run file only if the quoted words appear in an operator message (its D4 and D5,
+proposed, not ruled). If that is accepted, the directive D8 asks for is a `rule` written through
+that tool, and the limit above shrinks to the one that ADR states for itself: a model can still
+write the file by hand.
+
 ## 5. Consequences
 
 - **`tools/pr` loses a network dependency**, and the confined container stops handing delegates a
@@ -263,7 +294,9 @@ pull request, with these edits called out.
   review, which is the point, and a cost.
 - **Plans are reviewed as JSON diffs.** A 28-task plan is about 20 KB. Whole-document rewrites
   make noisy diffs unless the writer keeps a stable key order. `dagr apply` would help; it is on
-  the fork side of D7.
+  the fork side of D7. *Amended 2026-10-04:* with the fork adopted, a plan's owner can change a
+  committed plan by patch with a precondition instead of rewriting the document (021 ADR-002 D9,
+  proposed).
 - **Two branches editing one plan will conflict in git.** Nothing here solves that.
 - **The level above a plan has no home in dagr.** F2 left it out for now. Linear's 12 projects
   were that level,
@@ -271,8 +304,20 @@ pull request, with these edits called out.
   all completed.
 - **Expect the fork to be permanent if adopted.** `apply` is a compare-and-set, and upstream's
   contract says it carries no CAS. This is an inference: no pull request has been opened to test
-  it.
+  it. *Amended 2026-10-04:* it is adopted, and the operator has ruled out an upstream pull request
+  for now.
 - **What Linear gave that nothing here replaces:** a web and mobile view, and notifications.
+- **An operator's ruling does not yet survive a restart.** *Added 2026-10-04.* A new session
+  starts a new run file seeded from the plan, so a ruling recorded only in the old run file is not
+  in it. 021 ADR-002 §5 leaves that question to D4 and D5 here. D2 says a plan holds no state, and
+  D8's check has to find the directive. This is open (§9). One candidate is a small rulings block
+  in the committed plan, which dagr would ignore (§2.3), modelled on the decision ledger described
+  in `RESEARCH-ailang-planning-system-implications.md` §3.1.
+- **Two ADRs now edit the same extension files.** *Added 2026-10-04.* WI-2 here and 021 ADR-002's
+  tool both change `packages/motoko-ext-herdr/orchestrator.ail`,
+  `packages/motoko-ext-herdr/register.ail`, `packages/motoko-ext-herdr/dagr.ail` and the producer
+  skill. 021 proposes that its change lands first and this one re-grounds. The operator has not
+  ruled on the order.
 - **Under D8 the orchestrator loses a shortcut it has today.** Between the two versions of
   PLAN-004's plan file, the criteria of 2 of the 13 started tasks were rewritten with no directive
   naming them (§6). Both read as wording updates for a plan revision; the check cannot tell.
@@ -310,6 +355,10 @@ Each was ruled as recommended.
   RULED:** per-plan graphs first, on upstream 0.3.1. The fork is not adopted now. It is reconsidered,
   together with the supply-chain change, when cross-plan dependencies or a portfolio view are wanted
   in dagr. Until then the level above a plan has no home in dagr (§5).
+  **REVERSED IN PART 2026-10-04.** The timing half no longer holds: the fork is adopted now, for
+  `dagr apply` (Status line; D7). The scope half stands. The first fork release is proposed as
+  upstream 0.3.1 plus `apply` and nothing else, so cross-plan dependencies and a view across
+  documents are still unbuilt, and the level above a plan still has no home in dagr.
 - **F3. The address format and field name in D6. RULED:** `NNN/PLAN-NNN/<task id>`, and the PR
   record field is renamed from `ticket:` to `task:`.
 - **F4. Plans already in flight. RULED:** they finish as they are. D2–D5 apply to plans started
@@ -336,6 +385,9 @@ Each was ruled as recommended.
 - Any index over documents, including `../036_chdb_memory/`.
 - The binding document's format (D5) and the mechanism of D4's re-projection. Those belong to the
   implementation plan, written fresh against the source.
+- Where an operator's ruling lives between sessions (§5). *Added 2026-10-04.*
+- Anything in 021 ADR-002 beyond its D1, and the order in which the two ADRs' extension changes
+  land. *Added 2026-10-04.*
 - A round-trip check that a plan's dagr document says what its prose intends, and a generated
   report from each decision to its tasks and their evidence. Both are candidates in
   `RESEARCH-ailang-planning-system-implications.md` §9.
@@ -383,8 +435,11 @@ Clustered by shared source surface. The plan is authored fresh from a handoff, n
   second.
 - **WI-2, the extension: binding and re-projection (D4, D5), with D8's refusal.**
   `packages/motoko-ext-herdr/` (`orchestrator.ail`, `register.ail`, `dagr.ail`), the observer
-  skill, the dagr-producer skill. Ends in `make verify_dagr_producer` green.
+  skill, the dagr-producer skill. Ends in `make verify_dagr_producer` green. *Amended 2026-10-04:*
+  if 021 ADR-002's change to these files lands first, this work re-grounds against it.
 - **WI-4, close-out snapshot (D4), with D8's list of unmatched changes.** After WI-2.
 - **WI-5, the fork (D7).** Out of scope under F2's ruling, until that question is reopened.
+  *Amended 2026-10-04:* reopened and ruled. The fork release and the pin are 021's work, not a work
+  item of this ADR. Cross-plan dependencies and a view across documents remain unplanned.
 - **The Linear triage (F1).** Not a work item for an agent to run unattended: it files public
   issues and closes Linear ones, and which of the 24 are wanted is the operator's call.
