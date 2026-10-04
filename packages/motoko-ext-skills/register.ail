@@ -90,14 +90,15 @@ pure func lists_name(names: [string], wanted: string) -> bool {
 -- filesystem that ignores case a read of `SKILL.md` finds `skill.md`, and V1
 -- is exact case.
 func read_entry(entry: string) -> RootEntry ! {FS} {
-  if isDir(skill_dir(entry)) then
-    (if has_skill_md(listDir(skill_dir(entry))) then
+  let path = skill_dir(entry);
+  if isDir(path) then
+    (if has_skill_md(listDir(path)) then
       match readFileResult(skill_md_path(entry)) {
         Ok(text) => DirWithSkillMd(entry, text),
         Err(why) => DirUnreadableSkillMd(entry, why)
       }
     else DirWithoutSkillMd(entry))
-  else if isFile(skill_dir(entry)) then RegularFile(entry)
+  else if isFile(path) then RegularFile(entry)
   else OtherEntry(entry)
 }
 
