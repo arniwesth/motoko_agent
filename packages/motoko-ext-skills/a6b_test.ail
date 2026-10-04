@@ -1,0 +1,412 @@
+-- 037 ADR-001 A6b: a loaded skill arrives whole -- and where it does not.
+--
+-- These tests run the two real compactors on the message the harness builds
+-- from a `Skill` result. EACH SIDE GETS THE LIMIT IT IS ACTUALLY GIVEN (ADR D8
+-- as revised 2026-10-04):
+--
+--   the handler     the model's DECLARED window (`raw_window_of`,
+--                   `src/core/session.ail`), through `load_skill`
+--   the compactors  a smaller WORKING limit: the declared window less 65,536
+--                   tokens of output allowance and less the pinned prefix,
+--                   floored at 0 (`working_budget_for_ext`,
+--                   `src/core/context_limit.ail`)
+--
+-- So a skill the handler returns is whole in the next request only where the
+-- two limits are close, and the tests state both sides of that split instead
+-- of hiding it behind one number.
+--
+-- The compactors are this module's dependencies and nothing else's:
+-- `skills.ail` imports neither, and `register.ail` must not import this file.
+-- The structural tests are pure. The `compaction_ai` tests carry its effect
+-- row because `compact_with_ai` declares one; the summarizer is a stub, so no
+-- provider is called.
+
+module sunholo/motoko_ext_skills/a6b_test
+
+import std/json (jo)
+import std/list (foldl, flatMap, range, last)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/string (length, substring, concat, repeat, contains, startsWith)
+import pkg/sunholo/motoko_ext_abi/types (
+  Msg, AiCtx, ExtWorld, AiStepOutcome,
+  PassThrough, PassThroughObserved, Compacted,
+  pure_ctx, ai_ctx, empty_ext_world
+)
+import pkg/sunholo/motoko_ext_compaction_structural/compaction_structural (compact_for_pre_step, usage_percent_with_limit)
+import pkg/sunholo/motoko_ext_compaction_ai/compaction_ai (compact_with_ai, calibrated_usage_percent)
+import pkg/sunholo/motoko_ext_compaction_ai/types (CompactionAiConfig, default_config)
+import pkg/sunholo/motoko_ext_skills/skills (load_skill, envelope_message, envelope_message_chars, skill_result_envelope, estimate_tokens)
+
+-- ============================================================================
+-- The two limits.
+-- ============================================================================
+
+-- A COPY of `working_budget_for_ext` (`src/core/context_limit.ail`), which a
+-- package cannot import. `test_working_limit_is_the_cores` pins it to values
+-- printed by the core's own function (037 evidence/p3/working_limit_core.out).
+func working_limit(declared: int, pinned: int) -> int {
+  let effective = if declared <= 65536 then 0 else declared - 65536;
+  if effective <= pinned then 0 else effective - pinned
+}
+
+-- The pinned prefix of the P1 sessions, in tokens
+-- (`NOTE-p1-prototype-results.md` §6.1).
+func pinned_tokens() -> int { 1936 }
+
+func test_working_limit_is_the_cores() -> bool
+  tests [((), true)]
+  {
+    working_limit(80000, 1936) == 12528
+      && working_limit(100000, 1936) == 32528
+      && working_limit(107472, 1936) == 40000
+      && working_limit(117472, 1936) == 50000
+      && working_limit(117473, 1936) == 50001
+      && working_limit(131472, 1936) == 64000
+      && working_limit(262144, 1936) == 194672
+      && working_limit(64000, 1936) == 0
+      && working_limit(67472, 1936) == 0
+      && working_limit(67473, 1936) == 1
+      && working_limit(65536, 0) == 0
+      && working_limit(65537, 0) == 1
+      && working_limit(0, 0) == 0
+  }
+
+-- ============================================================================
+-- The history: a task, older tool results, and the skill as the newest one.
+-- ============================================================================
+
+-- The id shape of recent session journals: `call_` and 32 hex digits.
+func skill_call_id() -> string { "call_0123456789abcdef0123456789abcdef" }
+
+-- A valid SKILL.md for directory `a` whose harness message is exactly
+-- `message_chars` long.
+func skill_md_of_message_chars(message_chars: int) -> string {
+  let head = "---\nname: a\ndescription: A fixture skill.\n---\n# A fixture skill\n";
+  let empty = envelope_message_chars(skill_result_envelope(skill_call_id(), "a", head));
+  concat([head, repeat("x", message_chars - empty)])
+}
+
+func tool_result(id: string, content: string) -> Msg {
+  { role: "tool", content: content, tool_calls: [], tool_call_id: id }
+}
+
+func tool_call(id: string, tool: string) -> Msg {
+  { role: "assistant", content: "", tool_calls: [{ id: id, name: tool, arguments: "{}" }], tool_call_id: "" }
+}
+
+func task_text() -> string { "Do the task the skill describes." }
+
+-- THE HANDLER'S SIDE. What a `Skill` call returns under this declared window,
+-- as the tool message the harness builds from it; `None` when the handler
+-- answers with an error instead.
+func loaded_skill(declared: int, message_chars: int) -> Option[Msg] {
+  match load_skill("a", skill_md_of_message_chars(message_chars), skill_call_id(), declared) {
+    Ok(env) => Some(tool_result(skill_call_id(), envelope_message(env))),
+    Err(_) => None
+  }
+}
+
+func filler_pair(i: int, chars_each: int) -> [Msg] {
+  let id = concat(["call_filler_", repeat("i", i + 1)]);
+  [tool_call(id, "ReadFile"), tool_result(id, repeat("f", chars_each))]
+}
+
+func history(fillers: int, chars_each: int, skill: Msg) -> [Msg] {
+  [{ role: "user", content: task_text(), tool_calls: [], tool_call_id: "" }]
+    ++ flatMap(\i. filler_pair(i, chars_each), range(0, fillers))
+    ++ [tool_call(skill.tool_call_id, "Skill"), skill]
+}
+
+-- A history that sits just inside `pct` percent of `limit` by the compactors'
+-- estimate, with the padding spread over `fillers` older tool results. Each
+-- test asserts the usage it got, so the arithmetic here is checked, not
+-- trusted.
+func history_at(limit: int, pct: int, fillers: int, skill: Msg) -> [Msg] {
+  let target_chars = ((limit * pct + 99) / 100 + 8) * 4;
+  let each = (target_chars - length(task_text()) - length(skill.content)) / fillers;
+  history(fillers, (if each < 0 then 0 else each), skill)
+}
+
+func newest_tool_content(msgs: [Msg]) -> string {
+  foldl(\found m. if m.role == "tool" then m.content else found, "", msgs)
+}
+
+-- ============================================================================
+-- The structural compactor.
+-- ============================================================================
+
+type StructuralRun = { compacted: bool, note: string, newest: string }
+
+-- THE COMPACTOR'S SIDE: `compact_for_pre_step` under the working limit.
+func structural(limit: int, msgs: [Msg]) -> StructuralRun {
+  match compact_for_pre_step({ pure_ctx(jo([])) | context_limit: limit }, msgs) {
+    PassThrough => { compacted: false, note: "", newest: newest_tool_content(msgs) },
+    PassThroughObserved(code, _) => { compacted: false, note: code, newest: newest_tool_content(msgs) },
+    Compacted(out, note, _) => { compacted: true, note: note, newest: newest_tool_content(out) }
+  }
+}
+
+-- The largest skill V7 admits, 60,000 chars of message, under a declared
+-- window of 262,144 (the one a committed profile sets). The working limit is
+-- 194,672, the skill is 7% of it, and tier 1 elides the three oldest of
+-- thirteen tool results. The skill is the newest and is untouched.
+func test_structural_72_pct_newest_skill_is_whole() -> bool
+  tests [((), true)]
+  {
+    let limit = working_limit(262144, pinned_tokens());
+    match loaded_skill(262144, 60000) {
+      None => false,
+      Some(skill) => {
+        let msgs = history_at(limit, 72, 12, skill);
+        let run = structural(limit, msgs);
+        length(skill.content) == 60000
+          && usage_percent_with_limit(msgs, limit) == 72
+          && run.compacted
+          && contains(run.note, "tier=tier1")
+          && run.newest == skill.content
+      }
+    }
+  }
+
+-- The same skill at 96%: tier 1 does not relieve it and the compactor goes to
+-- keep-last-5. The skill is still the newest tool result and still whole.
+func test_structural_96_pct_newest_skill_is_whole() -> bool
+  tests [((), true)]
+  {
+    let limit = working_limit(262144, pinned_tokens());
+    match loaded_skill(262144, 60000) {
+      None => false,
+      Some(skill) => {
+        let msgs = history_at(limit, 96, 12, skill);
+        let run = structural(limit, msgs);
+        usage_percent_with_limit(msgs, limit) == 96
+          && run.compacted
+          && contains(run.note, "tier=hard")
+          && run.newest == skill.content
+      }
+    }
+  }
+
+-- 96% with three large older results: only the emergency tiers relieve it, and
+-- what they keep is the newest results. The skill is one of them.
+func test_structural_96_pct_emergency_newest_skill_is_whole() -> bool
+  tests [((), true)]
+  {
+    let limit = working_limit(262144, pinned_tokens());
+    match loaded_skill(262144, 60000) {
+      None => false,
+      Some(skill) => {
+        let msgs = history_at(limit, 96, 3, skill);
+        let run = structural(limit, msgs);
+        usage_percent_with_limit(msgs, limit) == 96
+          && run.compacted
+          && contains(run.note, "tier=emergency")
+          && run.newest == skill.content
+      }
+    }
+  }
+
+-- THE SPLIT, reproduced from the P1 recorder session `dry/cap-80000`
+-- (`NOTE-p1-prototype-results.md` §6.1). Declared 80,000: the handler loads a
+-- skill the size of `dagr-producer` (24,284 chars of message, 7% of the
+-- declared window). The compactor's limit is 12,528, the same message is 48%
+-- of that, and `cap_oversized_tool_results` cuts it at 30% wherever it sits --
+-- here as the newest tool result. D8's size check does not prevent this, and
+-- the ADR no longer says it does.
+func test_structural_caps_a_loaded_skill_when_the_limits_are_far_apart() -> bool
+  tests [((), true)]
+  {
+    let limit = working_limit(80000, pinned_tokens());
+    match loaded_skill(80000, 24284) {
+      None => false,
+      Some(skill) => {
+        let msgs = history_at(limit, 72, 3, skill);
+        let run = structural(limit, msgs);
+        limit == 12528
+          && estimate_tokens(length(skill.content)) * 100 / 80000 == 7
+          && estimate_tokens(length(skill.content)) * 100 / limit == 48
+          && usage_percent_with_limit(msgs, limit) == 72
+          && run.compacted
+          && run.newest == concat([substring(skill.content, 0, 80), "...[elided 24204 chars]\n[large tool result capped; use grep or offset+limit instead of re-reading in full]"])
+      }
+    }
+  }
+
+-- Where the split falls for the largest skill V7 admits (15,000 tokens): the
+-- cap is 30% of the working limit, so the skill is whole from a working limit
+-- of 50,001 and cut at 50,000 -- a declared window of 117,473 against 117,472
+-- with this prefix. The handler loads it in both: it is 12% of either.
+func test_structural_cap_boundary_for_the_largest_skill() -> bool
+  tests [((), true)]
+  {
+    match loaded_skill(117473, 60000) {
+      None => false,
+      Some(skill) =>
+        match loaded_skill(117472, 60000) {
+          None => false,
+          Some(same) => {
+            let whole = structural(50001, history_at(50001, 72, 12, skill));
+            let capped = structural(50000, history_at(50000, 72, 12, same));
+            working_limit(117473, pinned_tokens()) == 50001
+              && working_limit(117472, pinned_tokens()) == 50000
+              && whole.compacted && whole.newest == skill.content
+              && capped.compacted && capped.newest != same.content
+              && contains(capped.newest, "[large tool result capped;")
+          }
+        }
+    }
+  }
+
+-- Below that range nothing is cut, for a different reason: a declared window
+-- of 65,536 plus the prefix or less gives the compactor a limit of 0, and at 0
+-- it never acts. The size check is what protects such a window: at 64,000 it
+-- loads the largest skill (23%), and at 60,000 it answers with its error.
+func test_structural_does_nothing_at_a_working_limit_of_zero() -> bool
+  tests [((), true)]
+  {
+    match loaded_skill(64000, 60000) {
+      None => false,
+      Some(skill) => {
+        let msgs = history(12, 60000, skill);
+        let run = structural(working_limit(64000, pinned_tokens()), msgs);
+        working_limit(64000, pinned_tokens()) == 0
+          && not run.compacted
+          && run.newest == skill.content
+          && (match loaded_skill(60000, 60000) { None => true, Some(_) => false })
+      }
+    }
+  }
+
+-- ============================================================================
+-- compaction_ai.
+-- ============================================================================
+
+func stub_summarizer(world: ExtWorld, model_id: string, sent: [Msg]) -> AiStepOutcome ! {AI, IO, Trace} {
+  { result: Ok("summary of the folded turns"), next_state: world }
+}
+
+func ai_context(limit: int) -> AiCtx {
+  ai_ctx(
+    { pure_ctx(jo([])) | task: task_text(), step: 1, model: "m", context_limit: limit },
+    { ai_step: stub_summarizer },
+    empty_ext_world()
+  )
+}
+
+type AiRun = { compacted: bool, messages: int, ends_with_skill_call_and_result: bool, holds_skill: bool }
+
+func is_skill_call(m: Msg) -> bool {
+  m.role == "assistant" && foldl(\found c. found || c.id == skill_call_id(), false, m.tool_calls)
+}
+
+func ends_with_call_and_result(out: [Msg], skill: Msg) -> bool {
+  let n = foldl(\k m. k + 1, 0, out);
+  match foldl(\w m. { index: w.index + 1, call: w.call || (w.index == n - 2 && is_skill_call(m)) }, { index: 0, call: false }, out).call {
+    false => false,
+    true =>
+      match last(out) {
+        None => false,
+        Some(m) => m.role == "tool" && m.tool_call_id == skill.tool_call_id && m.content == skill.content
+      }
+  }
+}
+
+-- `compact_with_ai` under the working limit and one configuration.
+func ai_compaction(limit: int, msgs: [Msg], cfg: CompactionAiConfig, skill: Msg) -> AiRun ! {AI, IO, Trace} {
+  match compact_with_ai(ai_context(limit), msgs, cfg).decision {
+    Compacted(out, _, _) => {
+      compacted: true,
+      messages: foldl(\k m. k + 1, 0, out),
+      ends_with_skill_call_and_result: ends_with_call_and_result(out, skill),
+      holds_skill: foldl(\found m. found || m.content == skill.content, false, out)
+    },
+    _ => { compacted: false, messages: 0, ends_with_skill_call_and_result: false, holds_skill: false }
+  }
+}
+
+-- The default configuration keeps a number of recent messages (six), so the
+-- newest tool result is in the recent part whatever its size.
+func test_ai_default_keeps_the_newest_skill() -> bool ! {AI, IO, Trace}
+  tests [((), true)]
+  {
+    let limit = working_limit(262144, pinned_tokens());
+    match loaded_skill(262144, 60000) {
+      None => false,
+      Some(skill) => {
+        let msgs = history_at(limit, 76, 12, skill);
+        let run = ai_compaction(limit, msgs, default_config(), skill);
+        default_config().keep_recent_tokens == 0
+          && default_config().threshold_pct == 75
+          && calibrated_usage_percent(msgs, limit, 0, 0) == 76
+          && run.compacted
+          && run.messages < 27
+          && run.ends_with_skill_call_and_result
+      }
+    }
+  }
+
+-- A tail budget of 20,000 tokens, which three committed profiles set. The
+-- working limit is 64,000 (a declared 131,472, as P1 row c ran), where the
+-- budget is the effective one: the fold cap does not raise it. The largest
+-- skill is 15,000 tokens, fits the tail, and is kept with the call that made
+-- it.
+func test_ai_tail_budget_20000_keeps_the_newest_skill() -> bool ! {AI, IO, Trace}
+  tests [((), true)]
+  {
+    let limit = working_limit(131472, pinned_tokens());
+    match loaded_skill(131472, 60000) {
+      None => false,
+      Some(skill) => {
+        let msgs = history_at(limit, 76, 12, skill);
+        let run = ai_compaction(limit, msgs, { default_config() | keep_recent_tokens: 20000 }, skill);
+        limit == 64000
+          && calibrated_usage_percent(msgs, limit, 0, 0) == 76
+          && run.compacted
+          && run.ends_with_skill_call_and_result
+      }
+    }
+  }
+
+-- The same budget under the profile that sets both it and a declared window of
+-- 262,144.
+func test_ai_tail_budget_20000_at_a_large_window_keeps_the_newest_skill() -> bool ! {AI, IO, Trace}
+  tests [((), true)]
+  {
+    let limit = working_limit(262144, pinned_tokens());
+    match loaded_skill(262144, 60000) {
+      None => false,
+      Some(skill) => {
+        let msgs = history_at(limit, 76, 12, skill);
+        let run = ai_compaction(limit, msgs, { default_config() | keep_recent_tokens: 20000 }, skill);
+        run.compacted && run.ends_with_skill_call_and_result
+      }
+    }
+  }
+
+-- THE SPLIT for compaction_ai: it folds even the newest message when that
+-- message alone exceeds the tail budget. Under a budget of 12,000 tokens the
+-- 15,000-token skill is summarized away with everything before it, in the
+-- request straight after it loaded; under 20,000, in the same history, it is
+-- kept. (Working limit 40,000: small enough that the fold cap does not raise
+-- the budget past the skill.)
+func test_ai_smaller_tail_budget_folds_the_newest_skill() -> bool ! {AI, IO, Trace}
+  tests [((), true)]
+  {
+    let limit = working_limit(107472, pinned_tokens());
+    match loaded_skill(107472, 60000) {
+      None => false,
+      Some(skill) => {
+        let msgs = history_at(limit, 76, 12, skill);
+        let folded = ai_compaction(limit, msgs, { default_config() | keep_recent_tokens: 12000 }, skill);
+        let kept = ai_compaction(limit, msgs, { default_config() | keep_recent_tokens: 20000 }, skill);
+        limit == 40000
+          && estimate_tokens(length(skill.content)) == 15000
+          && folded.compacted
+          && folded.messages == 1
+          && not folded.holds_skill
+          && kept.compacted
+          && kept.ends_with_skill_call_and_result
+      }
+    }
+  }
