@@ -43,6 +43,7 @@ import src/core/ext/registry_normalize (
   rejection_extension,
   kind_name,
   DuplicateExitLabel,
+  RegistrationRefused,
   fold_kind_repeats_allowed,
   empty_registration_omits
 )
@@ -191,31 +192,57 @@ func scenario_whole_registry(label: string) -> bool ! {IO} {
 }
 
 -- ---------------------------------------------------------------------------
--- 037 ADR-001 D2 -- THE ARTIFACT 031 ADR-001's Amendment 5 cites.
+-- 037 ADR-001 D2 -- THE REGISTRATION REFUSAL, and the artifact 031 ADR-001's
+-- Amendment 5 cites.
 --
--- A registration whose `config` carries the key `registration_refusal`, set to
--- a non-empty string, on the clean capability list: ONE mutation from the
--- negative control, and the mutation is in `config`, which no rule at this
--- boundary reads today. The row records what the host does with it AS IT
--- STANDS: accepts it, and carries the config onto the entry byte for byte. So
--- an extension that has found its own configuration broken has no way to make
--- the host refuse to start -- `ExtRegistration` is `{ config, caps }` and has
--- no error channel. This is the row that turns red when the check lands.
+-- THE FIXTURE: a registration whose `config` carries the key
+-- `registration_refusal`, set to a non-empty string, on the clean capability
+-- list. ONE mutation from the negative control, and the mutation is in
+-- `config`, which no rule at this boundary read before this one.
+--
+-- AS THE ARTIFACT (commit cfdf74c1, before the check): the row asserted that
+-- the host ACCEPTED it and carried the config onto the entry byte for byte --
+-- an extension that had found its own configuration broken had no way to make
+-- the host refuse to start, `ExtRegistration` being `{ config, caps }` with no
+-- error channel. That run, and the same row going red the moment the check
+-- landed, are under .agent/projects/037_skills_system/evidence/p2/amendment-5/.
+--
+-- NOW: the same fixture, asserted the other way. The host refuses, names the
+-- extension, and the message ENDS WITH the extension's string unedited.
 -- ---------------------------------------------------------------------------
 pure func refusal_text() -> string {
   "fixture: this extension found its own root broken and lists every violation here (one; two)"
 }
 pure func refusing_config() -> Json { jo([kv("registration_refusal", js(refusal_text()))]) }
 
-func scenario_refusal_key_as_the_host_stands(label: string) -> bool ! {IO} {
-  match normalize_registration("refuse#6", refusing_config(), clean()) {
+-- Refused BY `registration-refused`, naming the extension, carrying exactly
+-- `message` -- whatever the capability list is.
+func assert_refused(label: string, id: string, config: Json, caps: [Capability], message: string) -> bool ! {IO} {
+  match normalize_registration(id, config, caps) {
+    Ok(_) => { let _ = println("  ✗ ${label}: accepted, expected rejection by [registration-refused]"); false },
+    Err(r) => {
+      let payload = match r { RegistrationRefused(e, m) => e == id && m == message, _ => false };
+      let ok = rejection_rule(r) == "registration-refused" && rejection_extension(r) == id && payload;
+      let _ = if ok then println("  ✓ ${label}: ${rejection_message(r)}")
+              else println("  ✗ ${label}: expected [registration-refused] naming '${id}' with the extension's string as the message, got ${rejection_message(r)}");
+      ok
+    }
+  }
+}
+
+-- THE CONTROL for the row above, one mutation from it: the same key holding
+-- the EMPTY string is no refusal. The registration loads and the entry still
+-- carries the key -- the host reads `config`, it does not edit it.
+func scenario_empty_refusal_is_accepted(label: string) -> bool ! {IO} {
+  let cfg = jo([kv("registration_refusal", js(""))]);
+  match normalize_registration("refuse#8", cfg, clean()) {
     Ok(e) => {
-      let ok = e.id == "refuse#6" && encode(e.config) == encode(refusing_config()) && kinds_of(e.caps) == kinds_of(clean());
-      let _ = if ok then println("  ✓ ${label}: ACCEPTED -- the host as it stands does not read `registration_refusal`; the entry carries config ${encode(e.config)} unchanged and all ${show(List.length(e.caps))} atoms")
+      let ok = e.id == "refuse#8" && encode(e.config) == encode(cfg) && kinds_of(e.caps) == kinds_of(clean());
+      let _ = if ok then println("  ✓ ${label}: accepted -- the entry carries config ${encode(e.config)} unchanged and all ${show(List.length(e.caps))} atoms")
               else println("  ✗ ${label}: accepted, but the entry does not carry the registration's config and atoms unchanged");
       ok
     },
-    Err(r) => { let _ = println("  ✗ ${label}: expected acceptance by the host as it stands, got ${rejection_message(r)}"); false }
+    Err(r) => { let _ = println("  ✗ ${label}: expected acceptance, got ${rejection_message(r)}"); false }
   }
 }
 
@@ -236,7 +263,12 @@ export func main() -> () ! {IO} {
   let r6 = assert_rejected("a third ExitIntent reusing the label 'panes'", "duplicate-exit-label", "exit#5", duplicate_exit_label(),
     \r. match r { DuplicateExitLabel(_, l, p) => l == "panes" && p == 11, _ => false });
   let _ = println("  -- 037 D2: a registration whose config carries registration_refusal --");
-  let a5 = scenario_refusal_key_as_the_host_stands("config carries registration_refusal (non-empty string)");
+  let a5 = assert_refused("config carries registration_refusal (non-empty string)", "refuse#6", refusing_config(), clean(), refusal_text());
+  -- TWO mutations, and said so: the refusal on a list that ALSO trips a
+  -- multiplicity rule. The refusal is read before the walk, so it is the
+  -- rejection -- `second ToolPolicy` above is what this list gets without it.
+  let a5_order = assert_refused("the same config on the 'second ToolPolicy' list (read before the walk)", "refuse#7", refusing_config(), second_policy(), refusal_text());
+  let a5_empty = scenario_empty_refusal_is_accepted("config carries registration_refusal = \"\" (the control)");
   let _ = println("  -- the whole build --");
   let w = scenario_whole_registry("registry of good + empty + bad");
   -- the harness's own control: the boundary must be able to reject at all
@@ -244,7 +276,7 @@ export func main() -> () ! {IO} {
     && (match normalize_registration("x", jo([]), clean()) { Ok(_) => true, Err(_) => false });
   let _ = if control then println("  ✓ control: the boundary both accepts and rejects")
           else println("  ✗ control: the boundary never rejects -- every row above is vacuous");
-  if c && r1 && r2 && r3 && r4 && r5 && r6 && a5 && w && control
+  if c && r1 && r2 && r3 && r4 && r5 && r6 && a5 && a5_order && a5_empty && w && control
   then println("registry_multiplicity_dst PASS")
   else { let _ = println("registry_multiplicity_dst FAIL"); exit(1) }
 }
