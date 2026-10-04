@@ -107,7 +107,7 @@ Not copied. All of it goes when the worktree and `/tmp` are cleaned.
 | The `std/yaml` probe extension | `packages/motoko-ext-yaml-probe/`, untracked | small |
 | The profile | `.motoko/config/skills_proto/`, untracked | 1 KB |
 | The wiring | uncommitted changes to `ailang.toml`, `ailang.lock`, `src/core/ext/registry_generated.ail` | 60 lines |
-| Session captures | `p1.3/capture/` (459 scored row b sessions, 6 row c runs, 6 row d, 7 row e, plus voided, error and smoke sessions), `p1.3/dry/`, `p1.3a/capture/` request bodies, `p1.2/capture/` request bodies | 55 MB |
+| Session captures | Archived as `./captures/p1-captures.tar.gz` (7.9 MB; unpacks to 55 MB: `p1.3/capture/`, `p1.3/dry/`, `p1.3a/capture/`, `p1.2/capture/` — see `./captures/README.md`). The live trees stay only in the scratch worktree until cleanup | 7.9 MB committed |
 | Runner logs | `p1.3/results/*.log` | 69 KB |
 | Fixtures | `/tmp/motoko-037-p1-fixture/`, `/tmp/motoko-037-p1.3a-l2/`, `/tmp/motoko-037-p1.3/` | 313 MB |
 | The six delegate reports | `.motoko/herdr-delegates/answer-mot-dlg-*.md` there, and the same files in the shared checkout's mailbox | 100 KB |
