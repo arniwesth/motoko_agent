@@ -110,10 +110,24 @@ form `scripts/probe_budget_continue.sh` uses).
 | # | Measurement | Settles |
 | --- | --- | --- |
 | a | A session whose workdir is not the directory it was launched from: are the indexed and loaded skills the workdir's? In both layouts, does `ReadFile` on a bundled file under the directory line succeed? | Q3; A10 and part of A9 |
-| b | The research's M2 task set through the real runtime, on the three profile models: how often `Skill` is the first call, how often it is called at all in the first response, and whether the checkable action was done | Q4; A5 |
+| b | The research's M2 task set through the real runtime, on the three profile models and on four more recent ones (see below): how often `Skill` is the first call, how often it is called at all in the first response, and whether the checkable action was done | Q4; A5 |
 | c | A run driven past 70% usage under the structural compactor, then under `compaction_ai` at 75%: reloads per run, and the tokens they cost | Q4; A5 |
 | d | A model whose context is small enough that the size check must answer with its error | A5 |
 | e | One request with an index at the 16,000-char budget to each provider family the profiles use, OpenAI included | Q2; A5 |
+
+**Row b's models (operator ruling, 2026-10-04).** The three profile models
+(`meta/muse-spark-1.3-contributor`, `deepseek/deepseek-v4-pro`, `deepseek/deepseek-v4-flash`) run
+five trials each. Their first trial was near the ceiling: `Skill` was called on 9 or 10 of the 10
+matching tasks and on none of the 5 control tasks, for each model. More repeats of the same three
+would add little, so the operator extended the row to four more recent models:
+`deepseek/deepseek-v4.1-flash`, `z-ai/glm-5.3`, `xiaomi/mimo-v2.6-pro` and `tencent/hy4-preview`
+(OpenRouter ids; all four were listed with tool calling on 2026-10-04). They run after the first
+three have finished, with the same task set, harness and scoring: three trials per model, one
+session at a time, and one session per model first to check that it starts and calls tools. Their
+results go in the same tables as the first three.
+
+**Spend cap for P1.3 (operator ruling, 2026-10-04).** $7 at list price for all of P1.3, raised
+from $4 to cover the four added models, which are estimated at about $3 for three trials.
 
 Measurement (e) needs a working route to an OpenAI model. This account's OpenAI key was rejected
 on 2026-10-03, so the operator supplies one or rules OpenAI models out of scope for skills.
