@@ -3,7 +3,7 @@
 Evidence for PLAN-001 §5 P3, the pure core of `packages/motoko-ext-skills/`. Everything
 here was produced on 2026-10-04 in `/workspaces/motoko_agent-skills` on
 `feat/skills-extension`, with AILANG v0.47.2. The package code these files describe is
-at commit `928009c4`.
+at commit `928009c4`; the commits after it add evidence only.
 
 ## Test and check logs (`logs/`)
 
@@ -18,6 +18,24 @@ Each log starts with the directory and command and ends with the exit status.
 | `test_package_mode.log` | `ailang test --no-color --package .` | 11 of 11, exit 0. Package mode discovers `*_test.ail` only, so it runs `a6b_test.ail` and not the 62 inline tests of `skills.ail` |
 | `check_skills.log`, `check_a6b.log` | `AILANG_RELAX_MODULES=1 ailang check <file>` | exit 0 |
 | `check_strict_cold.log` | `ailang check skills.ail` with the package's `.ailang` cache removed | exit 1, `MOD010`. The Makefile checks package modules with `AILANG_RELAX_MODULES=1` for the same reason |
+
+## Gates that walk the tree (`GATES.tsv`, `gates/`)
+
+The package is not wired into the root manifest, the lock, the registry or any profile,
+so no gate installs it. Six light gates read `packages/` or the tracked `.ail` files, and
+were run at `bbad5b59` to see whether the new directory moves them. Each ran as
+`make <gate>`, one at a time, with the eleven credential variables P0 lists removed from
+the environment. `GATES.tsv` compares each log with P2's log of the same gate
+(`../p2/gates/`).
+
+No gate is newly red. Five are green as in the baseline. `ext_hook_scope` is red as in the
+baseline, on `test_dummy`, with a log identical to P2's. The one content difference in
+any log is `profile_definition`'s count of tracked `.ail` files, 563 where it was 561.
+
+**The other eleven gates of ADR A7 were not run for P3**: `check_core`, `driver_only`,
+`profile_coverage`, `conformance`, `test_coverage`, `new_contract_policy`,
+`registry_multiplicity`, `declared_vs_performed`, `driver_plus_no_ops`,
+`driver_plus_compose`, `driver_plus_herdr`.
 
 ## Two copies of core code, and what holds each equal
 
