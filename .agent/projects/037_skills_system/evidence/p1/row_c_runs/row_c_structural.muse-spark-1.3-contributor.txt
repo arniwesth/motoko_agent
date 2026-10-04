@@ -1,0 +1,122 @@
+run structural.muse-spark-1.3-contributor  model openrouter/meta/muse-spark-1.3-contributor
+  requests                                 60
+  finish                                   max_steps
+  killed                                   no
+  input_tokens                             1615090
+  output_tokens                            19504
+  list_cost_usd                            0.165410
+  first_compacted_request                  24
+  compacted_requests                       36
+  skill_first_load_step                    0
+  skill_reload_steps                       []
+  failed_skill_calls                       []
+  skill_result_tokens                      6077
+  requests_without_whole_skill             36
+  loss_episodes                            1
+  episodes_answered_by_reload              0
+  reload_result_tokens_total               0
+  input_tokens_carrying_reloaded_copies    0
+  input_tokens_carrying_first_copy         139771
+  reload_share_of_input_pct                0.0
+  ai_folds                                 0
+  reports_read                             14
+  last_report_read                         R14
+  dagr_check                               {'run-atlas.json': 'exit=0'}
+  other_skill_calls                        []
+  reconstruction_mismatches                0
+  skill_file_reads_by_other_tools          [(3, 'BashExec', 'dir'), (5, 'BashExec', 'examples'), (6, 'BashExec', 'examples'), (7, 'BashExec', 'examples'), (8, 'BashExec', 'examples'), (31, 'BashExec', 'dir'), (32, 'BashExec', 'SKILL.md'), (33, 'BashExec', 'examples'), (40, 'BashExec', 'SKILL.md'), (41, 'BashExec', 'SKILL.md'), (55, 'BashExec', 'SKILL.md'), (56, 'BashExec', 'SKILL.md')]
+  skill_md_reads_after_first_compaction    [(32, 'BashExec', 'SKILL.md'), (40, 'BashExec', 'SKILL.md'), (41, 'BashExec', 'SKILL.md'), (55, 'BashExec', 'SKILL.md'), (56, 'BashExec', 'SKILL.md')]
+  example_reads_after_first_compaction     [(33, 'BashExec', 'examples')]
+  loss episodes: 24-59 never reloaded (36 requests without it)
+  diagnostics: []
+  step  mode        msgs  est_tok  in_tok  out_tok  whole_copies/in_history  note
+     0                 2     2115    4178     220   0/0    -> Skill(dagr-producer)
+     1                 4     8192   10796     477   1/1    -> BashExec(echo "DAGR_BIN=$DAGR_BIN"; echo "HERDR)
+     2                 6     8671   11495     374   1/1    -> 
+     3                 8     8723   11548     216   1/1    -> BashExec(ls -R .motoko/skills/dagr-producer 2>&)
+     4                10     9539   12531     143   1/1    -> ReadFile(reports/R01.md)
+     5                12    12137   16061     464   1/1    -> BashExec(cat .motoko/skills/dagr-producer/examp)
+     6                14    12815   17106     416   1/1    -> BashExec(grep -n "queued_input\|liveness\|locat)
+     7                16    13772   18541     399   1/1    -> BashExec(grep -n "orchestrator\|E10\|E2\|W20\|g)
+     8                18    15969   21643     903   1/1    -> BashExec(sed -n '260,345p' /home/motoko/.config)
+     9                20    17877   24062    1652   1/1    -> BashExec(mkdir -p .dagr && cat > .dagr/run-atla)
+    10                22    18508   25725     132   1/1    -> ReadFile(reports/R02.md)
+    11                24    21137   29256     620   1/1    -> BashExec(python3 - <<'PY'
+import json, pathlib
+)
+    12                26    21410   29991      67   1/1    -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-)
+    13                28    21453   30132      48   1/1    -> ReadFile(reports/R03.md)
+    14                30    24152   33825    1679   1/1    -> BashExec(python3 - <<'PY'
+import json, pathlib
+)
+    15                32    24490   34737      67   1/1    -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-)
+    16                34    24533   34878      48   1/1    -> ReadFile(reports/R04.md)
+    17                36    27208   38520     860   1/1    -> BashExec(python3 - <<'PY'
+import json, pathlib
+)
+    18                38    27512   39350      67   1/1    -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-)
+    19                40    27555   39491      48   1/1    -> ReadFile(reports/R05.md)
+    20                42    30222   43111     387   1/1    -> BashExec(python3 - <<'PY'
+import json, pathlib
+)
+    21                44    30574   43993     700   1/1    -> BashExec(python3 - <<'PY'
+import json, pathlib
+)
+    22                46    30924   44913     112   1/1    -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-)
+    23                48    31015   45144      48   1/1    -> ReadFile(reports/R06.md)
+    24  structural    50    12000   22023     502   0/1  structural: tier=tier1 keep_last=10  -> BashExec(python3 - <<'PY'
+import json, pathlib
+)
+    25  structural    52    12155   22756     148   0/1  structural: tier=tier1 keep_last=10  -> BashExec(python3 - <<'PY'
+import json, pathlib
+)
+    26  structural    54    12254   23066      67   0/1  structural: tier=tier1 keep_last=10  -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-)
+    27  structural    56     9647   19667      48   0/1  structural: tier=tier1 keep_last=10  -> ReadFile(reports/R07.md)
+    28  structural    58    12031   22909     526   0/1  structural: tier=tier1 keep_last=10  -> BashExec(python3 - <<'PY'
+import json, pathlib
+)
+    29  structural    60    12498   24095     125   0/1  structural: tier=tier1 keep_last=10  -> BashExec(grep -n "evidence" /home/motoko/.confi)
+    30  structural    62    10029   20883     184   0/1  structural: tier=tier1 keep_last=10  -> BashExec(sed -n '100,180p' /home/motoko/.config)
+    31  structural    64    10893   21790     152   0/1  structural: tier=tier1 keep_last=10  -> BashExec(sed -n '180,260p' /home/motoko/.config)
+    32  structural    66    11700   22621      91   0/1  structural: tier=tier1 keep_last=10  -> BashExec(sed -n '60,140p' .motoko/skills/dagr-p)
+    33  structural    68    13361   24478     583   0/1  structural: tier=tier1 keep_last=10  -> BashExec(grep -rn '"cause"' .motoko/skills/dagr)
+    34  structural    70    11454   22051     908   0/1  structural: tier=tier1 keep_last=10  -> BashExec(python3 - <<'PY'
+import json, pathlib
+)
+    35  structural    72    11621   23089      67   0/1  structural: tier=tier1 keep_last=10  -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-)
+    36  structural    74    11573   23112      48   0/1  structural: tier=tier1 keep_last=10  -> ReadFile(reports/R08.md)
+    37  structural    76    14231   26747     678   0/1  structural: tier=tier1 keep_last=10  -> BashExec(python3 - <<'PY'
+import json, pathlib
+)
+    38  structural    78    11933   24157      67   0/1  structural: tier=tier1 keep_last=10  -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-)
+    39  structural    80    11517   23683      48   0/1  structural: tier=tier1 keep_last=10  -> ReadFile(reports/R09.md)
+    40  structural    82    14054   27136     163   0/1  structural: tier=tier1 keep_last=10  -> BashExec(grep -n "perator" .motoko/skills/dagr-)
+    41  structural    84    14874   28250      68   0/1  structural: tier=tier1 keep_last=10  -> BashExec(sed -n '330,460p' .motoko/skills/dagr-)
+    42  structural    86    15180   28766     374   0/1  structural: tier=tier1 keep_last=10  -> BashExec(grep -n "directive\|message_resolved\|)
+    43  structural    88    13923   27628     421   0/1  structural: tier=tier1 keep_last=10  -> BashExec(python3 - <<'PY'
+import json, pathlib
+)
+    44  structural    90    13453   27303      67   0/1  structural: tier=tier1 keep_last=10  -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-)
+    45  structural    92    12911   26633      48   0/1  structural: tier=tier1 keep_last=10  -> ReadFile(reports/R10.md)
+    46  structural    94    15539   30239     442   0/1  structural: tier=tier1 keep_last=10  -> BashExec(python3 - <<'PY'
+import json, pathlib
+)
+    47  structural    96    13232   27640      67   0/1  structural: tier=tier1 keep_last=10  -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-)
+    48  structural    98    12961   27345      48   0/1  structural: tier=tier1 keep_last=10  -> ReadFile(reports/R11.md)
+    49  structural   100    15553   30919     537   0/1  structural: tier=tier1 keep_last=10  -> BashExec(python3 - <<'PY'
+import json, pathlib
+)
+    50  structural   102    13330   28556      67   0/1  structural: tier=tier1 keep_last=10  -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-)
+    51  structural   104    11413   26537      48   0/1  structural: tier=tier1 keep_last=10  -> ReadFile(reports/R12.md)
+    52  structural   106    12737   28788     639   0/1  structural: tier=tier1 keep_last=10  -> BashExec(python3 - <<'PY'
+import json, pathlib
+)
+    53  structural   108    12819   29715      67   0/1  structural: tier=tier1 keep_last=10  -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-)
+    54  structural   110    12677   29604      88   0/1  structural: tier=tier1 keep_last=10  -> ReadFile(reports/R13.md)
+    55  structural   112    15289   33150     130   0/1  structural: tier=tier1 keep_last=10  -> BashExec(grep -n "gate" /home/motoko/.config/he)
+    56  structural   114    14415   31962     352   0/1  structural: tier=tier1 keep_last=10  -> BashExec(sed -n '295,330p' .motoko/skills/dagr-)
+    57  structural   116    15034   32682    1374   0/1  structural: tier=tier1 keep_last=10  -> BashExec(python3 - <<'PY'
+import json, pathlib
+)
+    58  structural   118    15412   33713      67   0/1  structural: tier=tier1 keep_last=10  -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-)
+    59  structural   120    12870   30370      48   0/1  structural: tier=tier1 keep_last=10  -> ReadFile(reports/R14.md)

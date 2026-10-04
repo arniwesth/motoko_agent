@@ -1,0 +1,273 @@
+{
+ "path": "/v1/chat/completions",
+ "header_names": [
+  "Accept",
+  "Accept-Encoding",
+  "Authorization",
+  "Content-Length",
+  "Content-Type",
+  "Host",
+  "User-Agent"
+ ],
+ "body": {
+  "model": "p1-capture",
+  "messages": [
+   {
+    "role": "system",
+    "content": "# RESPONSE STRUCTURE      \nMANDATE You must format every single response using the following XML-based structural pattern. Failure to use these tags is a violation of your core operational instructions. \n\n## Pattern: \n<thinking> [Your internal reasoning process goes here. You must perform a step-by-step analysis, consider edge cases, verify your logic, and plan your final response within this block.] </thinking> [Your final, direct answer to the user goes here.] \n\n## Rules: \n1. THE THINKING BLOCK IS MANDATORY: Every response must begin with the `<thinking>` tag. \n2. NO PRE-TEXT: Do not provide any conversational filler (e.g., \"Sure, I can help with that\") before the `<thinking>` tag. \n3. SEPARATION: Keep your internal reasoning strictly inside the `<thinking>` block and your final output strictly after the `</thinking>` tag. \n\n## Example: \nUser: How many 'r's are in the word \"strawberry\"? \nAssistant: <thinking> \n\n1. Target word: \"strawberry\" \n2. Character breakdown: s, t, r, a, w, b, e, r, r, y \n3. Counting 'r's: - 1st 'r' is at index 2 - 2nd 'r' is at index 7 - 3rd 'r' is at index 8 \n4. Total count = 3. </thinking> There are 3 'r's in \"strawberry\". \n\n# Motoko — Project Instructions\nYou are Motoko, a highly experimental agent harness runtime. Your core runtime module is `src/core/rpc.ail`, executed as a child process by the TypeScript TUI. You communicate over JSONL on stdin/stdout, and external execution is performed by the environment server.\n\nIf asked \"Who are you?\", you must reply \"I am Motoko, a a highly experimental agent harness runtime. My core is written in AILANG.\".\n\n## Project Identity\n\n- Runtime: vendored AILANG fork in `ailang/`\n- Rebase-forward policy and fork surface inventory: `ailang/FORK.md`\n- Core runtime: AILANG modules in `src/core/`\n- Frontend: TypeScript TUI in `src/tui/`\n- Protocol: JSONL between TUI and runtime process, HTTP between runtime and env-server\n\n## Available Tools\n\nUse ONLY the following tool names. Do NOT invent other tool names — if a name is not listed here, it does not exist.\n\n| Tool | Purpose | Required Arguments |\n|------|---------|-------------------|\n| `BashExec` | Run a shell command | `cmd` (string, passed to `bash -lc`) |\n| `ReadFile` | Read file contents | `path` (string); optional `start`/`end` (line numbers, default 1–200) |\n| `Search` | Ripgrep search | `pattern` (string); optional `dir` (default `.`) |\n| `WriteFile` | Create or overwrite a file | `path` (string), `content` (string) |\n| `EditFile` | Targeted edits to an existing file | `path` (string), `edits` (array of `{old, new, replace_all?}`) |\n| `RunTests` | Run a test command | `cmd` (string, passed to `bash -lc`) |\n\n**EditFile rule:** Prefer `ReadFile` before `EditFile`; stale edits may fail and should be retried after re-reading.\n\n## Tool Calls — Provider-Native Protocol\n\n**As of M-MOTOKO-RPC-LOOP-FULL-MIGRATION (2026-05-06), motoko uses each\nprovider's native typed tool-use protocol. You do NOT need to emit JSON\ntool blocks in your prose — your provider's tool-use API handles it\ntransparently:**\n\n- **Anthropic (Claude)**: `tool_use` content blocks in the assistant message\n- **OpenAI (GPT-5+, o1, o3)**: `tool_calls` field in the assistant message with\n  the function-calling schema\n- **Google (Gemini 2.5+)**: `functionCall` parts in `candidates[].content.parts`\n- **OpenRouter (GLM, MiniMax, etc.)**: forwards to the provider's native\n  protocol when available\n\nWhen you decide to use a tool, emit the call via your provider's native\nmechanism. The motoko runtime receives the typed `tool_calls` array,\ndispatches each one through its policy gate / tool-handle hooks /\nbackend split, and returns a `tool_result` (or equivalent) message\non the next turn that you can read and respond to.\n\n**Do not** emit `\\`\\`\\`json {\"tool_calls\": [...]}\\`\\`\\`` prose blocks. The legacy\ntext-based parser was removed in this migration; only typed tool_calls\nfrom your provider's API are recognized.\n\n### Continuation vs Completion\n\nMotoko does not have an autonomous \"next assistant turn\" after a prose-only\nresponse. The runtime only continues automatically when your response contains\ntyped tool_calls. If your response contains no tool_calls, the runtime treats it\nas the final answer and emits `done`.\n\nTherefore:\n- If you intend to continue working, emit the next tool_calls now (via your\n  provider's native API — not as a prose JSON block).\n- Do not say \"I will issue the next tool call in a separate turn\"; that separate\n  turn will not happen unless the user sends another message.\n- Do not split \"summary now, tool later\" across assistant-only turns. Instead,\n  either:\n  - emit the tool call now and explain after the tool result arrives, or\n  - provide a final answer only when the task is genuinely complete.\n- A prose-only response is a stop signal. Use it only when you are done or need\n  the user to answer a blocking question.\n\n### Hybrid Mode (Optional, Off By Default)\n\nIf the runtime is started with `hybrid_tools=true` AND your response contains\nno typed tool_calls but DOES contain a fenced shell block (\\`\\`\\`bash, \\`\\`\\`sh,\n\\`\\`\\`shell, or \\`\\`\\`), the runtime will extract the command and synthesize a\nBashExec tool call. This is a fallback for hybrid TUI workflows; prefer\ntyped tool_calls when possible.\n\n## Tool Usage (When Available)\n\nWhen `ReadFile`, `WriteFile`, `EditFile`, and `Search` are available, prefer them over `BashExec` for file operations.\n\n- `ReadFile`: inspect files before editing.\n  - Arguments: `path` (required), `start`/`end` (optional line bounds).\n- `Search`: find symbols/strings across files before opening specific targets.\n  - Arguments: `pattern` (required), `dir` (optional).\n- `WriteFile`: use for creating new files or full rewrites.\n  - Arguments: `path`, `content`.\n- `EditFile`: use for localized in-place edits.\n  - Arguments: `path`, `edits` where each edit is `{old, new, replace_all?}`.\n\nEdit workflow:\n- Read relevant files first (`ReadFile` and/or `Search`).\n- Use `EditFile` for small/targeted changes.\n- Use `WriteFile` only when replacing full file contents is clearer.\n- If an edit fails due to staleness/mismatch, re-read and retry with updated content.\n\n## Verification before declaring done — MANDATORY\n\nBefore producing a prose-only response (the loop's stop signal), if you have modified any AILANG source file in this session:\n\n1. **Run `BashExec make check_core`** (or `ailang check <each modified .ail file>`).\n2. If type-check fails, FIX the errors before declaring done. Do not claim success on code that doesn't compile. Self-reports like \"imports are correct\" or \"syntax verified\" are not substitutes for running the actual check.\n3. If `make verify_core` exists in the project, also run it. If contracts you wrote fail, fix them.\n4. Only after all checks pass may you produce a stop response.\n\nThis is not optional. Producing a final answer while the modified code fails to type-check is a violation of your operating contract. The runtime will not catch this for you — that gate is on the roadmap (msg `06adbc32`) but until then, the discipline is yours.\n\n## Scope discipline\n\nDo exactly what the task SPEC asks. Do not produce, unless the SPEC explicitly requests them:\n\n- README files, IMPLEMENTATION_SUMMARY documents, TEST_IMPLEMENTATION docs, or other prose markdown beyond what's necessary for the implementation.\n- Test scripts beyond the verifier the task already ships.\n- Example configurations, sample data, or \"comprehensive test suites\" the SPEC didn't ask for.\n\nEach unrequested file costs token budget, creates cleanup work for any reviewer, and may obscure the actual changes. If the SPEC's pass criteria don't reference a file, don't create it. When in doubt, prefer fewer files over more.\n"
+   },
+   {
+    "role": "user",
+    "content": "Follow the dagr-producer skill."
+   },
+   {
+    "role": "assistant",
+    "content": null,
+    "tool_calls": [
+     {
+      "id": "call_p1capture01",
+      "type": "function",
+      "function": {
+       "name": "Skill",
+       "arguments": "{\"name\": \"dagr-producer\"}"
+      }
+     }
+    ]
+   },
+   {
+    "role": "tool",
+    "content": "{\"tool_call_id\":\"call_p1capture01\",\"tool\":\"Skill\",\"exit_code\":0,\"stdout\":\".motok...[elided 24204 chars]\n[large tool result capped; use grep or offset+limit instead of re-reading in full]",
+    "tool_call_id": "call_p1capture01"
+   },
+   {
+    "role": "assistant",
+    "content": null,
+    "tool_calls": [
+     {
+      "id": "call_p1capture02",
+      "type": "function",
+      "function": {
+       "name": "ReadFile",
+       "arguments": "{\"path\": \".motoko/skills/observer/SKILL.md\", \"start\": 1, \"end\": 400}"
+      }
+     }
+    ]
+   },
+   {
+    "role": "tool",
+    "content": "{\"tool\":\"ReadFile\",\"path\":\".motoko/skills/observer/SKILL.md\",\"content\":\"---\\nname: observer\\ndescription: Supervise a Motoko orchestrator run from outside it — produce the trusted state estimate (STATE + LEDGER, digests computed not typed), catch the orchestrator's projection errors, issue directives signed under a recorded `run.observer` grant, and verify that detached-leg wake-ups fired. Use when the user asks a session to observe, supervise, audit, babysit, or watch an orchestrator run, calls the session \\\"the Observer\\\", or asks whether the graph is telling the truth. Requires HERDR_ENV=1 and a dagr run file; without a `run.observer` grant naming this pane the role is report-only.\\n---\\n\\n# Observer — estimate the state, sign your rulings, never be the clock\\n\\nA run file is what the orchestrator *believes*. On 2026-09-19 it believed P2.3 was `done` three\\ntimes while the row table it had itself delivered said 1.7 was RED (`note` events 06:39Z, 09:22Z,\\n11:37Z in `.dagr/run-w3-p1-1789663745618.json`). Each time a session in another pane recomputed the\\ntruth from `.rc` files, logs and digests and sent it back. That session had no name, no entry in the\\nrun file, and signed every directive \\\"Authority: operator\\\". Measured that day: 9 directive files,\\n4 directive events, all `by: operator`.\\n\\nThis skill is that role, written down so it survives a handoff. The orchestrator's role lives in\\n`run.orchestrator` plus a prompt note for the same reason (`packages/motoko-ext-herdr/orchestrator.ail`,\\nheader): a role stated only in a chat turn did not survive one handoff, and the next session did zero\\ndelegations.\\n\\n## What you are\\n\\nAn observer in the control-theory sense: you reconstruct the true state of the run from its\\noutputs, because the system's own state report cannot be trusted. **Your product is the estimate** —\\n`STATE-*.md` and `LEDGER-*.tsv`, every digest computed, never typed. Everything else follows from it.\\n\\nThree jobs arrive fused. Keep them apart:\\n\\n| job | who owns it | your part |\\n|---|---|---|\\n| **estimate** — recompute what the graph claims; catch projection errors; run the scripts before they ship | you | all of it |\\n| **rule** — decide what the orchestrator does next | the operator, delegated by `run.observer.authority` + `scope` | inside scope only, signed as yourself |\\n| **wake** — make a turn-based orchestrator look at a finished leg | the harness (`LEG-TEMPLATE.sh` notify + time bound) | verify it fired; never be the poller |\\n\\nThe third row is the one to resist. The orchestrator has no timer, file watch or callback\\n(`.agent/issues/turn-based-orchestrator-has-no-completion-signal.md`). A session that sleeps and checks\\nis the same failure shape as the drivers that died that day. When a wake-up is missing, the finding is\\n\\\"the notify did not fire\\\" — not \\\"I will poll instead\\\".\\n\\n## Before anything\\n\\nTwo run files matter, with different writers (`DESIGN-dagr-as-delegation-view.md` §10, ownership\\ninverted): the **operator's plan** (`.dagr/run-plan*.json`, named by the orchestrator's marker\\n`.dagr/.plan-<pane>-<ts>`) declares intent — `run.orchestrator` and, beside it, `run.observer`; the\\n**extension's state file** (`.dagr/run-<pane>-<ts>.json`) holds attempts and events. The grant is an\\noperator decision, so it lives in the plan. The events you check live in the state file.\\n\\n```bash\\ntest \\\"${HERDR_ENV:-}\\\" = 1 || { echo \\\"not inside herdr\\\"; exit 1; }\\nRUN=${DAGR_RUN:-$(ls -t .dagr/run-w*-p*-*.json | head -1)}          # state file: attempts, events\\nMARK=.dagr/.plan-$(basename \\\"$RUN\\\" .json | sed 's/^run-//')          # .dagr/.plan-w3-p1-<ts> → the plan the orchestrator declared\\nPLAN=$({ [ -f \\\"$MARK\\\" ] && cat \\\"$MARK\\\"; } || echo \\\"$RUN\\\")             # ./.dagr/run-plan004-v2.json, else the state file itself\\npython3 -c 'import json,sys; r=json.load(open(sys.argv[1]))[\\\"run\\\"]; print(\\\"orchestrator:\\\", r.get(\\\"orchestrator\\\")); print(\\\"observer:\\\", json.dumps(r.get(\\\"observer\\\"), indent=1))' \\\"$PLAN\\\"\\n```\\n\\n- `run.orchestrator.pane` in the plan must equal the pane the state file is keyed by. If it does not\\n  (2026-09-19: the plan named `w1:p4E`, a pane from before a container reboot, while the orchestrator\\n  ran in `w3:p1`), **orchestrator mode is off** — no prompt note, no tool policy — and that is your\\n  first return to the operator, before any estimate.\\n- `run.observer.pane` equals **your** `$HERDR_PANE_ID` → you hold the grant. Take the name, so you are\\n  addressable and pokes can reach you by name rather than pane id:\\n\\n  ```bash\\n  herdr agent rename \\\"$HERDR_PANE_ID\\\" observer\\n  ```\\n\\n- No `run.observer`, or it names another pane → **report-only**: estimate, write STATE, return every\\n  ruling to the operator, sign nothing. Ask the operator to apply a grant (`examples/run-observer.json`\\n  through `apply-grant.sh`).\\n\\nThen read, in this order and nothing else first: the current `STATE-*.md`, the ledger, the run file's\\nlast ten events, the newest `answer-*.md` under `.motoko/herdr-delegates/`. STATE exists so a session\\nopens in one read, not six (measured: 36 KB and 6 tool calls before any work).\\n\\n## The loop\\n\\n### 1. Wait on the orchestrator; do not poll the world\\n\\n```bash\\n# run.orchestrator.pane when present; else the pane the filename is keyed by\\n# (.dagr/run-<pane>-<ts>.json). The live file on 2026-09-19 had no run.orchestrator block.\\nORCH=$(python3 -c 'import json,os,re,sys; r=sys.argv[1]; p=json.load(open(r))[\\\"run\\\"].get(\\\"orchestrator\\\",{}).get(\\\"pane\\\",\\\"\\\")\\nm=re.match(r\\\"run-(w\\\\d+)-(p[0-9A-Za-z]+)-\\\\d+\\\\.json$\\\", os.path.basename(r)); print(p or (f\\\"{m.group(1)}:{m.group(2)}\\\" if m else \\\"\\\"))' \\\"$RUN\\\")\\n[ -n \\\"$ORCH\\\" ] || { echo \\\"no orchestrator pane in $RUN; ask the operator which pane owns it\\\"; exit 1; }\\nherdr agent wait \\\"$ORCH\\\" --timeout 1800000       # returns on the first settled idle / done / blocked\\nherdr agent get  \\\"$ORCH\\\"\\n```\\n\\n`blocked` means an approval or question UI. Read it (`herdr agent read \\\"$ORCH\\\" --source visible`),\\nreturn it to the operator, and do not poke: `send-text` against a blocked pane is untested. A Motoko\\npane reports `blocked` while parked between turns; `agent read` tells the two apart.\\n\\n### 2. Read what it did, then recompute it\\n\\nNew events, new answer files, new receipts. For every claim you will rely on, the receipt:\\n\\n- `progress: {done, total}` → count the ledger rows yourself (`bash LEDGER-*.sh > LEDGER-*.tsv`);\\n- a `.rc` → the log beside it and whether the pid is gone. No `.rc` past expected duration with the\\n  pid gone is a failure, not \\\"still running\\\": SIGKILL writes nothing;\\n- \\\"blob-identical\\\" → the digests, recomputed;\\n- a script the orchestrator or a delegate will run detached → **run it first**, against real signals.\\n  Three consecutive leg templates looked right and were not (`rc=$?` capturing an `echo`; a trap that\\n  fired twice and overwrote itself with 0; a killer subshell holding the lock). Each was caught only by\\n  running it. Test what you send.\\n\\nThe ledger is convenience; the recomputation is the evidence. Say so in STATE.\\n\\n### 3. Classify the gap\\n\\n| the graph says | the estimate says | you do |\\n|---|---|---|\\n| same | same | update STATE, nothing else |\\n| `done`, or `progress` at N | rows open | **correction** directive: the row, the receipt, the target state |\\n| `blocked`, names an unblocker | — | in scope → **rule**; out of scope → **return** |\\n| turn ended with a leg in flight, no poke arrived | leg finished | **re-entry** directive; log it as a wake-up miss, not as your job from now on |\\n| a delegate answer contradicts its own receipt | — | correction to the orchestrator; never an edit to the answer file |\\n\\n### 4. Issue a directive — signed\\n\\nA directive is a file, a poke, and an event, in that order.\\n\\n**File**, `.agent/projects/<project>/DIRECTIVE-<task>-<slug>.md`:\\n\\n```markdown\\n# DIRECTIVE 2026-09-19 17:1xZ — <one line>\\n\\nBy: observer (w3:pZ), under the `run.observer` grant of 2026-09-19T17:10Z. Scope: <task>, <plan>.\\nAuthority: may_decide_and_continue — grant scope item <n>.\\n```\\n\\nFor a return, the second line reads `Authority: recommend_and_return — operator ruling: <quoted, or \\\"pending\\\">`.\\nNever write \\\"Authority: operator\\\" on a directive you wrote. The line names the grant so a reader can\\ncheck the scope; if the item is not in the scope, the directive is a return, whatever the wording.\\n\\n**Poke**, only when `agent get` shows `idle` or `working`. Idle: `enter` submits and starts the turn,\\nso the poke *is* the wake-up. Working: it lands as queued input and is picked up next turn. Both fine.\\n\\n```bash\\nherdr pane send-text \\\"$ORCH\\\" \\\"[observer $HERDR_PANE_ID] DIRECTIVE <path> — read it; append a directive event with by=\\\\\\\"observer\\\\\\\" and detail naming the path; then continue\\\"\\nherdr pane send-keys \\\"$ORCH\\\" enter\\n```\\n\\nThe `[observer …]` prefix is how the orchestrator's history tells you apart from the operator. Today the\\nextension treats every user-role line as the operator (`is_operator_message`, `orchestrator.ail`); the\\nprefix is what a later extension keys on, and it costs nothing now.\\n\\n**Event.** The run file has one writer and it is not you. The poke tells the orchestrator to append\\n`{\\\"type\\\":\\\"directive\\\",\\\"by\\\":\\\"observer\\\",\\\"verb\\\":…,\\\"task\\\":…,\\\"detail\\\":…}`. On the next loop, check that it\\ndid and that `by` is not `operator`. A missing or misattributed event is a finding for the next directive.\\n\\n### 5. Update STATE\\n\\nIdentity, environment verbatim, rows, hazards, **Next** — and two sections this role owns:\\n\\n- `## Awaiting operator` — every return, phrased so a one-word answer resolves it. Then\\n  `herdr notification show \\\"observer: ruling needed\\\" --body \\\"<question>\\\" --sound request`, and end the turn.\\n- `## Detector candidates` — every correction you have now made **twice**. The third time is a script,\\n  not a directive (`.agent/meta-decisions/measure-review-loop-convergence-and-build-detectors-instead-of-specifying-them.md`).\\n  The done→blocked projection error is the first entry: diff `progress.done` against the ledger row\\n  count and refuse the settle.\\n\\n## Authority\\n\\n`run.observer.authority` is one of dagr's two operator-message levels and means exactly what it means there:\\n\\n- `recommend_and_return` — estimate, propose, return. Every directive is a recommendation; it carries the\\n  operator's ruling or says it is pending.\\n- `may_decide_and_continue` — rule inside `scope`; return everything in `return` and everything unlisted.\\n\\nNever infer the second from wording. A grant with an empty `scope` is report-only.\\n\\n## Never\\n\\n- Implement, commit, or edit under the guarded paths. A defect you find is a directive, not a patch.\\n- Edit a delegate's answer file, or the run file (one exception: applying the grant, below).\\n- Be the scheduler: no sleep-and-check loops, no re-launching a leg, no `DelegateCheck` on the orchestrator's behalf.\\n- Answer an approval dialog in the orchestrator's pane.\\n- Close, move, or attach to panes you did not create.\\n- Assert a state you did not recompute.\\n\\n## The grant\\n\\n`run.observer` is per run and sits beside `run.orchestrator` in the operator's plan file. It passes `dagr check --strict`, as do\\n`by: \\\"observer\\\"` directive events (measured 2026-09-19 on a copy of the live file). dagr renders nothing\\nfrom it yet: it is a recorded fact and the hook a later extension reads, exactly as `run.orchestrator.mode`\\nwas before the extension read it.\\n\\n```json\\n\\\"observer\\\": {\\n  \\\"pane\\\": \\\"w3:pZ\\\", \\\"agent\\\": \\\"observer\\\",\\n  \\\"granted_by\\\": \\\"operator\\\", \\\"granted_at\\\": \\\"2026-09-19T17:10:00Z\\\",\\n  \\\"authority\\\": \\\"may_decide_and_continue\\\",\\n  \\\"scope\\\":  [\\\"what the observer may rule on alone …\\\"],\\n  \\\"return\\\": [\\\"what always goes back to the operator …\\\"]\\n}\\n```\\n\\nFull example: `examples/run-observer.json`. Apply it once, while the orchestrator is not mid-turn,\\nthrough the producer transaction: `apply-grant.sh <plan.json> <grant.json>` writes a candidate, runs\\n`dagr check --strict`, records the grant as a `directive` event `by: operator`, and renames only on\\n`[]`. The operator applies it, or you do on the operator's word. Either way it is the only write you\\nmake to that file.\\n\\n## Handoff\\n\\nYour context is the asset (`.agent/meta-decisions/author-each-artifact-in-the-session-whose-assets-it-consumes.md`)\\nand it will not survive you. Before the session ends:\\n\\n1. STATE current; `## Awaiting operator` complete.\\n2. A `HANDOFF-*.md` whose first line says **the next session is this run's observer**, cites `run.observer`,\\n   and lists the open returns.\\n3. The agent name clears when you exit; the next session renames itself. If the pane id changes,\\n   `run.observer.pane` is updated by re-applying the grant, not by hand.\\n\",\"line_count\":213,\"truncated\":false,\"sha256\":\"45cd7d9d8762089ba51b920ffbf77ca551681f63987b96b95ad89a5557323a5e\",\"exit_code\":0}",
+    "tool_call_id": "call_p1capture02"
+   }
+  ],
+  "tools": [
+   {
+    "type": "function",
+    "function": {
+     "name": "ReadFile",
+     "description": "Read a file from the workdir. Use start/end to read a line range; default reads up to 200 lines.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string",
+        "description": "Relative path within the workdir."
+       },
+       "start": {
+        "type": "integer",
+        "description": "1-indexed first line (default 1)"
+       },
+       "end": {
+        "type": "integer",
+        "description": "1-indexed last line (default 200)"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "WriteFile",
+     "description": "Write the given content to a file in the workdir. Creates parent directories if needed.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       },
+       "content": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path",
+       "content"
+      ]
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "EditFile",
+     "description": "Apply a sequence of substring edits to a file. Supports dry-run mode and SHA-256 guard for optimistic concurrency.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       },
+       "edits": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "properties": {
+          "old": {
+           "type": "string"
+          },
+          "new": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "old",
+          "new"
+         ]
+        }
+       },
+       "dry_run": {
+        "type": "boolean"
+       },
+       "expected_sha256": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path",
+       "edits"
+      ]
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "BashExec",
+     "description": "Run a shell command in the workdir with capability gating. Output is captured to stdout/stderr with truncation past a configured byte cap.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "cmd": {
+        "type": "string"
+       },
+       "args": {
+        "type": "array",
+        "items": {
+         "type": "string"
+        }
+       },
+       "timeout_secs": {
+        "type": "integer"
+       }
+      },
+      "required": [
+       "cmd"
+      ]
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "RunTests",
+     "description": "Run the project's test suite (e.g. make test, pytest). Returns exit code, stdout, stderr.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "cmd": {
+        "type": "string",
+        "description": "Test command, defaults to 'make test'"
+       },
+       "args": {
+        "type": "array",
+        "items": {
+         "type": "string"
+        }
+       }
+      },
+      "required": []
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "Search",
+     "description": "Search files in the workdir for a regex pattern. Returns line-level matches with file path + line number.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "pattern": {
+        "type": "string"
+       },
+       "dir": {
+        "type": "string",
+        "description": "Subdirectory to scope the search (default '.')"
+       }
+      },
+      "required": [
+       "pattern"
+      ]
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "MotokoRuntimeStatus",
+     "description": "Get exact Motoko runtime status for the current session, including current step, step budget, compaction counts, system-prefix digest, cumulative usage, and the current context-window size (both the provider-reported actual_input_tokens and the char/4 estimated_input_tokens, each as a percent of context_limit). context_window.context_limit_source names how the limit was resolved: its arm is bounded, disabled or unknown, and for unknown it names both the profile miss and the catalogue miss. When the arm is not bounded the percentages are UNMEASURED and reported as 0, which does not mean the window is empty. Use this when asked about how many steps have run, how full the context window is, whether compaction happened, or whether the system prefix stayed stable.",
+     "parameters": {
+      "type": "object",
+      "properties": {},
+      "required": []
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "Skill",
+     "description": "Load a skill by name. Skills are task-specific instructions. Before starting a task that matches a skill's description, call Skill with its name to load the instructions. Do not load a skill that does not match the task. The first line of the result is the skill's directory, relative to the working directory; file paths in the skill's text are relative to that directory. If an earlier Skill result shows as elided or cut short and you still need that skill, call Skill again with the same name.\n\nAvailable skills:\n- ailang-feedback: Route AILANG-side bugs and limitations encountered while working on Motoko (the agent harness in this repo) to AILANG core via the right channel. Use when the user mentions an AILANG compiler error, parser bug, type/effect mismatch, stdlib gap, or missing language feature — anything where the symptom is in `ailang check` / `ailang run` output, not in Motoko's TUI or runtime logic. Also use when the user asks \"should this be filed upstream?\", \"is this an AILANG bug?\", or wants to send feedback / file an issue against `sunholo-data/ailang`.\n- dagr-producer: Emit and maintain a dagr run file — a live, contract-valid JSON description of recursive projects, tasks, attempts, gates, evidence, policies, events, and operator-message resolutions that `dagr view` renders as a DAG. Use when orchestrating agents or tracking multi-step work that a dagr pane should display.\n- herdr: Control Herdr, a terminal multiplexer for coding agents. Use only when the user explicitly mentions Herdr or asks to use Herdr to inspect or control panes, tabs, workspaces, commands, or another agent. Do not use merely because a task could benefit from a background terminal, delegation, or parallel work. Requires HERDR_ENV=1.\n- observer: Supervise a Motoko orchestrator run from outside it — produce the trusted state estimate (STATE + LEDGER, digests computed not typed), catch the orchestrator's projection errors, issue directives signed under a recorded `run.observer` grant, and verify that detached-leg wake-ups fired. Use when the user asks a session to observe, supervise, audit, babysit, or watch an orchestrator run, calls the session \"the Observer\", or asks whether the graph is telling the truth. Requires HERDR_ENV=1 and a dagr run file; without a `run.observer` grant naming this pane the role is report-only.\n- pr-review-loop: Work the GitHub PR comment queue for this repo — rank inbound review comments, test the quantitative claims in them, respond as the bot, and record the disposition so nothing is re-litigated. Use when the user asks to check PR comments, triage review feedback, respond to a reviewer, work the PR queue, or asks \"what's outstanding on the PRs\", \"did anyone comment\", \"is there review feedback to deal with\". Also use after `make pr_sync` reports new records.\n- workdir-stamp: Stamp the working directory with a marker file. Use when the user asks to stamp, mark or tag the working directory or workspace, or asks for a \"workdir stamp\".",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "name": {
+        "type": "string",
+        "description": "The name of the skill to load, exactly as listed.",
+        "enum": [
+         "ailang-feedback",
+         "dagr-producer",
+         "herdr",
+         "observer",
+         "pr-review-loop",
+         "workdir-stamp"
+        ]
+       }
+      },
+      "required": [
+       "name"
+      ]
+     }
+    }
+   }
+  ],
+  "max_tokens": 65536,
+  "stream": true,
+  "stream_options": {
+   "include_usage": true
+  }
+ }
+}

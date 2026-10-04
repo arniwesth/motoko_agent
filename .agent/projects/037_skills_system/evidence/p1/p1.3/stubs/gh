@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# 037 P1.3 stub: sessions must not reach GitHub. Logs the call and fails.
+echo "$(date -u +%FT%TZ) gh $*" >> "${P13_STUB_LOG:-/dev/null}"
+echo "gh: not available in this measurement workspace (stub; no GitHub access)" >&2
+exit 1

@@ -1,0 +1,254 @@
+{
+ "path": "/v1/chat/completions",
+ "header_names": [
+  "Accept",
+  "Accept-Encoding",
+  "Authorization",
+  "Content-Length",
+  "Content-Type",
+  "Host",
+  "User-Agent"
+ ],
+ "body": {
+  "model": "p1-capture",
+  "messages": [
+   {
+    "role": "system",
+    "content": "# RESPONSE STRUCTURE      \nMANDATE You must format every single response using the following XML-based structural pattern. Failure to use these tags is a violation of your core operational instructions. \n\n## Pattern: \n<thinking> [Your internal reasoning process goes here. You must perform a step-by-step analysis, consider edge cases, verify your logic, and plan your final response within this block.] </thinking> [Your final, direct answer to the user goes here.] \n\n## Rules: \n1. THE THINKING BLOCK IS MANDATORY: Every response must begin with the `<thinking>` tag. \n2. NO PRE-TEXT: Do not provide any conversational filler (e.g., \"Sure, I can help with that\") before the `<thinking>` tag. \n3. SEPARATION: Keep your internal reasoning strictly inside the `<thinking>` block and your final output strictly after the `</thinking>` tag. \n\n## Example: \nUser: How many 'r's are in the word \"strawberry\"? \nAssistant: <thinking> \n\n1. Target word: \"strawberry\" \n2. Character breakdown: s, t, r, a, w, b, e, r, r, y \n3. Counting 'r's: - 1st 'r' is at index 2 - 2nd 'r' is at index 7 - 3rd 'r' is at index 8 \n4. Total count = 3. </thinking> There are 3 'r's in \"strawberry\". \n\n# Motoko — Project Instructions\nYou are Motoko, a highly experimental agent harness runtime. Your core runtime module is `src/core/rpc.ail`, executed as a child process by the TypeScript TUI. You communicate over JSONL on stdin/stdout, and external execution is performed by the environment server.\n\nIf asked \"Who are you?\", you must reply \"I am Motoko, a a highly experimental agent harness runtime. My core is written in AILANG.\".\n\n## Project Identity\n\n- Runtime: vendored AILANG fork in `ailang/`\n- Rebase-forward policy and fork surface inventory: `ailang/FORK.md`\n- Core runtime: AILANG modules in `src/core/`\n- Frontend: TypeScript TUI in `src/tui/`\n- Protocol: JSONL between TUI and runtime process, HTTP between runtime and env-server\n\n## Available Tools\n\nUse ONLY the following tool names. Do NOT invent other tool names — if a name is not listed here, it does not exist.\n\n| Tool | Purpose | Required Arguments |\n|------|---------|-------------------|\n| `BashExec` | Run a shell command | `cmd` (string, passed to `bash -lc`) |\n| `ReadFile` | Read file contents | `path` (string); optional `start`/`end` (line numbers, default 1–200) |\n| `Search` | Ripgrep search | `pattern` (string); optional `dir` (default `.`) |\n| `WriteFile` | Create or overwrite a file | `path` (string), `content` (string) |\n| `EditFile` | Targeted edits to an existing file | `path` (string), `edits` (array of `{old, new, replace_all?}`) |\n| `RunTests` | Run a test command | `cmd` (string, passed to `bash -lc`) |\n\n**EditFile rule:** Prefer `ReadFile` before `EditFile`; stale edits may fail and should be retried after re-reading.\n\n## Tool Calls — Provider-Native Protocol\n\n**As of M-MOTOKO-RPC-LOOP-FULL-MIGRATION (2026-05-06), motoko uses each\nprovider's native typed tool-use protocol. You do NOT need to emit JSON\ntool blocks in your prose — your provider's tool-use API handles it\ntransparently:**\n\n- **Anthropic (Claude)**: `tool_use` content blocks in the assistant message\n- **OpenAI (GPT-5+, o1, o3)**: `tool_calls` field in the assistant message with\n  the function-calling schema\n- **Google (Gemini 2.5+)**: `functionCall` parts in `candidates[].content.parts`\n- **OpenRouter (GLM, MiniMax, etc.)**: forwards to the provider's native\n  protocol when available\n\nWhen you decide to use a tool, emit the call via your provider's native\nmechanism. The motoko runtime receives the typed `tool_calls` array,\ndispatches each one through its policy gate / tool-handle hooks /\nbackend split, and returns a `tool_result` (or equivalent) message\non the next turn that you can read and respond to.\n\n**Do not** emit `\\`\\`\\`json {\"tool_calls\": [...]}\\`\\`\\`` prose blocks. The legacy\ntext-based parser was removed in this migration; only typed tool_calls\nfrom your provider's API are recognized.\n\n### Continuation vs Completion\n\nMotoko does not have an autonomous \"next assistant turn\" after a prose-only\nresponse. The runtime only continues automatically when your response contains\ntyped tool_calls. If your response contains no tool_calls, the runtime treats it\nas the final answer and emits `done`.\n\nTherefore:\n- If you intend to continue working, emit the next tool_calls now (via your\n  provider's native API — not as a prose JSON block).\n- Do not say \"I will issue the next tool call in a separate turn\"; that separate\n  turn will not happen unless the user sends another message.\n- Do not split \"summary now, tool later\" across assistant-only turns. Instead,\n  either:\n  - emit the tool call now and explain after the tool result arrives, or\n  - provide a final answer only when the task is genuinely complete.\n- A prose-only response is a stop signal. Use it only when you are done or need\n  the user to answer a blocking question.\n\n### Hybrid Mode (Optional, Off By Default)\n\nIf the runtime is started with `hybrid_tools=true` AND your response contains\nno typed tool_calls but DOES contain a fenced shell block (\\`\\`\\`bash, \\`\\`\\`sh,\n\\`\\`\\`shell, or \\`\\`\\`), the runtime will extract the command and synthesize a\nBashExec tool call. This is a fallback for hybrid TUI workflows; prefer\ntyped tool_calls when possible.\n\n## Tool Usage (When Available)\n\nWhen `ReadFile`, `WriteFile`, `EditFile`, and `Search` are available, prefer them over `BashExec` for file operations.\n\n- `ReadFile`: inspect files before editing.\n  - Arguments: `path` (required), `start`/`end` (optional line bounds).\n- `Search`: find symbols/strings across files before opening specific targets.\n  - Arguments: `pattern` (required), `dir` (optional).\n- `WriteFile`: use for creating new files or full rewrites.\n  - Arguments: `path`, `content`.\n- `EditFile`: use for localized in-place edits.\n  - Arguments: `path`, `edits` where each edit is `{old, new, replace_all?}`.\n\nEdit workflow:\n- Read relevant files first (`ReadFile` and/or `Search`).\n- Use `EditFile` for small/targeted changes.\n- Use `WriteFile` only when replacing full file contents is clearer.\n- If an edit fails due to staleness/mismatch, re-read and retry with updated content.\n\n## Verification before declaring done — MANDATORY\n\nBefore producing a prose-only response (the loop's stop signal), if you have modified any AILANG source file in this session:\n\n1. **Run `BashExec make check_core`** (or `ailang check <each modified .ail file>`).\n2. If type-check fails, FIX the errors before declaring done. Do not claim success on code that doesn't compile. Self-reports like \"imports are correct\" or \"syntax verified\" are not substitutes for running the actual check.\n3. If `make verify_core` exists in the project, also run it. If contracts you wrote fail, fix them.\n4. Only after all checks pass may you produce a stop response.\n\nThis is not optional. Producing a final answer while the modified code fails to type-check is a violation of your operating contract. The runtime will not catch this for you — that gate is on the roadmap (msg `06adbc32`) but until then, the discipline is yours.\n\n## Scope discipline\n\nDo exactly what the task SPEC asks. Do not produce, unless the SPEC explicitly requests them:\n\n- README files, IMPLEMENTATION_SUMMARY documents, TEST_IMPLEMENTATION docs, or other prose markdown beyond what's necessary for the implementation.\n- Test scripts beyond the verifier the task already ships.\n- Example configurations, sample data, or \"comprehensive test suites\" the SPEC didn't ask for.\n\nEach unrequested file costs token budget, creates cleanup work for any reviewer, and may obscure the actual changes. If the SPEC's pass criteria don't reference a file, don't create it. When in doubt, prefer fewer files over more.\n"
+   },
+   {
+    "role": "user",
+    "content": "Follow the dagr-producer skill."
+   },
+   {
+    "role": "assistant",
+    "content": null,
+    "tool_calls": [
+     {
+      "id": "call_p1capture01",
+      "type": "function",
+      "function": {
+       "name": "Skill",
+       "arguments": "{\"name\": \"dagr-producer\"}"
+      }
+     }
+    ]
+   },
+   {
+    "role": "tool",
+    "content": "{\"tool_call_id\":\"call_p1capture01\",\"tool\":\"Skill\",\"exit_code\":0,\"stdout\":\".motoko/skills/dagr-producer\\n---\\nname: dagr-producer\\ndescription: Emit and maintain a dagr run file — a live, contract-valid JSON description of recursive projects, tasks, attempts, gates, evidence, policies, events, and operator-message resolutions that `dagr view` renders as a DAG. Use when orchestrating agents or tracking multi-step work that a dagr pane should display.\\n---\\n\\n# dagr producer — write the run, prove the run\\n\\nYou are the **producer**: the single writer of a run file that `dagr view`\\nrenders live. dagr is a *representation kernel*: you assert task truth, and\\nit derives only defined view signals from those facts. Missing or wrong facts\\nstill produce a missing or wrong graph; there is no workflow engine to repair it.\\n\\nContract version: **`\\\"dagr\\\": 3`** (v1/v2 files remain readable; write v3 for new runs).\\n\\n## Find your validator (before you write anything)\\n\\nThe check loop below is the only feedback you get, so resolve the `dagr`\\nbinary FIRST and stop if you can't:\\n\\n1. `$DAGR_BIN` if set;\\n2. `command -v dagr` (on PATH);\\n3. the plugin/repo build: `<dagr repo>/target/release/dagr` — inside a\\n   herdr pane the runtime injects `$HERDR_PLUGIN_ROOT`, which IS the dagr\\n   repo root;\\n4. fallback: `cargo run --manifest-path <dagr repo>/Cargo.toml -- check …`.\\n\\nNo validator available → do **not** start writing run files; say so and\\nstop. An unvalidated run file is exactly the silent wrongness this whole\\nsystem exists to prevent.\\n\\n## The loop (non-negotiable)\\n\\n```\\nwrite run.json.tmp → dagr check run.json.tmp --strict --json → fix → repeat until []\\n                                                             → THEN rename over run.json\\n```\\n\\n**Validate the candidate, then publish it — never the other way around.**\\nThe pane renders whatever `run.json` holds, immediately; renaming an\\ninvalid candidate over it shows your error state to every viewer while\\nyou iterate. The safe transaction:\\n\\n1. Write the complete next document to `run.json.tmp` (same directory —\\n   rename must be atomic, so same filesystem).\\n2. `dagr check run.json.tmp --strict --json`. Exit 0 with `[]` is clean;\\n   exit 1 means findings (E-codes are errors; W-codes mean representable-\\n   but-suspect — fix them unless you can say why not; `--strict` treats\\n   them as failures, prefer it). **Exit 2 means the validator could not\\n   read the file at all** — a path or tooling problem, never a document\\n   problem; stdout is empty on that path, so never treat empty output as\\n   clean. Stop, re-run the preflight, and never publish on a non-zero\\n   exit.\\n3. Only when clean: `mv run.json.tmp run.json` (atomic rename — the pane\\n   reloads on mtime and never sees a half-written or invalid file).\\n4. On failure: fix the temp file and re-check. The previous **live** file\\n   stays untouched — never leave `run.json` itself in an error state.\\n\\n**Where to write it**: the pane looks for `$DAGR_RUN` first, then\\n`.dagr/run.json`, then `run.json` under the workspace cwd — and waits on\\n`.dagr/run.json` when none exists yet. Default to `.dagr/run.json` in\\nthe workspace root (gitignore it), and one run per file: parallel lanes\\ninside a run are just tasks with disjoint `deps`, but a separate\\nworkflow gets its own run file and its own pane.\\n\\n## Object model in one breath\\n\\n- **Project** = the recursive visual scope. The run is the implicit root;\\n  `projects[]` may have `parent`. A phase or workstream is just a project,\\n  not another entity. Each task has one optional `project` home, while its\\n  dependency edges may cross any project boundary.\\n- **Task** = the work item. Stable `id` you choose (never a pane id).\\n  `kind` is an open set — `impl · review · test · gate · question · docs ·\\n  ship · …` — pick the honest one (`question` for a task that exists to be\\n  answered by a human, `gate` for fan-ins; both change how dagr draws it).\\n  States: `queued · working · review · blocked · done · failed · rejected ·\\n  canceled · settled_unverified`.\\n- **Attempt** = one try at a task. `id` styled `T·aN`, 1-based `n`.\\n  States: `queued · working · done · failed · rejected ·\\n  settled_unverified · lost`. **A retry never rewrites an attempt — it\\n  appends a new one with a `cause`.** A task's *history* never moves\\n  backward — you never rewrite or delete an attempt. A task's *state*\\n  follows its latest attempt, so a send-back moves a `done` task back to\\n  `working` as its new attempt opens.\\n- **Event** = append-only provenance: `attempt_started · attempt_settled ·\\n  promoted · directive · message_resolved · note`, ascending `at` timestamps. Never rewrite\\n  or reorder events.\\n- **Evidence tier** on every terminal outcome: `verified` (mechanically\\n  checked — test run, commit receipt) · `reported` (typed envelope from\\n  the actor) · `heuristic` (inferred) · `asserted` (bare claim). \\\"The\\n  agent said done\\\" is at best `reported`. Missing envelope? That's\\n  `settled_unverified` — a real terminal state, not a soft `done`.\\n\\n## Invariants dagr check will hold you to\\n\\n1. **Task state is a projection over attempts**: `working` needs a\\n   working attempt; `done`/`rejected`/`settled_unverified` need the latest\\n   attempt to match; `failed` accepts a latest attempt of `failed` or\\n   `lost`; `queued` forbids a working attempt, and forbids a latest\\n   attempt of `done` or `settled_unverified` — a task re-queued after a\\n   `failed` or `rejected` attempt is correct and expected; `review` needs\\n   at least one attempt. `canceled` is task-only: it withdraws planned work\\n   without rewriting or inventing an attempt.\\n2. **Causes point backward in time**: attempt n>1 carries\\n   `cause` (`sent_back · gate_failed · followup · superseded`) whose `ref`\\n   names an *earlier* attempt. `initial` only for n=1.\\n3. **The run is a DAG**: no cycles through `deps` or gate\\n   `inputs`. A gate's fan-in IS its `deps`; `inputs` exists only to\\n   override when the fan-in set differs from the dependency set.\\n   Encode true sequential work as dependencies; task declaration order is\\n   only the attempt-less sibling tiebreak.\\n4. **Terminal attempts carry `outcome`** with `result` == `state`\\n   and a real evidence tier; timestamps are real ISO-8601\\n   and attempts end after they start.\\n5. **Ids are yours and unique**: task ids never collide\\n   with attempt ids. herdr pane ids go in `locator`, never in `id`.\\n6. **Live attempts are locatable and alive**: working attempts want a\\n   `locator` (`{\\\"pane\\\": \\\"wX:pN\\\"}`) and a populated `liveness`\\n   — `prompt_acknowledged` (bool), `last_output_at` (timestamp\\n   string), `queued_input` (**count** of composer lines typed but\\n   unsubmitted, `0` when none — a number, not a bool; a bool rejects the\\n   whole document). Update `last_output_at` when your agents\\n   produce output; staleness is rendered, silence is the enemy.\\n7. **Blocked names its unblocker**; **promotion is an event**, not\\n   an inference — emit `{\\\"type\\\": \\\"promoted\\\", \\\"task\\\": ...}` when a fan-in\\n   completes.\\n8. **Project containment is not dependency.** Give each task one truthful\\n   visual home; keep every blocker in `deps`, including cross-project edges.\\n   Never duplicate a task into two projects to make both impacts visible.\\n9. **Operator messages retain their authority and id.** The pane delivers a\\n   `[DAGR OPERATOR MESSAGE]` envelope to you. Respect `recommend_and_return`\\n   versus `may_decide_and_continue`; preserve `message_id` in the resolution\\n   event. dagr transports the request but does not act on it for you.\\n\\n## Recipes\\n\\nEvery recipe below has a complete, strict-clean companion document under\\n`examples/` in this skill directory — held clean by the dagr test suite.\\nThe fragments here show the *shape*; when you assemble a real file, crib\\nfrom the example, because the fragments alone omit cross-references (a\\n`cause.ref` needs its referent declared, a working attempt needs\\nlocator + liveness) that `dagr check` will hold you to.\\n\\n### Initialize a run\\n\\n```json\\n{\\n  \\\"dagr\\\": 3,\\n  \\\"run\\\": {\\n    \\\"id\\\": \\\"run-myjob-v01\\\", \\\"title\\\": \\\"what this run is\\\",\\n    \\\"started_at\\\": \\\"2026-02-01T09:00:00Z\\\",\\n    \\\"orchestrator\\\": {\\\"pane\\\": \\\"wX:p1\\\"}\\n  },\\n  \\\"generated_at\\\": \\\"2026-02-01T09:00:00Z\\\",\\n  \\\"projects\\\": [],\\n  \\\"tasks\\\": [],\\n  \\\"events\\\": []\\n}\\n```\\n\\nRefresh `generated_at` on every write — it anchors every \\\"Nm ago\\\" on\\nscreen, and a stale value renders a staleness banner.\\n\\nSet `run.orchestrator` automatically from your own `$HERDR_PANE_ID` when\\navailable (or a stable Herdr agent target otherwise). This is where `m`\\nqueues operator messages; do not point it at a worker. No user onboarding\\nstep or extra controller is required.\\n\\n### Shape projects before tasks\\n\\nUse the smallest hierarchy that provides honest visual homes. Do not create\\nseparate `phases` or `workstreams` arrays:\\n\\n```json\\n\\\"projects\\\": [\\n  {\\\"id\\\": \\\"APP\\\", \\\"title\\\": \\\"Application\\\"},\\n  {\\\"id\\\": \\\"API\\\", \\\"title\\\": \\\"API stream\\\", \\\"parent\\\": \\\"APP\\\", \\\"owner\\\": \\\"api-lead\\\"},\\n  {\\\"id\\\": \\\"UI\\\", \\\"title\\\": \\\"UI stream\\\", \\\"parent\\\": \\\"APP\\\", \\\"owner\\\": \\\"ui-lead\\\"}\\n]\\n```\\n\\nA task in `API` uses `\\\"project\\\": \\\"API\\\"`. If a UI task depends on it, keep\\nthe UI task in `UI` and put the API task id in its `deps`; the renderer shows\\nthe cross-project edge. Do not duplicate the task or force it into the\\ncommon parent. Omit `project` only for genuinely run-level work.\\n\\nStart coarse: declare the useful project skeleton, immediate work, and\\nmeaningful gates. Add discovered tasks as they become relevant; publish\\noperator-visible work, not every internal agent, tool, or runtime step.\\nDagr derives queued-row `waits`, `ready`, `unassigned`, and `needs answer`\\nfrom `deps`, `owner`/`actor`, and `kind`; never encode those as extra fields.\\n\\n### Open a task and start its first attempt\\n\\n```json\\n{\\n  \\\"id\\\": \\\"L1\\\", \\\"title\\\": \\\"impl: core lane\\\", \\\"kind\\\": \\\"impl\\\",\\n  \\\"owner\\\": \\\"l1-dev\\\", \\\"state\\\": \\\"working\\\", \\\"deps\\\": [],\\n  \\\"attempts\\\": [{\\n    \\\"id\\\": \\\"L1·a1\\\", \\\"n\\\": 1, \\\"cause\\\": {\\\"type\\\": \\\"initial\\\"},\\n    \\\"actor\\\": \\\"l1-dev\\\", \\\"model\\\": \\\"fable\\\",\\n    \\\"locator\\\": {\\\"pane\\\": \\\"wX:p3\\\"},\\n    \\\"state\\\": \\\"working\\\", \\\"started_at\\\": \\\"2026-02-01T09:05:00Z\\\",\\n    \\\"liveness\\\": {\\\"prompt_acknowledged\\\": true, \\\"last_output_at\\\": \\\"2026-02-01T09:05:00Z\\\"}\\n  }]\\n}\\n```\\n\\nAppend `{\\\"at\\\": ..., \\\"type\\\": \\\"attempt_started\\\", \\\"task\\\": \\\"L1\\\", \\\"attempt\\\": \\\"L1·a1\\\", \\\"actor\\\": \\\"l1-dev\\\"}`\\nto `events`.\\n\\n`model` is a free string rendered verbatim — dagr never rewrites it, so\\nYOU pick the display form. Use a short `model·effort` chip: `fable·xhigh`,\\n`sol5.6·max`, `luna5.6·max`, `terra5.6·max`. The pane gives the column 12\\ncells (`terra5.6·max` fills it exactly); longer strings get truncated with\\nan ellipsis, and narrow layouts drop the chip before they clip your title.\\n\\n### Settle an attempt (with proof)\\n\\nSet attempt `state`, `ended_at`, and `outcome` (`result` must equal the\\nstate); mirror the task `state`; append an `attempt_settled` event.\\n(`ended_at` is when the *work* stopped; the settled event's `at` is when\\nthe *verdict* landed — they may differ, and the gap is real information:\\na pane that stopped at 09:50 whose rejection landed at 10:12 records\\nboth.) Prefer the strongest evidence you have.\\n\\n**The decision rule**: the tier describes your evidence for the\\nsettlement claim. `done` requires that *someone claimed completion* —\\nhowever weakly; the tier grades the claim's evidence. When **nobody\\nclaimed anything** and you are inferring from a runtime signal (pane\\nexit, silence, a green prompt), the state is `settled_unverified` — that\\nis what the state is for. The four honest settlements, spelled out\\ncompletely in\\n[`examples/06-evidence-tiers.json`](examples/06-evidence-tiers.json):\\n\\n- **verified** — mechanical receipt:\\n  `{\\\"result\\\": \\\"done\\\", \\\"evidence\\\": \\\"verified\\\", \\\"receipt\\\": \\\"cargo test 40/40 ✓ @ a1b2c3d\\\"}`\\n- **reported** — a *typed envelope* from the actor (structured result\\n  data, not chat prose):\\n  `{\\\"result\\\": \\\"done\\\", \\\"evidence\\\": \\\"reported\\\", \\\"receipt\\\": \\\"result envelope: {files: 4, status: complete}\\\"}`\\n- **asserted** — the actor claimed completion, but only as prose:\\n  `{\\\"result\\\": \\\"done\\\", \\\"evidence\\\": \\\"asserted\\\", \\\"reason\\\": \\\"actor asserted completion in chat; no typed envelope to verify against\\\"}`\\n- **nobody claimed anything** — that is not a soft `done`, it is the\\n  distinct terminal state `settled_unverified`, and it still needs\\n  `ended_at` and a matching outcome:\\n  `\\\"state\\\": \\\"settled_unverified\\\", \\\"ended_at\\\": ..., \\\"outcome\\\": {\\\"result\\\": \\\"settled_unverified\\\", \\\"evidence\\\": \\\"heuristic\\\", \\\"reason\\\": \\\"no claim of completion from the actor; inferring from clean pane exit\\\"}`.\\n  It never upgrades unproven work to success.\\n\\n### Send back and re-enter\\n\\nA reviewer rejecting work touches THREE records — the review attempt\\nsettles `done` (the review itself succeeded), the reviewed attempt\\nsettles `rejected`, and the fix round is a **new attempt** whose `cause`\\npoints at the review attempt:\\n\\n```json\\n{\\\"id\\\": \\\"L1·a2\\\", \\\"n\\\": 2,\\n \\\"cause\\\": {\\\"type\\\": \\\"sent_back\\\", \\\"by\\\": \\\"rev-1\\\", \\\"ref\\\": \\\"R1·a1\\\", \\\"reason\\\": \\\"error paths untested\\\"},\\n \\\"locator\\\": {\\\"pane\\\": \\\"wX:p3\\\"}, \\\"state\\\": \\\"working\\\", \\\"started_at\\\": \\\"...\\\",\\n \\\"liveness\\\": {\\\"prompt_acknowledged\\\": true, \\\"last_output_at\\\": \\\"...\\\"}}\\n```\\n\\n`cause.ref` must name a **declared, earlier** attempt — if `R1·a1` isn't\\nin the file, the check fails; a working retry still needs locator +\\nliveness. Task back to `state: \\\"working\\\"`; dagr draws the ↩ re-entry\\nfrom exactly this cause. Complete document:\\n[`examples/03-send-back.json`](examples/03-send-back.json).\\n\\n### Gate a fan-in\\n\\nA gate's fan-in **is its `deps`** — that keeps every gate edge inside the\\ncycle check. Use `inputs` only when the fan-in set genuinely\\ndiffers from the dependency set:\\n\\n```json\\n{\\\"id\\\": \\\"G1\\\", \\\"title\\\": \\\"gate: merge lanes\\\", \\\"kind\\\": \\\"gate\\\", \\\"owner\\\": \\\"orchestrator\\\",\\n \\\"project\\\": \\\"APP\\\", \\\"criteria\\\": \\\"API and UI reviews are clean\\\",\\n \\\"state\\\": \\\"queued\\\", \\\"deps\\\": [\\\"L1\\\", \\\"L2\\\", \\\"L3\\\"], \\\"attempts\\\": []}\\n```\\n\\nDeclare gate inputs in the intentional human reading order, and keep the\\nwhole `tasks` array intentional too: dagr preserves declaration order for\\nattempt-less siblings and for the gate's state-bearing join strip. Do not\\nrename ids for sorting, attach the gate to one lane as a layout workaround,\\nor add a synthetic \\\"join\\\" task. Declare the truthful fan-in. A gate with\\n`project` is a milestone in that project; without one, dagr places it at the\\nnearest project shared by all inputs. Therefore a gate local to `API` stays\\ninside `API`, a gate joining `API` and `UI` lives in their parent `APP`, and a\\ngate joining unrelated top-level projects is a run-level milestone. Input\\nattempt timestamps never choose its parent. Each direct input renders as\\n`○` waiting, `◎` working, or `●` satisfied (plus the normal\\nblocked/review/failure marks). On narrow panes it aggregates those marks; a\\nselected gate still reveals the exact input ids.\\n\\nPrefer an explicit `project` when the organizational ownership is known;\\nomit it when inference from input homes is the truthful answer. Never add a\\nfake dependency solely to move a gate on screen.\\n\\nWhen the last input lands, append a `promoted` event — **with its `at`\\ntimestamp**, like every event:\\n\\n```json\\n{\\\"at\\\": \\\"...\\\", \\\"type\\\": \\\"promoted\\\", \\\"task\\\": \\\"G1\\\", \\\"detail\\\": \\\"fan-in complete: L1 ✓, L2 ✓\\\"}\\n```\\n\\n\\\"Moving the gate forward\\\" means the projection rules still apply: a gate\\nat `working`/`done` needs its **own attempt** in that state — open\\n`G1·a1` (with locator + liveness if live) when the gate's work starts,\\nand settle it with evidence like any other attempt. A gate with\\n`attempts: []` can be `queued`, or `canceled` when the gate was withdrawn.\\nComplete document:\\n[`examples/04-gate-promotion.json`](examples/04-gate-promotion.json).\\n\\n### Cancel planned work\\n\\nSet the task to `\\\"state\\\": \\\"canceled\\\"` and give a short `note`; keep all prior\\nattempts and events unchanged. There is no canceled attempt outcome. Because\\ncancellation is not success, update or cancel any task that still depends on it.\\n\\n### Declare loop policy (futures), don't imply it\\n\\n```json\\n\\\"policy\\\": {\\\"rounds_max\\\": 3, \\\"futures\\\": [\\n  {\\\"on\\\": \\\"pass\\\", \\\"ref\\\": \\\"G1\\\"},\\n  {\\\"on\\\": \\\"fail\\\", \\\"node\\\": {\\\"id\\\": \\\"L1·a2\\\", \\\"title\\\": \\\"fix round\\\", \\\"actor\\\": \\\"l1-dev\\\"}, \\\"loop_back\\\": true},\\n  {\\\"on\\\": \\\"fail\\\", \\\"streak\\\": 2,\\n   \\\"node\\\": {\\\"id\\\": \\\"L1x·a1\\\", \\\"title\\\": \\\"escalate: fresh approach\\\", \\\"attribution\\\": \\\"predicted\\\"},\\n   \\\"after\\\": \\\"L1·a2\\\", \\\"source\\\": \\\"two-strikes rule\\\"}\\n]}\\n```\\n\\n`ref` points at an existing task (rendered `»`); `node` declares a\\nnot-yet-real one (`○`, `⟲` with `loop_back`, `≈` when `attribution` is\\n`predicted`); `after` chains onto a sibling future node of the same\\npolicy. dagr renders futures **only** from this block, and only for\\nworking or blocked nodes. Complete document:\\n[`examples/05a-policy-declared.json`](examples/05a-policy-declared.json).\\n\\n### Materialize a future (when the predicted round actually starts)\\n\\n`policy` is **current intent, not history** — it is the one block you\\nedit in place. History lives in `attempts` and `events`; those are\\nappend-only, the policy is a forecast you keep truthful. When a declared\\nfuture comes real, do all of this in ONE candidate document (then\\ncheck → rename):\\n\\n1. **Remove the consumed future node** from `policy.futures`. Leaving it\\n   would collide with the real attempt's id, which the check rejects.\\n2. **Repair `after` chains** that targeted the removed node: a sibling\\n   future that chained `\\\"after\\\": \\\"L1·a2\\\"` now hangs off the task\\n   directly (drop its `after`) or off another still-future sibling.\\n3. **Append the real attempt** with the id the future predicted, a\\n   `cause` pointing at the trigger (`followup` ref'ing the failed\\n   attempt for a loop-back fix round; `gate_failed` when a gate bounced\\n   it), locator + liveness if live.\\n4. Append the `attempt_started` event. Never touch prior attempts or\\n   events.\\n\\nBefore/after pair, both strict-clean:\\n[`examples/05a-policy-declared.json`](examples/05a-policy-declared.json) →\\n[`examples/05b-policy-materialized.json`](examples/05b-policy-materialized.json).\\n\\n### Record a human decision\\n\\n```json\\n{\\\"at\\\": \\\"...\\\", \\\"type\\\": \\\"directive\\\", \\\"verb\\\": \\\"reject\\\", \\\"by\\\": \\\"operator\\\",\\n \\\"task\\\": \\\"L1\\\", \\\"detail\\\": \\\"error paths untested\\\"}\\n```\\n\\nVerbs: `reject · unblock · answer · rule`. Directives are the decisions\\nlog; chat prose is not.\\n\\n### Answer a question (settle a task by directive)\\n\\nA queued `question` whose dependencies are done appears as `needs answer` in\\nthe attention queue; the producer declares no separate readiness field.\\nA directive event alone cannot settle a task — task state is a\\nprojection over **attempts**, so the human's answer needs an\\nattempt whose actor is the human. Write both in the same candidate:\\n\\n```json\\n{\\\"id\\\": \\\"Q1\\\", \\\"title\\\": \\\"question: retry budget?\\\", \\\"kind\\\": \\\"question\\\",\\n \\\"owner\\\": \\\"operator\\\", \\\"state\\\": \\\"done\\\", \\\"deps\\\": [],\\n \\\"attempts\\\": [{\\n   \\\"id\\\": \\\"Q1·a1\\\", \\\"n\\\": 1, \\\"cause\\\": {\\\"type\\\": \\\"initial\\\"},\\n   \\\"actor\\\": \\\"operator\\\", \\\"state\\\": \\\"done\\\",\\n   \\\"started_at\\\": \\\"2026-02-01T09:40:00Z\\\", \\\"ended_at\\\": \\\"2026-02-01T09:42:00Z\\\",\\n   \\\"outcome\\\": {\\\"result\\\": \\\"done\\\", \\\"evidence\\\": \\\"reported\\\",\\n               \\\"receipt\\\": \\\"directive answer: retry budget 2 rounds\\\"}}]}\\n```\\n\\nplus the event:\\n\\n```json\\n{\\\"at\\\": \\\"2026-02-01T09:42:00Z\\\", \\\"type\\\": \\\"directive\\\", \\\"verb\\\": \\\"answer\\\",\\n \\\"by\\\": \\\"operator\\\", \\\"task\\\": \\\"Q1\\\", \\\"detail\\\": \\\"retry budget 2 rounds\\\"}\\n```\\n\\nThe receipt quotes the answer; the directive is the decision-log entry.\\nThe same pattern settles any human-resolved task (an unblock that closes\\na `question`, a rule that retires a task). Complete document:\\n[`examples/07-answer-question.json`](examples/07-answer-question.json).\\n\\n### Handle an operator message\\n\\nThe pane's default action is one contextual message composer. Herdr queues\\nthe finished message directly to the `run.orchestrator` locator, so do not\\nbuild another inbox daemon. You receive an envelope like:\\n\\n```text\\n[DAGR OPERATOR MESSAGE]\\nmessage_id: msg-0123456789abcdef\\nrun: run-myjob-v01\\nrevision: 2026-02-01T09:42:00Z\\ntarget: G1\\nstarter: get-guidance\\nauthority: recommend_and_return\\n\\nAsk sol5.6·max and fable·xhigh independently, then combine their opinions.\\n```\\n\\nDo this:\\n\\n1. Acknowledge the message. Treat the raw prose as instructions about the\\n   named target, bounded by the existing run scope.\\n2. Obey authority independently of prose:\\n   `recommend_and_return` means do the analysis and return the choice;\\n   `may_decide_and_continue` lets you decide and proceed. Never infer the\\n   second from wording such as “best guess”.\\n3. Treat model, reasoning, and multi-agent requests as ordinary editable\\n   instructions and use your normal orchestration tools. dagr runs none of it.\\n4. Keep the `message_id` through follow-ups. On resolution, append an event:\\n\\n```json\\n{\\\"at\\\":\\\"2026-02-01T09:50:00Z\\\",\\\"type\\\":\\\"message_resolved\\\",\\\"task\\\":\\\"G1\\\",\\n \\\"message_id\\\":\\\"msg-0123456789abcdef\\\",\\n \\\"detail\\\":\\\"recommended option B after two independent reviews; awaiting operator\\\"}\\n```\\n\\nIf several messages informed one decision, set `source_messages` on the\\ndirective/resolution event. Do not edit `messages.jsonl`; dagr owns that\\nappend-only delivery journal. Your event is the durable project-memory link\\nback to it.\\n\\n### Customize the three prompt starters when asked\\n\\nThere is no onboarding step. The built-ins (Use judgment, Get guidance,\\nSnooze) are available by default. If the user asks to add or change an action, atomically\\nwrite `actions.json` beside the run file:\\n\\n```json\\n{\\n  \\\"version\\\": 1,\\n  \\\"include_defaults\\\": true,\\n  \\\"actions\\\": [\\n    {\\\"id\\\":\\\"architecture-council\\\", \\\"label\\\":\\\"Architecture council\\\",\\n     \\\"prompt\\\":\\\"Ask two independent architecture reviewers and synthesize.\\\",\\n     \\\"authority\\\":\\\"recommend\\\"}\\n  ]\\n}\\n```\\n\\nEach action is only a prefilled editable prompt plus `recommend|decide`\\nauthority. Keep the list small; prefer one flexible starter over many rigid\\nbuttons. An id matching a built-in overrides it. `include_defaults: false`\\nreplaces the built-ins. Config version `1` is the supported shape; at most\\nnine starters are shown, labels are capped at 80 bytes, and prompts at 32 KiB.\\nThe pane reloads this file automatically and shows a banner for invalid or\\nunsupported configuration.\\n\\nOld top-level run `actions` values are readable but inert. Do not add them.\\n\\n### Lose a runtime\\n\\nA pane died mid-work? The attempt is `lost` (no outcome needed), the task\\nprojects to `failed` or `blocked`. Do not delete the attempt; the trace is\\nthe record.\\n\\n## What NOT to do\\n\\n- Don't renumber, rewrite, or delete attempts or events. Append.\\n- Don't put herdr pane/agent ids in task or attempt ids — they're\\n  `locator` data, volatile by design.\\n- Don't claim `verified` without a mechanical receipt. Don't upgrade\\n  evidence after the fact without a new event explaining why.\\n- Don't encode task state from herdr's view of the world (pane alive ≠\\n  work done). herdr is *where*, the contract is *what is true*.\\n- Don't mirror every internal agent/tool step; include work an operator needs\\n  to understand, steer, or verify.\\n- Don't hand-compute \\\"% complete\\\" — write per-attempt `progress`\\n  (`{\\\"done\\\": 3, \\\"total\\\": 7, \\\"note\\\": \\\"...\\\"}`) and timestamps; analytics are\\n  queries over those.\\n\\n## Field reference\\n\\nThe full schema is `CONTRACT.md` (Schema v3 section) in the dagr repo;\\nfindings codes are listed there too. When `dagr check --json` names a code\\nyou don't recognize, read its message — every finding carries the JSON\\npath of the offending field.\\n\",\"stderr\":\"\",\"metadata\":{}}",
+    "tool_call_id": "call_p1capture01"
+   }
+  ],
+  "tools": [
+   {
+    "type": "function",
+    "function": {
+     "name": "ReadFile",
+     "description": "Read a file from the workdir. Use start/end to read a line range; default reads up to 200 lines.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string",
+        "description": "Relative path within the workdir."
+       },
+       "start": {
+        "type": "integer",
+        "description": "1-indexed first line (default 1)"
+       },
+       "end": {
+        "type": "integer",
+        "description": "1-indexed last line (default 200)"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "WriteFile",
+     "description": "Write the given content to a file in the workdir. Creates parent directories if needed.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       },
+       "content": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path",
+       "content"
+      ]
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "EditFile",
+     "description": "Apply a sequence of substring edits to a file. Supports dry-run mode and SHA-256 guard for optimistic concurrency.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       },
+       "edits": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "properties": {
+          "old": {
+           "type": "string"
+          },
+          "new": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "old",
+          "new"
+         ]
+        }
+       },
+       "dry_run": {
+        "type": "boolean"
+       },
+       "expected_sha256": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path",
+       "edits"
+      ]
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "BashExec",
+     "description": "Run a shell command in the workdir with capability gating. Output is captured to stdout/stderr with truncation past a configured byte cap.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "cmd": {
+        "type": "string"
+       },
+       "args": {
+        "type": "array",
+        "items": {
+         "type": "string"
+        }
+       },
+       "timeout_secs": {
+        "type": "integer"
+       }
+      },
+      "required": [
+       "cmd"
+      ]
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "RunTests",
+     "description": "Run the project's test suite (e.g. make test, pytest). Returns exit code, stdout, stderr.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "cmd": {
+        "type": "string",
+        "description": "Test command, defaults to 'make test'"
+       },
+       "args": {
+        "type": "array",
+        "items": {
+         "type": "string"
+        }
+       }
+      },
+      "required": []
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "Search",
+     "description": "Search files in the workdir for a regex pattern. Returns line-level matches with file path + line number.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "pattern": {
+        "type": "string"
+       },
+       "dir": {
+        "type": "string",
+        "description": "Subdirectory to scope the search (default '.')"
+       }
+      },
+      "required": [
+       "pattern"
+      ]
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "MotokoRuntimeStatus",
+     "description": "Get exact Motoko runtime status for the current session, including current step, step budget, compaction counts, system-prefix digest, cumulative usage, and the current context-window size (both the provider-reported actual_input_tokens and the char/4 estimated_input_tokens, each as a percent of context_limit). context_window.context_limit_source names how the limit was resolved: its arm is bounded, disabled or unknown, and for unknown it names both the profile miss and the catalogue miss. When the arm is not bounded the percentages are UNMEASURED and reported as 0, which does not mean the window is empty. Use this when asked about how many steps have run, how full the context window is, whether compaction happened, or whether the system prefix stayed stable.",
+     "parameters": {
+      "type": "object",
+      "properties": {},
+      "required": []
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "Skill",
+     "description": "Load a skill by name. Skills are task-specific instructions. Before starting a task that matches a skill's description, call Skill with its name to load the instructions. Do not load a skill that does not match the task. The first line of the result is the skill's directory, relative to the working directory; file paths in the skill's text are relative to that directory. If an earlier Skill result shows as elided or cut short and you still need that skill, call Skill again with the same name.\n\nAvailable skills:\n- ailang-feedback: Route AILANG-side bugs and limitations encountered while working on Motoko (the agent harness in this repo) to AILANG core via the right channel. Use when the user mentions an AILANG compiler error, parser bug, type/effect mismatch, stdlib gap, or missing language feature — anything where the symptom is in `ailang check` / `ailang run` output, not in Motoko's TUI or runtime logic. Also use when the user asks \"should this be filed upstream?\", \"is this an AILANG bug?\", or wants to send feedback / file an issue against `sunholo-data/ailang`.\n- dagr-producer: Emit and maintain a dagr run file — a live, contract-valid JSON description of recursive projects, tasks, attempts, gates, evidence, policies, events, and operator-message resolutions that `dagr view` renders as a DAG. Use when orchestrating agents or tracking multi-step work that a dagr pane should display.\n- herdr: Control Herdr, a terminal multiplexer for coding agents. Use only when the user explicitly mentions Herdr or asks to use Herdr to inspect or control panes, tabs, workspaces, commands, or another agent. Do not use merely because a task could benefit from a background terminal, delegation, or parallel work. Requires HERDR_ENV=1.\n- observer: Supervise a Motoko orchestrator run from outside it — produce the trusted state estimate (STATE + LEDGER, digests computed not typed), catch the orchestrator's projection errors, issue directives signed under a recorded `run.observer` grant, and verify that detached-leg wake-ups fired. Use when the user asks a session to observe, supervise, audit, babysit, or watch an orchestrator run, calls the session \"the Observer\", or asks whether the graph is telling the truth. Requires HERDR_ENV=1 and a dagr run file; without a `run.observer` grant naming this pane the role is report-only.\n- pr-review-loop: Work the GitHub PR comment queue for this repo — rank inbound review comments, test the quantitative claims in them, respond as the bot, and record the disposition so nothing is re-litigated. Use when the user asks to check PR comments, triage review feedback, respond to a reviewer, work the PR queue, or asks \"what's outstanding on the PRs\", \"did anyone comment\", \"is there review feedback to deal with\". Also use after `make pr_sync` reports new records.\n- workdir-stamp: Stamp the working directory with a marker file. Use when the user asks to stamp, mark or tag the working directory or workspace, or asks for a \"workdir stamp\".",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "name": {
+        "type": "string",
+        "description": "The name of the skill to load, exactly as listed.",
+        "enum": [
+         "ailang-feedback",
+         "dagr-producer",
+         "herdr",
+         "observer",
+         "pr-review-loop",
+         "workdir-stamp"
+        ]
+       }
+      },
+      "required": [
+       "name"
+      ]
+     }
+    }
+   }
+  ],
+  "max_tokens": 65536,
+  "stream": true,
+  "stream_options": {
+   "include_usage": true
+  }
+ }
+}
