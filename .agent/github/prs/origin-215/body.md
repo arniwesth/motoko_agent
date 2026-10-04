@@ -18,17 +18,22 @@ after the ADR was accepted, with the nine readers' notes filed as evidence. The 
 evidence for the ADR's D2 and D3: AILANG's one machine-checked planning block held, and its prose
 queue did not.
 
-This PR adds documents only. Nothing the ADR decides is executed here: the Linear coupling in
+The ADR was amended the same day with D8, after reading Midspiral: once a task has been started,
+the terms it is judged by change only by directive. D2 and D4 together would otherwise have let an
+agent loosen a task's criteria until the task could settle.
+
+This PR adds documents and one evidence script only. Nothing the ADR decides is executed here: the Linear coupling in
 `tools/pr`, `.mcp.json` and the devcontainer is still in the tree.
 
 ## Changes
 
 - docs(008): ADR-001 — plan structure lives in a committed dagr document, Linear is retired
 - docs(008): research — AILANG's planning and docs system read in full, with the readers' notes
+- docs(008): amend ADR-001 with D8 — a started task's acceptance terms change only by directive
 - chore(github) commits recording this PR
 
-11 files under `.agent/projects/008_docs_system/`: the ADR, the research note, and nine evidence
-files (about 525 KB) under `evidence/ailang-survey/`.
+12 files under `.agent/projects/008_docs_system/`: the ADR, the research note, nine evidence
+files (about 525 KB) under `evidence/ailang-survey/`, and `evidence/spec_edit_probe.py`.
 
 What the ADR decides, in short:
 
@@ -41,8 +46,10 @@ What the ADR decides, in short:
 - **D6** A task's address is `NNN/PLAN-NNN/<task id>` and replaces `MOT-N`.
 - **D7** Stay on upstream dagr 0.3.1. The fork is deferred until cross-plan dependencies or a
   portfolio view are wanted in dagr.
+- **D8** (amendment) Once a task has an attempt, a change to its `criteria`, `deps`, `inputs`,
+  `kind` or `policy`, or cancelling it, needs a `directive` naming the task. This narrows D4.
 
-The operator closed the four forks on 2026-10-04, each as recommended. One thing is still owed
+The operator closed the four forks on 2026-10-04, each as recommended, and approved D8 the same day. One thing is still owed
 from that ruling: which of the 24 open Linear issues are still wanted (Appendix A).
 
 What the research note adds, in short:
@@ -52,7 +59,9 @@ What the research note adds, in short:
 - Its decision ledger, a marked block a script validates, is the part that held up.
 - Status encoded in a directory path drifts both ways there: 27 completed sprints' design docs
   still sit in `planned/`, and 51 sprint files point at a path that no longer exists.
-- Ten candidate follow-ons for Motoko are listed in the note's §6. None is decided by this PR.
+- Thirteen candidate follow-ons for Motoko are listed in the note's §6. None is decided by this PR.
+- An addendum (§9) covers Midspiral, the source of the observation behind D8. Motoko already uses
+  its claimcheck technique in `packages/motoko-ext-compose/claimcheck.ail`.
 
 ## Governing docs
 
@@ -100,6 +109,15 @@ What was checked while writing the research note:
 - Every local path the note cites resolves in this branch.
 - The evidence files were scanned for emails, tokens and home-directory paths: none found.
 
+What was checked while writing the D8 amendment:
+
+- `evidence/spec_edit_probe.py`, the smallest version of the D8 check, was run on three local pairs
+  of plan files. Between `.dagr/run-plan004.json` and `.dagr/run-plan004-v2.json` (31 tasks in
+  common, 13 started) it found the criteria of 2 started tasks rewritten with no directive naming
+  them. On the other two pairs it found no change.
+- Five Midspiral posts were fetched directly and every quoted passage was found word for word.
+- Every local path the amended ADR and note cite resolves in this branch: 47 and 16 checked.
+
 Not done:
 
 - [ ] `make verify_dagr_producer` was not re-run
@@ -107,7 +125,11 @@ Not done:
       021 design note
 - [ ] Three of the four checks the ADR names (§6) do not exist yet
 - [ ] Only MOT-136 and MOT-134 of the 24 open Linear issues were compared with the tree
-- [ ] The probe scripts are not in the tree
+- [ ] The probe scripts behind the ADR's §2.3 are not in the tree; the D8 probe is
+- [ ] The D8 probe cannot tell whether an edit weakened a task's terms, does not cover `policy` or
+      cancellation, and reads gitignored local files, so its run cannot be repeated from the tree
+- [ ] D8's refusal at re-projection is not built
+- [ ] Three of Midspiral's ten posts were read only as summaries and two were not read
 - [ ] Most statements in the research note rest on a reader's notes and were not re-checked
 - [ ] AILANG's incident numbers are its own records; none was checked against logs or CI
 - [ ] The AILANG clone had no git history, so claims about change over time come from dates in
