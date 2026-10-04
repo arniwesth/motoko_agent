@@ -20,13 +20,15 @@ that tool, `RunRecord`, which writes an operator's answer or ruling through the 
 existing validate-then-publish path, and refuses a quote the operator did not write. PLAN-001
 sequences the work by surface.
 
-Four questions in ADR-002 §7 are open for the operator, and nothing in the plan starts before they
-are ruled. The fork ruling reverses F2 of 008's ADR (draft PR #215), which that PR's owner needs to
-record.
+The operator ruled the four questions of ADR-002 §7 as proposed on 2026-10-04, so the ADR is
+Accepted and the plan can start. No part has begun. The fork ruling reverses F2 of 008's ADR (draft
+PR #215), which that PR's owner still needs to record.
 
 ## Changes
 
 - docs(021): ADR-002 and PLAN-001 — verified writes to dagr files
+- docs(021): ADR-002 accepted — the four open questions ruled as proposed
+- chore(github) commits recording this PR
 
 3 files changed, all under `.agent/projects/021_herdr_delegation/`: the ADR and the plan are new,
 and the design doc gains §10.7, which says the fork is adopted and points at both.
