@@ -236,11 +236,12 @@ validator.
   bounded the set, and the index is sent with every request and cannot be compacted away. Five
   skills today come to about 2,200 chars of descriptions.
 - **Providers.** A description of 16,000 chars is accepted by Anthropic, Google, DeepSeek and
-  Meta models through OpenRouter (`evidence/m8_description_limit_probe.py`). OpenAI could not
-  be tested: this account's OpenAI key is rejected at any length. OpenAI is reported to cap a
-  function description at 1,024 chars. If that holds, this decision does not work on OpenAI
-  models for more than two or three skills, and it returns to the operator. The plan's first
-  step settles it.
+  Meta models through OpenRouter (`evidence/m8_description_limit_probe.py`), and P1.3e showed
+  the same through the real runtime for DeepSeek, Meta, Tencent, Qwen, Xiaomi, Anthropic and
+  Google (`NOTE-p1-prototype-results.md` §4). **OpenAI is out of scope by the operator's
+  ruling of 2026-10-04** (no working route to an OpenAI model; no request sent): the reported
+  1,024-char cap on OpenAI function descriptions is untested, and this decision is not claimed
+  to work on OpenAI models.
 - Adding, removing or rewording a skill changes neither `system_prefix_digest` nor
   `ext_set_digest` (`src/core/ext/runtime.ail:1327` hashes ids and capability kinds only), so it
   never refuses a resume (`src/core/journal.ail:629`, `:631`). Enabling the extension in a
@@ -306,6 +307,16 @@ is not sandboxed and passes a `--workdir` other than its own directory indexes t
 and nothing at registration can see the workdir to correct it. Registration records in `config`
 whether the sandbox variable was set. When it was not, and `ctx.workdir` is not `.`, the handler
 returns a tool error saying so instead of loading.
+
+**Scope, by the operator's ruling of 2026-10-04.** P1.3a showed the claims above hold when
+the workdir is outside the launch directory (layout 1), and that a second layout fails
+upstream of the root: when the workdir is under the launch directory, the TUI passes
+`--workdir` as a relative path, the core prefixes it onto the profile path and no profile
+(and no extension) loads, and native file tools prefix it the same way
+(`NOTE-p1-prototype-results.md` §5). The bare root itself is exonerated — with the
+extension loaded, the index is the workdir's. That failure is recorded as its own issue
+for the TUI and core owner. Until it is resolved, D7, D10's directory-line sentence,
+A9's `ReadFile` clause and A10 are stated for layout 1.
 
 ### D8. Compaction: a standing instruction, a size check, and a measurement — ruled 2026-10-03 (ruling 1)
 
@@ -564,8 +575,8 @@ inline tests and a row in the registration-boundary script,
     they cost;
   - the same under `compaction_ai` at its 75% threshold;
   - a model whose context is small enough that D8's size check must answer with its error;
-  - one request with an index at budget size to each provider family the profiles use,
-    OpenAI included.
+  - one request with an index at budget size to each provider family the profiles use
+    (OpenAI out of scope by the operator's ruling of 2026-10-04).
 
   These are reported, not gated. The implementation is not accepted until the operator has
   recorded a disposition of the results.
