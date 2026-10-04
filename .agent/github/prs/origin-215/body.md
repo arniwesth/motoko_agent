@@ -22,6 +22,11 @@ The ADR was amended the same day with D8, after reading Midspiral: once a task h
 the terms it is judged by change only by directive. D2 and D4 together would otherwise have let an
 agent loosen a task's criteria until the task could settle.
 
+It was amended a second time that day. In another session the operator ruled that the tree runs
+our fork of dagr, pinned, for its `apply` command (draft PR #216, 021 ADR-002 D1). That reverses
+the timing half of this ADR's F2. The scope half stands: the level above a plan still has no home
+in dagr.
+
 This PR adds documents and one evidence script only. Nothing the ADR decides is executed here: the Linear coupling in
 `tools/pr`, `.mcp.json` and the devcontainer is still in the tree.
 
@@ -30,6 +35,7 @@ This PR adds documents and one evidence script only. Nothing the ADR decides is 
 - docs(008): ADR-001 — plan structure lives in a committed dagr document, Linear is retired
 - docs(008): research — AILANG's planning and docs system read in full, with the readers' notes
 - docs(008): amend ADR-001 with D8 — a started task's acceptance terms change only by directive
+- docs(008): amend ADR-001 again — F2 is reversed in part, the dagr fork is adopted
 - chore(github) commits recording this PR
 
 12 files under `.agent/projects/008_docs_system/`: the ADR, the research note, nine evidence
@@ -45,11 +51,12 @@ What the ADR decides, in short:
 - **D5** Pane bindings and grants move out of the plan into a local binding document.
 - **D6** A task's address is `NNN/PLAN-NNN/<task id>` and replaces `MOT-N`.
 - **D7** Stay on upstream dagr 0.3.1. The fork is deferred until cross-plan dependencies or a
-  portfolio view are wanted in dagr.
+  portfolio view are wanted in dagr. *Amended:* the fork is now adopted for `dagr apply` by the
+  later ruling. D2 to D6 still need nothing beyond the upstream contract, which the fork keeps.
 - **D8** (amendment) Once a task has an attempt, a change to its `criteria`, `deps`, `inputs`,
   `kind` or `policy`, or cancelling it, needs a `directive` naming the task. This narrows D4.
 
-The operator closed the four forks on 2026-10-04, each as recommended, and approved D8 the same day. One thing is still owed
+The operator closed the four forks on 2026-10-04, each as recommended, and approved D8 the same day. F2 was then reversed in part by the ruling in PR #216. One thing is still owed
 from that ruling: which of the 24 open Linear issues are still wanted (Appendix A).
 
 What the research note adds, in short:
@@ -118,6 +125,14 @@ What was checked while writing the D8 amendment:
 - Five Midspiral posts were fetched directly and every quoted passage was found word for word.
 - Every local path the amended ADR and note cite resolves in this branch: 47 and 16 checked.
 
+What was checked while writing the second amendment:
+
+- 021's ADR-002 was read on branch `feat/dagr-verified-writes` at `11e52dc8`.
+- The operator's quoted words were found in the operator's own message in the session that
+  received them (2026-10-04 09:52 UTC), in a local transcript that is not in the tree.
+- 51 local paths in the amended ADR were checked. One does not resolve on this branch, as the ADR
+  says: 021's ADR-002, which is on PR #216's branch.
+
 Not done:
 
 - [ ] `make verify_dagr_producer` was not re-run
@@ -129,6 +144,10 @@ Not done:
 - [ ] The D8 probe cannot tell whether an edit weakened a task's terms, does not cover `policy` or
       cancellation, and reads gitignored local files, so its run cannot be repeated from the tree
 - [ ] D8's refusal at re-projection is not built
+- [ ] 021's ADR-002 is an unreviewed draft. Only its D1 is cited as ruled; its D3 to D9, including
+      `RunRecord`, are cited as proposals
+- [ ] Where an operator's ruling lives between sessions is open
+- [ ] Which of the two ADRs' extension changes lands first is not ruled
 - [ ] Three of Midspiral's ten posts were read only as summaries and two were not read
 - [ ] Most statements in the research note rest on a reader's notes and were not re-checked
 - [ ] AILANG's incident numbers are its own records; none was checked against logs or CI
