@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# pre-commit — keep task work off main and out of the shared checkout.
+#
+# Refuses a commit in two cases:
+#   1. the current branch is main, in any worktree;
+#   2. the commit is being made from the shared checkout (the one that owns
+#      .git) on any branch, unless MOTOKO_ALLOW_PRIMARY_COMMIT=1 is set.
+#
+# Turned on by tools/worktree/install-hooks.sh, per user, inside the agent
+# container. Not active until that is run, and never through the repository's
+# own config: see that script for why.
+#
+# SCOPE. This stops a commit, not an edit: files can still be changed in the
+# shared checkout. `git commit --no-verify` skips it, and so do merges and
+# rebases, which run other hooks. It is a guard against doing the wrong thing by
+# habit, not a boundary against doing it on purpose.
+set -euo pipefail
+
+main="${WORKTREE_MAIN_BRANCH:-main}"
+branch="$(git symbolic-ref --quiet --short HEAD || echo "(detached)")"
+
+if [ "$branch" = "$main" ]; then
+	echo "pre-commit: refusing to commit on '$main'." >&2
+	echo "  Start the task in its own worktree: tools/worktree/new.sh <name> <branch>" >&2
+	exit 1
+fi
+
+git_dir="$(git rev-parse --path-format=absolute --git-dir)"
+common_dir="$(git rev-parse --path-format=absolute --git-common-dir)"
+if [ "$git_dir" = "$common_dir" ] && [ "${MOTOKO_ALLOW_PRIMARY_COMMIT:-0}" != "1" ]; then
+	echo "pre-commit: refusing to commit from the shared checkout ($(git rev-parse --show-toplevel))." >&2
+	echo "  It is on '$branch'; it should stay on '$main', and task work belongs in a worktree:" >&2
+	echo "  tools/worktree/new.sh <name> <branch>" >&2
+	echo "  To commit here anyway, set MOTOKO_ALLOW_PRIMARY_COMMIT=1 for that command." >&2
+	exit 1
+fi
+
+exit 0
