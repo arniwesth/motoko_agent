@@ -1,0 +1,113 @@
+flowchart TB
+  %% 034 ADR-001 D1–D3 — FROM WHAT THE HARNESS OBSERVED TO WHAT THE MODEL READS: Phase 0's mapping
+  %% (D2), the typed layer and the wire object (D3). A mechanism map of the live path only; the
+  %% deterministic world is effect-disclosure-world.
+  %% Colour = role: blue an observation the harness already makes at HEAD · blue-dashed an arm
+  %% whose start-only status is not established on the pinned binary · amber the two values (D1)
+  %% · green what Phase 0 builds · gray-solid the object on the wire · gray-dashed no disclosure ·
+  %% purple the same shape, later (030).
+  %% Every observation states the value it renders in italics, and the edges into the two amber
+  %% nodes say the same thing: an observation reaches `none` only if the fault is observed before
+  %% the effect is entered. The two dashed edges are the provisional arms, which render unknown
+  %% until a probe row (NotAllowed) or an upstream statement (PermissionDenied) shows the arm is
+  %% returned only before the child exists.
+  %% Layout note: the renderer lays same-rank nodes in a row, so a call's path is drawn as a
+  %% spine (refused, validated, by tool, by ProcessError arm) and the values sit below every
+  %% observation that reaches them. The refusals are one edge from their subgraph; drawn per
+  %% node, one of them routed round the far side of the exec arms and read as an edge to unknown.
+  %% The write tools are two nodes (reached, then started) so that the started write sits at the
+  %% rank of the exec arms; as one node a rank higher, its edge to unknown ran behind NotAllowed.
+  %% The exec tools are declared before the write tools so that the started write lands right of
+  %% the arms: on the left, its edge to unknown crossed NotFound's edge to none.
+  %% Grounded 2026-10-03: ADR-001 as written 2026-10-02 against HEAD 4023bf08, AILANG v0.47.2;
+  %% only src/tui changed between 4023bf08 and 21ba95c9, so the coordinates stand. Probe cases
+  %% A–D are the ADR's §0 table (cases 8, 10–12 of evidence/exec_probe.sh); they call
+  %% std/process.exec directly and do not read the message the model gets. NOTHING in the amber,
+  %% green or gray-solid nodes exists at HEAD.
+
+  call(["<b>a tool call</b><br/>one tool, with arguments, from the model"]):::flow
+
+  subgraph PRE["Refused before the effect is entered"]
+    direction TB
+    a1["<b>refused before dispatch</b> · tool_phase.ail<br/>arguments not valid JSON · :347–355<br/>(already says 'the tool was NOT run')<br/>policy denial · :569–579<br/>no write, exec or update was started<br/><i>renders none</i>"]:::site
+    a2["<b>validation refusal</b> · tool_runtime.ail<br/>path guard · missing argument · unknown tool<br/>expected_sha256 mismatch · edits that do not apply<br/>delegated-backend refusal<br/>:443–480, :590, :870–880, :248, :986–987<br/><i>renders none</i>"]:::site
+  end
+  call --> a1
+  a1 --> a2
+
+  subgraph TOOLS["By tool — what a valid call would change"]
+    direction TB
+    t1["<b>ReadFile · Search</b><br/>any failure · :520–529, :594–596<br/>there is no update to apply<br/><i>renders none</i>"]:::site
+    t3["<b>BashExec · RunTests</b><br/>run_process_result calls std/process.exec<br/>and today maps every Err to exit_code 1,<br/>stdout empty, prose in stderr"]:::site
+    t2["<b>WriteFile · EditFile</b><br/>the same ToolErrorResult constructor is built<br/>before the write and after it was attempted"]:::site
+  end
+  a2 --> t1
+  a2 --> t3
+  a2 --> t2
+
+  w1["<b>the write was started</b><br/>WriteFile after mkdirAllResult or<br/>writeFileResult was called<br/>EditFile after atomic_write<br/>:700–703, :898–899<br/><i>renders unknown</i>"]:::site
+  t2 --> w1
+
+  subgraph ARMS["What exec returned — one pure function, exhaustive match, a test row per arm: a new upstream arm is a compile error, not a default"]
+    direction TB
+    x1["<b>NotFound</b><br/>case B: no such command<br/>case C: a mode-644 script<br/>nothing ran<br/><i>renders none</i>"]:::site
+    x2["<b>NotAllowed</b><br/>returned before spawn in the<br/>checkout's Go source<br/>unmeasured on v0.47.2<br/><i>unknown, until a probe row shows it</i>"]:::held
+    x3["<b>PermissionDenied</b><br/>classified by substring from a call<br/>that both starts and waits<br/>not produced by case C<br/><i>unknown, until upstream says start-only</i>"]:::held
+    x4["<b>SpawnFailed</b><br/>case A: the command exited 0,<br/>m_fg present at return, m_bg lands later<br/>the note had 'never started'<br/><i>renders unknown</i>"]:::site
+    x5["<b>Timeout · OutputLimitExceeded<br/>AbnormalExit</b><br/>note cases 2–4 · case D: m_sig<br/>present after kill -9<br/><i>renders unknown</i>"]:::site
+    x6["<b>Ok, any exit code</b><br/>the call ran to its own exit<br/>:1020–1022<br/><i>no disclosure</i>"]:::site
+  end
+  t3 --> x1
+  t3 --> x2
+  t3 --> x3
+  t3 --> x4
+  t3 --> x5
+  t3 --> x6
+
+  none{{"<b>effects: none</b><br/>the harness did not enter the tool's effect"}}:::value
+  unknown{{"<b>effects: unknown</b><br/>entered, and no completion the harness can report:<br/>it may have happened, may not, or may still land"}}:::value
+  nodisc["<b>no disclosure</b><br/>the result is the tool's own report"]:::capped
+
+  PRE --> none
+  t1 --> none
+  x1 --> none
+  x2 -.-> none
+  x3 -.-> none
+  x2 --> unknown
+  x3 --> unknown
+  x4 --> unknown
+  x5 --> unknown
+  w1 --> unknown
+  x6 --> nodisc
+
+  typed["<b>the typed layer</b> · types.ail<br/>a two-arm sum for the disclosure, and a small fault record:<br/>observation kind, disclosure, that kind's numbers<br/>required on ToolErrorResult — the same constructor is built before the effect<br/>and after it was attempted, so each of 13 sites states its value<br/>on BashExecResult and RunTestsResult, absent on the Ok arm — 4 sites"]:::now
+  none --> typed
+  unknown --> typed
+
+  subgraph RENDER["Both renderers that reach the model for native tools"]
+    direction TB
+    r1["<b>tool_result_item_to_json</b><br/>tool_dispatch_adapter.ail:95–160 · the live path<br/>live faults stay ToolCompleted"]:::now
+    r2["<b>tool_fault_message</b><br/>tool_phase.ail:297–304 · the typed-fault path<br/>derives the value from ToolFailed's dispatch stage"]:::now
+  end
+  typed --> r1
+  typed --> r2
+
+  wire[("<b>the fault object</b> — one key, in one JSON object<br/>fault: { kind, effects, note }<br/>kind names the observation, never the world's truth<br/>effects is 'none' or 'unknown' · note is one fixed sentence per value<br/>key, values and sentences come from one constants home<br/>exit_code stays 1 on a harness-reported fault")]:::artifact
+  r1 --> wire
+  r2 --> wire
+
+  model(["<b>the model reads a tool-role message</b><br/>a tool message keeps its first 65,536 bytes,<br/>so fault is emitted before stdout and stderr"]):::flow
+  wire --> model
+  nodisc -.-> model
+
+  later["<b>one shape with 030</b><br/>030's diagnostics are this object with more kinds<br/>top-level in the native result now; under ToolResultEnvelope.metadata<br/>when 030's candidate reaches extension-handled tools"]:::later
+  wire -.-> later
+
+  classDef flow fill:#1f2335,stroke:#a9b1d6,color:#d5dbe5;
+  classDef site fill:#16294d,stroke:#7aa2f7,color:#cdd9f5,stroke-width:2px;
+  classDef held fill:#16294d,stroke:#7aa2f7,color:#cdd9f5,stroke-dasharray:6 4;
+  classDef value fill:#3a2f12,stroke:#e0af68,color:#f2e2c2,stroke-width:2.5px;
+  classDef now fill:#16351f,stroke:#3fb950,color:#c6f0cf;
+  classDef later fill:#2f2145,stroke:#bb9af7,color:#e5d5fb;
+  classDef artifact fill:#2a2f3a,stroke:#9aa4b2,color:#d5dbe5,stroke-width:2px;
+  classDef capped fill:#24262f,stroke:#6e7681,color:#9aa4b2,stroke-dasharray:5 5;

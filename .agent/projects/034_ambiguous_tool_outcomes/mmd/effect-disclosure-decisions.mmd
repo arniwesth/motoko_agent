@@ -1,0 +1,102 @@
+flowchart TB
+  %% 034 ADR-001 — EFFECT DISCLOSURE FOR TOOL FAULTS: what the nine decisions propose, grouped by
+  %% the phase a plan would sequence them into (ADR §4), and what each phase makes true.
+  %% Colour = role: blue what holds at HEAD · amber the ADR · green a proposed decision ·
+  %% purple a proposed decision with a condition (D7 files only after the ruling, D8 batches only
+  %% if the knob widening has a date) · teal what a phase makes true, its gate in italics ·
+  %% teal-dashed potential, contingent on an upstream reply · amber-dashed open: not established
+  %% anywhere, and needed · gray-dashed out of scope (§3).
+  %% "ruling N" on a decision is its item in §6, the list the operator rules on. D1 has no item of
+  %% its own; it is ruled on through D2 and D3.
+  %% Layout note: the renderer lays same-rank nodes in a row, so each phase is a subgraph whose
+  %% decisions are chained down to what the phase makes true. The chain is the order the ADR
+  %% argues them in (values, mapping, carrier), not a dependency between rulings.
+  %% Grounded 2026-10-03: ADR-001 as written 2026-10-02 against HEAD 4023bf08 on main, installed
+  %% AILANG v0.47.2. Between 4023bf08 and 21ba95c9 (HEAD when drawn) only src/tui changed, so the
+  %% ADR's src/core coordinates stand. The ADR is PROPOSED: the operator has ruled on nothing, and
+  %% NOTHING in the green, purple or teal nodes exists at HEAD.
+
+  subgraph HEAD["What holds at HEAD — the note's §0 and §6, re-checked for the ADR at 4023bf08"]
+    direction TB
+    h1["<b>live: two cases, one typed signal</b><br/>every ProcessError becomes exit_code 1, stdout empty<br/>'never started' and 'ran' differ only in stderr prose"]:::cap
+    h2["<b>a success reported as a spawn failure</b><br/>case A: the command exited 0 with its work done<br/>exec returned Err(SpawnFailed) — nothing injected"]:::cap
+    h3["<b>world: every tool fault row says 'did not happen'</b><br/>WorldState keeps no record of tool effects<br/>009 D3 requires both halves; the benign one was built"]:::cap
+    h4["<b>no driver retry</b><br/>retries are the model's decision<br/>the harness is not destructive, it is uninformative"]:::cap
+  end
+
+  adr{"<b>034 ADR-001</b><br/>2026-10-02 · Proposed<br/>nothing ruled,<br/>nothing executed"}:::decision
+  h1 --> adr
+  h2 --> adr
+  h3 --> adr
+  h4 --> adr
+
+  subgraph P0["Phase 0 — live disclosure, independent of everything below"]
+    direction TB
+    d5["<b>D5 · Phase 0 ships on its own, first</b> · ruling 4<br/>the only part that changes a live session; needs no DST machinery<br/>P1 does not check the live renderer, so waiting for it buys nothing<br/>cost: every faulted tool message changes shape —<br/>eval baselines measured before and after, once, with 030's"]:::now
+    d1["<b>D1 · two values, both derived from the observation</b><br/>none: the harness did not enter the tool's effect<br/>unknown: entered, and no completion it can report<br/>no third value — the harness cannot know the world's bit"]:::now
+    d2["<b>D2 · none only where the effect was provably not entered</b> · ruling 1<br/>a fault observed before the effect is entered;<br/>for a ProcessError arm, a probe on the pinned binary as well<br/>everything else is unknown, which is always sound<br/>amends the note: SpawnFailed and PermissionDenied render unknown"]:::now
+    d3["<b>D3 · one fault object, a value stated at every site</b> · ruling 2<br/>a required field: 13 ToolErrorResult and 4 process-result sites<br/>are each forced to choose<br/>ToolFailed gains a dispatch stage; the deadline and mismatch<br/>variants gain nothing · live faults stay ToolCompleted<br/>one shape with 030's diagnostics"]:::now
+    u0["<b>the model can read whether the effect started</b><br/>every harness-reported fault carries fault.effects,<br/>ahead of stdout and stderr<br/>BashExec's description stops promising truncation past the cap<br/><i>gate: one exhaustive mapping with a test row per arm</i><br/><i>a live witness through run_process_result, one unknown arm and one none</i><br/><i>a probe row for every none arm · eval baselines before and after</i>"]:::unlocked
+  end
+  adr --> d5
+  d5 --> d1
+  d1 --> d2
+  d2 --> d3
+  d3 --> u0
+
+  subgraph P0B["Phase 0b — a deadline inside the wall"]
+    direction TB
+    d6["<b>D6 · the deadline wrapper is its own phase</b> · ruling 4<br/>Phase 0 renders observations that already exist;<br/>the wrapper changes the observation:<br/>Ok with exit 124 where there was Err(Timeout)<br/>not expected to help case A — untested"]:::now
+    u0b["<b>partial output survives a deadline</b><br/>stdout and stderr intact · the kill reaches the process group,<br/>though a setsid child still escapes<br/>the disclosure after a wrapper deadline stays unknown<br/><i>gate: its own probe through run_process_result</i><br/><i>and its own baseline pass</i>"]:::unlocked
+  end
+  u0 --> d6
+  d6 --> u0b
+
+  subgraph UP["Upstream, in parallel"]
+    direction TB
+    d7["<b>D7 · four upstream asks</b> · ruling 5<br/>(a) partial stdout and stderr on Timeout and OutputLimitExceeded<br/>(b) a kill that reaches the process group<br/>(c) a clean exit whose pipe outlives it returns Ok, not SpawnFailed<br/>(d) which ProcessError arms return only before the child exists<br/>filing is outward-facing and waits for the ruling"]:::later
+    pot["<b>if the asks land</b><br/>(d): PermissionDenied may render none<br/>(c): case A becomes an Ok with its exit code and output<br/>(a), (b): partial output and a group kill wherever the runtime runs,<br/>and for the output limit, which the wrapper does not cover"]:::potential
+  end
+  adr --> d7
+  d7 -.-> pot
+
+  subgraph P1["Phase 1 — world and catalogue"]
+    direction TB
+    d9["<b>D9 · 009 ADR-001 D3 is not reopened</b> · ruling 7<br/>D3 already requires both halves, and lets the catalogue grow<br/>while the boundary holds · applied is one all-or-nothing bit,<br/>so the physical-fault exclusion stands<br/>the twin rows are not 'decorative': a real constructor delivers them<br/>to a real branch — read the other way, D3 reopens"]:::now
+    d4["<b>D4 · 'applied, then faulted' never reaches the wire</b> · ruling 3<br/>two world-only rows, each naming its wire twin —<br/>amends the note's single row<br/>a visibility field on every row · the existing rows are not edited<br/>no carrier: ToolOutcome gains nothing that holds applied"]:::now
+    d8["<b>D8 · batch Phase 1 with the knob widening</b> · ruling 6<br/>adopted only if the widening is scheduled<br/>both bump generator_version, re-pin the canary by hand<br/>and re-derive the PR bank<br/>013 orders the widening after its seed-space question<br/>no date when Phase 1 is planned: Phase 1 goes alone"]:::later
+    u1["<b>the world can hold 'applied, and the call still faulted'</b><br/>ScriptedTool gains applied and a stage<br/>a WorldState effect log · the next program schema version<br/>fault-catalogue/3, eleven rows → thirteen<br/><i>checks: validate_catalogue on every world-only row's twin</i><br/><i>no projected tool message names a world-only id</i>"]:::unlocked
+  end
+  adr --> d9
+  d9 --> d4
+  d4 --> d8
+  d8 --> u1
+
+  subgraph P2["Phase 2 — three properties, each accepted only when its mutation fixture has been seen red"]
+    direction TB
+    p1["<b>P1 · the disclosure is sound</b><br/>effects = none ⇒ the world did not apply the update<br/>and every harness-reported fault message carries effects<br/><i>fixture: none for an after-dispatch ToolFailed; drop the key</i>"]:::unlocked
+    p2["<b>P2 · nothing leaks</b><br/>two programs differing only in one applied field<br/>produce identical traces, outcomes and served interactions<br/><i>fixture: read applied from next_state into the message</i>"]:::unlocked
+    p3["<b>P3 · no call is dispatched twice</b><br/>the driver dispatches no tool call id twice<br/>holds trivially today, so the fixture is its only evidence<br/><i>fixture: a retry-on-deadline in the driver</i>"]:::unlocked
+  end
+  u1 --> p1
+  u1 --> p2
+  u1 --> p3
+
+  u3["<b>Phase 3 — the report</b><br/>class and branch counters pick the two rows up from required_class_ids()<br/>duplicate effect keys from the model: a run-report metric, not a verdict"]:::unlocked
+  p1 --> u3
+  p2 --> u3
+  p3 --> u3
+
+  open["<b>not established anywhere, and needed</b> — §5<br/>can NotAllowed or PermissionDenied be returned<br/>on v0.47.2 after the child exists<br/>what the wrapper does in case A<br/>the wording of the two fixed sentences"]:::open
+  out["<b>out of scope</b> — §3<br/>measuring model honesty, which is Havoc's question<br/>torn or partial effects · the extension effect seam<br/>delegation (WakeOutcome)<br/>harness-side resolution: read-back, idempotency keys<br/>reclassifying live faults into typed variants<br/>changing exit_code on a faulted result<br/>extension-handled tools' metadata, which is 030's candidate"]:::capped
+  adr -.->|"what the ADR leaves open"| open
+  adr -.->|"what the ADR does not decide"| out
+
+  classDef cap fill:#16294d,stroke:#7aa2f7,color:#cdd9f5,stroke-width:2px;
+  classDef decision fill:#3a2f12,stroke:#e0af68,color:#f2e2c2,stroke-width:2.5px;
+  classDef now fill:#16351f,stroke:#3fb950,color:#c6f0cf;
+  classDef later fill:#2f2145,stroke:#bb9af7,color:#e5d5fb;
+  classDef unlocked fill:#123038,stroke:#2ac3de,color:#bdeef5,stroke-width:2px;
+  classDef potential fill:#123038,stroke:#2ac3de,color:#bdeef5,stroke-dasharray:6 4;
+  classDef open fill:#3a2f12,stroke:#e0af68,color:#f2e2c2,stroke-dasharray:6 4;
+  classDef capped fill:#24262f,stroke:#6e7681,color:#9aa4b2,stroke-dasharray:5 5;
