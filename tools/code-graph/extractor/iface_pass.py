@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from . import config
@@ -48,6 +50,27 @@ def run_iface(module: str) -> tuple[str, str]:
     return result.stdout, result.stderr
 
 
+def iface_jobs() -> int:
+    raw = os.environ.get("CODE_GRAPH_JOBS", "").strip()
+    if not raw:
+        return max(1, min(8, os.cpu_count() or 1))
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        raise SystemExit(f"CODE_GRAPH_JOBS must be an integer, got {raw!r}")
+
+
+def run_iface_all(modules: list[str], jobs: int | None = None) -> dict[str, tuple[str, str]]:
+    # One `ailang iface` process per module, `jobs` at a time. The result is keyed
+    # by module so the caller keeps its own order: emitted rows must not depend on
+    # which process finished first.
+    jobs = iface_jobs() if jobs is None else jobs
+    if jobs <= 1 or len(modules) <= 1:
+        return {m: run_iface(m) for m in modules}
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        return dict(zip(modules, pool.map(run_iface, modules)))
+
+
 def first_error_line(stdout: str, stderr: str) -> str:
     for text in (stderr, stdout):
         for line in text.splitlines():
@@ -70,8 +93,9 @@ def apply_iface(parsed_modules: list) -> tuple[list[dict], list[dict], list[dict
     effects: list[dict] = []
     status_rows: list[dict] = []
     verdicts: dict[str, Verdict] = {}
+    outputs = run_iface_all([p.slug for p in parsed_modules])
     for p in parsed_modules:
-        stdout, stderr = run_iface(p.slug)
+        stdout, stderr = outputs[p.slug]
         verdict = classify(stdout, len(p.funcs))
         if verdict.status == "failed" and not verdict.error:
             verdict.error = first_error_line(stdout, stderr)
@@ -110,7 +134,7 @@ def apply_iface(parsed_modules: list) -> tuple[list[dict], list[dict], list[dict
                         "module_iface_status": verdict.status})
             for eff in effs:
                 effects.append({"func_slug": fslug, "effect": eff})
-            for tref in type_refs(fn.get("type", "")):
+            for tref in sorted(type_refs(fn.get("type", ""))):
                 tslug = known_types.get(tref, f"?#{tref}")
                 uses.append({"from_slug": fslug, "type_slug": tslug, "resolved": int(not tslug.startswith("?"))})
     return list(funcs_by_slug.values()), types, ctors, uses, effects, status_rows
