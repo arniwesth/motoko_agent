@@ -30,6 +30,7 @@ import pkg/sunholo/motoko_ext_progress_contract_guard/register (register_with_co
 import pkg/sunholo/motoko_ext_repetition_guard/register (register_with_config as register_repetition_guard)
 import pkg/sunholo/motoko_ext_agentcli/register (register_with_config as register_agentcli)
 import pkg/sunholo/motoko_ext_herdr/register (register_with_config as register_herdr)
+import pkg/sunholo/motoko_ext_skills/register (register_with_config as register_skills)
 import src/core/config (RuntimeConfig)
 import pkg/sunholo/motoko_ext_abi/types (ExtRegistration, ExtEntry)
 import pkg/sunholo/motoko_ext_abi/types (ExtRegistry)
@@ -61,6 +62,7 @@ func resolve(name: string, cfg: RuntimeConfig) -> Option[ExtRegistration] ! {AI,
   else if name == "repetition_guard" then Some(register_repetition_guard(cfg))
   else if name == "agentcli" then Some(register_agentcli(cfg))
   else if name == "herdr" then Some(register_herdr(cfg))
+  else if name == "skills" then Some(register_skills(cfg))
   else None
 }
 
