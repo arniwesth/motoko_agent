@@ -23,15 +23,14 @@ eleven credential variables removed from the environment. Each log ends in `exit
   three logs differs from P2's. Wiring the package causes this, and PLAN-001 gives the
   repair to P6 (the four profile lists, the arms and the counts).
 - `ext_hook_scope` is red on `test_dummy` alone, as before; `skills` passes its row.
-- `gates/ci_verify/` holds three targets that are not in A7 and that CI runs on a change
-  under `src/core`: `verify_core`, `verify_classify_check` and `smoke_no_delegated_storm`.
-  All exit 0.
+- `gates/ci_verify/` holds three targets that are not in A7 and that CI runs:
+  `verify_core`, `verify_classify_check` and `smoke_no_delegated_storm`. All exit 0.
 
 The logs were compared with P2's as P2 compared with the baseline: line by line, after
 dropping the lock-warning pairs and the `exit=` line and replacing colour codes and
 durations. The four inventory logs were also compared with P4's wired-clone logs
-(`../p4/gates/wired/`); they differ only in the source revision, a Makefile line number
-and the tracked-file count.
+(`../p4/gates/wired/`); they differ only in the source revision, a Makefile line number,
+the tracked-file count and, in `ext_call_inventory`, the position of one line.
 
 ## The fixture suite (`gates/verify_skills_refusal.log`)
 
@@ -88,7 +87,7 @@ The four changed lines of the root manifest and the generated registry are P4's
 `WIRING.diff`, and the lock's new entry has the content and interface hashes P4's clone
 recorded. `ailang lock` also refreshed two content hashes that were stale against
 committed package content: `motoko_ext_abi` (P2's comment, `5efa4294`) and
-`motoko_ext_test_dummy` (stale on `main`). With the root lock fresh, the lock warning P2
+`motoko_ext_test_dummy` (stale on `main`; the baseline's logs carry its warning). With the root lock fresh, the lock warning P2
 described is gone from every gate log but `conformance`'s: a package module is checked
 against the package's own lock, and all twenty package locks still hold the older ABI hash.
 
