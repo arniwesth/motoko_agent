@@ -144,6 +144,8 @@ pure func collect_ext_schemas(entries: [ExtEntry]) -> [ToolSchema] {
   }
 }
 
+-- contracts: BLOCKED — RECURSIVE; a synthesised `ensures { true }` fails to
+-- encode rather than failing to prove.
 pure func contains_name(names: [string], name: string) -> bool {
   match names {
     [] => false,
@@ -152,6 +154,9 @@ pure func contains_name(names: [string], name: string) -> bool {
 }
 
 -- One schema per tool name, in input order; the FIRST schema for a name is kept.
+-- The property worth stating, that no name repeats in the result, quantifies
+-- over the list.
+-- contracts: BLOCKED — RECURSIVE; see `contains_name`.
 pure func unique_by_name(xs: [ToolSchema], seen: [string]) -> [ToolSchema] {
   match xs {
     [] => [],
