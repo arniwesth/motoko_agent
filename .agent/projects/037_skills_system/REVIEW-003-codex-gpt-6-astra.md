@@ -6,7 +6,7 @@ Delegation: [herdr skill](../../../.claude/skills/herdr/SKILL.md), agent `rev-as
 Change reviewed: PR #213, `feat/skills-extension` at `4c9f9c25`, against the merge base `cf54dff9`.
 Report SHA-256: `30164c45b81b3ebecbe98b92146bbfcc80831212b8cb1644bf57ccd4cd8510c2`.
 Verdict: **merge after fixes.**
-Status: **Open. Nothing here is addressed yet.** A proposed disposition is at the end.
+Status: Addressed in `b839b1de..e7d635ef` (`LEG-R3.md`, `evidence/r3/`). The second round is [REVIEW-004](REVIEW-004-codex-gpt-6-astra.md), which found both resolved.
 
 ## Scope
 
@@ -98,9 +98,12 @@ Both findings were re-run by the delegating session at `4c9f9c25`, with its own 
   failure there would show only as a different failing line.
 - **Mutants M1 to M4** were not re-run.
 
-## Proposed disposition — 2026-10-05, not ruled
+## Disposition — 2026-10-05
 
-| # | Finding | Proposed |
+The operator accepted both fixes the same day, in telling the delegating session to start the
+fixing delegate.
+
+| # | Finding | Decision |
 |---|---|---|
-| 1 | A FIFO named `SKILL.md` hangs startup | Fix before merge: an `isFile` guard in `read_entry` that reports V3, and a fixture with a timeout that requires the refusal |
-| 2 | The herdr omission test accepts the wrong extension | Fix before merge: an inline test in each of the four profile modules that names the omitted ids it requires |
+| 1 | A FIFO named `SKILL.md` hangs startup | **Fixed** at `b839b1de`: an `isFile` guard in `read_entry` that reports V3, a named-pipe fixture, and a timeout on every start in the suite |
+| 2 | The herdr omission test accepts the wrong extension | **Fixed** at `c7649907`: an inline test in each of the four profile modules that requires `skills` and `ailang_tools` by name |

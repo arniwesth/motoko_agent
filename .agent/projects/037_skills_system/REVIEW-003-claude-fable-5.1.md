@@ -6,7 +6,7 @@ Delegation: [herdr skill](../../../.claude/skills/herdr/SKILL.md), agent `rev-fa
 Change reviewed: PR #213, `feat/skills-extension` at `4c9f9c25`, against the merge base `cf54dff9`.
 Report SHA-256: `8586b0a7c9a9999aead546bbbb6dd261fba9193a93c8ba730e8695e428fb16ea`.
 Verdict: **merge after fixes.**
-Status: **Open. Nothing here is addressed yet.** A proposed disposition is at the end.
+Status: F1, F2, F3 and F7 are addressed in `b839b1de..e7d635ef` (`LEG-R3.md`, `evidence/r3/`). F4, F5, F6, F8 and F9 are with the operator and not fixed. The second round is [REVIEW-004](REVIEW-004-claude-fable-5.1.md).
 
 ## Scope
 
@@ -264,16 +264,20 @@ at `4c9f9c25`. The notes were not re-run, except where said.
   reviewer ran it; the delegating session did not.
 - **F5 to F9** were not checked.
 
-## Proposed disposition — 2026-10-05, not ruled
+## Disposition — 2026-10-05
 
-| # | Finding | Proposed |
+The operator accepted the fixes for F1, F2, F3 and F7 the same day, in telling the delegating
+session to start the fixing delegate. The rows for F4, F5, F6, F8 and F9 are still proposals:
+none has been ruled on, and none is fixed.
+
+| # | Finding | Decision |
 |---|---|---|
-| F1 | A FIFO named `SKILL.md` hangs startup | Fix before merge, as in the Codex record |
-| F2 | CI runs none of the package's tests | Fix before merge: a `make` target that runs the three test files, and it and `verify_skills_refusal` in CI |
-| F3 | The sandbox flag and the real handler path are checked by nothing committed | Fix before merge: the startup probe prints the `config` record and dispatches one `Skill` call through the real host; one sandboxed and one unsandboxed case in the suite |
-| F4 | The reserved key can reach the host from the operator's `ailang_tools.json` | Operator's call. Smallest: correct the ABI comment and the refusal message's wording, and record the path in Amendment 5 |
-| F5 | The D7 guard sees "unset", not "set to something else" | Record as a stated limit of D7. No code change |
-| F6 | Invalid UTF-8 and control characters are accepted | Operator's call: refuse control characters in a description under V6, or record it. Not a merge blocker |
-| F7 | The symlink control does not check the index | Fix with the others: it is one assertion |
-| F8 | The envelope copy is pinned to a literal | Follow-up: a live row in `registry_multiplicity_dst.ail` |
-| F9 | While `test_dummy` keeps four comparisons red, a wrong `skills` pin would not change the exit status | No action here; it is one more reason to file the `test_dummy` issue |
+| F1 | A FIFO named `SKILL.md` hangs startup | **Fixed** at `b839b1de` |
+| F2 | CI runs none of the package's tests | **Fixed** at `9f547d78`: `make verify_skills_tests`, and a CI step that runs it and `verify_skills_refusal` |
+| F3 | The sandbox flag and the real handler path are checked by nothing committed | **Fixed** at `d4fb1a5a`: the startup probe prints the `config` record, a second script (`scripts/verify_skills_call.ail`) dispatches `Skill` through the real host, and the suite has five more checks, two of them unsandboxed |
+| F4 | The reserved key can reach the host from the operator's `ailang_tools.json` | Proposed, not ruled: operator's call. Smallest: correct the ABI comment and the refusal message's wording, and record the path in Amendment 5 |
+| F5 | The D7 guard sees "unset", not "set to something else" | Proposed, not ruled: record as a stated limit of D7. No code change |
+| F6 | Invalid UTF-8 and control characters are accepted | Proposed, not ruled: operator's call: refuse control characters in a description under V6, or record it. Not a merge blocker |
+| F7 | The symlink control does not check the index | **Fixed** at `c1a4490c` |
+| F8 | The envelope copy is pinned to a literal | Proposed, not ruled: follow-up: a live row in `registry_multiplicity_dst.ail` |
+| F9 | While `test_dummy` keeps four comparisons red, a wrong `skills` pin would not change the exit status | Proposed, not ruled: no action here; it is one more reason to file the `test_dummy` issue |
