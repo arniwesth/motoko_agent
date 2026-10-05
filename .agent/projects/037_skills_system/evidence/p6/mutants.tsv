@@ -1,0 +1,5 @@
+id	file	change	command	expected	exit	observed	killed
+m1	scripts/dst/run_declared_vs_performed.sh	s/^absorb Env 18$/absorb Env 16/; s/^absorb FS 15$/absorb FS 13/	make declared_vs_performed	red on the Env and FS absorption rows and on no other row	2	2 matching line(s)	yes
+m2	tools/ext_ambient_inventory/fixtures/hook_scope/expected.json	s/^      "skills": 2,$/      "skills": 3,/	make ext_hook_scope_selftest	the atom-count row names skills: 3 expected, 2 derived	2	1 matching line(s)	yes
+m3a	src/core/dst_driver_plus_no_ops.ail	s/List.length(d.omitted_extensions) == 16/List.length(d.omitted_extensions) == 15/	ailang test src/core/dst_driver_plus_no_ops.ail	the inline partition test fails	1	2 matching line(s)	yes
+m3b	src/core/dst_driver_plus_no_ops.ail	s/List.length(d.omitted_extensions) == 16/List.length(d.omitted_extensions) == 15/	make test_coverage	test_coverage is red and names the module	2	3 matching line(s)	yes

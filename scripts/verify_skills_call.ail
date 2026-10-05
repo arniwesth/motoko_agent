@@ -1,0 +1,110 @@
+-- verify_skills_call — one `Skill` call through the real host and the live
+-- port (037 ADR-001 D7, D10; acceptance A9).
+--
+-- Usage (driven by `make verify_skills_refusal`, beside
+-- scripts/verify_skills_startup.ail):
+--   ailang run ... scripts/verify_skills_call.ail -- <workdir> <profile> <name> [<name> ...]
+--
+-- It starts as the runtime does, `load_config_from_cli` then
+-- `init_runtime_with_config`, so the `config` it calls under is the one the
+-- `skills` registration returned in this process: the index, and whether the
+-- sandbox variable was set. A refused registration ends the process there, as
+-- in verify_skills_startup.ail.
+--
+-- Then one call per name, the way a session's tool phase makes it:
+-- `dispatch_tool_handle` over that registry, with the production port bridge
+-- (`session.ext_ports_of`) over the live ports, so the handler's
+-- `ctx.ports.file_read` reads the disk. The context's workdir is the one
+-- `rpc.run_with_config` hands the session, `cfg.agent.workdir`.
+--
+--   OK started ...          the registry that was built
+--   SKILLS_CONFIG {...}     the `config` record of the `skills` entry
+--   SKILL_CALL {...}        per name: name, handled, exit_code, stdout, stderr
+--
+-- This is a script of its own, and not part of verify_skills_startup.ail,
+-- because of what the bridge costs: `src/core/session` is recompiled by every
+-- process that imports it (about 30 s; its type info is over the compile
+-- cache's blob limit), and the startup script runs once per fixture.
+module scripts/verify_skills_call
+
+import std/io (println)
+import std/env (getArgs)
+import std/json (encode, jo, kv, js, jb, jnum, ja)
+import std/list as List (length)
+import std/option (None)
+import std/string (join, startsWith)
+import src/core/config (load_config_from_cli)
+import src/core/session (ext_ports_of)
+import src/core/ports (empty_world_state)
+import src/core/ext_world (world_to_token)
+import src/core/test/stub_step (live_ports)
+import src/core/tool_contract (ToolCallEnvelope)
+import src/core/ext/runtime (init_runtime_with_config, loaded_extension_names, dispatch_tool_handle)
+import src/core/ext/ctx_defaults (empty_ext_artifacts, zero_token_telemetry, empty_tool_evidence)
+import pkg/sunholo/motoko_ext_abi/types (ExtRuntime, ExtEntry, ExtCtx, Handled, Delegate, NotReached)
+
+func skills_config_line(entries: [ExtEntry]) -> string {
+  match entries {
+    [] => "<no skills entry>",
+    e :: rest => if startsWith(e.id, "skills#") then encode(e.config) else skills_config_line(rest)
+  }
+}
+
+-- The context a session's tool phase dispatches under (`mk_v2_ext_ctx`,
+-- `src/core/session.ail`), over an empty world. `context_limit` is 0, the "not
+-- known" value, so D8's size check stays out of these calls.
+func call_ctx(rt: ExtRuntime, workdir: string) -> ExtCtx ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
+  let w = empty_world_state();
+  {
+    task: "verify_skills_call",
+    step: 0,
+    model: "stub",
+    cwd: workdir,
+    hybrid_tools: false,
+    budget: { total: 0, solver: 0, verifier: 0 },
+    mode: "v2",
+    workdir: workdir,
+    env_server_url: "",
+    budget_remaining: 0,
+    history_slice: [],
+    state_key: "core:ext:v2",
+    finish_reason: "",
+    work_in_flight: [],
+    open_waits: ja([]),
+    context_limit: 0,
+    ports: ext_ports_of(live_ports(rt), w, ""),
+    artifacts: empty_ext_artifacts(),
+    telemetry: zero_token_telemetry(), verification: NotReached, tool_evidence: empty_tool_evidence(), decision_state: None, world: world_to_token(w)
+  }
+}
+
+func skill_call(rt: ExtRuntime, workdir: string, name: string) -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let call: ToolCallEnvelope = { id: "call_verify_skills_call", tool: "Skill", arguments: jo([kv("name", js(name))]) };
+  match dispatch_tool_handle(rt, call_ctx(rt, workdir), call).decision {
+    Handled(r) => println("SKILL_CALL ${encode(jo([kv("name", js(name)), kv("handled", jb(true)), kv("exit_code", jnum(intToFloat(r.exit_code))), kv("stdout", js(r.stdout)), kv("stderr", js(r.stderr))]))}"),
+    Delegate => println("SKILL_CALL ${encode(jo([kv("name", js(name)), kv("handled", jb(false))]))}")
+  }
+}
+
+func skill_calls(rt: ExtRuntime, workdir: string, names: [string]) -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  match names {
+    [] => (),
+    n :: rest => {
+      let _ = skill_call(rt, workdir, n);
+      skill_calls(rt, workdir, rest)
+    }
+  }
+}
+
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  match getArgs() {
+    workdir :: profile :: name :: names => {
+      let cfg = load_config_from_cli(["--workdir", workdir, "--profile", profile]);
+      let rt = init_runtime_with_config(cfg);
+      let _ = println("OK started: profile=${cfg.profile} entries=${show(List.length(rt.registry.entries))} loaded=${join(",", loaded_extension_names(rt))}");
+      let _ = println("SKILLS_CONFIG ${skills_config_line(rt.registry.entries)}");
+      skill_calls(rt, cfg.agent.workdir, name :: names)
+    },
+    _ => println("FAIL usage: verify_skills_call.ail -- <workdir> <profile> <name> [<name> ...]")
+  }
+}

@@ -1,0 +1,92 @@
+== check_core: exit 0 -> 0  identical
+== conformance: exit 0 -> 0  identical
+== declared_vs_performed: exit 0 -> 0  10 line(s) differ
+   @@ -56 +56 @@
+   -      ✓ herdr [B]: MEASURED — registration and dispatch both completed; the hook performs neither
+   +      ~ herdr [B]: CONFOUNDED — register_with_config performs 'FS' before the hook is reached
+   @@ -59,2 +59,2 @@
+   -      MEASURED   (10/20): decision_framework microrag compaction_structural empty_stop_guard progress_contract_guard test_dummy scratchpad repetition_guard agentcli herdr
+   -      CONFOUNDED (10/20): omnigraph context_mode mcp exa_search ailang_docs compose a2a ailang_tools compaction_ai skills
+   +      MEASURED   (9/20): decision_framework microrag compaction_structural empty_stop_guard progress_contract_guard test_dummy scratchpad repetition_guard agentcli
+   +      CONFOUNDED (11/20): omnigraph context_mode mcp exa_search ailang_docs compose a2a ailang_tools compaction_ai herdr skills
+   @@ -63 +63 @@
+   -      The 10 confounded subjects are settled by producer 3 below, not by this one.
+   +      The 11 confounded subjects are settled by producer 3 below, not by this one.
+   @@ -230 +230 @@
+   -      PERFORMED on_budget_plan : ! {}   (runtime trap, out of process, 10 of 20 witnessed)
+   +      PERFORMED on_budget_plan : ! {}   (runtime trap, out of process, 9 of 20 witnessed)
+== driver_only: exit 0 -> 0  2 line(s) differ
+   @@ -57 +57 @@
+   -  ✓ every manifest ABI pin in the tree is the declared one: 8.0 (34 pin(s) across 565 tracked .ail file(s))
+   +  ✓ every manifest ABI pin in the tree is the declared one: 8.0 (34 pin(s) across 566 tracked .ail file(s))
+== driver_plus_compose: exit 2 -> 2  identical
+== driver_plus_herdr: exit 0 -> 0  identical
+== driver_plus_no_ops: exit 2 -> 2  identical
+== ext_ambient_inventory: exit 0 -> 0  identical
+== ext_ambient_inventory_selftest: exit 0 -> 0  identical
+== ext_call_inventory: exit 0 -> 0  identical
+== ext_call_inventory_selftest: exit 0 -> 0  identical
+== ext_hook_scope: exit 2 -> 2  2 line(s) differ
+   @@ -91 +91 @@
+   -make: *** [Makefile:3429: ext_hook_scope] Error 1
+   +make: *** [Makefile:3460: ext_hook_scope] Error 1
+== ext_hook_scope_selftest: exit 2 -> 2  2 line(s) differ
+   @@ -70 +70 @@
+   -make: *** [Makefile:3432: ext_hook_scope_selftest] Error 1
+   +make: *** [Makefile:3463: ext_hook_scope_selftest] Error 1
+== herdr_graded: exit 0 -> 0  identical
+== new_contract_policy: exit 0 -> 0  7 line(s) differ
+   @@ -0,0 +1,5 @@
+   +  ✓ src/core/dst_driver_only.ail test_skills_and_ailang_tools_are_omitted_by_name: out of scope -- reachable only from tests [...] of test_skills_and_ailang_tools_are_omitted_by_name
+   +  ✓ src/core/dst_driver_only.ail omits: out of scope -- reachable only from tests [...] of test_skills_and_ailang_tools_are_omitted_by_name -> omits
+   +  ✓ src/core/dst_driver_plus_compose.ail test_skills_and_ailang_tools_are_omitted_by_name: out of scope -- reachable only from tests [...] of test_skills_and_ailang_tools_are_omitted_by_name
+   +  ✓ src/core/dst_driver_plus_herdr.ail test_skills_and_ailang_tools_are_omitted_by_name: out of scope -- reachable only from tests [...] of test_skills_and_ailang_tools_are_omitted_by_name
+   +  ✓ src/core/dst_driver_plus_no_ops.ail test_skills_and_ailang_tools_are_omitted_by_name: out of scope -- reachable only from tests [...] of test_skills_and_ailang_tools_are_omitted_by_name
+   @@ -18 +23 @@
+   -new_contract_policy: 3 in-scope new pure func declarations, all justified; 13 more out of scope, reachable only from a tests block
+   +new_contract_policy: 3 in-scope new pure func declarations, all justified; 18 more out of scope, reachable only from a tests block
+== profile_coverage: exit 0 -> 0  identical
+== profile_definition: exit 0 -> 0  2 line(s) differ
+   @@ -112 +112 @@
+   -  ✓ every manifest ABI pin in the tree is the declared one: 8.0 (34 pin(s) across 565 tracked .ail file(s))
+   +  ✓ every manifest ABI pin in the tree is the declared one: 8.0 (34 pin(s) across 566 tracked .ail file(s))
+== registry_gen_check: exit 0 -> 0  identical
+== registry_multiplicity: exit 0 -> 0  identical
+== test_coverage: exit 0 -> 0  14 line(s) differ
+   @@ -12,4 +12,4 @@
+   -  ✓ src/core/dst_driver_only.ail: 6/6 passed
+   -  ✓ src/core/dst_driver_plus_compose.ail: 9/9 passed
+   -  ✓ src/core/dst_driver_plus_herdr.ail: 3/3 passed
+   -  ✓ src/core/dst_driver_plus_no_ops.ail: 7/7 passed
+   +  ✓ src/core/dst_driver_only.ail: 7/7 passed
+   +  ✓ src/core/dst_driver_plus_compose.ail: 10/10 passed
+   +  ✓ src/core/dst_driver_plus_herdr.ail: 4/4 passed
+   +  ✓ src/core/dst_driver_plus_no_ops.ail: 8/8 passed
+   @@ -49,3 +49,3 @@
+   -src/core: 70 .ail files discovered, 47 carry tests, 522 tests, 517 passed, 5 skipped
+   -slowest against the <dur> per-file cap: src/core/dst_profile.ail <dur> = 10%, 38 CPU-s, 0.6 cores; src/core/dst_replay.ail <dur> = 8%, 31 CPU-s, 0.6 cores; src/core/journal.ail <dur> = 8%, 34 CPU-s, 0.7 cores
+   -test_coverage: every file carrying inline tests was run; 517 of 522 passed, 5 skipped against a record
+   +src/core: 70 .ail files discovered, 47 carry tests, 526 tests, 521 passed, 5 skipped
+   +slowest against the <dur> per-file cap: src/core/dst_profile.ail <dur> = 10%, 38 CPU-s, 0.6 cores; src/core/dst_replay.ail <dur> = 8%, 31 CPU-s, 0.6 cores; src/core/dst_invariants.ail <dur> = 8%, 30 CPU-s, 0.7 cores
+   +test_coverage: every file carrying inline tests was run; 521 of 526 passed, 5 skipped against a record
+== verify_classify_check: exit 0 -> 0  identical
+== verify_core: exit 0 -> 0  identical
+== verify_skills_refusal: exit 0 -> 0  12 line(s) differ
+   @@ -8,0 +9 @@
+   +OK          D7: under the sandbox, the registration's config record says the sandbox was set
+   @@ -9,0 +11,3 @@
+   +OK          the symlinked skill is in the index and the enum
+   +OK started  a SKILL.md that is a relative symlink to a regular file inside the workdir -- exit 0, no error event, one Skill schema
+   +OK          that skill is in the index and the enum
+   @@ -19,0 +24,2 @@
+   +OK refused  V3 SKILL.md is a named pipe -- exit 2, one error event naming V3: .motoko/skills/pipe/SKILL.md
+   +OK          the reason says it is not a regular file
+   @@ -41,0 +48,4 @@
+   +OK          A9: sandboxed, a valid skill loads: the directory line, then the file as it is on disk
+   +OK          A9: sandboxed, a name not in the index is an error that lists the nine names
+   +OK          D7: unsandboxed, the registration's config record says the sandbox was not set
+   +OK          D7: unsandboxed with an absolute workdir that is not the process's directory, a Skill call returns D7's error and loads nothing
+   @@ -43 +53 @@
+   -verify_skills_refusal: 41 passed, 0 failed
+   +verify_skills_refusal: 51 passed, 0 failed
+== verify_skills_tests: no log on the first side; second exit=0

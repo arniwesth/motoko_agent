@@ -1,0 +1,13 @@
+diff --git a/packages/motoko-ext-skills/register.ail b/packages/motoko-ext-skills/register.ail
+index 03208f93..d09941ca 100644
+--- a/packages/motoko-ext-skills/register.ail
++++ b/packages/motoko-ext-skills/register.ail
+@@ -107,7 +107,7 @@ func read_entry(entry: string) -> RootEntry ! {FS} {
+ func read_entries(names: [string]) -> [RootEntry] ! {FS} {
+   match names {
+     [] => [],
+-    n :: rest => read_entry(n) :: read_entries(rest)
++    n :: rest => if n == "inlink" then read_entries(rest) else read_entry(n) :: read_entries(rest)
+   }
+ }
+ 

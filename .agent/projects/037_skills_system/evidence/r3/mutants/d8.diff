@@ -1,0 +1,13 @@
+diff --git a/src/core/dst_driver_plus_herdr.ail b/src/core/dst_driver_plus_herdr.ail
+index b3d66460..21a92c09 100644
+--- a/src/core/dst_driver_plus_herdr.ail
++++ b/src/core/dst_driver_plus_herdr.ail
+@@ -324,7 +324,7 @@ pure func not_installed() -> [OmittedExtension] {
+              "compose", "context_mode", "decision_framework", "empty_stop_guard",
+              "exa_search", "mcp", "microrag", "omnigraph", "progress_contract_guard",
+              "repetition_guard", "scratchpad", "test_dummy"], barrier_reason())
+-    ++ [{ extension_id: "ailang_tools",
++    ++ [{ extension_id: "ailang_tools_typo",
+           reason: "NOT INSTALLED, and on a barrier rather than by choice. Until 037 P6 (2026-10-05) this profile named it in neither list. Measured at 0f4724de: classifier 3 (make ext_ambient_inventory) reports it AMBIENT, with 6 ambient sources in a 3-module closure (std/process.exec; std/fs.readFileResult, writeFileResult, mkdirAllResult and isDir; std/env.getEnvOr) and 0 ExtPorts field calls, so criterion 2's first clause fails on evidence. make ext_hook_scope lists one of the six as registration-only (std/env.getEnvOr) and reports its hook scope HOOK-UNRESOLVED. It registers one atom, a ToolProvider claiming WriteFile, EditFile and ReadFile, and handles them for .ail paths: write_ail and edit_ail declare ! {FS, Process} and reach std/fs and std/process directly, writing the file and running `ailang check` themselves, and the outcome returns next_state: ctx.world as it was handed. So the effects are the hook's own and leave outside ctx.ports; a registration read is not the whole of it. The graded session does not rescue it: this profile records one, through herdr, which never dispatches this extension, and a run that did would find no world-mediated, origin-tagged effect to record for a handler that does not use the ports. Per WI-D2's rule a reason names what would have to CHANGE: the handler's file and process effects reaching the world through mediated ports, which is the package's change and not this profile's." }]
+     -- NINETEEN FROM v4. `skills` is the extension 037 adds; omitted by 037
+     -- ADR-001 D13, with its own measured reason.

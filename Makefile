@@ -2646,6 +2646,52 @@ verify_strict_extensions:
 	if [ $$rc -eq 2 ] && echo "$$out" | grep -q 'extensions.strict.*registers no capability atom'; then echo "OK strict: an empty registration refused to start (exit 2)"; \
 	else echo "FAIL strict/empty: rc=$$rc"; echo "$$out" | tail -3; echo "verify_strict_extensions: a strict profile started without an extension that registered nothing"; exit 1; fi
 
+# 037 ADR-001 A3, A1 and A2: a broken skill tree refuses startup. One fixture
+# workdir per rule of D1 (R1 three ways, V1-V8 with V4's four cases, one with
+# two violations), each run with AILANG_FS_SANDBOX set to it: the process must
+# exit 2 with exactly one JSONL `error` event naming the rule and the path. The
+# controls must start with one `Skill` schema: no root, an empty root, and a
+# valid set with every scalar style. Then the digests: a change to the index
+# moves ext_config_digest alone and a resume continues; a body edit moves
+# nothing. Last, D7 and A9 through the real host and the live port
+# (scripts/verify_skills_call.ail): the config record's sandbox flag, a `Skill`
+# call that loads, one that names no skill, and one from an unsandboxed start
+# whose workdir is elsewhere. Every start runs under a timeout, so a startup
+# that hangs is a failed check. The script builds its fixtures and says what
+# each case checks.
+#
+# NOT a prerequisite of check_core, which every session's local baseline runs:
+# `skills` is in no profile check_core boots (ADR D11), and this takes about
+# 2 min. CI runs it on every pull request as its own step, with
+# verify_skills_tests (.github/workflows/verify-extensions.yml, job `core`).
+.PHONY: verify_skills_refusal
+verify_skills_refusal:
+	@bash scripts/verify_skills_refusal.sh
+
+# The skills package's inline tests (037 ADR-001): the rules of D1, D3, D8, D9
+# and D10 as pure functions in skills.ail, A6b in a6b_test.ail, and the config,
+# the catalogue and the handler over a stub port in register.ail. `test_coverage`
+# walks src/core only, so this target is what runs them.
+#
+# Each file's COUNT line is read, never only an exit status (WI-A17's rule:
+# `ailang test` exits 0 when every test was skipped). A file passes when it ran
+# at least one test and none failed or was skipped; a file that does not
+# compile prints no count line and fails here.
+.PHONY: verify_skills_tests
+verify_skills_tests:
+	@fail=0; for f in skills.ail a6b_test.ail register.ail; do \
+		out=$$(ailang test --no-color packages/motoko-ext-skills/$$f 2>&1 < /dev/null); \
+		line=$$(printf '%s\n' "$$out" | grep -E '^[0-9]+ tests:' | tail -1); \
+		if printf '%s\n' "$$line" | grep -qE '^[1-9][0-9]* tests: [0-9]+ passed, 0 failed, 0 skipped'; then \
+			echo "  ✓ packages/motoko-ext-skills/$$f: $$line"; \
+		else \
+			echo "  ✗ packages/motoko-ext-skills/$$f: $${line:-no count line}"; \
+			printf '%s\n' "$$out" | grep -vE '^ *✓ |^ +at |^$$' | cut -c1-400 | tail -30; \
+			fail=1; \
+		fi; \
+	done; \
+	[ $$fail -eq 0 ] || { echo "verify_skills_tests: the skills package's inline tests are not all passing"; exit 1; }
+
 verify_native_path_guard:
 	@out=$$(AILANG_RELAX_MODULES=1 ailang run --caps IO,FS,Process,Env,Clock --entry main \
 		scripts/verify_native_path_guard.ail 2>/dev/null); rc=$$?; \
@@ -2811,6 +2857,20 @@ verify_repetition_guard:
 	echo "$$out" | grep -E '^(OK|FAIL)'; \
 	[ $$rc -eq 0 ] || (echo "verify_repetition_guard: the no-progress loop guard regressed" && exit 1)
 
+# The boot runs as a session's does (037 ADR-001 D1), in two respects.
+#
+# UNDER THE SANDBOX, AILANG_FS_SANDBOX set to the repository root. The TUI pins
+# the runtime's sandbox to the workdir, and std/fs answers differently with it:
+# a relative path resolves against the sandbox root, and a symlink that leaves
+# it reads as neither file nor directory. An extension that scans a directory
+# at registration (skills: .motoko/skills) could otherwise pass here and be
+# refused in a session, or the reverse.
+#
+# THE REJECTION IS PRINTED. A registration the host refuses is one JSONL
+# `error` event on stdout and exit 2 (registry_generated.ail, `parse_tokens`).
+# The filter used to keep only lines matching `Error|UNKNOWN`, which that
+# lower-case event does not, so a refused extension printed its name and no
+# reason.
 verify_extensions:
 	@profile=$${MOTOKO_CONFIG:-$(PROFILE)}; \
 	cfg=".motoko/config/$$profile/config.json"; \
@@ -2827,6 +2887,7 @@ verify_extensions:
 	for ext in $$exts; do \
 		out=$$(MOTOKO_PROFILE_DIR="$$PWD/.motoko/config/$$profile" \
 		      AILANG_RELAX_MODULES=1 \
+		      AILANG_FS_SANDBOX="$$PWD" \
 		      ailang run --caps Net,AI,SharedMem,IO,Env,Clock,FS,Process,Stream \
 		        --ai-stub --entry main \
 		        scripts/verify_extension_boot.ail -- "$$ext" 2>&1); \
@@ -2836,7 +2897,7 @@ verify_extensions:
 			ok=$$((ok + 1)); \
 		else \
 			echo "  ✗ $$ext"; \
-			echo "$$out" | sed -E 's/\x1b\[[0-9;]*[a-zA-Z]//g' | grep -E "Error|UNKNOWN" | head -3 | sed 's/^/      /'; \
+			echo "$$out" | sed -E 's/\x1b\[[0-9;]*[a-zA-Z]//g' | grep -E 'Error|UNKNOWN|"type":"error"' | head -3 | sed 's/^/      /'; \
 			fail=$$((fail + 1)); \
 			failed_names="$$failed_names $$ext"; \
 		fi; \

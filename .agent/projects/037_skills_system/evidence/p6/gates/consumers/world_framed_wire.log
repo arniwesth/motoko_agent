@@ -1,0 +1,41 @@
+./scripts/dst/run_world_framed_wire.sh --selftest
+=== world_framed_wire selftest (every red class on a synthetic wire) ===
+  ✓ selftest shared_session_two_runs: green
+  ✓ selftest nonzero_ordinal0: green
+  ✓ selftest repeated_ordinal: red — frame a: ordinal 2 repeated (stale-world re-request)
+  ✓ selftest backward_ordinal: red — frame a: ordinal 2 after 3 is backward (stale-world re-request)
+  ✓ selftest gap: red — frame a: ordinal 3 after 1 is a gap of 1 (advanced but not witnessed on this path, or an unhelped leaf)
+  ✓ selftest gap_at_ordinal0: red — frame a: ordinal 5 after 3 is a gap of 1 (advanced but not witnessed on this path, or an unhelped leaf)
+  ✓ selftest final_mismatch: red — frame a: last witnessed ordinal 2 != final 3 (a drop after the last witness)
+  ✓ selftest request_outside_frame: red — line 1: world_request ordinal 1 outside any frame
+  ✓ selftest request_after_frame: red — line 4: world_request ordinal 2 outside any frame
+  ✓ selftest missing_end_at_eof: red — frame a: no END marker (the script exited inside the frame, or END was truncated away)
+  ✓ selftest missing_end_midstream: red — frame a: BEGIN b arrived before its END (missing END or duplicated BEGIN)
+  ✓ selftest duplicated_begin: red — frame a: label framed twice (duplicated BEGIN)
+  ✓ selftest duplicated_end: red — line 4: END a with no open frame (duplicated END or missing BEGIN)
+  ✓ selftest truncated_end: red — line 3: truncated or malformed END marker: 'WORLD_RUN_END a'
+  ✓ selftest truncated_begin: red — line 1: truncated or malformed BEGIN marker: 'WORLD_RUN_BEGIN a'
+  ✓ selftest label_mismatch: red — frame a: closed by END b (marker label mismatch)
+  ✓ selftest refused_end: red — frame a: the script REFUSED END (pending=1) — the run returned with witnesses pending
+  ✓ selftest empty_frame: red — frame a: no world_request inside it — every traced run witnesses its finalize clock, so an empty frame is vacuous
+  ✓ selftest frame_count: red — expected 2 frame(s), saw 1 BEGIN marker(s)
+  ✓ selftest frames_line_missing: red — WORLD_RUN_FRAMES is none, expected 1 — the script did not finish framing its runs
+  ✓ selftest empty_wire: red — no world_request lines at all — every row above is vacuous
+world_framed_wire selftest PASS
+./scripts/dst/run_world_framed_wire.sh
+=== world_framed_wire (PLAN-001 P2 Part 3: per-run frames on the stdout wire) ===
+  ✓ frame native: ordinal0=0 requests=22 strict +1 to final=22 (session session_0)
+  ✓ frame denied: ordinal0=0 requests=19 strict +1 to final=19 (session session_0)
+  ✓ frame pending: ordinal0=0 requests=20 strict +1 to final=20 (session session_0)
+  ✓ frame errored: ordinal0=0 requests=18 strict +1 to final=18 (session session_0)
+  ✓ frame capped: ordinal0=0 requests=17 strict +1 to final=17 (session session_0)
+  ✓ frame dp7: ordinal0=0 requests=20 strict +1 to final=20 (session session_0)
+  ✓ frame handled: ordinal0=0 requests=19 strict +1 to final=19 (session session_0)
+  ✓ frame delegated: ordinal0=0 requests=19 strict +1 to final=19 (session session_0)
+  ✓ frame parked: ordinal0=0 requests=21 strict +1 to final=21 (session lp)
+  ✓ expected frame count: 9 BEGIN marker(s)
+  ✓ exactly one END per BEGIN (9)
+  ✓ the script reached its WORLD_RUN_FRAMES 9 line
+  ✓ 175 world_request line(s) checked across 2 session_id(s) (equal ordinals in different frames are valid)
+world_framed_wire gate PASS
+exit=0

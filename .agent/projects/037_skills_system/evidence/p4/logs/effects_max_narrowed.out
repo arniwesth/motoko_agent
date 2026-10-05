@@ -1,0 +1,35 @@
+== [effects] max narrowed to ["Env", "FS"] in the scratch clone's packages/motoko-ext-skills/ailang.toml
+-- (package dir) AILANG_RELAX_MODULES=1 ailang check register.ail
+→ Type checking register.ail...
+→ Effect checking...
+  Running under --relax-modules; mismatch ignored. For strict checking, omit --relax-modules flag.
+Error: in function skills_handle in register: effect ceiling violation in package sunholo/motoko_ext_skills: effects [IO Process AI Net SharedMem Clock Stream Rand Trace] not in max [Env FS]
+Add missing effects to [effects].max in ailang.toml
+exit 1
+-- (package dir) ailang test --no-color register.ail
+  ✓ Passed: 0
+  ✗ Failed: 18
+
+Seed:
+exit 1
+-- (package dir) ailang lock
+  → sunholo/motoko_ext_abi@8.0 (path: ../motoko-ext-abi)
+  → sunholo/motoko_ext_compaction_ai@0.3.0 (path: ../motoko-ext-compaction-ai)
+  → sunholo/motoko_ext_compaction_structural@1.1.0 (path: ../motoko-ext-compaction-structural)
+exit 0
+-- (root) ailang lock
+Resolving dependencies in /workspaces/motoko_agent-skills/.motoko/herdr-delegates/p4/wired
+  → sunholo/motoko_ext_skills@0.1.0 (path: packages/motoko-ext-skills)
+exit 0
+-- (root) AILANG_RELAX_MODULES=1 ailang check src/core/ext/registry_generated.ail
+→ Type checking src/core/ext/registry_generated.ail...
+→ Effect checking...
+
+✓ No errors found!
+exit 0
+== and with skills_handle (and the tests that call it) declared ! {FS}, max still ["Env", "FS"]
+-- (package dir) AILANG_RELAX_MODULES=1 ailang check register.ail
+→ Type checking register.ail...
+→ Effect checking...
+Error: type error in register (decl 33): type unification failed at [function application at register.ail:350:19]: failed to unify parameter 1: failed to unify effect rows: incompatible closed rows: r1 has extra labels [AI Clock Env IO Net Process Rand SharedMem Stream Trace], r2 has extra labels []
+exit 1

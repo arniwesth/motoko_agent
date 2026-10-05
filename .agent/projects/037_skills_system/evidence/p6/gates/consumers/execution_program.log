@@ -1,0 +1,33 @@
+→ Type checking...
+→ Effect checking...
+✓ Running scripts/dst/execution_program_dst.ail
+execution_program_dst  (execution-program/4)
+  ✓ NEGATIVE CONTROL: a valid 10-interaction program over all seven D2 classes validates clean
+  ✓ the fixture's manifest is the real one and validates against the definition it realizes
+  ✓ a repeated production call id is REPRESENTABLE, not a decode error (D2): #1 and #8 carry an IDENTICAL tool identity body at different ordinals and the program still validates
+  mutation coverage — one valid program, one change each:
+    ✓ program-schema-field-missing ← generator_id blanked
+    ✓ program-schema-undecodable ← schema_version from an older, undecodable schema
+    ✓ program-initial-value-missing ← initial world's messages_and_policy blanked
+    ✓ program-negative-time ← an interaction advances the clock by -1
+    ✓ program-negative-time ← the clock epoch is negative
+    ✓ program-duplicate-ordinal ← two interactions carry ordinal 1
+    ✓ program-ordinal-not-dense ← ordinal 3 replaced by 9, leaving a gap
+    ✓ program-impossible-reference ← outcome names a fault class the catalogue does not define
+    ✓ program-impossible-reference ← extension effect names a class id outside the catalogue
+    ✓ program-identity-component-missing ← tool interaction has a blank call_id
+    ✓ program-deadline-disagrees-with-class ← provider interaction records a deadline
+    ✓ program-deadline-disagrees-with-class ← tool interaction records no deadline
+    ✓ program-stream-on-non-provider ← tool interaction carries stream chunks
+    ✓ program-chunk-offsets-not-monotone ← provider stream chunk offsets decrease
+    ✓ program-outcome-status-disagrees-with-fault ← fault outcome with a blank fault_class_id
+    ✓ program-outcome-status-disagrees-with-fault ← ok outcome naming a fault class
+    ✓ program-outcome-status-disagrees-with-fault ← provider interaction with a 'missing' status
+    ✓ program-outcome-status-disagrees-with-fault ← file_write interaction with a 'missing' status
+    ✓ program-outcome-status-disagrees-with-fault ← dir_make interaction with a 'missing' status
+    ✓ program-empty ← no interactions at all
+  ✓ the base program is within every declared bound
+    ✓ generator-bound-exceeded ← max_interactions lowered to 3 against 10 interactions
+execution_program_dst PASS
+  ✓ src/core/dst_program.ail
+exit=0

@@ -1,0 +1,13 @@
+diff --git a/packages/motoko-ext-skills/register.ail b/packages/motoko-ext-skills/register.ail
+index 03208f93..3db849da 100644
+--- a/packages/motoko-ext-skills/register.ail
++++ b/packages/motoko-ext-skills/register.ail
+@@ -269,7 +269,7 @@ pure func tool_error(call_id: string, message: string) -> ToolResultEnvelope {
+ pure func unknown_skill_error(wanted: string, names: [string]) -> string {
+   match names {
+     [] => concat(["Unknown skill '", wanted, "'. No skills are installed in this workspace (", skills_root(), " holds none)."]),
+-    _ => concat(["Unknown skill '", wanted, "'. Valid names: ", join(", ", names), "."])
++    _ => concat(["Unknown skill '", wanted, "'."])
+   }
+ }
+ 

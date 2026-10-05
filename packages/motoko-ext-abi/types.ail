@@ -1997,6 +1997,29 @@ export type Capability
 -- builds for the extension, and hashes as its config digest. `caps` is a
 -- literal list of constructor applications or a delegated call to a named
 -- function that, recursively, is one.
+--
+-- ONE TOP-LEVEL KEY OF `config` IS RESERVED: `registration_refusal`
+-- (ADR-001 (031) Amendment 5; 037 ADR-001 D2). This record has no error
+-- channel and gains no field in 8.x, so an extension that finds at
+-- registration that it must not be started says so in `config`: it sets the
+-- key to a non-empty string naming every reason, and still returns its
+-- ordinary `caps`. The host reads that one key before it looks at `caps`:
+--
+--   absent, or the empty string   no refusal; the registration proceeds
+--   a non-empty string            the host refuses to start, and that string
+--                                 is the message
+--   any other JSON type           the host refuses, as a malformed refusal
+--
+-- An extension uses the key for nothing else. NOTHING IN THIS PACKAGE CHANGES
+-- FOR IT -- no type, no function, no version: the key is a string each side
+-- writes. The host's copy and its reader are in
+-- `src/core/ext/registry_normalize.ail` (`registration_refusal_key`,
+-- `read_registration_refusal`), and a row in
+-- `scripts/dst/registry_multiplicity_dst.ail` asserts the extension's spelling
+-- and the host's are one string. The check is the HOST's, and a package
+-- version says nothing about the host: one without the check ignores the key
+-- and starts, so an extension that sets it must also be safe when started
+-- anyway.
 export type ExtRegistration = { config: Json, caps: [Capability] }
 
 -- The registry entry: D5's owner-bearing shape. `id` is the host's install

@@ -1,0 +1,19 @@
+# 037 P5: P4's WIRING.diff against the wiring commit 9884fe1c, changed lines only
+## P4 (evidence/p4/gates/wired/WIRING.diff), ailang.toml and registry_generated.ail
++"sunholo/motoko_ext_skills" = { path = "packages/motoko-ext-skills" }
++  "sunholo/motoko_ext_skills@0.1.0",
++import pkg/sunholo/motoko_ext_skills/register (register_with_config as register_skills)
++  else if name == "skills" then Some(register_skills(cfg))
+## this branch: git diff 32c02cd8 9884fe1c -- ailang.toml src/core/ext/registry_generated.ail
++"sunholo/motoko_ext_skills" = { path = "packages/motoko-ext-skills" }
++  "sunholo/motoko_ext_skills@0.1.0",
++import pkg/sunholo/motoko_ext_skills/register (register_with_config as register_skills)
++  else if name == "skills" then Some(register_skills(cfg))
+## the root lock's new entry: content_hash and interface_hash
+P4:   sha256:0cc7459f3afeca0a89a9a222990dde9f80b5dbd6b98c420790493e5738762bae  sha256:1e7989d89fc9686a7bef7e52e622bdc445cd34ce1b42aa1d34d88054d872e0ac
+here: sha256:0cc7459f3afeca0a89a9a222990dde9f80b5dbd6b98c420790493e5738762bae sha256:1e7989d89fc9686a7bef7e52e622bdc445cd34ce1b42aa1d34d88054d872e0ac
+## git diff --stat 32c02cd8 9884fe1c
+ ailang.lock                         | 32 +++++++++++++++++++++++++++++---
+ ailang.toml                         |  2 ++
+ src/core/ext/registry_generated.ail |  2 ++
+ 3 files changed, 33 insertions(+), 3 deletions(-)

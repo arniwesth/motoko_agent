@@ -1,0 +1,13 @@
+diff --git a/packages/motoko-ext-skills/register.ail b/packages/motoko-ext-skills/register.ail
+index 03208f93..4faa5003 100644
+--- a/packages/motoko-ext-skills/register.ail
++++ b/packages/motoko-ext-skills/register.ail
+@@ -93,7 +93,7 @@ func read_entry(entry: string) -> RootEntry ! {FS} {
+   let path = skill_dir(entry);
+   if isDir(path) then
+     (if not has_skill_md(listDir(path)) then DirWithoutSkillMd(entry)
+-    else if not isFile(skill_md_path(entry)) then DirUnreadableSkillMd(entry, "it is not a regular file, or is a symlink that does not lead to one inside the working directory")
++    else if not isFile(skill_md_path(entry)) || entry == "mdlink" then DirUnreadableSkillMd(entry, "it is not a regular file, or is a symlink that does not lead to one inside the working directory")
+     else match readFileResult(skill_md_path(entry)) {
+       Ok(text) => DirWithSkillMd(entry, text),
+       Err(why) => DirUnreadableSkillMd(entry, why)

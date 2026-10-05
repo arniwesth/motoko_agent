@@ -1,0 +1,30 @@
+-- 037 P3 evidence driver, PACKAGE side: prints what the skills package's
+-- `envelope_message` builds for the same envelopes as the core-side driver.
+-- Run from packages/motoko-ext-skills; not part of the package.
+module sunholo/motoko_ext_skills/zz_envelope_parity_pkg
+
+import std/io (println)
+import std/crypto (sha256Hex)
+import std/json (jo, kv, js)
+import std/string (concat, intToStr, length, repeat)
+import pkg/sunholo/motoko_ext_abi/types (ToolResultEnvelope)
+import pkg/sunholo/motoko_ext_skills/skills (skill_result_envelope, envelope_message)
+
+func small() -> ToolResultEnvelope {
+  skill_result_envelope("call_0123456789abcdef0123456789abcdef", "observer", "---\nname: observer\ndescription: \"Say \\\"hi\\\"\"\n---\n# Body <&> \u{00E9}\n")
+}
+
+func tricky_text() -> string {
+  concat(["---\nname: a\ndescription: d\n---\n", repeat("tab\there \"quoted\" back\\slash <tag> & amp \u{00E9}\u{2028}\u{0001}\r\n", 800)])
+}
+
+export func main() -> () ! {IO} {
+  let a = envelope_message(small());
+  let b = envelope_message({ small() | metadata: jo([kv("cells", js("c")), kv("kept", js("k")), kv("images", js("i")), kv("jsonOutputs", js("j"))]) });
+  let c = envelope_message(skill_result_envelope("call_00000000000000000000000000000000", "a", tricky_text()));
+  let d = envelope_message(skill_result_envelope("call_0123456789abcdef0123456789abcdef", "workdir-stamp", concat(["---\nname: workdir-stamp\ndescription: x\n---\n", repeat("0123456789", 6100)])));
+  println(concat(["A ", a]));
+  println(concat(["B ", b]));
+  println(concat(["C chars=", intToStr(length(c)), " sha256=", sha256Hex(c)]));
+  println(concat(["D chars=", intToStr(length(d)), " sha256=", sha256Hex(d)]))
+}

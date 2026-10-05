@@ -1,0 +1,90 @@
+→ Type checking...
+→ Effect checking...
+✓ Running scripts/dst/program_persistence_dst.ail
+program_persistence_dst  (D8 persistence safety)
+  ✓ the synthetic environment map produces no finding (12 driver keys)
+  ✓ the synthetic interaction log produces no finding (9 interactions)
+    ✓ redacting a clean environment map is the identity
+    ✓ redacting a clean interaction log is the identity
+  ✓ no two fixture quantities are equal (interactions=9, env entries=12, kinds=5, chunks=3)
+  ✓ the fixture's environment surface IS driver_env_keys() (12 keys, re-derived from the driver's source by make discovery)
+    ✓ every one of those keys is NAME-clean, so the name axis reaches none of them
+  ✓ a live credential in the VALUE is caught under all 12 name-clean driver keys
+  mutation rows — one credential shape at a time, under OPENAI_BASE_URL
+    ✓ secret-provider-token-literal ← a provider token in the value
+    ✓ secret-url-userinfo ← a base URL carrying userinfo
+    ✓ secret-private-key-block ← a PEM private key
+    ✓ secret-json-web-token ← a JSON web token
+    ✓ secret-opaque-high-entropy ← an opaque high-entropy token
+  ✓ all 6 detector rules are reached by a fixture in this suite
+  interaction artifact sites
+    ✓ a credential in an outcome payload is found at the payload site
+    ✓ a credential in a stream chunk is found at the chunk site
+    ✓ a credential in a request projection is found at the projection site
+    ✓ a credential in an identity component is found at the identity site
+  the reject-or-redact tension
+    ✓ redacting an environment VALUE is reported: it is a replay input, so the replay may diverge (D8 finding, carried in ReplayImpact)
+    ✓ redacting a request PROJECTION is not reported: D2 demotes it, so regression replay records it and strict replay fails closed — neither is silent
+    ✓ the credential is absent from the redacted environment map
+program_persistence_dst  (D8 encoding, compatibility policy and store)
+  ✓ the specimen is a structurally valid program (stage 1's validator, 11 known class ids)
+    ✓ all 11 identity classes appear, checked against all_interaction_kinds()
+    ✓ all three outcome statuses appear (ok, fault, missing)
+    ✓ chunks present and absent, deadline present and absent, fault id present and blank, and D2's one legitimate blank call id
+    ✓ the escaping surface is present: a tab, a newline and a backslash inside frozen values
+    ✓ every manifest list is non-empty and the fault class is one required_class_ids() defines
+  ✓ the specimen round-trips field by field (36 header scalars, 12 interactions × 9 fields)
+    ✓ no two of the specimen's scalar fields hold the same value, so a codec that swapped two of them would be visible
+  ✓ the same program encodes byte-identically twice (2496 bytes, 88 lines)
+    ✓ a one-field change moves exactly 2 of 88 lines — the field's own line and the digest (header=2, env value=2, interaction #7 payload=2)
+  ✓ the frozen v1 specimen decodes to the specimen, field by field (1956 bytes read from the tree)
+    ⓘ the current encoder produces different bytes from the frozen artifact, and the frozen artifact still decodes correctly — that is a backward-compatible encoding change and is permitted
+  ✓ the frozen v2 specimen decodes to the program its own bytes hold, field by field (2409 bytes read from the tree)
+    ✓ its five-field bounds line decodes to chunk_draw_hi = 3 — v2's own semantics, not int_at's 0, which would be a program that never draws chunks
+    ⓘ the current encoder produces different bytes from the frozen v2 artifact, and the frozen artifact still decodes correctly — that is a backward-compatible encoding change and is permitted. The strict byte-identity assertion lives on the v3 row, at the version this build writes
+    ✓ the only round-tripped-but-not-frozen class is expect_wake (added after this freeze at execution-program/4; the v4 row freezes it)
+  ✓ the frozen v3 specimen decodes to the program its own bytes hold, field by field (2412 bytes read from the tree)
+    ⓘ the current encoder produces different bytes from the frozen v3 artifact, and the frozen artifact still decodes correctly — that is a backward-compatible encoding change and is permitted. The strict byte-identity assertion lives on the v4 row, at the version this build writes
+    ✓ the only round-tripped-but-not-frozen class is expect_wake (added after this freeze at execution-program/4; the v4 row freezes it)
+  ✓ the frozen v4 specimen decodes to the specimen, field by field (2496 bytes read from the tree)
+    ✓ the current encoder still produces those exact bytes
+    ✓ 0 identity class(es) round-tripped-but-not-frozen (all 11 classes are in frozen bytes at the version this build writes)
+  ✓ an artifact at an unknown schema version fails closed by name, pointing at the pinned runner
+      [artifact-unknown-schema-version] this build writes 'execution-program/4' and can decode 4 schema version(s); it cannot decode 'execution-program/0' and will NOT reinterpret it. D8 forbids silently reinterpreting an old program: replay this artifact with the pinned runner for schema 'execution-program/0', or add a decode path for it to decodable_schema_versions() and to this module. Regenerating the artifact is not a migration — it destroys the evidence the artifact exists to carry
+  decode mutation rows — one corruption at a time
+    ✓ artifact-digest-mismatch ← one byte of the body edited, digest untouched
+    ✓ artifact-not-an-execution-program ← the trailing newline removed (a truncated file)
+    ✓ artifact-not-an-execution-program ← the digest line replaced by something else
+    ✓ artifact-unknown-schema-version ← a schema version this build does not know
+    ✓ artifact-unknown-file-kind ← an initial-world file entry whose kind this build does not define
+    ✓ artifact-directory-carries-content ← a directory entry carrying a file body
+    ✓ artifact-unknown-tag ← a line whose tag this schema does not define
+    ✓ artifact-missing-section ← a required line deleted
+    ✓ artifact-repeated-section ← a required line written twice
+    ✓ artifact-wrong-arity ← a line truncated to fewer fields than its tag declares
+    ✓ artifact-not-an-integer ← an integer field holding text
+    ✓ artifact-malformed-escape ← an escape this schema never emits
+    ✓ artifact-unknown-interaction-kind ← an eighth identity class
+    ✓ artifact-unknown-outcome-status ← a fourth outcome status
+    ✓ artifact-incomplete-interaction ← an interaction whose payload line is deleted
+  the ordering obligation, read off the file system
+  ✓ persisting a credential-bearing program is refused by name
+    ✓ NO FILE EXISTS at .ailang/dst-artifacts/gen.specimen/gv-2/seed-99.artifact — the refusal happened before any bytes were written, which is the half a redact-after-write arrangement fails
+    ✓ encode_artifact itself returns a refusal rather than a string, so the ordering is structural rather than asserted
+  the store
+  ✓ the store writes and reads back the specimen field by field (.ailang/dst-artifacts/gen.specimen/gv-2/seed-23.artifact)
+    ✓ writing the same program twice is idempotent
+    ✓ a DIFFERENT program at the same (generator_id, generator_version, seed) is refused by name and the existing artifact survives
+      [artifact-path-collision] .ailang/dst-artifacts/gen.specimen/gv-2/seed-23.artifact already holds a DIFFERENT artifact (existing identity ef3c8016ddf4eb2d248d1ec9eef6f81d1e0035dd20a147a425903d93ef50c545, incoming 3f955b1d8434f0c311476fe3e30734c4505a639c231fe69f03e0f181a980d25d) and was not overwritten. D8 names a preserved failure by (generator_id, generator_version, seed) and that triple is not unique — it omits the execution manifest the program is conditioned on, and cluster 11's site 22 measured that a version bump is currently only a seed offset. Two different programs can legitimately want this path; the store refuses rather than losing one
+  regression replay over the frozen program
+  ✓ the frozen program replays against itself with no fatal and no recorded difference
+    ✓ a re-worded request projection in a newer build is RECORDED and the replay continues (D2's demotion set)
+    ✓ an unsafe causal mismatch still stops regression replay
+program_persistence_dst PASS
+  ✓ the program codec names all 16 ExecutionManifest fields (re-counted from dst_profile's own declaration)
+  ✓ all five frozen specimens are present (67 lines of v1 bytes and 83 of v2 and 83 of v3, all three now predating this build's encoder, plus 87 lines of v4 bytes carrying the byte-identity assertion at the version this build writes)
+  ✓ nothing in the tree writes to scripts/dst/fixtures — the specimen has no regeneration target
+  ✓ src/core/dst_persistence.ail (the escape, the tag tables, and the path-vs-identity split site 22 forces)
+  ✓ src/core/dst_secrets.ail stays in the std-only tier (3 imports, all std/* or dst_interaction)
+  ✓ src/core/dst_secrets.ail (the detectors, and the false-positive controls that keep honest artifacts persistable)
+exit=0

@@ -1,0 +1,417 @@
+ailang: AILANG v0.47.2
+== controls: accepted
+CASE c01-no-motoko (sandbox)
+CONFIG {"root":".motoko/skills","skills":[],"sandbox_set":true}
+REFUSAL <none>
+CAPS 2
+CAP DescribeTools: one schema, name=Skill description_chars=144
+DESCRIPTION Load a skill by name. No skills are installed in this workspace (.motoko/skills holds none), so there is nothing to load. Do not call this tool.
+PARAMETERS {"type":"object","properties":{"name":{"type":"string","description":"The name of the skill to load."}},"required":["name"]}
+CAP ToolProvider names=[Skill]
+LISTDIR <root is not a directory>
+EXIT 0
+
+CASE c02-no-root (sandbox)
+CONFIG {"root":".motoko/skills","skills":[],"sandbox_set":true}
+REFUSAL <none>
+CAPS 2
+CAP DescribeTools: one schema, name=Skill description_chars=144
+DESCRIPTION Load a skill by name. No skills are installed in this workspace (.motoko/skills holds none), so there is nothing to load. Do not call this tool.
+PARAMETERS {"type":"object","properties":{"name":{"type":"string","description":"The name of the skill to load."}},"required":["name"]}
+CAP ToolProvider names=[Skill]
+LISTDIR <root is not a directory>
+EXIT 0
+
+CASE c03-empty-root (sandbox)
+CONFIG {"root":".motoko/skills","skills":[],"sandbox_set":true}
+REFUSAL <none>
+CAPS 2
+CAP DescribeTools: one schema, name=Skill description_chars=144
+DESCRIPTION Load a skill by name. No skills are installed in this workspace (.motoko/skills holds none), so there is nothing to load. Do not call this tool.
+PARAMETERS {"type":"object","properties":{"name":{"type":"string","description":"The name of the skill to load."}},"required":["name"]}
+CAP ToolProvider names=[Skill]
+LISTDIR  in_name_order=true
+CALL nope workdir=. limit=0 => tool=Skill exit_code=1 stdout_chars=0 stdout_line1=[] stderr=[Unknown skill 'nope'. No skills are installed in this workspace (.motoko/skills holds none).]
+EXIT 0
+
+CASE c04-valid-set (sandbox)
+CONFIG {"root":".motoko/skills","skills":[{"name":"alpha","description":"A plain scalar."},{"name":"b-literal","description":"first line\nsecond line\n"},{"name":"crlf-bom","description":"CRLF and a byte-order mark."},{"name":"multi-line","description":"line one line two"},{"name":"quoted","description":"Tab\there: yes # still text"},{"name":"single-q","description":"It's quoted: yes # still text"},{"name":"workdir-stamp","description":"Stamp the working directory with a marker file. Use when the user asks to stamp, mark or tag the working directory.\n"}],"sandbox_set":true}
+REFUSAL <none>
+CAPS 2
+CAP DescribeTools: one schema, name=Skill description_chars=861
+DESCRIPTION Load a skill by name. Skills are task-specific instructions. Before starting a task that matches a skill's description, call Skill with its name to load the instructions. Do not load a skill that does not match the task. The first line of the result is the skill's directory, relative to the working directory; file paths in the skill's text are relative to that directory. If an earlier Skill result shows as elided or cut short and you still need that skill, call Skill again with the same name.
+
+Available skills:
+- alpha: A plain scalar.
+- b-literal: first line second line
+- crlf-bom: CRLF and a byte-order mark.
+- multi-line: line one line two
+- quoted: Tab here: yes # still text
+- single-q: I ...[861 chars]
+PARAMETERS {"type":"object","properties":{"name":{"type":"string","description":"The name of the skill to load, exactly as listed.","enum":["alpha","b-literal","crlf-bom","multi-line","quoted","single-q","workdir-stamp"]}},"required":["name"]}
+CAP ToolProvider names=[Skill]
+LISTDIR .DS_Store,README.md,alpha,b-literal,crlf-bom,multi-line,quoted,single-q,workdir-stamp in_name_order=true
+CALL workdir-stamp workdir=. limit=0 => tool=Skill exit_code=0 stdout_chars=262 stdout_line1=[.motoko/skills/workdir-stamp] stderr=[]
+EXIT 0
+
+CASE c04-valid-set (sandbox)
+CONFIG {"root":".motoko/skills","skills":[{"name":"alpha","description":"A plain scalar."},{"name":"b-literal","description":"first line\nsecond line\n"},{"name":"crlf-bom","description":"CRLF and a byte-order mark."},{"name":"multi-line","description":"line one line two"},{"name":"quoted","description":"Tab\there: yes # still text"},{"name":"single-q","description":"It's quoted: yes # still text"},{"name":"workdir-stamp","description":"Stamp the working directory with a marker file. Use when the user asks to stamp, mark or tag the working directory.\n"}],"sandbox_set":true}
+REFUSAL <none>
+CAPS 2
+CAP DescribeTools: one schema, name=Skill description_chars=861
+DESCRIPTION Load a skill by name. Skills are task-specific instructions. Before starting a task that matches a skill's description, call Skill with its name to load the instructions. Do not load a skill that does not match the task. The first line of the result is the skill's directory, relative to the working directory; file paths in the skill's text are relative to that directory. If an earlier Skill result shows as elided or cut short and you still need that skill, call Skill again with the same name.
+
+Available skills:
+- alpha: A plain scalar.
+- b-literal: first line second line
+- crlf-bom: CRLF and a byte-order mark.
+- multi-line: line one line two
+- quoted: Tab here: yes # still text
+- single-q: I ...[861 chars]
+PARAMETERS {"type":"object","properties":{"name":{"type":"string","description":"The name of the skill to load, exactly as listed.","enum":["alpha","b-literal","crlf-bom","multi-line","quoted","single-q","workdir-stamp"]}},"required":["name"]}
+CAP ToolProvider names=[Skill]
+LISTDIR .DS_Store,README.md,alpha,b-literal,crlf-bom,multi-line,quoted,single-q,workdir-stamp in_name_order=true
+CALL crlf-bom workdir=<fixtures>/c04-valid-set limit=200000 => tool=Skill exit_code=0 stdout_chars=99 stdout_line1=[.motoko/skills/crlf-bom] stderr=[]
+EXIT 0
+
+CASE c04-valid-set (sandbox)
+CONFIG {"root":".motoko/skills","skills":[{"name":"alpha","description":"A plain scalar."},{"name":"b-literal","description":"first line\nsecond line\n"},{"name":"crlf-bom","description":"CRLF and a byte-order mark."},{"name":"multi-line","description":"line one line two"},{"name":"quoted","description":"Tab\there: yes # still text"},{"name":"single-q","description":"It's quoted: yes # still text"},{"name":"workdir-stamp","description":"Stamp the working directory with a marker file. Use when the user asks to stamp, mark or tag the working directory.\n"}],"sandbox_set":true}
+REFUSAL <none>
+CAPS 2
+CAP DescribeTools: one schema, name=Skill description_chars=861
+DESCRIPTION Load a skill by name. Skills are task-specific instructions. Before starting a task that matches a skill's description, call Skill with its name to load the instructions. Do not load a skill that does not match the task. The first line of the result is the skill's directory, relative to the working directory; file paths in the skill's text are relative to that directory. If an earlier Skill result shows as elided or cut short and you still need that skill, call Skill again with the same name.
+
+Available skills:
+- alpha: A plain scalar.
+- b-literal: first line second line
+- crlf-bom: CRLF and a byte-order mark.
+- multi-line: line one line two
+- quoted: Tab here: yes # still text
+- single-q: I ...[861 chars]
+PARAMETERS {"type":"object","properties":{"name":{"type":"string","description":"The name of the skill to load, exactly as listed.","enum":["alpha","b-literal","crlf-bom","multi-line","quoted","single-q","workdir-stamp"]}},"required":["name"]}
+CAP ToolProvider names=[Skill]
+LISTDIR .DS_Store,README.md,alpha,b-literal,crlf-bom,multi-line,quoted,single-q,workdir-stamp in_name_order=true
+CALL ../config/dogfood workdir=. limit=0 => tool=Skill exit_code=1 stdout_chars=0 stdout_line1=[] stderr=[Unknown skill '../config/dogfood'. Valid names: alpha, b-literal, crlf-bom, multi-line, quoted, single-q, workdir-stamp.]
+EXIT 0
+
+CASE c05-relative-symlink-inside (sandbox)
+CONFIG {"root":".motoko/skills","skills":[{"name":"good","description":"A valid skill beside the case."},{"name":"inlink","description":"Reached by a relative symlink inside the workdir."}],"sandbox_set":true}
+REFUSAL <none>
+CAPS 2
+CAP DescribeTools: one schema, name=Skill description_chars=615
+DESCRIPTION Load a skill by name. Skills are task-specific instructions. Before starting a task that matches a skill's description, call Skill with its name to load the instructions. Do not load a skill that does not match the task. The first line of the result is the skill's directory, relative to the working directory; file paths in the skill's text are relative to that directory. If an earlier Skill result shows as elided or cut short and you still need that skill, call Skill again with the same name.
+
+Available skills:
+- good: A valid skill beside the case.
+- inlink: Reached by a relative symlink inside the workdir.
+PARAMETERS {"type":"object","properties":{"name":{"type":"string","description":"The name of the skill to load, exactly as listed.","enum":["good","inlink"]}},"required":["name"]}
+CAP ToolProvider names=[Skill]
+LISTDIR good,inlink in_name_order=true
+CALL inlink workdir=. limit=0 => tool=Skill exit_code=0 stdout_chars=111 stdout_line1=[.motoko/skills/inlink] stderr=[]
+EXIT 0
+
+CASE c06-real-skills (sandbox)
+CONFIG {"root":".motoko/skills","skills":[{"name":"ailang-feedback","description":"Route AILANG-side bugs and limitations encountered while working on Motoko (the agent harness in this repo) to AILANG core via the right channel. Use when the user mentions an AILANG compiler error, parser bug, type/effect mismatch, stdlib gap, or missing language feature — anything where the symptom is in `ailang check` / `ailang run` output, not in Motoko's TUI or runtime logic. Also use when the user asks \"should this be filed upstream?\", \"is this an AILANG bug?\", or wants to send feedback / file an issue against `sunholo-data/ailang`."},{"name":"dagr-producer","description":"Emit and maintain a dagr run file  ...[2490 chars]
+REFUSAL <none>
+CAPS 2
+CAP DescribeTools: one schema, name=Skill description_chars=2819
+DESCRIPTION Load a skill by name. Skills are task-specific instructions. Before starting a task that matches a skill's description, call Skill with its name to load the instructions. Do not load a skill that does not match the task. The first line of the result is the skill's directory, relative to the working directory; file paths in the skill's text are relative to that directory. If an earlier Skill result shows as elided or cut short and you still need that skill, call Skill again with the same name.
+
+Available skills:
+- ailang-feedback: Route AILANG-side bugs and limitations encountered while working on Motoko (the agent harness in this repo) to AILANG core via the right channel. Use when the user  ...[2819 chars]
+PARAMETERS {"type":"object","properties":{"name":{"type":"string","description":"The name of the skill to load, exactly as listed.","enum":["ailang-feedback","dagr-producer","herdr","observer","pr-review-loop"]}},"required":["name"]}
+CAP ToolProvider names=[Skill]
+LISTDIR ailang-feedback,dagr-producer,herdr,observer,pr-review-loop in_name_order=true
+CALL dagr-producer workdir=. limit=0 => tool=Skill exit_code=0 stdout_chars=23107 stdout_line1=[.motoko/skills/dagr-producer] stderr=[]
+EXIT 0
+
+CASE c06-real-skills (sandbox)
+CONFIG {"root":".motoko/skills","skills":[{"name":"ailang-feedback","description":"Route AILANG-side bugs and limitations encountered while working on Motoko (the agent harness in this repo) to AILANG core via the right channel. Use when the user mentions an AILANG compiler error, parser bug, type/effect mismatch, stdlib gap, or missing language feature — anything where the symptom is in `ailang check` / `ailang run` output, not in Motoko's TUI or runtime logic. Also use when the user asks \"should this be filed upstream?\", \"is this an AILANG bug?\", or wants to send feedback / file an issue against `sunholo-data/ailang`."},{"name":"dagr-producer","description":"Emit and maintain a dagr run file  ...[2490 chars]
+REFUSAL <none>
+CAPS 2
+CAP DescribeTools: one schema, name=Skill description_chars=2819
+DESCRIPTION Load a skill by name. Skills are task-specific instructions. Before starting a task that matches a skill's description, call Skill with its name to load the instructions. Do not load a skill that does not match the task. The first line of the result is the skill's directory, relative to the working directory; file paths in the skill's text are relative to that directory. If an earlier Skill result shows as elided or cut short and you still need that skill, call Skill again with the same name.
+
+Available skills:
+- ailang-feedback: Route AILANG-side bugs and limitations encountered while working on Motoko (the agent harness in this repo) to AILANG core via the right channel. Use when the user  ...[2819 chars]
+PARAMETERS {"type":"object","properties":{"name":{"type":"string","description":"The name of the skill to load, exactly as listed.","enum":["ailang-feedback","dagr-producer","herdr","observer","pr-review-loop"]}},"required":["name"]}
+CAP ToolProvider names=[Skill]
+LISTDIR ailang-feedback,dagr-producer,herdr,observer,pr-review-loop in_name_order=true
+CALL dagr-producer workdir=. limit=24309 => tool=Skill exit_code=0 stdout_chars=23107 stdout_line1=[.motoko/skills/dagr-producer] stderr=[]
+EXIT 0
+
+CASE c06-real-skills (sandbox)
+CONFIG {"root":".motoko/skills","skills":[{"name":"ailang-feedback","description":"Route AILANG-side bugs and limitations encountered while working on Motoko (the agent harness in this repo) to AILANG core via the right channel. Use when the user mentions an AILANG compiler error, parser bug, type/effect mismatch, stdlib gap, or missing language feature — anything where the symptom is in `ailang check` / `ailang run` output, not in Motoko's TUI or runtime logic. Also use when the user asks \"should this be filed upstream?\", \"is this an AILANG bug?\", or wants to send feedback / file an issue against `sunholo-data/ailang`."},{"name":"dagr-producer","description":"Emit and maintain a dagr run file  ...[2490 chars]
+REFUSAL <none>
+CAPS 2
+CAP DescribeTools: one schema, name=Skill description_chars=2819
+DESCRIPTION Load a skill by name. Skills are task-specific instructions. Before starting a task that matches a skill's description, call Skill with its name to load the instructions. Do not load a skill that does not match the task. The first line of the result is the skill's directory, relative to the working directory; file paths in the skill's text are relative to that directory. If an earlier Skill result shows as elided or cut short and you still need that skill, call Skill again with the same name.
+
+Available skills:
+- ailang-feedback: Route AILANG-side bugs and limitations encountered while working on Motoko (the agent harness in this repo) to AILANG core via the right channel. Use when the user  ...[2819 chars]
+PARAMETERS {"type":"object","properties":{"name":{"type":"string","description":"The name of the skill to load, exactly as listed.","enum":["ailang-feedback","dagr-producer","herdr","observer","pr-review-loop"]}},"required":["name"]}
+CAP ToolProvider names=[Skill]
+LISTDIR ailang-feedback,dagr-producer,herdr,observer,pr-review-loop in_name_order=true
+CALL dagr-producer workdir=. limit=24308 => tool=Skill exit_code=1 stdout_chars=0 stdout_line1=[] stderr=[Skill 'dagr-producer' does not fit this model's context: about 6077 tokens against a context limit of 24308, and a skill is loaded only when it is under 25% of the limit. It was not loaded. Do not call Skill for it again in this session.]
+EXIT 0
+
+== R1: the root
+CASE r1a-root-is-file (sandbox)
+CONFIG {"root":".motoko/skills","skills":[],"sandbox_set":true,"registration_refusal":"skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] R1: .motoko/skills: is a regular file, not a directory"}
+REFUSAL skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] R1: .motoko/skills: is a regular file, not a directory
+CAPS 2
+CAP DescribeTools: one schema, name=Skill description_chars=229
+DESCRIPTION Load a skill by name. No skill can be loaded in this session: what is under .motoko/skills failed validation at startup, so none is listed. Calling this tool loads nothing and returns the validation errors. Do not call this tool.
+PARAMETERS {"type":"object","properties":{"name":{"type":"string","description":"The name of the skill to load."}},"required":["name"]}
+CAP ToolProvider names=[Skill]
+LISTDIR <root is not a directory>
+CALL good workdir=. limit=0 => tool=Skill exit_code=1 stdout_chars=0 stdout_line1=[] stderr=[skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] R1: .motoko/skills: is a regular file, not a directory]
+EXIT 0
+
+CASE r1b-root-symlink-out (sandbox)
+CONFIG {"root":".motoko/skills","skills":[],"sandbox_set":true,"registration_refusal":"skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] R1: .motoko/skills: is neither a directory nor a regular file: a symlink that leaves the workdir, or has an absolute target, reads this way under the sandbox"}
+REFUSAL skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] R1: .motoko/skills: is neither a directory nor a regular file: a symlink that leaves the workdir, or has an absolute target, reads this way under the sandbox
+CAPS 2
+CAP DescribeTools: one schema, name=Skill description_chars=229
+DESCRIPTION Load a skill by name. No skill can be loaded in this session: what is under .motoko/skills failed validation at startup, so none is listed. Calling this tool loads nothing and returns the validation errors. Do not call this tool.
+PARAMETERS {"type":"object","properties":{"name":{"type":"string","description":"The name of the skill to load."}},"required":["name"]}
+CAP ToolProvider names=[Skill]
+LISTDIR <root is not a directory>
+CALL good workdir=. limit=0 => tool=Skill exit_code=1 stdout_chars=0 stdout_line1=[] stderr=[skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] R1: .motoko/skills: is neither a directory nor a regular file: a symlink that leaves the workdir, or has an absolute target, reads this way under the sandbox]
+EXIT 0
+
+CASE r1c-root-symlink-absolute-inside (sandbox)
+CONFIG {"root":".motoko/skills","skills":[],"sandbox_set":true,"registration_refusal":"skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] R1: .motoko/skills: is neither a directory nor a regular file: a symlink that leaves the workdir, or has an absolute target, reads this way under the sandbox"}
+REFUSAL skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] R1: .motoko/skills: is neither a directory nor a regular file: a symlink that leaves the workdir, or has an absolute target, reads this way under the sandbox
+CAPS 2
+CAP DescribeTools: one schema, name=Skill description_chars=229
+DESCRIPTION Load a skill by name. No skill can be loaded in this session: what is under .motoko/skills failed validation at startup, so none is listed. Calling this tool loads nothing and returns the validation errors. Do not call this tool.
+PARAMETERS {"type":"object","properties":{"name":{"type":"string","description":"The name of the skill to load."}},"required":["name"]}
+CAP ToolProvider names=[Skill]
+LISTDIR <root is not a directory>
+CALL good workdir=. limit=0 => tool=Skill exit_code=1 stdout_chars=0 stdout_line1=[] stderr=[skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] R1: .motoko/skills: is neither a directory nor a regular file: a symlink that leaves the workdir, or has an absolute target, reads this way under the sandbox]
+EXIT 0
+
+CASE r1d-root-symlink-dangling (sandbox)
+CONFIG {"root":".motoko/skills","skills":[],"sandbox_set":true,"registration_refusal":"skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] R1: .motoko/skills: is neither a directory nor a regular file: a symlink that leaves the workdir, or has an absolute target, reads this way under the sandbox"}
+REFUSAL skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] R1: .motoko/skills: is neither a directory nor a regular file: a symlink that leaves the workdir, or has an absolute target, reads this way under the sandbox
+CAPS 2
+CAP DescribeTools: one schema, name=Skill description_chars=229
+DESCRIPTION Load a skill by name. No skill can be loaded in this session: what is under .motoko/skills failed validation at startup, so none is listed. Calling this tool loads nothing and returns the validation errors. Do not call this tool.
+PARAMETERS {"type":"object","properties":{"name":{"type":"string","description":"The name of the skill to load."}},"required":["name"]}
+CAP ToolProvider names=[Skill]
+LISTDIR <root is not a directory>
+CALL good workdir=. limit=0 => tool=Skill exit_code=1 stdout_chars=0 stdout_line1=[] stderr=[skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] R1: .motoko/skills: is neither a directory nor a regular file: a symlink that leaves the workdir, or has an absolute target, reads this way under the sandbox]
+EXIT 0
+
+== V1..V8, each beside a valid skill
+CASE v1a-dir-without-skill-md (sandbox)
+CONFIG {"root":".motoko/skills","skills":[],"sandbox_set":true,"registration_refusal":"skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V1: .motoko/skills/empty: the directory has no SKILL.md (exact case)"}
+REFUSAL skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V1: .motoko/skills/empty: the directory has no SKILL.md (exact case)
+CAPS 2
+CAP DescribeTools: one schema, name=Skill description_chars=229
+DESCRIPTION Load a skill by name. No skill can be loaded in this session: what is under .motoko/skills failed validation at startup, so none is listed. Calling this tool loads nothing and returns the validation errors. Do not call this tool.
+PARAMETERS {"type":"object","properties":{"name":{"type":"string","description":"The name of the skill to load."}},"required":["name"]}
+CAP ToolProvider names=[Skill]
+LISTDIR empty,good in_name_order=true
+CALL good workdir=. limit=0 => tool=Skill exit_code=1 stdout_chars=0 stdout_line1=[] stderr=[skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V1: .motoko/skills/empty: the directory has no SKILL.md (exact case)]
+EXIT 0
+
+CASE v1b-wrong-case (sandbox)
+CONFIG {"root":".motoko/skills","skills":[],"sandbox_set":true,"registration_refusal":"skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V1: .motoko/skills/lower: the directory has no SKILL.md (exact case)"}
+REFUSAL skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V1: .motoko/skills/lower: the directory has no SKILL.md (exact case)
+CAPS 2
+CAP DescribeTools: one schema, name=Skill description_chars=229
+DESCRIPTION Load a skill by name. No skill can be loaded in this session: what is under .motoko/skills failed validation at startup, so none is listed. Calling this tool loads nothing and returns the validation errors. Do not call this tool.
+PARAMETERS {"type":"object","properties":{"name":{"type":"string","description":"The name of the skill to load."}},"required":["name"]}
+CAP ToolProvider names=[Skill]
+LISTDIR good,lower in_name_order=true
+CALL good workdir=. limit=0 => tool=Skill exit_code=1 stdout_chars=0 stdout_line1=[] stderr=[skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V1: .motoko/skills/lower: the directory has no SKILL.md (exact case)]
+EXIT 0
+
+CASE v2-entry-symlink-out (sandbox)
+CONFIG {"root":".motoko/skills","skills":[],"sandbox_set":true,"registration_refusal":"skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V2: .motoko/skills/far: is neither a regular file nor a directory (under the sandbox a symlink that leaves the workdir, or has an absolute target, reads this way)"}
+REFUSAL skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V2: .motoko/skills/far: is neither a regular file nor a directory (under the sandbox a symlink that leaves the workdir, or has an absolute target, reads this way)
+CAPS 2
+CAP DescribeTools: one schema, name=Skill description_chars=229
+DESCRIPTION Load a skill by name. No skill can be loaded in this session: what is under .motoko/skills failed validation at startup, so none is listed. Calling this tool loads nothing and returns the validation errors. Do not call this tool.
+PARAMETERS {"type":"object","properties":{"name":{"type":"string","description":"The name of the skill to load."}},"required":["name"]}
+CAP ToolProvider names=[Skill]
+LISTDIR far,good in_name_order=true
+CALL good workdir=. limit=0 => tool=Skill exit_code=1 stdout_chars=0 stdout_line1=[] stderr=[skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V2: .motoko/skills/far: is neither a regular file nor a directory (under the sandbox a symlink that leaves the workdir, or has an absolute target, reads this way)]
+EXIT 0
+
+CASE v3a-skill-md-unreadable (sandbox)
+CONFIG {"root":".motoko/skills","skills":[],"sandbox_set":true,"registration_refusal":"skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V3: .motoko/skills/locked/SKILL.md: cannot be read: cannot read file: openat .motoko/skills/locked/SKILL.md: permission denied"}
+REFUSAL skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V3: .motoko/skills/locked/SKILL.md: cannot be read: cannot read file: openat .motoko/skills/locked/SKILL.md: permission denied
+CAPS 2
+CAP DescribeTools: one schema, name=Skill description_chars=229
+DESCRIPTION Load a skill by name. No skill can be loaded in this session: what is under .motoko/skills failed validation at startup, so none is listed. Calling this tool loads nothing and returns the validation errors. Do not call this tool.
+PARAMETERS {"type":"object","properties":{"name":{"type":"string","description":"The name of the skill to load."}},"required":["name"]}
+CAP ToolProvider names=[Skill]
+LISTDIR good,locked in_name_order=true
+CALL good workdir=. limit=0 => tool=Skill exit_code=1 stdout_chars=0 stdout_line1=[] stderr=[skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V3: .motoko/skills/locked/SKILL.md: cannot be read: cannot read file: openat .motoko/skills/locked/SKILL.md: permission denied]
+EXIT 0
+
+CASE v3b-skill-md-is-directory (sandbox)
+CONFIG {"root":".motoko/skills","skills":[],"sandbox_set":true,"registration_refusal":"skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V3: .motoko/skills/dirmd/SKILL.md: cannot be read: cannot read file: read <fixtures>/v3b-skill-md-is-directory/.motoko/skills/dirmd/SKILL.md: is a directory"}
+REFUSAL skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V3: .motoko/skills/dirmd/SKILL.md: cannot be read: cannot read file: read <fixtures>/v3b-skill-md-is-directory/.motoko/skills/dirmd/SKILL.md: is a directory
+CAPS 2
+CAP DescribeTools: one schema, name=Skill description_chars=229
+DESCRIPTION Load a skill by name. No skill can be loaded in this session: what is under .motoko/skills failed validation at startup, so none is listed. Calling this tool loads nothing and returns the validation errors. Do not call this tool.
+PARAMETERS {"type":"object","properties":{"name":{"type":"string","description":"The name of the skill to load."}},"required":["name"]}
+CAP ToolProvider names=[Skill]
+LISTDIR dirmd,good in_name_order=true
+CALL good workdir=. limit=0 => tool=Skill exit_code=1 stdout_chars=0 stdout_line1=[] stderr=[skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V3: .motoko/skills/dirmd/SKILL.md: cannot be read: cannot read file: read <fixtures>/v3b-skill-md-is-directory/.motoko/skills/dirmd/SKILL.md: is a directory]
+EXIT 0
+
+CASE v3c-skill-md-symlink-out (sandbox)
+CONFIG {"root":".motoko/skills","skills":[],"sandbox_set":true,"registration_refusal":"skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V3: .motoko/skills/far/SKILL.md: cannot be read: cannot read file: path \".motoko/skills/far/SKILL.md\" escapes sandbox \"<fixtures>/v3c-skill-md-symlink-out\": openat .motoko/skills/far/SKILL.md: path escapes from parent"}
+REFUSAL skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V3: .motoko/skills/far/SKILL.md: cannot be read: cannot read file: path ".motoko/skills/far/SKILL.md" escapes sandbox "<fixtures>/v3c-skill-md-symlink-out": openat .motoko/skills/far/SKILL.md: path escapes from parent
+CAPS 2
+CAP DescribeTools: one schema, name=Skill description_chars=229
+DESCRIPTION Load a skill by name. No skill can be loaded in this session: what is under .motoko/skills failed validation at startup, so none is listed. Calling this tool loads nothing and returns the validation errors. Do not call this tool.
+PARAMETERS {"type":"object","properties":{"name":{"type":"string","description":"The name of the skill to load."}},"required":["name"]}
+CAP ToolProvider names=[Skill]
+LISTDIR far,good in_name_order=true
+CALL good workdir=. limit=0 => tool=Skill exit_code=1 stdout_chars=0 stdout_line1=[] stderr=[skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V3: .motoko/skills/far/SKILL.md: cannot be read: cannot read file: path ".motoko/skills/far/SKILL.md" escapes sandbox "<fixtures>/v3c-skill-md-symlink-out": openat .motoko/skills/far/SKILL.md: path escapes from parent]
+EXIT 0
+
+CASE v4a-no-frontmatter (sandbox)
+CONFIG {"root":".motoko/skills","skills":[],"sandbox_set":true,"registration_refusal":"skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V4: .motoko/skills/nofm/SKILL.md: no frontmatter block: the first line is not `---`"}
+REFUSAL skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V4: .motoko/skills/nofm/SKILL.md: no frontmatter block: the first line is not `---`
+CAPS 2
+CAP DescribeTools: one schema, name=Skill description_chars=229
+DESCRIPTION Load a skill by name. No skill can be loaded in this session: what is under .motoko/skills failed validation at startup, so none is listed. Calling this tool loads nothing and returns the validation errors. Do not call this tool.
+PARAMETERS {"type":"object","properties":{"name":{"type":"string","description":"The name of the skill to load."}},"required":["name"]}
+CAP ToolProvider names=[Skill]
+LISTDIR good,nofm in_name_order=true
+CALL good workdir=. limit=0 => tool=Skill exit_code=1 stdout_chars=0 stdout_line1=[] stderr=[skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V4: .motoko/skills/nofm/SKILL.md: no frontmatter block: the first line is not `---`]
+EXIT 0
+
+CASE v4b-unterminated (sandbox)
+CONFIG {"root":".motoko/skills","skills":[],"sandbox_set":true,"registration_refusal":"skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V4: .motoko/skills/open/SKILL.md: the frontmatter block is not terminated: no later line is `---`"}
+REFUSAL skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V4: .motoko/skills/open/SKILL.md: the frontmatter block is not terminated: no later line is `---`
+CAPS 2
+CAP DescribeTools: one schema, name=Skill description_chars=229
+DESCRIPTION Load a skill by name. No skill can be loaded in this session: what is under .motoko/skills failed validation at startup, so none is listed. Calling this tool loads nothing and returns the validation errors. Do not call this tool.
+PARAMETERS {"type":"object","properties":{"name":{"type":"string","description":"The name of the skill to load."}},"required":["name"]}
+CAP ToolProvider names=[Skill]
+LISTDIR good,open in_name_order=true
+CALL good workdir=. limit=0 => tool=Skill exit_code=1 stdout_chars=0 stdout_line1=[] stderr=[skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V4: .motoko/skills/open/SKILL.md: the frontmatter block is not terminated: no later line is `---`]
+EXIT 0
+
+CASE v4c-bad-yaml (sandbox)
+CONFIG {"root":".motoko/skills","skills":[],"sandbox_set":true,"registration_refusal":"skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V4: .motoko/skills/badyaml/SKILL.md: the frontmatter block does not decode as YAML: yaml: yaml: line 2: mapping values are not allowed in this context"}
+REFUSAL skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V4: .motoko/skills/badyaml/SKILL.md: the frontmatter block does not decode as YAML: yaml: yaml: line 2: mapping values are not allowed in this context
+CAPS 2
+CAP DescribeTools: one schema, name=Skill description_chars=229
+DESCRIPTION Load a skill by name. No skill can be loaded in this session: what is under .motoko/skills failed validation at startup, so none is listed. Calling this tool loads nothing and returns the validation errors. Do not call this tool.
+PARAMETERS {"type":"object","properties":{"name":{"type":"string","description":"The name of the skill to load."}},"required":["name"]}
+CAP ToolProvider names=[Skill]
+LISTDIR badyaml,good in_name_order=true
+CALL good workdir=. limit=0 => tool=Skill exit_code=1 stdout_chars=0 stdout_line1=[] stderr=[skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V4: .motoko/skills/badyaml/SKILL.md: the frontmatter block does not decode as YAML: yaml: yaml: line 2: mapping values are not allowed in this context]
+EXIT 0
+
+CASE v4d-not-a-mapping (sandbox)
+CONFIG {"root":".motoko/skills","skills":[],"sandbox_set":true,"registration_refusal":"skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V4: .motoko/skills/seq/SKILL.md: the frontmatter block decodes to a sequence, not a mapping"}
+REFUSAL skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V4: .motoko/skills/seq/SKILL.md: the frontmatter block decodes to a sequence, not a mapping
+CAPS 2
+CAP DescribeTools: one schema, name=Skill description_chars=229
+DESCRIPTION Load a skill by name. No skill can be loaded in this session: what is under .motoko/skills failed validation at startup, so none is listed. Calling this tool loads nothing and returns the validation errors. Do not call this tool.
+PARAMETERS {"type":"object","properties":{"name":{"type":"string","description":"The name of the skill to load."}},"required":["name"]}
+CAP ToolProvider names=[Skill]
+LISTDIR good,seq in_name_order=true
+CALL good workdir=. limit=0 => tool=Skill exit_code=1 stdout_chars=0 stdout_line1=[] stderr=[skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V4: .motoko/skills/seq/SKILL.md: the frontmatter block decodes to a sequence, not a mapping]
+EXIT 0
+
+CASE v5-name-differs (sandbox)
+CONFIG {"root":".motoko/skills","skills":[],"sandbox_set":true,"registration_refusal":"skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V5: .motoko/skills/renamed/SKILL.md: `name` (`other-name`) differs from the directory name `renamed`"}
+REFUSAL skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V5: .motoko/skills/renamed/SKILL.md: `name` (`other-name`) differs from the directory name `renamed`
+CAPS 2
+CAP DescribeTools: one schema, name=Skill description_chars=229
+DESCRIPTION Load a skill by name. No skill can be loaded in this session: what is under .motoko/skills failed validation at startup, so none is listed. Calling this tool loads nothing and returns the validation errors. Do not call this tool.
+PARAMETERS {"type":"object","properties":{"name":{"type":"string","description":"The name of the skill to load."}},"required":["name"]}
+CAP ToolProvider names=[Skill]
+LISTDIR good,renamed in_name_order=true
+CALL good workdir=. limit=0 => tool=Skill exit_code=1 stdout_chars=0 stdout_line1=[] stderr=[skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V5: .motoko/skills/renamed/SKILL.md: `name` (`other-name`) differs from the directory name `renamed`]
+EXIT 0
+
+CASE v6-empty-description (sandbox)
+CONFIG {"root":".motoko/skills","skills":[],"sandbox_set":true,"registration_refusal":"skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V6: .motoko/skills/blank/SKILL.md: `description` is empty after trimming"}
+REFUSAL skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V6: .motoko/skills/blank/SKILL.md: `description` is empty after trimming
+CAPS 2
+CAP DescribeTools: one schema, name=Skill description_chars=229
+DESCRIPTION Load a skill by name. No skill can be loaded in this session: what is under .motoko/skills failed validation at startup, so none is listed. Calling this tool loads nothing and returns the validation errors. Do not call this tool.
+PARAMETERS {"type":"object","properties":{"name":{"type":"string","description":"The name of the skill to load."}},"required":["name"]}
+CAP ToolProvider names=[Skill]
+LISTDIR blank,good in_name_order=true
+CALL good workdir=. limit=0 => tool=Skill exit_code=1 stdout_chars=0 stdout_line1=[] stderr=[skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V6: .motoko/skills/blank/SKILL.md: `description` is empty after trimming]
+EXIT 0
+
+CASE v7-too-large (sandbox)
+CONFIG {"root":".motoko/skills","skills":[],"sandbox_set":true,"registration_refusal":"skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V7: .motoko/skills/huge/SKILL.md: the skill is too large to deliver whole: 61182 chars encoded, over the limit of 60000"}
+REFUSAL skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V7: .motoko/skills/huge/SKILL.md: the skill is too large to deliver whole: 61182 chars encoded, over the limit of 60000
+CAPS 2
+CAP DescribeTools: one schema, name=Skill description_chars=229
+DESCRIPTION Load a skill by name. No skill can be loaded in this session: what is under .motoko/skills failed validation at startup, so none is listed. Calling this tool loads nothing and returns the validation errors. Do not call this tool.
+PARAMETERS {"type":"object","properties":{"name":{"type":"string","description":"The name of the skill to load."}},"required":["name"]}
+CAP ToolProvider names=[Skill]
+LISTDIR good,huge in_name_order=true
+CALL good workdir=. limit=0 => tool=Skill exit_code=1 stdout_chars=0 stdout_line1=[] stderr=[skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V7: .motoko/skills/huge/SKILL.md: the skill is too large to deliver whole: 61182 chars encoded, over the limit of 60000]
+EXIT 0
+
+CASE v8-index-over-budget (sandbox)
+CONFIG {"root":".motoko/skills","skills":[],"sandbox_set":true,"registration_refusal":"skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V8: .motoko/skills: the index is 17135 chars for 17 skills, over the budget of 16000"}
+REFUSAL skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V8: .motoko/skills: the index is 17135 chars for 17 skills, over the budget of 16000
+CAPS 2
+CAP DescribeTools: one schema, name=Skill description_chars=229
+DESCRIPTION Load a skill by name. No skill can be loaded in this session: what is under .motoko/skills failed validation at startup, so none is listed. Calling this tool loads nothing and returns the validation errors. Do not call this tool.
+PARAMETERS {"type":"object","properties":{"name":{"type":"string","description":"The name of the skill to load."}},"required":["name"]}
+CAP ToolProvider names=[Skill]
+LISTDIR s01,s02,s03,s04,s05,s06,s07,s08,s09,s10,s11,s12,s13,s14,s15,s16,s17 in_name_order=true
+CALL good workdir=. limit=0 => tool=Skill exit_code=1 stdout_chars=0 stdout_line1=[] stderr=[skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V8: .motoko/skills: the index is 17135 chars for 17 skills, over the budget of 16000]
+EXIT 0
+
+CASE two-violations (sandbox)
+CONFIG {"root":".motoko/skills","skills":[],"sandbox_set":true,"registration_refusal":"skills: 2 violations under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V1: .motoko/skills/empty: the directory has no SKILL.md (exact case) [2] V5: .motoko/skills/renamed/SKILL.md: `name` (`other-name`) differs from the directory name `renamed`"}
+REFUSAL skills: 2 violations under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V1: .motoko/skills/empty: the directory has no SKILL.md (exact case) [2] V5: .motoko/skills/renamed/SKILL.md: `name` (`other-name`) differs from the directory name `renamed`
+CAPS 2
+CAP DescribeTools: one schema, name=Skill description_chars=229
+DESCRIPTION Load a skill by name. No skill can be loaded in this session: what is under .motoko/skills failed validation at startup, so none is listed. Calling this tool loads nothing and returns the validation errors. Do not call this tool.
+PARAMETERS {"type":"object","properties":{"name":{"type":"string","description":"The name of the skill to load."}},"required":["name"]}
+CAP ToolProvider names=[Skill]
+LISTDIR empty,good,renamed in_name_order=true
+CALL good workdir=. limit=0 => tool=Skill exit_code=1 stdout_chars=0 stdout_line1=[] stderr=[skills: 2 violations under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V1: .motoko/skills/empty: the directory has no SKILL.md (exact case) [2] V5: .motoko/skills/renamed/SKILL.md: `name` (`other-name`) differs from the directory name `renamed`]
+EXIT 0
+
+== D1, what the guarantee does not cover: a directory that cannot be listed
+CASE x1-unlistable-skill-dir (sandbox)
+Error: execution failed: listDir: openat .motoko/skills/sealed: permission denied
+EXIT 1
+
+== D7: started without the sandbox (the root resolves against the process directory)
+CASE c04-valid-set (nosandbox)
+CONFIG {"root":".motoko/skills","skills":[],"sandbox_set":false}
+REFUSAL <none>
+CAPS 2
+CAP DescribeTools: one schema, name=Skill description_chars=144
+DESCRIPTION Load a skill by name. No skills are installed in this workspace (.motoko/skills holds none), so there is nothing to load. Do not call this tool.
+PARAMETERS {"type":"object","properties":{"name":{"type":"string","description":"The name of the skill to load."}},"required":["name"]}
+CAP ToolProvider names=[Skill]
+LISTDIR <root is not a directory>
+CALL workdir-stamp workdir=. limit=0 => tool=Skill exit_code=1 stdout_chars=0 stdout_line1=[] stderr=[Unknown skill 'workdir-stamp'. No skills are installed in this workspace (.motoko/skills holds none).]
+EXIT 0
+
+CASE c04-valid-set (nosandbox)
+CONFIG {"root":".motoko/skills","skills":[],"sandbox_set":false}
+REFUSAL <none>
+CAPS 2
+CAP DescribeTools: one schema, name=Skill description_chars=144
+DESCRIPTION Load a skill by name. No skills are installed in this workspace (.motoko/skills holds none), so there is nothing to load. Do not call this tool.
+PARAMETERS {"type":"object","properties":{"name":{"type":"string","description":"The name of the skill to load."}},"required":["name"]}
+CAP ToolProvider names=[Skill]
+LISTDIR <root is not a directory>
+CALL workdir-stamp workdir=<fixtures>/c04-valid-set limit=0 => tool=Skill exit_code=1 stdout_chars=0 stdout_line1=[] stderr=[Skill: nothing was loaded. This runtime was started without AILANG_FS_SANDBOX and its working directory is '<fixtures>/c04-valid-set', not '.'. Without the sandbox .motoko/skills is read from the directory the runtime was started in, so the skills indexed at startup may not be this working directory's. Do not call Skill again in this session.]
+EXIT 0
+

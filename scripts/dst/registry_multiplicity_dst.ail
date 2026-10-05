@@ -24,7 +24,7 @@ module scripts/dst/registry_multiplicity_dst
 import std/io (println, exit)
 import std/list as List (length)
 import std/result (Result, Ok, Err)
-import std/json (Json, jo)
+import std/json (Json, jo, kv, js, encode)
 import pkg/sunholo/motoko_ext_abi/types (
   PureCtx, AiCtx, ProviderCtx, InterceptCtx, ProcessCtx, FsCtx, PromptPatch, BudgetPlan, BudgetPatch, Msg, PreStepOutcome, ToolSchema,
   ToolCallEnvelope, ToolPolicyDecision, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome
@@ -43,11 +43,16 @@ import src/core/ext/registry_normalize (
   rejection_extension,
   kind_name,
   DuplicateExitLabel,
+  RegistrationRefused,
+  registration_refusal_key,
   fold_kind_repeats_allowed,
   empty_registration_omits
 )
 -- B8: `Capability`/`ExtEntry` and the constructors are the ABI's now.
 import pkg/sunholo/motoko_ext_abi/types (Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, ExitIntent, ExitAction, ExitIntentOutcome, ExtEntry)
+-- 037 D2: the extension's side of the same-string row -- the key as the skills
+-- package writes it. Renamed on import: the host's function has the same name.
+import pkg/sunholo/motoko_ext_skills/skills (registration_refusal_key as skills_registration_refusal_key)
 
 -- ---------------------------------------------------------------------------
 -- Neutral payloads. Only the KINDS and the names matter to the boundary.
@@ -190,6 +195,98 @@ func scenario_whole_registry(label: string) -> bool ! {IO} {
   rejects && names
 }
 
+-- ---------------------------------------------------------------------------
+-- 037 ADR-001 D2 -- THE REGISTRATION REFUSAL, and the artifact 031 ADR-001's
+-- Amendment 5 cites.
+--
+-- THE FIXTURE: a registration whose `config` carries the key
+-- `registration_refusal`, set to a non-empty string, on the clean capability
+-- list. ONE mutation from the negative control, and the mutation is in
+-- `config`, which no rule at this boundary read before this one.
+--
+-- AS THE ARTIFACT (commit cfdf74c1, before the check): the row asserted that
+-- the host ACCEPTED it and carried the config onto the entry byte for byte --
+-- an extension that had found its own configuration broken had no way to make
+-- the host refuse to start, `ExtRegistration` being `{ config, caps }` with no
+-- error channel. That run, and the same row going red the moment the check
+-- landed, are under .agent/projects/037_skills_system/evidence/p2/amendment-5/.
+--
+-- NOW: the same fixture, asserted the other way. The host refuses, names the
+-- extension, and the message ENDS WITH the extension's string unedited.
+-- ---------------------------------------------------------------------------
+pure func refusal_text() -> string {
+  "fixture: this extension found its own root broken and lists every violation here (one; two)"
+}
+pure func refusing_config() -> Json { jo([kv("registration_refusal", js(refusal_text()))]) }
+
+-- Refused BY `registration-refused`, naming the extension, carrying exactly
+-- `message` -- whatever the capability list is.
+func assert_refused(label: string, id: string, config: Json, caps: [Capability], message: string) -> bool ! {IO} {
+  match normalize_registration(id, config, caps) {
+    Ok(_) => { let _ = println("  ✗ ${label}: accepted, expected rejection by [registration-refused]"); false },
+    Err(r) => {
+      let payload = match r { RegistrationRefused(e, m) => e == id && m == message, _ => false };
+      let ok = rejection_rule(r) == "registration-refused" && rejection_extension(r) == id && payload;
+      let _ = if ok then println("  ✓ ${label}: ${rejection_message(r)}")
+              else println("  ✗ ${label}: expected [registration-refused] naming '${id}' with the extension's string as the message, got ${rejection_message(r)}");
+      ok
+    }
+  }
+}
+
+-- THE CONTROL for the row above, one mutation from it: the same key holding
+-- the EMPTY string is no refusal. The registration loads and the entry still
+-- carries the key -- the host reads `config`, it does not edit it.
+func scenario_empty_refusal_is_accepted(label: string) -> bool ! {IO} {
+  let cfg = jo([kv("registration_refusal", js(""))]);
+  match normalize_registration("refuse#8", cfg, clean()) {
+    Ok(e) => {
+      let ok = e.id == "refuse#8" && encode(e.config) == encode(cfg) && kinds_of(e.caps) == kinds_of(clean());
+      let _ = if ok then println("  ✓ ${label}: accepted -- the entry carries config ${encode(e.config)} unchanged and all ${show(List.length(e.caps))} atoms")
+              else println("  ✗ ${label}: accepted, but the entry does not carry the registration's config and atoms unchanged");
+      ok
+    },
+    Err(r) => { let _ = println("  ✗ ${label}: expected acceptance, got ${rejection_message(r)}"); false }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- 037 ADR-001 D2 -- THE SAME-STRING ROW. The key has TWO writers and no shared
+-- owner: the host's `registration_refusal_key()` in core, and the literal an
+-- extension puts in its `config`. The ABI package exports neither (that would
+-- be an 8.1 minor), so this script -- which can import both sides -- is where
+-- the two are tied.
+--
+-- THE EXTENSION'S SIDE IS THE PACKAGE'S OWN EXPORT (PLAN-001 P5; it was a
+-- stand-in literal in this script from P2 until the package existed).
+-- `registration_refusal_key` in packages/motoko-ext-skills/skills.ail is what
+-- `register.ail` writes the key with (`refusal_fields`) and reads it back with
+-- (`config_refusal`), so this row ties the host's reader to the one extension
+-- that writes the key, not to a spelling repeated here.
+-- ---------------------------------------------------------------------------
+pure func extension_refusal_key() -> string { skills_registration_refusal_key() }
+
+-- Equal strings, AND the equality is about the key the host actually reads: a
+-- config written with the extension's spelling is refused, and one written
+-- with a near-miss of it is not. Two literals that agreed while the reader
+-- looked up a third would pass the first half alone.
+func scenario_same_key(label: string) -> bool ! {IO} {
+  let ext = extension_refusal_key();
+  let host = registration_refusal_key();
+  let read = match normalize_registration("same#9", jo([kv(ext, js(refusal_text()))]), clean()) {
+    Err(RegistrationRefused(e, m)) => e == "same#9" && m == refusal_text(),
+    _ => false
+  };
+  let near_miss = match normalize_registration("same#9", jo([kv("${ext}s", js(refusal_text()))]), clean()) {
+    Ok(_) => true,
+    Err(_) => false
+  };
+  let ok = ext == host && ext != "" && read && near_miss;
+  let _ = if ok then println("  ✓ ${label}: extension '${ext}' == host '${host}'; a config written with the extension's spelling is refused and the near-miss '${ext}s' is not (extension side: registration_refusal_key() exported by packages/motoko-ext-skills/skills.ail)")
+          else println("  ✗ ${label}: extension '${ext}' vs host '${host}' (equal: ${show(ext == host)}; the host refuses the extension's spelling: ${show(read)}; a near-miss key is accepted: ${show(near_miss)})");
+  ok
+}
+
 export func main() -> () ! {IO} {
   let _ = println("=== registry_multiplicity_dst (ADR-001 B4; D3 decided, D4 open = ${show(fold_kind_repeats_allowed())}, D7 omits = ${show(empty_registration_omits())}) ===");
   let _ = println("  -- the negative control --");
@@ -206,6 +303,14 @@ export func main() -> () ! {IO} {
   let r5 = scenario_fold_kind("second Compactor (fold kind)");
   let r6 = assert_rejected("a third ExitIntent reusing the label 'panes'", "duplicate-exit-label", "exit#5", duplicate_exit_label(),
     \r. match r { DuplicateExitLabel(_, l, p) => l == "panes" && p == 11, _ => false });
+  let _ = println("  -- 037 D2: a registration whose config carries registration_refusal --");
+  let a5 = assert_refused("config carries registration_refusal (non-empty string)", "refuse#6", refusing_config(), clean(), refusal_text());
+  -- TWO mutations, and said so: the refusal on a list that ALSO trips a
+  -- multiplicity rule. The refusal is read before the walk, so it is the
+  -- rejection -- `second ToolPolicy` above is what this list gets without it.
+  let a5_order = assert_refused("the same config on the 'second ToolPolicy' list (read before the walk)", "refuse#7", refusing_config(), second_policy(), refusal_text());
+  let a5_empty = scenario_empty_refusal_is_accepted("config carries registration_refusal = \"\" (the control)");
+  let a5_same = scenario_same_key("the extension and the host use the same key");
   let _ = println("  -- the whole build --");
   let w = scenario_whole_registry("registry of good + empty + bad");
   -- the harness's own control: the boundary must be able to reject at all
@@ -213,7 +318,7 @@ export func main() -> () ! {IO} {
     && (match normalize_registration("x", jo([]), clean()) { Ok(_) => true, Err(_) => false });
   let _ = if control then println("  ✓ control: the boundary both accepts and rejects")
           else println("  ✗ control: the boundary never rejects -- every row above is vacuous");
-  if c && r1 && r2 && r3 && r4 && r5 && r6 && w && control
+  if c && r1 && r2 && r3 && r4 && r5 && r6 && a5 && a5_order && a5_empty && a5_same && w && control
   then println("registry_multiplicity_dst PASS")
   else { let _ = println("registry_multiplicity_dst FAIL"); exit(1) }
 }

@@ -141,6 +141,8 @@ import pkg/sunholo/motoko_ext_progress_contract_guard/register as ProgressContra
 import pkg/sunholo/motoko_ext_repetition_guard/register as RepetitionGuard (register_with_config)
 import pkg/sunholo/motoko_ext_agentcli/register as Agentcli (register_with_config)
 import pkg/sunholo/motoko_ext_herdr/register as Herdr (register_with_config)
+import pkg/sunholo/motoko_ext_ailang_tools/register as AilangTools (register_with_config)
+import pkg/sunholo/motoko_ext_skills/register as Skills (register_with_config)
 
 -- ---------------------------------------------------------------------------
 -- A context with no driver behind it
@@ -469,6 +471,19 @@ pure func compose_cfg(mode: string) -> ComposeHostConfig {
 -- atoms come from the rowless `compose_caps()`), which is the 17 -> 16.
 -- `compaction_ai` is at `! {Env, FS}`: the one total-absorption site above is
 -- closed.
+--
+-- RE-MEASURED FOR TWENTY EXTENSIONS (037 PLAN-001 P6, 2026-10-05).
+-- `ailang_tools` and `skills` each declare `! {Env, FS}` on their
+-- registration and nothing else moved, so the counts are
+--
+--   Env      admitted by 18 of the 18 registration ROWS
+--   FS       admitted by 15 of 18
+--   Process  admitted by  3 of 18
+--
+-- and the two paragraphs below hold with those numbers: Process through the
+-- same three over-declared rows, FS in 15, Env in every row that exists.
+-- Where they say "13" and "the 16" they are the 8.0 measurement, left as
+-- written.
 --
 -- WHAT THE NEW COUNTS MEAN FOR HOW MUCH THE WI-D6/D7/D8 NARROWINGS ENFORCE.
 -- The absorption counts measure ONE door, and it is the smaller one now:
@@ -1120,4 +1135,44 @@ export func budget_herdr() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, 
   let rt = { registry: { entries: [{ id: "subject", config: h.config, caps: h.caps }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
   let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
   reached("budget_herdr", show(out.total))
+}
+
+-- ailang_tools — REGISTER arm (037 PLAN-001 P6, 2026-10-05). The extension joined
+-- ailang.toml's [extensions] packages at 140dde9e and this probe had no arm for
+-- it: the member-for-member row was red on it at 037's baseline, and the
+-- differential loop then stopped at its missing arm, so nothing after that loop
+-- had run since.
+export func reg_ailang_tools() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = AilangTools.register_with_config(0);
+  reached("reg_ailang_tools", show(List.length(h.caps)))
+}
+
+-- ailang_tools — DISPATCH arm. It registers one atom, a ToolProvider, and NO
+-- BudgetShaper, so the 4242 comes from the witness alone, the shape
+-- `budget_repetition_guard` uses: the witness is registered AFTER the subject
+-- in one ordered unconditional fold, so the value is unobtainable unless that
+-- fold ran over the subject's entry first.
+export func budget_ailang_tools() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = AilangTools.register_with_config(0);
+  let rt = { registry: { entries: [{ id: "subject", config: h.config, caps: h.caps }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
+  reached("budget_ailang_tools", show(out.total))
+}
+
+-- skills — REGISTER arm (037 PLAN-001 P6). The extension 037 adds; the host's
+-- generated registry has named it since 9884fe1c. Its registration reads Env
+-- and then the skill root (`! {Env, FS}`), so both regimes report it
+-- CONFOUNDED: this producer cannot see past a registration that performs.
+export func reg_skills() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = Skills.register_with_config(0);
+  reached("reg_skills", show(List.length(h.caps)))
+}
+
+-- skills — DISPATCH arm. It registers DescribeTools and a ToolProvider and NO
+-- BudgetShaper, so the 4242 comes from the witness alone, as above.
+export func budget_skills() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let h = Skills.register_with_config(0);
+  let rt = { registry: { entries: [{ id: "subject", config: h.config, caps: h.caps }, witness_hooks()] }, strict_mode: false, verification: no_verification() };
+  let out = Rt.dispatch_budget_plan(rt, probe_ctx("tool"), plan());
+  reached("budget_skills", show(out.total))
 }

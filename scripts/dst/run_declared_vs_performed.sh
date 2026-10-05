@@ -1706,8 +1706,22 @@ absorb() {  # $1 = effect name, $2 = expected count of ROWS admitting it
 #                            spawns anything (recorded, not fixed: narrowing
 #                            them is those packages' item, not this one)
 # What it means for the narrowings is in declared_vs_performed.ail's note.
-absorb Env 16
-absorb FS 13
+#
+# RE-MEASURED for the NINETEENTH and TWENTIETH extensions (037 PLAN-001 P6,
+# 2026-10-05), from the rows and not from a failure message. This run had not
+# reached these rows since `ailang_tools` joined the registry (140dde9e): the
+# differential loop above stopped at its missing arm. Both new registrations
+# declare the same row,
+#
+#     export func register_with_config(_cfg: a) -> ExtRegistration ! {Env, FS}
+#     (packages/motoko-ext-ailang-tools/register.ail:257, and
+#      packages/motoko-ext-skills/register.ail:344, the extension 037 adds)
+#
+# so the denominator goes 16 -> 18 rows by the arithmetic above (20 - 3 + 1),
+# Env goes 16 -> 18 and FS 13 -> 15, one of each per extension, and Process
+# does NOT move: neither row admits it. Env is still admitted by every row.
+absorb Env 18
+absorb FS 15
 absorb Process 3
 # The one registration that absorbs EVERYTHING, named rather than counted.
 if grep -qE "func register_with_config.*! ?$old_ten" packages/motoko-ext-compaction-ai/register.ail; then

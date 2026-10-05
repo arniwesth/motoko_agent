@@ -1,0 +1,35 @@
+./scripts/dst/run_declared_vs_performed.sh
+declared_vs_performed — D5's missing detector (WI-C5), all 19 bindings (WI-D6; count read from src/core/ext/registry_generated.ail)
+
+-- producer 1: DECLARED, read from source --
+      packages/motoko-ext-abi/types.ail:1945  | BudgetShaper((PureCtx, BudgetPlan) -> BudgetPatch)
+  ✓ ABI declares the BudgetShaper payload (on_budget_plan through 5.x) effect-free (WI-D6 narrowed it; was the closed ! {Env, FS} through WI-D5)
+  ✓ no binding site in the tree declares an effect row on a BudgetPatch-returning hook (all 48 former sites narrowed)
+      packages/motoko-ext-compose/compose.ail:1117  func budget_hook(_ctx: PureCtx, _plan: BudgetPlan) -> BudgetPatch {
+  ✓ compose's binding declares the same (empty) row as the ABI slot
+  ✗ the host's generated registry and the probe's arm pairs DISAGREE — an installable extension is unmeasured:
+4d3
+< ailang_tools
+
+-- producer 2: PERFORMED, observed out of process (runtime capability trap) --
+   compose's four slots, WI-C5's original subjects:
+  ✓ compose_pre_step completed with Env, FS and Process withheld — it performs none of them (the stage list names the witness alone (compose registers no Compactor since item 4) and the registry names compose — the ONLY arm of the four that does)
+  ✓ compose_budget completed with Env, FS and Process withheld — it performs none of them (the witness's requested_total survived the fold; compose's participation rests on the row above)
+  ✓ compose_solver completed with Env, FS and Process withheld — it performs none of them (the witness's Accept was collected; compose's participation rests on the row above)
+  ✓ compose_intercept_noninline completed with Env, FS and Process withheld — it performs none of them (first_intercept recursed PAST compose, which means compose returned NoIntercept without performing)
+  ✓ all seven dispatching arms build their registry from compose_then_witness — the join holds
+
+   all 19 on_budget_plan bindings, register-vs-dispatch differential:
+      regime A = Env, FS, Process withheld     regime B = FS, Process withheld (Env granted)
+      ~ test_dummy [A]: CONFOUNDED — register_with_config performs 'Env' before the hook is reached
+      ~ omnigraph [A]: CONFOUNDED — register_with_config performs 'Env' before the hook is reached
+      ~ context_mode [A]: CONFOUNDED — register_with_config performs 'Env' before the hook is reached
+      ~ mcp [A]: CONFOUNDED — register_with_config performs 'Env' before the hook is reached
+      ~ exa_search [A]: CONFOUNDED — register_with_config performs 'Env' before the hook is reached
+      ~ ailang_docs [A]: CONFOUNDED — register_with_config performs 'Env' before the hook is reached
+      ~ compose [A]: CONFOUNDED — register_with_config performs 'Env' before the hook is reached
+      ~ a2a [A]: CONFOUNDED — register_with_config performs 'Env' before the hook is reached
+      ✓ decision_framework [A]: MEASURED — registration and dispatch both completed; the hook performs neither
+      ✓ microrag [A]: MEASURED — registration and dispatch both completed; the hook performs neither
+make: *** [Makefile:445: declared_vs_performed] Error 1
+exit=2

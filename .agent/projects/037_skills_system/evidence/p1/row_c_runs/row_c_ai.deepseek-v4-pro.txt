@@ -1,0 +1,127 @@
+run ai.deepseek-v4-pro  model openrouter/deepseek/deepseek-v4-pro
+  requests                                 60
+  finish                                   stop
+  killed                                   no
+  input_tokens                             1960423
+  output_tokens                            43329
+  list_cost_usd                            0.427431
+  first_compacted_request                  24
+  compacted_requests                       35
+  skill_first_load_step                    0
+  skill_reload_steps                       [35]
+  failed_skill_calls                       []
+  skill_result_tokens                      6075
+  requests_without_whole_skill             30
+  loss_episodes                            3
+  episodes_answered_by_reload              1
+  reload_result_tokens_total               6075
+  input_tokens_carrying_reloaded_copies    30375
+  input_tokens_carrying_first_copy         145800
+  reload_share_of_input_pct                1.5
+  ai_folds                                 3
+  reports_read                             14
+  last_report_read                         R14
+  dagr_check                               {'run-atlas.json': 'exit=0'}
+  other_skill_calls                        []
+  reconstruction_mismatches                0
+  skill_file_reads_by_other_tools          [(2, 'BashExec', 'examples'), (3, 'ReadFile', 'examples'), (3, 'ReadFile', 'examples')]
+  skill_md_reads_after_first_compaction    []
+  example_reads_after_first_compaction     []
+  loss episodes: 24-24 never reloaded (1 requests without it); 26-35 reloaded at step 35 (after 10 requests without it); 41-59 never reloaded (19 requests without it)
+  diagnostics: []
+  compaction_ai summary refreshed at step 24: 99 chars, boundary 44; mentions the skill: False; mentions 'Skill': False
+  compaction_ai summary refreshed at step 26: 99 chars, boundary 44; mentions the skill: False; mentions 'Skill': False
+  compaction_ai summary refreshed at step 27: 99 chars, boundary 44; mentions the skill: False; mentions 'Skill': False
+  compaction_ai summary refreshed at step 28: 99 chars, boundary 44; mentions the skill: False; mentions 'Skill': False
+  compaction_ai summary refreshed at step 29: 99 chars, boundary 44; mentions the skill: False; mentions 'Skill': False
+  compaction_ai summary refreshed at step 30: 99 chars, boundary 44; mentions the skill: False; mentions 'Skill': False
+  compaction_ai summary refreshed at step 31: 99 chars, boundary 44; mentions the skill: False; mentions 'Skill': False
+  compaction_ai summary refreshed at step 32: 99 chars, boundary 44; mentions the skill: False; mentions 'Skill': False
+  compaction_ai summary refreshed at step 33: 99 chars, boundary 44; mentions the skill: False; mentions 'Skill': False
+  compaction_ai summary refreshed at step 34: 99 chars, boundary 44; mentions the skill: False; mentions 'Skill': False
+  compaction_ai summary refreshed at step 35: 99 chars, boundary 44; mentions the skill: False; mentions 'Skill': False
+  compaction_ai summary refreshed at step 36: 99 chars, boundary 44; mentions the skill: False; mentions 'Skill': False
+  compaction_ai summary refreshed at step 37: 99 chars, boundary 44; mentions the skill: False; mentions 'Skill': False
+  compaction_ai summary refreshed at step 38: 99 chars, boundary 44; mentions the skill: False; mentions 'Skill': False
+  compaction_ai summary refreshed at step 39: 99 chars, boundary 44; mentions the skill: False; mentions 'Skill': False
+  compaction_ai summary refreshed at step 40: 99 chars, boundary 44; mentions the skill: False; mentions 'Skill': False
+  compaction_ai summary refreshed at step 41: 135 chars, boundary 84; mentions the skill: False; mentions 'Skill': False
+  compaction_ai summary refreshed at step 42: 135 chars, boundary 84; mentions the skill: False; mentions 'Skill': False
+  compaction_ai summary refreshed at step 43: 135 chars, boundary 84; mentions the skill: False; mentions 'Skill': False
+  compaction_ai summary refreshed at step 44: 135 chars, boundary 84; mentions the skill: False; mentions 'Skill': False
+  compaction_ai summary refreshed at step 45: 135 chars, boundary 84; mentions the skill: False; mentions 'Skill': False
+  compaction_ai summary refreshed at step 46: 135 chars, boundary 84; mentions the skill: False; mentions 'Skill': False
+  compaction_ai summary refreshed at step 47: 135 chars, boundary 84; mentions the skill: False; mentions 'Skill': False
+  compaction_ai summary refreshed at step 48: 135 chars, boundary 84; mentions the skill: False; mentions 'Skill': False
+  compaction_ai summary refreshed at step 49: 135 chars, boundary 84; mentions the skill: False; mentions 'Skill': False
+  compaction_ai summary refreshed at step 50: 135 chars, boundary 84; mentions the skill: False; mentions 'Skill': False
+  compaction_ai summary refreshed at step 51: 135 chars, boundary 84; mentions the skill: False; mentions 'Skill': False
+  compaction_ai summary refreshed at step 52: 135 chars, boundary 84; mentions the skill: False; mentions 'Skill': False
+  compaction_ai summary refreshed at step 53: 135 chars, boundary 84; mentions the skill: False; mentions 'Skill': False
+  compaction_ai summary refreshed at step 54: 135 chars, boundary 84; mentions the skill: False; mentions 'Skill': False
+  compaction_ai summary refreshed at step 55: 135 chars, boundary 84; mentions the skill: False; mentions 'Skill': False
+  compaction_ai summary refreshed at step 56: 106 chars, boundary 118; mentions the skill: False; mentions 'Skill': False
+  compaction_ai summary refreshed at step 57: 106 chars, boundary 118; mentions the skill: False; mentions 'Skill': False
+  compaction_ai summary refreshed at step 58: 106 chars, boundary 118; mentions the skill: False; mentions 'Skill': False
+  compaction_ai summary refreshed at step 59: 106 chars, boundary 118; mentions the skill: False; mentions 'Skill': False
+  step  mode        msgs  est_tok  in_tok  out_tok  whole_copies/in_history  note
+     0                 2     2115    3993     153   0/0    -> Skill(dagr-producer), ReadFile(PROJECT.md)
+     1                 5     8594   11424     230   1/1    -> BashExec(echo "DAGR_BIN=${DAGR_BIN:-unset}"; co)
+     2                 7     8693   11667     169   1/1    -> ReadFile(reports/R01.md), BashExec(ls .motoko/skills/dagr-producer/exampl)
+     3                10    11413   15427     279   1/1    -> ReadFile(.motoko/skills/dagr-producer/examples/01-init.json), ReadFile(.motoko/skills/dagr-producer/examples/02-first-attempt.json)
+     4                13    11824   16191     543   1/1    -> BashExec(mkdir -p .dagr)
+     5                15    11906   16351    1344   1/1    -> WriteFile(.dagr/run-atlas.json.tmp)
+     6                17    12290   17398      77   1/1    -> BashExec(dagr check .dagr/run-atlas.json.tmp --)
+     7                19    12330   17530      79   1/1    -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-)
+     8                21    12369   17657      65   1/1    -> ReadFile(reports/R02.md)
+     9                23    15006   21220     326   1/1    -> ReadFile(.dagr/run-atlas.json)
+    10                25    15390   21836     817   1/1    -> WriteFile(.dagr/run-atlas.json.tmp)
+    11                27    15989   23472     104   1/1    -> BashExec(dagr check .dagr/run-atlas.json.tmp --)
+    12                29    16025   23601     108   1/1    -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-), ReadFile(reports/R03.md)
+    13                32    18757   27422    2531   1/1    -> WriteFile(.dagr/run-atlas.json.tmp)
+    14                34    19523   29488     276   1/1    -> BashExec(dagr check .dagr/run-atlas.json.tmp --)
+    15                36    19559   29617     108   1/1    -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-), ReadFile(reports/R04.md)
+    16                39    22267   33388    1460   1/1    -> WriteFile(.dagr/run-atlas.json.tmp)
+    17                41    23104   35631    1201   1/1    -> WriteFile(.dagr/run-atlas.json.tmp)
+    18                43    24654   38867      94   1/1    -> BashExec(dagr check .dagr/run-atlas.json.tmp --)
+    19                45    24690   38996     109   1/1    -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-), ReadFile(reports/R05.md)
+    20                48    27390   42765    2576   1/1    -> WriteFile(.dagr/run-atlas.json.tmp)
+    21                50    28262   45143     425   1/1    -> BashExec(dagr check .dagr/run-atlas.json.tmp --)
+    22                52    28298   45272     340   1/1    -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-), ReadFile(reports/R06.md)
+    23                55    30973   49020    1749   1/1    -> WriteFile(.dagr/run-atlas.json.tmp)
+    24  ai-folded     14     9909   17717      73   0/1  AI-folded 44 turns (75% -> 32%)  -> BashExec(dagr check .dagr/run-atlas.json.tmp --)
+    25                59    32309   52642     104   1/1    -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-), ReadFile(reports/R07.md)
+    26  ai-cache      19    12641   21594    1944   0/1  AI-cache-reused 44 turns (83% -> 40%)  -> WriteFile(.dagr/run-atlas.json.tmp)
+    27  ai-cache      21    14223   25835      72   0/1  AI-cache-reused 44 turns (76% -> 33%)  -> BashExec(dagr check .dagr/run-atlas.json.tmp --)
+    28  ai-cache      23    14378   26132     568   0/1  AI-cache-reused 44 turns (80% -> 36%)  -> EditFile(.dagr/run-atlas.json.tmp)
+    29  ai-cache      25    14636   26684      72   0/1  AI-cache-reused 44 turns (80% -> 37%)  -> BashExec(dagr check .dagr/run-atlas.json.tmp --)
+    30  ai-cache      27    14672   26813     110   0/1  AI-cache-reused 44 turns (81% -> 38%)  -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-), ReadFile(reports/R08.md)
+    31  ai-cache      30    17386   30614    2065   0/1  AI-cache-reused 44 turns (86% -> 43%)  -> WriteFile(.dagr/run-atlas.json.tmp)
+    32  ai-cache      32    19075   35150      66   0/1  AI-cache-reused 44 turns (90% -> 47%)  -> BashExec(dagr check .dagr/run-atlas.json.tmp --)
+    33  ai-cache      34    19111   35279     109   0/1  AI-cache-reused 44 turns (94% -> 51%)  -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-), ReadFile(reports/R09.md)
+    34  ai-cache      37    21829   39017     452   0/1  AI-cache-reused 44 turns (99% -> 56%)  -> Search(), ReadFile(PROJECT.md)
+    35  ai-cache      40    22966   40629     370   0/1  AI-cache-reused 44 turns (102% -> 59%)  -> Skill(dagr-producer)
+    36  ai-cache      42    29079   47582    2528   1/2  AI-cache-reused 44 turns (114% -> 71%)  -> WriteFile(.dagr/run-atlas.json.tmp)
+    37  ai-cache      44    30915   52480      66   1/2  AI-cache-reused 44 turns (117% -> 74%)  -> BashExec(dagr check .dagr/run-atlas.json.tmp --)
+    38  ai-cache      46    30951   52609     113   1/2  AI-cache-reused 44 turns (121% -> 78%)  -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-), ReadFile(reports/R10.md)
+    39  ai-cache      49    33632   56361    2651   1/2  AI-cache-reused 44 turns (126% -> 83%)  -> WriteFile(.dagr/run-atlas.json.tmp)
+    40  ai-cache      51    35568   61574      66   1/2  AI-cache-reused 44 turns (131% -> 88%)  -> BashExec(dagr check .dagr/run-atlas.json.tmp --)
+    41  ai-folded     13     8860   18328     108   0/2  AI-folded 84 turns (135% -> 40%)  -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-), ReadFile(reports/R11.md)
+    42  ai-cache      16    11505   22060     421   0/2  AI-cache-reused 84 turns (124% -> 30%)  -> ReadFile(PROJECT.md)
+    43  ai-cache      18    11934   22613    3248   0/2  AI-cache-reused 84 turns (126% -> 31%)  -> WriteFile(.dagr/run-atlas.json.tmp)
+    44  ai-cache      20    14210   28711      78   0/2  AI-cache-reused 84 turns (130% -> 35%)  -> BashExec(dagr check .dagr/run-atlas.json.tmp --)
+    45  ai-cache      22    14349   28982     556   0/2  AI-cache-reused 84 turns (136% -> 41%)  -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-), ReadFile(reports/R12.md)
+    46  ai-cache      25    17128   32883    3219   0/2  AI-cache-reused 84 turns (141% -> 46%)  -> WriteFile(.dagr/run-atlas.json.tmp)
+    47  ai-cache      27    19664   39770      72   0/2  AI-cache-reused 84 turns (147% -> 52%)  -> BashExec(dagr check .dagr/run-atlas.json.tmp --)
+    48  ai-cache      29    19700   39899     107   0/2  AI-cache-reused 84 turns (153% -> 58%)  -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-), ReadFile(reports/R13.md)
+    49  ai-cache      32    22366   43588    3704   0/2  AI-cache-reused 84 turns (158% -> 63%)  -> WriteFile(.dagr/run-atlas.json.tmp)
+    50  ai-cache      34    25138   51086      71   0/2  AI-cache-reused 84 turns (164% -> 69%)  -> BashExec(dagr check .dagr/run-atlas.json.tmp --)
+    51  ai-cache      36    25234   51295     427   0/2  AI-cache-reused 84 turns (171% -> 76%)  -> EditFile(.dagr/run-atlas.json.tmp)
+    52  ai-cache      38    25390   51690      74   0/2  AI-cache-reused 84 turns (171% -> 76%)  -> BashExec(dagr check .dagr/run-atlas.json.tmp --)
+    53  ai-cache      40    25426   51819     117   0/2  AI-cache-reused 84 turns (171% -> 77%)  -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-), ReadFile(reports/R14.md)
+    54  ai-cache      43    28093   55552    3513   0/2  AI-cache-reused 84 turns (177% -> 82%)  -> WriteFile(.dagr/run-atlas.json.tmp)
+    55  ai-cache      45    31015   63398      77   0/2  AI-cache-reused 84 turns (183% -> 88%)  -> BashExec(dagr check .dagr/run-atlas.json.tmp --)
+    56  ai-folded     13     8257   16590     276   0/2  AI-folded 118 turns (190% -> 51%)  -> EditFile(.dagr/run-atlas.json.tmp)
+    57  ai-cache      15    10176   19896      71   0/2  AI-cache-reused 118 turns (164% -> 25%)  -> BashExec(dagr check .dagr/run-atlas.json.tmp --)
+    58  ai-cache      17    10212   20025      96   0/2  AI-cache-reused 118 turns (166% -> 27%)  -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-)
+    59  ai-cache      19    10249   20150     502   0/2  AI-cache-reused 118 turns (166% -> 27%)  -> 
