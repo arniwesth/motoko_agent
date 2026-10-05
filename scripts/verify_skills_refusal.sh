@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # verify_skills_refusal — 037 ADR-001 acceptance A3 (every rule refuses), A1
 # (one tool, one index) and A2 (digests), through the registration path the
-# runtime starts on, with AILANG_FS_SANDBOX set to each fixture workdir.
+# runtime starts on, with AILANG_FS_SANDBOX set to each fixture workdir; then
+# D7's sandbox flag and A9's `Skill` call, through the real host and the live
+# port, with the sandbox and once without it.
 #
 #   make verify_skills_refusal        (or: bash scripts/verify_skills_refusal.sh)
 #
@@ -18,7 +20,9 @@
 # the process exits 0 with no `error` event and exactly one `Skill` schema.
 #
 # Every start runs under `timeout` (START_TIMEOUT seconds, 180 unless set): a
-# startup that hangs is stopped and is a failed check that says so.
+# startup that hangs is stopped and is a failed check that says so. The slow
+# runs are the two launches at the end that make `Skill` calls, about 35 s
+# each: they run scripts/verify_skills_call.ail, which imports src/core/session.
 #
 # The fixtures are built here and not committed: they need symlinks with
 # absolute targets and targets outside the workdir, an unreadable file, a named
@@ -141,6 +145,9 @@ W=$(wd n1-named-profile-broken); named "$W"; good "$W"; mkdir -p "$W/.motoko/ski
 # ADR D1, "what the guarantee does not cover": a directory that cannot be listed.
 W=$(wd x1-unlistable-skill-dir); good "$W"; skill "$W" sealed '---\nname: sealed\ndescription: d\n---\n'; chmod 000 "$W/.motoko/skills/sealed"
 
+# D7: a valid tree, started without the sandbox further down.
+W=$(wd d7-unsandboxed-elsewhere); good "$W"
+
 # A2: two valid skills, edited between runs below.
 W=$(wd a2-digests)
 skill "$W" alpha '---\nname: alpha\ndescription: The first skill.\n---\n# Alpha\n\nThe body.\n'
@@ -259,6 +266,11 @@ starts "nine valid skills, one per scalar style, one with malformed optional fie
 also "A1: the description names all nine in name order, one line each" index_is_whole
 also "A1: the description is the instruction, then the index, and nothing else" index_follows_instruction
 also "A1: the enum is the nine names, in name order" enum_is_names
+# D7: registration records whether the sandbox variable was set. Every start
+# above and below is sandboxed; this reads the record on one of them.
+config_field() { field SKILLS_CONFIG | jq -r "$1"; }
+sandbox_recorded_set() { [ "$(config_field .sandbox_set)" = true ]; }
+also "D7: under the sandbox, the registration's config record says the sandbox was set" sandbox_recorded_set
 # label of the entry, its description -> it is in the index and the enum, beside `good`.
 indexed_beside_good() {
   [ "$(enum_names)" = "$(printf 'good\n%s' "$1")" ] && index_lines | grep -qxF -- "- $1: $2"
@@ -363,6 +375,47 @@ else bad "A2       control: ext_set_digest differs under a profile with another 
 # An invalid change refuses startup whatever the digests say.
 skill "$B/a2-digests" alpha '---\nname: not-alpha\ndescription: The first skill.\n---\n# Alpha\n'
 refuses "A2 an invalid change refuses startup" a2-digests $P "$ID" "V5: .motoko/skills/alpha/SKILL.md"
+
+# ---- D7 and A9: a `Skill` call through the real host and the live port --------
+
+# One process per launch: scripts/verify_skills_call.ail starts as the runtime
+# does and then dispatches `Skill` once per name. "sandboxed" or "unsandboxed",
+# the workdir's name, then the names.
+calls() { local mode=$1 wdir=$2; shift 2; run_ail scripts/verify_skills_call.ail "$mode" "$wdir" probe "$@"; }
+# What stopped the launch itself, if anything: a call check cannot hold then.
+launched() { [ -z "$HUNG" ] && [ "$RC" -eq 0 ] && [ "$NERR" -eq 0 ] && printf '%s\n' "$OUT" | grep -q '^OK started: .* loaded=skills$'; }
+# skill name, then a jq condition over that name's SKILL_CALL record.
+call_is() {
+  local name=$1; shift
+  launched && printf '%s\n' "$OUT" | sed -n 's/^SKILL_CALL //p' | jq -e --arg n "$name" "$@" > /dev/null
+}
+
+STAMP="$B/c2-valid-set/.motoko/skills/workdir-stamp/SKILL.md"
+loads_with_directory_line() {
+  call_is workdir-stamp --rawfile text "$STAMP" \
+    'select(.name == $n) | .handled and .exit_code == 0 and .stderr == "" and .stdout == ".motoko/skills/workdir-stamp\n" + $text'
+}
+unknown_lists_names() {
+  call_is nope --arg names "$(printf '%s\n' "$WANT_NAMES" | paste -sd, | sed 's/,/, /g')" \
+    'select(.name == $n) | .handled and .exit_code == 1 and .stdout == "" and .stderr == "Unknown skill \u0027nope\u0027. Valid names: " + $names + "."'
+}
+calls sandboxed c2-valid-set workdir-stamp nope
+also "A9: sandboxed, a valid skill loads: the directory line, then the file as it is on disk" loads_with_directory_line
+also "A9: sandboxed, a name not in the index is an error that lists the nine names" unknown_lists_names
+
+# Without the sandbox `.motoko/skills` is read from the directory the process
+# was started in, this repository's root, and not from the workdir. The record
+# says the variable was not set, and a call says so instead of loading (D7).
+# What the root's own `.motoko/skills` holds does not matter to either check.
+ELSEWHERE="$B/d7-unsandboxed-elsewhere"
+sandbox_recorded_unset() { launched && [ "$(config_field .sandbox_set)" = false ]; }
+refuses_to_load_elsewhere() {
+  call_is good --arg wd "$ELSEWHERE" \
+    'select(.name == $n) | .handled and .exit_code == 1 and .stdout == "" and (.stderr | startswith("Skill: nothing was loaded. This runtime was started without AILANG_FS_SANDBOX and its working directory is \u0027" + $wd + "\u0027, not \u0027.\u0027. "))'
+}
+calls unsandboxed d7-unsandboxed-elsewhere good
+also "D7: unsandboxed, the registration's config record says the sandbox was not set" sandbox_recorded_unset
+also "D7: unsandboxed with an absolute workdir that is not the process's directory, a Skill call returns D7's error and loads nothing" refuses_to_load_elsewhere
 
 # ---- the stated limit, reported and not gated --------------------------------
 

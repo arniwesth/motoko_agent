@@ -17,6 +17,8 @@
 --   OK started ...          the registry that was built
 --   SKILL_SCHEMAS n         how many schemas named `Skill` the catalogue holds
 --   SKILL_SCHEMA {...}      each one, as a JSON line (`parameters` is a string)
+--   SKILLS_CONFIG {...}     the `config` record the `skills` registration
+--                           returned, as the registry holds it (D2, D4, D7)
 --   EXT_SET_DIGEST          `runtime.ext_set_digest`, what a resume compares
 --   EXT_CONFIG_DIGEST       `registry_normalize.ext_config_digest` of the
 --                           `skills` entry (031 ADR-001 D2; no runtime caller
@@ -29,6 +31,11 @@
 -- With the two digests of an earlier run as arguments it also prints the
 -- journal's own compatibility row for a resume under the same profile and
 -- workdir: `RESUME continues`, or `RESUME refused: <refusal id>`.
+--
+-- A `Skill` call through this registry is `scripts/verify_skills_call.ail`. It
+-- is a second script because the port bridge it needs is in `src/core/session`,
+-- which costs every process that imports it about 30 s, and this one runs once
+-- per fixture.
 module scripts/verify_skills_startup
 
 import std/io (println)
@@ -68,6 +75,14 @@ func skills_config_digest(entries: [ExtEntry]) -> string {
   match entries {
     [] => "<no skills entry>",
     e :: rest => if startsWith(e.id, "skills#") then ext_config_digest(e) else skills_config_digest(rest)
+  }
+}
+
+-- The `config` the `skills` registration returned, as the registry holds it.
+func skills_config_line(entries: [ExtEntry]) -> string {
+  match entries {
+    [] => "<no skills entry>",
+    e :: rest => if startsWith(e.id, "skills#") then encode(e.config) else skills_config_line(rest)
   }
 }
 
@@ -137,6 +152,7 @@ func report(workdir: string, profile: string, before: Option[{ ext: string, pref
   let _ = println("OK started: profile=${cfg.profile} strict=${show(cfg.extensions.strict)} entries=${show(List.length(rt.registry.entries))} loaded=${join(",", loaded_extension_names(rt))}");
   let _ = println("SKILL_SCHEMAS ${show(List.length(schemas))}");
   let _ = print_schemas(schemas);
+  let _ = println("SKILLS_CONFIG ${skills_config_line(rt.registry.entries)}");
   let _ = println("EXT_SET_DIGEST ${now_ext}");
   let _ = println("EXT_CONFIG_DIGEST ${skills_config_digest(rt.registry.entries)}");
   let _ = println("SYSTEM_PREFIX_DIGEST ${now_prefix}");
