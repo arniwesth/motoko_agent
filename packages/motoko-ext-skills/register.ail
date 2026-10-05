@@ -86,18 +86,18 @@ pure func lists_name(names: [string], wanted: string) -> bool {
 -- ============================================================================
 
 -- One entry directly under the root, as `skills.ail`'s listing data. `SKILL.md`
--- is looked for in the directory's own listing, not by reading the path: on a
--- filesystem that ignores case a read of `SKILL.md` finds `skill.md`, and V1
--- is exact case.
+-- is looked for in the directory's own listing, not by reading the path (V1 is
+-- exact case, and a read finds `skill.md` where the filesystem ignores case),
+-- and is opened only when `isFile` says so: opening a named pipe blocks (V3).
 func read_entry(entry: string) -> RootEntry ! {FS} {
   let path = skill_dir(entry);
   if isDir(path) then
-    (if has_skill_md(listDir(path)) then
-      match readFileResult(skill_md_path(entry)) {
-        Ok(text) => DirWithSkillMd(entry, text),
-        Err(why) => DirUnreadableSkillMd(entry, why)
-      }
-    else DirWithoutSkillMd(entry))
+    (if not has_skill_md(listDir(path)) then DirWithoutSkillMd(entry)
+    else if not isFile(skill_md_path(entry)) then DirUnreadableSkillMd(entry, "it is not a regular file, or is a symlink that does not lead to one inside the working directory")
+    else match readFileResult(skill_md_path(entry)) {
+      Ok(text) => DirWithSkillMd(entry, text),
+      Err(why) => DirUnreadableSkillMd(entry, why)
+    })
   else if isFile(path) then RegularFile(entry)
   else OtherEntry(entry)
 }

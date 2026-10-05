@@ -17,9 +17,12 @@
 # violations, each by rule and path, and no further one. A CONTROL passes when
 # the process exits 0 with no `error` event and exactly one `Skill` schema.
 #
+# Every start runs under `timeout` (START_TIMEOUT seconds, 180 unless set): a
+# startup that hangs is stopped and is a failed check that says so.
+#
 # The fixtures are built here and not committed: they need symlinks with
-# absolute targets and targets outside the workdir, an unreadable file, empty
-# directories and a 61,000-byte file. They are the workdirs of P4's discovery
+# absolute targets and targets outside the workdir, an unreadable file, a named
+# pipe, empty directories and a 61,000-byte file. They are the workdirs of P4's discovery
 # probe (.agent/projects/037_skills_system/evidence/p4/probe/), each given a
 # profile that names `skills`. V3's messages carry the workdir's absolute path
 # (std/fs writes it), so no message is compared whole.
@@ -29,7 +32,10 @@ set -u
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$ROOT" || exit 1
-command -v jq > /dev/null || { echo "FAIL verify_skills_refusal: jq is not on PATH"; exit 1; }
+for tool in jq timeout mkfifo; do
+  command -v "$tool" > /dev/null || { echo "FAIL verify_skills_refusal: $tool is not on PATH"; exit 1; }
+done
+START_TIMEOUT=${START_TIMEOUT:-180}
 
 # The physical path: the sandbox compares resolved paths, and /tmp is a symlink
 # on some hosts.
@@ -95,6 +101,9 @@ printf 'not a skill\n' > "$W/.motoko/skills/README.md"; printf 'x' > "$W/.motoko
 W=$(wd c3-relative-symlink-inside); good "$W"
 mkdir -p "$W/shared/inlink"; printf -- '---\nname: inlink\ndescription: Reached by a relative symlink inside the workdir.\n---\nbody\n' > "$W/shared/inlink/SKILL.md"
 ln -s ../../shared/inlink "$W/.motoko/skills/inlink"
+W=$(wd c4-skill-md-relative-symlink-inside); good "$W"
+mkdir -p "$W/shared" "$W/.motoko/skills/mdlink"; printf -- '---\nname: mdlink\ndescription: Its SKILL.md is a relative symlink inside the workdir.\n---\nbody\n' > "$W/shared/mdlink.md"
+ln -s ../../../shared/mdlink.md "$W/.motoko/skills/mdlink/SKILL.md"
 
 # R1: the root. The ADR's three, and a dangling symlink, which reads the same.
 W=$(wd r1a-root-is-file); printf 'not a directory\n' > "$W/.motoko/skills"
@@ -110,6 +119,8 @@ W=$(wd v2-entry-symlink-out); good "$W"; ln -s "../../../_outside/far" "$W/.moto
 W=$(wd v3a-skill-md-unreadable); good "$W"; skill "$W" locked '---\nname: locked\ndescription: d\n---\n'; chmod 000 "$W/.motoko/skills/locked/SKILL.md"
 W=$(wd v3b-skill-md-is-directory); good "$W"; mkdir -p "$W/.motoko/skills/dirmd/SKILL.md"
 W=$(wd v3c-skill-md-symlink-out); good "$W"; mkdir -p "$W/.motoko/skills/far"; ln -s "../../../../_outside/far/SKILL.md" "$W/.motoko/skills/far/SKILL.md"
+# No writer ever opens the pipe: a read of it would block for good.
+W=$(wd v3d-skill-md-is-fifo); good "$W"; mkdir -p "$W/.motoko/skills/pipe"; mkfifo "$W/.motoko/skills/pipe/SKILL.md"
 W=$(wd v4a-no-frontmatter); good "$W"; skill "$W" nofm '# no frontmatter here\n'
 W=$(wd v4b-unterminated); good "$W"; skill "$W" open '---\nname: open\ndescription: d\n\nbody\n'
 W=$(wd v4c-bad-yaml); good "$W"; skill "$W" badyaml '---\nname: badyaml\ndescription: Use when: the user asks.\n---\n'
@@ -137,18 +148,27 @@ skill "$W" beta '---\nname: beta\ndescription: The second skill.\n---\n# Beta\n'
 
 # ---- running a case ---------------------------------------------------------
 
-# workdir name, profile, then optionally the two digests of an earlier run.
-# Sets OUT (stdout), RC, ERRORS (the JSONL `error` events) and NERR.
-start() {
-  local wdir="$B/$1"; shift
+# The script, "sandboxed" or "unsandboxed", the workdir's name, then the
+# script's arguments after the workdir. Sets OUT (stdout), RC, HUNG (why, when
+# the run was stopped by the timeout), ERRORS (the JSONL `error` events) and
+# NERR. Every `-u` comes before the first assignment: env stops reading options
+# there.
+run_ail() {
+  local script=$1 mode=$2 wdir="$B/$3"; shift 3
+  local sandbox=(AILANG_FS_SANDBOX="$wdir")
+  [ "$mode" = sandboxed ] || sandbox=(-u AILANG_FS_SANDBOX)
   OUT=$(env -u MOTOKO_CONFIG -u MOTOKO_PROFILE_DIR -u MOTOKO_WORKDIR -u MOTOKO_REPO \
-        AILANG_FS_SANDBOX="$wdir" AILANG_RELAX_MODULES=1 \
-        ailang run --caps "$CAPS" --ai-stub --entry main \
-        scripts/verify_skills_startup.ail -- "$wdir" "$@" 2> "$B/_stderr" < /dev/null)
+        "${sandbox[@]}" AILANG_RELAX_MODULES=1 \
+        timeout -k 5 "$START_TIMEOUT" ailang run --caps "$CAPS" --ai-stub --entry main \
+        "$script" -- "$wdir" "$@" 2> "$B/_stderr" < /dev/null)
   RC=$?
+  HUNG=""
+  if [ "$RC" -eq 124 ] || [ "$RC" -eq 137 ]; then HUNG=" the run did not end within ${START_TIMEOUT}s and was stopped: it hangs;"; fi
   ERRORS=$(printf '%s\n' "$OUT" | jq -cR 'fromjson? | select(type == "object" and .type == "error")')
   NERR=$(printf '%s' "$ERRORS" | grep -c .)
 }
+# workdir name, profile, then optionally the two digests of an earlier run.
+start() { run_ail scripts/verify_skills_startup.ail sandboxed "$@"; }
 field() { printf '%s\n' "$OUT" | sed -n "s/^$1 //p" | head -1; }
 schema() { field SKILL_SCHEMA; }
 index_lines() { schema | jq -r '.description' | awk 'seen { print } /^Available skills:$/ { seen = 1 }'; }
@@ -159,8 +179,9 @@ has_enum() { schema | jq -e '.parameters | fromjson | .properties.name | has("en
 # per expected violation, in the order the message lists them.
 refuses() {
   local label=$1 wdir=$2 profile=$3 id=$4; shift 4
-  local n=$# why="" i=1 v msg count
+  local n=$# why i=1 v msg count
   start "$wdir" "$profile"
+  why=$HUNG
   msg=$(printf '%s\n' "$ERRORS" | head -1 | jq -r '.message // ""' 2> /dev/null)
   count="$n violations"; [ "$n" -ne 1 ] || count="1 violation"
   [ "$RC" -eq 2 ] || why="$why exit $RC, expected 2;"
@@ -182,8 +203,9 @@ refuses() {
 
 # label, workdir, profile, the expected `loaded=` list.
 starts() {
-  local label=$1 wdir=$2 profile=$3 loaded=$4 why=""
+  local label=$1 wdir=$2 profile=$3 loaded=$4 why
   start "$wdir" "$profile"
+  why=$HUNG
   [ "$RC" -eq 0 ] || why="$why exit $RC, expected 0;"
   [ "$NERR" -eq 0 ] || why="$why $NERR JSONL error events, expected none;"
   printf '%s\n' "$OUT" | grep -q "^OK started: .* loaded=$loaded\$" || why="$why no 'OK started' line with loaded=$loaded;"
@@ -237,7 +259,13 @@ starts "nine valid skills, one per scalar style, one with malformed optional fie
 also "A1: the description names all nine in name order, one line each" index_is_whole
 also "A1: the description is the instruction, then the index, and nothing else" index_follows_instruction
 also "A1: the enum is the nine names, in name order" enum_is_names
+# label of the entry, its description -> it is in the index and the enum, beside `good`.
+indexed_beside_good() {
+  [ "$(enum_names)" = "$(printf 'good\n%s' "$1")" ] && index_lines | grep -qxF -- "- $1: $2"
+}
 starts "a skill behind a relative symlink inside the workdir" c3-relative-symlink-inside probe skills
+starts "a SKILL.md that is a relative symlink to a regular file inside the workdir" c4-skill-md-relative-symlink-inside probe skills
+also "that skill is in the index and the enum" indexed_beside_good mdlink 'Its SKILL.md is a relative symlink inside the workdir.'
 
 # ---- A3: every rule refuses --------------------------------------------------
 
@@ -253,6 +281,15 @@ if [ "$(id -u)" -eq 0 ]; then echo "SKIP refused  V3 SKILL.md has no read permis
 else refuses "V3 SKILL.md has no read permission" v3a-skill-md-unreadable $P "$ID" "V3: .motoko/skills/locked/SKILL.md"; fi
 refuses "V3 SKILL.md is a directory" v3b-skill-md-is-directory $P "$ID" "V3: .motoko/skills/dirmd/SKILL.md"
 refuses "V3 SKILL.md is a symlink leaving the workdir" v3c-skill-md-symlink-out $P "$ID" "V3: .motoko/skills/far/SKILL.md"
+# The start is refused, not hung: without the regular-file check the read of
+# the pipe blocks, and this case then fails on the timeout.
+refuses "V3 SKILL.md is a named pipe" v3d-skill-md-is-fifo $P "$ID" "V3: .motoko/skills/pipe/SKILL.md"
+says_not_regular() {
+  case "$(printf '%s\n' "$ERRORS" | head -1 | jq -r '.message // ""')" in
+    *"V3: .motoko/skills/pipe/SKILL.md: cannot be read: it is not a regular file"*) ;; *) return 1 ;;
+  esac
+}
+also "the reason says it is not a regular file" says_not_regular
 refuses "V4 no frontmatter block" v4a-no-frontmatter $P "$ID" "V4: .motoko/skills/nofm/SKILL.md"
 refuses "V4 the block is not terminated" v4b-unterminated $P "$ID" "V4: .motoko/skills/open/SKILL.md"
 refuses "V4 the block does not decode as YAML" v4c-bad-yaml $P "$ID" "V4: .motoko/skills/badyaml/SKILL.md"
@@ -277,8 +314,9 @@ digests() { printf '%s %s %s' "$(field EXT_SET_DIGEST)" "$(field EXT_CONFIG_DIGE
 # label, what the config digest must do ("moves" or "same"). Runs the fixture
 # as it is now, as the resume of a session whose header recorded the base run.
 a2() {
-  local label=$1 want=$2 why="" set_d cfg_d pre_d
+  local label=$1 want=$2 why set_d cfg_d pre_d
   start a2-digests probe "$BASE_SET" "$BASE_PREFIX"
+  why=$HUNG
   set_d=$(field EXT_SET_DIGEST); cfg_d=$(field EXT_CONFIG_DIGEST); pre_d=$(field SYSTEM_PREFIX_DIGEST)
   [ "$RC" -eq 0 ] || why="$why exit $RC, expected 0;"
   case "$set_d$cfg_d$pre_d" in sha256:*sha256:*sha256:*) ;; *) why="$why a digest is missing;" ;; esac
