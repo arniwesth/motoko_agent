@@ -106,6 +106,12 @@ import src/core/dst_event_vocabulary as Vocab (event_vocabulary_version)
 
 export pure func herdr_profile_id() -> string { "driver_plus_herdr" }
 
+-- v4 (2026-10-05, 037 PLAN-001 P6, the re-pin). RE-ISSUED because the omitted
+-- list changed again: `skills`, the extension 037 adds, is named in it with
+-- its measured reason (037 ADR-001 D13 and A8). Nothing installed, covered,
+-- excluded or routed changes; the omitted count goes 18 -> 19, and the
+-- acceptance script's count and its `extension_profile` literal follow.
+--
 -- v3 (2026-10-05, 037 PLAN-001 P6, the repair). RE-ISSUED because the omitted
 -- list changed: `ailang_tools` is named in it, with its own measured reason
 -- (see `not_installed`). Nothing installed, covered, excluded or routed changes;
@@ -126,7 +132,7 @@ export pure func herdr_profile_id() -> string { "driver_plus_herdr" }
 -- Neither changes what is installed, covered, excluded or routed.
 --
 -- v1. First issue; there is no predecessor to re-issue from.
-export pure func herdr_profile_version() -> string { "3" }
+export pure func herdr_profile_version() -> string { "4" }
 
 -- The revision the measurements below were taken at.
 export pure func measured_at() -> string { "8470c3f" }
@@ -320,6 +326,10 @@ pure func not_installed() -> [OmittedExtension] {
              "repetition_guard", "scratchpad", "test_dummy"], barrier_reason())
     ++ [{ extension_id: "ailang_tools",
           reason: "NOT INSTALLED, and on a barrier rather than by choice. Until 037 P6 (2026-10-05) this profile named it in neither list. Measured at 0f4724de: classifier 3 (make ext_ambient_inventory) reports it AMBIENT, with 6 ambient sources in a 3-module closure (std/process.exec; std/fs.readFileResult, writeFileResult, mkdirAllResult and isDir; std/env.getEnvOr) and 0 ExtPorts field calls, so criterion 2's first clause fails on evidence. make ext_hook_scope lists one of the six as registration-only (std/env.getEnvOr) and reports its hook scope HOOK-UNRESOLVED. It registers one atom, a ToolProvider claiming WriteFile, EditFile and ReadFile, and handles them for .ail paths: write_ail and edit_ail declare ! {FS, Process} and reach std/fs and std/process directly, writing the file and running `ailang check` themselves, and the outcome returns next_state: ctx.world as it was handed. So the effects are the hook's own and leave outside ctx.ports; a registration read is not the whole of it. The graded session does not rescue it: this profile records one, through herdr, which never dispatches this extension, and a run that did would find no world-mediated, origin-tagged effect to record for a handler that does not use the ports. Per WI-D2's rule a reason names what would have to CHANGE: the handler's file and process effects reaching the world through mediated ports, which is the package's change and not this profile's." }]
+    -- NINETEEN FROM v4. `skills` is the extension 037 adds; omitted by 037
+    -- ADR-001 D13, with its own measured reason.
+    ++ [{ extension_id: "skills",
+          reason: "NOT INSTALLED, and named from 037 P6 (2026-10-05). 037 ADR-001 D13 (ruling 10, 2026-10-03) keeps the skills extension outside every DST profile in v1. Its position, measured at c708d2cc: classifier 3 (make ext_ambient_inventory) reports it AMBIENT, with 5 ambient sources in a 3-module closure (std/env.getEnvOr; std/fs.isDir, isFile, listDir and readFileResult) and 1 ExtPorts field call, and that closure reading is the one a profile may rely on, so criterion 2's first clause fails on it. make ext_hook_scope reports the second reading, HOOK-PORT-MEDIATED, with all five sources registration-only: discovery of .motoko/skills runs at registration, before any world exists, reads the real disk, and is disclosed through config and not mediated. The one effect a hook performs is the port read ctx.ports.file_read (register.ail:331, make ext_call_inventory), which a deterministic run serves from the world's file table. It registers two atoms: DescribeTools, which renders from config on a declared empty row, and a ToolProvider for the one tool Skill, the gated kind. Covering the ToolProvider takes a recorded, validated and strictly replayed run that dispatches Skill, as this profile's own run does for herdr's Delegate; the classifier cannot clear it, because its verdict is closure-wide and a registration read taints every hook, and the one graded session this profile records never dispatches Skill. Per WI-D2's rule a reason names what would have to CHANGE: a driver_plus_skills profile with its own graded run, which D13 names as the later step and 037 leaves out of scope. What the extension was measured to do, reported and not gated (037 P1, NOTE-p1-prototype-results.md): the expected skill was loaded in the first response in 88% to 100% of sessions per model, 261 of 270 over seven models; its instructions were followed to the end in 53 of 54 sessions; after compaction it was reloaded 0 times in three runs under the structural compactor and once in each of three under compaction_ai; and a 16,000-char index was accepted by all 7 provider families it was sent to. Default-profile membership is D11's and is ruled at gate G2, not here." }]
 }
 
 export pure func driver_plus_herdr() -> ProfileDefinition {
@@ -475,7 +485,7 @@ pure func test_four_atoms_one_exclusion_two_on_discovery() -> bool
     List.length(registered_atoms()) == 4
       && List.length(excluded_slot_ids()) == 1
       && List.length(criterion_2_slot_ids()) == 2
-      && List.length(driver_plus_herdr().omitted_extensions) == 18
+      && List.length(driver_plus_herdr().omitted_extensions) == 19
   }
 
 pure func test_two_hooks_mediate_substantively() -> bool

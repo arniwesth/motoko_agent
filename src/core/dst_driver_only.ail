@@ -520,7 +520,12 @@ export pure func driver_only_id() -> string { "driver_only" }
 -- nothing. The install list, the coverage claim, the waived set, the hook
 -- classifications, the catalogue and the attribution ref are as v32 had them.
 -- `make driver_only` was green before this entry and did not ask for it.
-export pure func driver_only_version() -> string { "33" }
+--
+-- v33 → v34 AT 037 PLAN-001 P6 (2026-10-05), THE RE-PIN. The same kind of bump:
+-- `omitted_extensions` names `skills`, the extension 037 adds, with its
+-- measured reason (037 ADR-001 D13 and A8). Installed, covered, waived,
+-- classified and attributed: all as v33 had them.
+export pure func driver_only_version() -> string { "34" }
 
 -- The attribution table this profile was issued against. Literals by design —
 -- see the header. Re-issuing the profile after a table correction means bumping
@@ -1059,13 +1064,21 @@ export pure func driver_only() -> ProfileDefinition {
       -- found this one in none of them.
       --
       -- THIS LIST IS STILL NOT A PARTITION OF THE INSTALLABLE SET, and the entry
-      -- does not make it one. Apart from `compaction_ai`, no other AMBIENT
-      -- extension is named anywhere in this file, as before, and no gate asks
-      -- for one:
+      -- does not make it one. Apart from `compaction_ai`, and `skills` below,
+      -- no other AMBIENT extension is named anywhere in this file, as before,
+      -- and no gate asks for one:
       -- `check_fixtures.py` requires by name only a classifier-2 caller and an
       -- extension at zero barriers, and `ailang_tools` is neither of those.
       { extension_id: "ailang_tools",
-        reason: "OMITTED BY CONSEQUENCE, not by choice, and named from 037 P6 (2026-10-05); until then no list in this profile named it. This profile installs nothing, so what the entry records is a measurement and not a decision to decline. Measured at 0f4724de: classifier 3 (make ext_ambient_inventory) reports it AMBIENT, with 6 ambient sources in a 3-module closure (std/process.exec; std/fs.readFileResult, writeFileResult, mkdirAllResult and isDir; std/env.getEnvOr) and 0 ExtPorts field calls, so criterion 2's first clause fails on evidence and the per-(extension, slot) derivation in tools/profile_definition/check_fixtures.py clears nothing for it: it is not among the extensions that derivation finds installable. make ext_hook_scope lists one of the six as registration-only (std/env.getEnvOr) and reports its hook scope HOOK-UNRESOLVED. It registers one atom, a ToolProvider claiming WriteFile, EditFile and ReadFile, and handles them for .ail paths: write_ail and edit_ail declare ! {FS, Process} and reach std/fs and std/process directly, writing the file and running `ailang check` themselves, and the outcome returns next_state: ctx.world as it was handed. So the effects are the hook's own and leave outside ctx.ports; a registration read is not the whole of it. Per WI-D2's rule a reason names what would have to CHANGE: the handler's file and process effects reaching the world through mediated ports, which is the package's change and not this profile's." }
+        reason: "OMITTED BY CONSEQUENCE, not by choice, and named from 037 P6 (2026-10-05); until then no list in this profile named it. This profile installs nothing, so what the entry records is a measurement and not a decision to decline. Measured at 0f4724de: classifier 3 (make ext_ambient_inventory) reports it AMBIENT, with 6 ambient sources in a 3-module closure (std/process.exec; std/fs.readFileResult, writeFileResult, mkdirAllResult and isDir; std/env.getEnvOr) and 0 ExtPorts field calls, so criterion 2's first clause fails on evidence and the per-(extension, slot) derivation in tools/profile_definition/check_fixtures.py clears nothing for it: it is not among the extensions that derivation finds installable. make ext_hook_scope lists one of the six as registration-only (std/env.getEnvOr) and reports its hook scope HOOK-UNRESOLVED. It registers one atom, a ToolProvider claiming WriteFile, EditFile and ReadFile, and handles them for .ail paths: write_ail and edit_ail declare ! {FS, Process} and reach std/fs and std/process directly, writing the file and running `ailang check` themselves, and the outcome returns next_state: ctx.world as it was handed. So the effects are the hook's own and leave outside ctx.ports; a registration read is not the whole of it. Per WI-D2's rule a reason names what would have to CHANGE: the handler's file and process effects reaching the world through mediated ports, which is the package's change and not this profile's." },
+
+      -- 037 PLAN-001 P6 (2026-10-05), THE RE-PIN. `skills` is the extension 037
+      -- adds, and it is named for the reason `ailang_tools` is: D13 states its
+      -- position in all four profiles. It is the one entry here omitted by a
+      -- RULING. Its hooks perform one effect, a port read, and the profile that
+      -- could cover that is D13's later step.
+      { extension_id: "skills",
+        reason: "OMITTED BY RULING, and named from 037 P6 (2026-10-05). 037 ADR-001 D13 (ruling 10, 2026-10-03) keeps the skills extension outside every DST profile in v1, and this profile installs nothing in any case. Its position, measured at c708d2cc: classifier 3 (make ext_ambient_inventory) reports it AMBIENT, with 5 ambient sources in a 3-module closure (std/env.getEnvOr; std/fs.isDir, isFile, listDir and readFileResult) and 1 ExtPorts field call, and that closure reading is the one a profile may rely on, so criterion 2's first clause fails on it. make ext_hook_scope reports the second reading, HOOK-PORT-MEDIATED, with all five sources registration-only: discovery of .motoko/skills runs at registration, before any world exists, reads the real disk, and is disclosed through config and not mediated. The one effect a hook performs is the port read ctx.ports.file_read (register.ail:331, make ext_call_inventory), which a deterministic run serves from the world's file table. It registers two atoms: DescribeTools, which renders from config on a declared empty row, and a ToolProvider for the one tool Skill, the gated kind. Covering the ToolProvider takes a recorded, validated and strictly replayed run that dispatches Skill; the classifier cannot clear it, because its verdict is closure-wide and a registration read taints every hook, and this profile records no run of an extension at all. Per WI-D2's rule a reason names what would have to CHANGE: a driver_plus_skills profile with its own graded run, which D13 names as the later step and 037 leaves out of scope. What the extension was measured to do, reported and not gated (037 P1, NOTE-p1-prototype-results.md): the expected skill was loaded in the first response in 88% to 100% of sessions per model, 261 of 270 over seven models; its instructions were followed to the end in 53 of 54 sessions; after compaction it was reloaded 0 times in three runs under the structural compactor and once in each of three under compaction_ai; and a 16,000-char index was accepted by all 7 provider families it was sent to. Default-profile membership is D11's and is ruled at gate G2, not here." }
     ],
 
     -- A10 decision 1, in force. Exactly the reachable-and-unrouted set; the
