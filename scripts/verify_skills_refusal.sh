@@ -264,6 +264,7 @@ indexed_beside_good() {
   [ "$(enum_names)" = "$(printf 'good\n%s' "$1")" ] && index_lines | grep -qxF -- "- $1: $2"
 }
 starts "a skill behind a relative symlink inside the workdir" c3-relative-symlink-inside probe skills
+also "the symlinked skill is in the index and the enum" indexed_beside_good inlink 'Reached by a relative symlink inside the workdir.'
 starts "a SKILL.md that is a relative symlink to a regular file inside the workdir" c4-skill-md-relative-symlink-inside probe skills
 also "that skill is in the index and the enum" indexed_beside_good mdlink 'Its SKILL.md is a relative symlink inside the workdir.'
 
