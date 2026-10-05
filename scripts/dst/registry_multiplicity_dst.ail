@@ -50,6 +50,9 @@ import src/core/ext/registry_normalize (
 )
 -- B8: `Capability`/`ExtEntry` and the constructors are the ABI's now.
 import pkg/sunholo/motoko_ext_abi/types (Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, ExitIntent, ExitAction, ExitIntentOutcome, ExtEntry)
+-- 037 D2: the extension's side of the same-string row -- the key as the skills
+-- package writes it. Renamed on import: the host's function has the same name.
+import pkg/sunholo/motoko_ext_skills/skills (registration_refusal_key as skills_registration_refusal_key)
 
 -- ---------------------------------------------------------------------------
 -- Neutral payloads. Only the KINDS and the names matter to the boundary.
@@ -254,14 +257,14 @@ func scenario_empty_refusal_is_accepted(label: string) -> bool ! {IO} {
 -- be an 8.1 minor), so this script -- which can import both sides -- is where
 -- the two are tied.
 --
--- THE EXTENSION'S SIDE IS A STAND-IN TODAY. No package writes the key yet: the
--- `skills` extension is PLAN-001 P3/P4. `extension_refusal_key` therefore
--- spells the key here, as the ABI comment beside `ExtRegistration` states it,
--- and the row says so in its output. PLAN-001 P5 REPLACES THIS BODY with the
--- package's own export (and the import that brings it in); until then the row
--- ties the host to the documented spelling, not to a second implementation.
+-- THE EXTENSION'S SIDE IS THE PACKAGE'S OWN EXPORT (PLAN-001 P5; it was a
+-- stand-in literal in this script from P2 until the package existed).
+-- `registration_refusal_key` in packages/motoko-ext-skills/skills.ail is what
+-- `register.ail` writes the key with (`refusal_fields`) and reads it back with
+-- (`config_refusal`), so this row ties the host's reader to the one extension
+-- that writes the key, not to a spelling repeated here.
 -- ---------------------------------------------------------------------------
-pure func extension_refusal_key() -> string { "registration_refusal" }
+pure func extension_refusal_key() -> string { skills_registration_refusal_key() }
 
 -- Equal strings, AND the equality is about the key the host actually reads: a
 -- config written with the extension's spelling is refused, and one written
@@ -279,7 +282,7 @@ func scenario_same_key(label: string) -> bool ! {IO} {
     Err(_) => false
   };
   let ok = ext == host && ext != "" && read && near_miss;
-  let _ = if ok then println("  ✓ ${label}: extension '${ext}' == host '${host}'; a config written with the extension's spelling is refused and the near-miss '${ext}s' is not (extension side: a STAND-IN literal in this script until the skills package exports its own -- PLAN-001 P5)")
+  let _ = if ok then println("  ✓ ${label}: extension '${ext}' == host '${host}'; a config written with the extension's spelling is refused and the near-miss '${ext}s' is not (extension side: registration_refusal_key() exported by packages/motoko-ext-skills/skills.ail)")
           else println("  ✗ ${label}: extension '${ext}' vs host '${host}' (equal: ${show(ext == host)}; the host refuses the extension's spelling: ${show(read)}; a near-miss key is accepted: ${show(near_miss)})");
   ok
 }
