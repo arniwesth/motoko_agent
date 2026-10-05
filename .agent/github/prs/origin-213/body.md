@@ -8,81 +8,105 @@ title: "feat(ext): skills extension — SKILL.md skills behind one Skill tool (0
 
 ## Summary
 
-**Draft: documents and baseline only so far, no code.** Project 037 gives Motoko a skills system:
-one extension, `packages/motoko-ext-skills`, that indexes `.motoko/skills/<name>/SKILL.md` (the
-Agent Skills format) and gives the model one `Skill` tool that loads a skill's instructions when
-the model asks for them. A broken or duplicate skill refuses startup instead of being skipped.
+Adds a skills system to Motoko: one extension, `packages/motoko-ext-skills`, that indexes
+`.motoko/skills/<name>/SKILL.md` (the Agent Skills format) and gives the model one `Skill` tool
+that loads a skill's instructions when the model asks for them. A broken or duplicate skill, or a
+broken root, refuses startup instead of being skipped. The host does the refusing, through a
+reserved `registration_refusal` key recorded as Amendment 5 to 031 ADR-001, with no ABI version
+change.
 
-The branch currently holds the research, ADR-001 (Accepted, v0.3, after two rounds of independent
-review), PLAN-001, the orchestrator handoff, the delegate briefs and the P0 gate baseline. It also
-deletes `design_docs/planned/m-motoko-ext-skills-import.md`, which the ADR replaces.
+The extension is opt-in. It is wired into the registry and has a named profile, `skills`, and it
+is not in the default profile (ADR D11). All of PLAN-001 is implemented, P0 to P6. The operator
+closed gate G1 on 2026-10-04 and gate G2 on 2026-10-05.
 
-The PR is open as a draft so documents and evidence can be pushed as the work proceeds. Next is a
-throwaway prototype with its measurements (PLAN-001 P1), then the operator's gate G1. The
-implementation (P2 to P6) comes after G1 and is not planned in detail yet, because what the
-prototype measures can change it.
+**Still a draft.** Three DST gates are red on an extension this PR does not touch, CI has not yet
+run on the implementation, and the change has not been reviewed. See Test evidence.
 
 ## Changes
 
-- docs(037): skills system — research, ADR-001 v0.3, PLAN-001, reviews
-- docs(037): P0 and P1.1 delegate briefs
-- docs(037): rewrite the orchestrator handoff for a Motoko orchestrator
-- docs(037): bring P0 and P1.1 briefs up to Delegate-tool routing
-- evidence(037): P0 baseline at 501cd879
-- docs(037): P1.2 delegate brief (prototype extension)
-- docs(037): P1.3a delegate brief (workdir-not-launch-dir measurement)
-- docs(037): P1.3b-e delegate brief (estimate first, then measure)
+45 commits, 362 files. 283 of the files are evidence under
+`.agent/projects/037_skills_system/evidence/`.
 
-42 files changed: 41 added under `.agent/projects/037_skills_system/`, and the one design doc
-deleted. Nothing under `src/`, `packages/`, `scripts/` or `tools/` is touched yet.
+- **Documents (project 037).** Research, ADR-001, PLAN-001, two rounds of independent review, the
+  orchestrator handoff and the delegate briefs. The design doc
+  `design_docs/planned/m-motoko-ext-skills-import.md` is deleted; the ADR replaces it.
+- **P0, the baseline.** The gates as they stood at `501cd879`, before any change.
+- **P1, a throwaway prototype and its measurements.** `NOTE-p1-prototype-results.md` and
+  `evidence/p1/`. The prototype's code is not in this PR.
+- **After G1.** ADR D8 revised (the size check and the compactor's cap use different limits), and
+  the OpenAI and layout rulings recorded in D4 and D7.
+- **P2, the host refusal.** `src/core/ext/registry_normalize.ail` refuses a registration that
+  carries `registration_refusal`; a comment in `packages/motoko-ext-abi/types.ail`; Amendment 5
+  added to `.agent/projects/031_system_one_decisions/ADR-001-extension-owned-structured-decisions.md`.
+- **P3, the package's pure core.** `skills.ail`: frontmatter, the refusal rules R1 and V1 to V8,
+  the index and the size check. `a6b_test.ail`.
+- **P4, registration and the handler.** `register.ail`.
+- **P5, the wiring.** Root `ailang.toml` and `ailang.lock`, the generated registry, the `skills`
+  profile under `.motoko/config/skills/`, and `make verify_skills_refusal`.
+- **P6, the DST position.** `ailang_tools` and then `skills` named in the four profiles' omitted
+  lists, with the pins that moved: the four `src/core/dst_driver_*.ail` modules, three scripts
+  under `scripts/dst/` and two fixture files under `tools/ext_ambient_inventory/`.
+- chore(github) commits recording this PR.
+
+One archive is larger than anything now on `main`:
+`evidence/p1/captures/p1-captures.tar.gz`, 7.9 MB, the P1 session captures (3,187 files).
 
 ## Governing docs
 
 - `.agent/projects/037_skills_system/ADR-001-skills-system.md`
-- `.agent/projects/037_skills_system/HANDOFF-2026-10-03-orchestrator-start-plan-001.md`
-- `.agent/projects/037_skills_system/LEG-P0.md`
-- `.agent/projects/037_skills_system/LEG-P1.1.md`
-- `.agent/projects/037_skills_system/LEG-P1.2.md`
-- `.agent/projects/037_skills_system/LEG-P1.3a.md`
-- `.agent/projects/037_skills_system/LEG-P1.3b-e.md`
 - `.agent/projects/037_skills_system/PLAN-001-implement-adr-001.md`
+- `.agent/projects/037_skills_system/NOTE-p1-prototype-results.md`
+- `.agent/projects/037_skills_system/AMENDMENT-5-draft.md`
+- `.agent/projects/031_system_one_decisions/ADR-001-extension-owned-structured-decisions.md`
 - `.agent/projects/037_skills_system/RESEARCH-skills-system.md`
+- `.agent/projects/037_skills_system/HANDOFF-2026-10-03-orchestrator-start-plan-001.md`
 - `.agent/projects/037_skills_system/REVIEW-001-claude-fable-5.1.md`
 - `.agent/projects/037_skills_system/REVIEW-001-codex-gpt-6-astra.md`
 - `.agent/projects/037_skills_system/REVIEW-002-claude-fable-5.1.md`
 - `.agent/projects/037_skills_system/REVIEW-002-codex-gpt-6-astra.md`
+- `.agent/projects/037_skills_system/LEG-P0.md`, `LEG-P1.1.md`, `LEG-P1.2.md`, `LEG-P1.3a.md`,
+  `LEG-P1.3b-e.md`, `LEG-P2.md`, `LEG-P3.md`, `LEG-P4.md`, `LEG-P5.md`, `LEG-P6.md`
 
 ## Predicted outcome
 
-As it stands, landing this changes no runtime behaviour: it adds documents and removes one.
+- **A session that does not install the extension is unaffected.** It is not in the default
+  profile and is named in all four DST profiles' omitted lists.
+- **With the `skills` profile**, a directory under `.motoko/skills/` holding a valid `SKILL.md` is
+  listed in the `Skill` tool's description, and the model loads it by name.
+- **A broken skill stops the runtime at startup**, exit 2, with one error event naming the path
+  and the rule.
+- **Adding or removing a skill, or rewording its description, does not refuse a resume.** Only
+  `ext_config_digest` moves.
 
-When the implementation is in:
-
-- A skill is a directory under `.motoko/skills/` holding a `SKILL.md`. The model sees the skills'
-  names and descriptions in the `Skill` tool's description and loads one by name (ADR D4, D10).
-- A broken skill, a duplicate name or an unreadable root stops the runtime at startup with a
-  message naming the path and the rule (D1). The host does the refusing, through a reserved
-  `registration_refusal` key, recorded as Amendment 5 to 031 ADR-001 with no ABI version change
-  (D2).
-- A session that does not install the extension is unaffected: it is not in the default profile
-  in v1 (D11) and is omitted from all four DST profiles (D13).
-
-Checked by the ADR's acceptance criteria A1 to A10 (ADR §2), and against the P0 baseline below:
-the gates that are green there stay green.
+Checked by `make verify_skills_refusal` and the package's tests, and by the ADR's acceptance
+criteria A1 to A10. Known limits, stated in the ADR: no model reloaded a skill after the
+structural compactor elided it; and a skill that passes the size check can still be capped by the
+compactor.
 
 ## Test evidence
 
-- [x] **P0 baseline**, at `501cd879`, before any code change: 17 gates, 13 green and 4 red
-  (`ext_hook_scope`, `declared_vs_performed`, `driver_plus_no_ops`, `driver_plus_compose`). Each
-  red is the gate's own failure, not a missing build. They are the state of `main`, not something
-  this branch caused: three of them name the `ailang_tools` extension and one the `test_dummy`
-  extension. Table and logs: `.agent/projects/037_skills_system/evidence/baseline/`.
-- [x] **Probes the ADR rests on**, scripts under `.agent/projects/037_skills_system/evidence/`:
-  - `m7`: under the sandbox the TUI sets, a relative path resolves against the workdir, so the
-    skill root is the bare path `.motoko/skills` (D7).
-  - `m2`: putting the index in the tool description or in the system prompt made no difference to
-    how often the skill was triggered, 139 of 150 for each (D4).
-  - `m8`: a 16,000-character tool description is accepted by Anthropic, Google, DeepSeek and Meta
-    models through OpenRouter. OpenAI could not be tested: this account's OpenAI key was rejected.
-- [ ] **P1 prototype measurements**: not run yet.
-- [ ] **Implementation and A1 to A10**: not started.
+- [x] **Package tests, re-run on 2026-10-05 at `77d9c75e`:** `ailang test` on `skills.ail`,
+  `a6b_test.ail` and `register.ail`: 62, 11 and 18 tests, 91 passed, 0 failed.
+- [x] **`make verify_skills_refusal`, re-run the same day:** 41 passed, 0 failed, through the real
+  runtime entry under the sandbox. It covers a fixture for R1 and each of V1 to V8, the controls
+  that must start, and the digest behaviour of A2.
+- [x] **The gates of ADR A7, from the delegate's table at `7e6f6ab6`**
+  (`evidence/p6/GATES.tsv`), not re-run for this record: 14 green and 3 red, and none newly red
+  against the P0 baseline. `declared_vs_performed` went from red to green.
+- [ ] **Three gates are red: `ext_hook_scope`, `driver_plus_no_ops`, `driver_plus_compose`.** All
+  three stop on the `test_dummy` extension's registration, which this PR does not change.
+  `ext_hook_scope` was red on it in the baseline. In the two profile gates it was hidden behind an
+  earlier failure on `ailang_tools`, which P6 repaired. The operator accepted them at G2. No issue
+  has been filed for `test_dummy` yet.
+- [x] **Mutation checks by the delegates**, in each part's evidence: 55 mutants in P3, 45 in P4,
+  12 in P5 and 4 in P6, all recorded as killed. P3's and P4's scripts count any failing run as a
+  kill, which is looser than the discipline proposed in PR #219.
+- [x] **P1 measurements, through the real runtime on seven models:** the right skill was loaded in
+  the first response in 88% to 100% of matching sessions, and `Skill` was never called in 135
+  control sessions. The checkable action was done in 53 of 54 sessions. A 16,000-character index
+  was accepted by seven provider families. OpenAI was ruled out of scope and not tested.
+- [ ] **One layout is not covered.** A session whose workdir is a subdirectory of the directory it
+  was launched from loads no extension at all, for a reason in the TUI and core. It was ruled its
+  own issue, which has not been filed. A10 holds for the other layout.
+- [ ] **CI has not run on the implementation.** It runs when this is pushed.
+- [ ] **Not reviewed.**
