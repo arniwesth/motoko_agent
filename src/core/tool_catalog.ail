@@ -24,7 +24,7 @@ import std/string (contains)
 import std/json (Json, jo, kv, js, getString)
 import std/option (Some, None)
 import src/core/config (VerificationConfig)
-import pkg/sunholo/motoko_ext_abi/types (ExtRuntime, ExtEntry, Capability, DescribeTools, ToolProvider)
+import pkg/sunholo/motoko_ext_abi/types (ExtRuntime, ExtEntry, Capability, DescribeTools, ToolProvider, ProviderCtx, ToolCallEnvelope, ToolHandleOutcome, Delegate)
 
 -- Each schema's `parameters` field is a JSON-Schema-shaped string. To keep
 -- the strings readable AILANG-side, we build them in helper functions
@@ -144,11 +144,43 @@ pure func collect_ext_schemas(entries: [ExtEntry]) -> [ToolSchema] {
   }
 }
 
+pure func contains_name(names: [string], name: string) -> bool {
+  match names {
+    [] => false,
+    n :: rest => if n == name then true else contains_name(rest, name)
+  }
+}
+
+-- One schema per tool name, in input order; the FIRST schema for a name is kept.
+pure func unique_by_name(xs: [ToolSchema], seen: [string]) -> [ToolSchema] {
+  match xs {
+    [] => [],
+    x :: rest =>
+      if contains_name(seen, x.name) then unique_by_name(rest, seen)
+      else x :: unique_by_name(rest, x.name :: seen)
+  }
+}
+
 -- Full tool catalog including any tools registered by active extensions.
 -- Use this instead of `tools()` when an ExtRuntime is available so that
 -- extension-provided tools appear in the LLM's tool list.
+--
+-- EVERY NAME APPEARS ONCE (#204). An extension may claim a native tool's name
+-- to wrap it -- `ToolProvider(["WriteFile"], ...)`, as microrag and
+-- ailang_tools do -- and `hook_schemas` then yields a schema under that name,
+-- the name-only one when the extension declares none. Appended as it was, the
+-- request carried the name twice. Anthropic, Gemini and xAI reject such a
+-- request outright (400, "Tool names must be unique"); measured 2026-10-04 with
+-- the request `live_ports` sends for the shipped `microrag` profile.
+--
+-- The first schema for a name is kept and native schemas come first, so a
+-- wrapped native tool keeps the native schema. That is right for a wrapper that
+-- takes the native arguments, which every in-tree one does. Between two
+-- extensions the earlier registry entry wins, and that is also the entry
+-- `first_handle` consults first. Whether an extension may REPLACE a native
+-- schema with its own is not decided here.
 export pure func tools_with_extensions(rt: ExtRuntime) -> [ToolSchema] {
-  tools() ++ collect_ext_schemas(rt.registry.entries)
+  unique_by_name(tools() ++ collect_ext_schemas(rt.registry.entries), [])
 }
 
 -- Inline tests
@@ -211,4 +243,115 @@ pure func test_runtime_status_schema() -> bool
       && contains(s.description, "how many steps have run")
       && contains(s.description, "system prefix stayed stable")
       && s.parameters == "{\"type\":\"object\",\"properties\":{},\"required\":[]}"
+  }
+
+-- #204: the registration shapes that used to put a native name in the catalog
+-- twice. `wrapper_handle` is never called here; the catalog reads only the
+-- name list beside it.
+pure func wrapper_handle(ctx: ProviderCtx, _call: ToolCallEnvelope)
+  -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  { decision: Delegate, next_state: ctx.world }
+}
+
+pure func rt_of(entries: [ExtEntry]) -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "make check_core" };
+  { registry: { entries: entries }, strict_mode: false, verification: v }
+}
+
+-- ailang_tools' shape: native names claimed, no `DescribeTools` atom.
+pure func undeclared_wrapper() -> ExtEntry {
+  { id: "wrap#0", config: jo([]), caps: [ToolProvider(["WriteFile", "EditFile", "ReadFile"], wrapper_handle)] }
+}
+
+-- microrag's shape: a native name claimed beside a `DescribeTools` that
+-- declares nothing.
+pure func empty_catalog(_cfg: Json) -> [ToolSchema] { [] }
+
+pure func empty_catalog_wrapper() -> ExtEntry {
+  { id: "wrap#1", config: jo([]), caps: [DescribeTools(empty_catalog), ToolProvider(["WriteFile"], wrapper_handle)] }
+}
+
+pure func declared_write_file(_cfg: Json) -> [ToolSchema] {
+  [{ name: "WriteFile", description: "an extension's own WriteFile", parameters: "{\"type\":\"object\"}" }]
+}
+
+pure func shared_first(_cfg: Json) -> [ToolSchema] {
+  [{ name: "Shared", description: "first", parameters: "{}" }, ext_tool_schema("OnlyFirst")]
+}
+
+pure func shared_second(_cfg: Json) -> [ToolSchema] {
+  [{ name: "Shared", description: "second", parameters: "{}" }, ext_tool_schema("OnlySecond")]
+}
+
+pure func count_named(xs: [ToolSchema], name: string) -> int {
+  match xs {
+    [] => 0,
+    x :: rest => (if x.name == name then 1 else 0) + count_named(rest, name)
+  }
+}
+
+pure func each_name_once(all: [ToolSchema], xs: [ToolSchema]) -> bool {
+  match xs {
+    [] => true,
+    x :: rest => count_named(all, x.name) == 1 && each_name_once(all, rest)
+  }
+}
+
+pure func description_of(xs: [ToolSchema], name: string) -> string {
+  match xs {
+    [] => "",
+    x :: rest => if x.name == name then x.description else description_of(rest, name)
+  }
+}
+
+pure func parameters_of(xs: [ToolSchema], name: string) -> string {
+  match xs {
+    [] => "",
+    x :: rest => if x.name == name then x.parameters else parameters_of(rest, name)
+  }
+}
+
+pure func names_csv(xs: [ToolSchema]) -> string {
+  match xs {
+    [] => "",
+    x :: [] => x.name,
+    x :: rest => "${x.name},${names_csv(rest)}"
+  }
+}
+
+pure func native_names_csv() -> string {
+  "ReadFile,WriteFile,EditFile,BashExec,RunTests,Search,MotokoRuntimeStatus"
+}
+
+pure func test_wrapped_native_names_appear_once() -> bool
+  tests [((), true)]
+  {
+    let undeclared = tools_with_extensions(rt_of([undeclared_wrapper()]));
+    let empty = tools_with_extensions(rt_of([empty_catalog_wrapper()]));
+    let both = tools_with_extensions(rt_of([undeclared_wrapper(), empty_catalog_wrapper()]));
+    names_csv(undeclared) == native_names_csv() && each_name_once(undeclared, undeclared)
+      && names_csv(empty) == native_names_csv() && each_name_once(empty, empty)
+      && names_csv(both) == native_names_csv() && each_name_once(both, both)
+  }
+
+pure func test_wrapped_native_tool_keeps_the_native_schema() -> bool
+  tests [((), true)]
+  {
+    let both = tools_with_extensions(rt_of([undeclared_wrapper(), empty_catalog_wrapper()]));
+    let declared = tools_with_extensions(rt_of([{ id: "decl#0", config: jo([]), caps: [DescribeTools(declared_write_file), ToolProvider(["WriteFile"], wrapper_handle)] }]));
+    let native = write_file_schema();
+    description_of(both, "WriteFile") == native.description && parameters_of(both, "WriteFile") == native.parameters
+      && names_csv(declared) == native_names_csv()
+      && description_of(declared, "WriteFile") == native.description && parameters_of(declared, "WriteFile") == native.parameters
+  }
+
+pure func test_two_extensions_one_name_keeps_the_earlier_entry() -> bool
+  tests [((), true)]
+  {
+    let first: ExtEntry = { id: "first#0", config: jo([]), caps: [DescribeTools(shared_first)] };
+    let second: ExtEntry = { id: "second#1", config: jo([]), caps: [DescribeTools(shared_second)] };
+    let forward = tools_with_extensions(rt_of([first, second]));
+    let backward = tools_with_extensions(rt_of([second, first]));
+    names_csv(forward) == "${native_names_csv()},Shared,OnlyFirst,OnlySecond" && description_of(forward, "Shared") == "first"
+      && names_csv(backward) == "${native_names_csv()},Shared,OnlySecond,OnlyFirst" && description_of(backward, "Shared") == "second"
   }

@@ -1,0 +1,156 @@
+-- scripts/dst/tool_catalog_registry_dst.ail
+--
+-- #204. The tool catalog the model is sent, built from the REAL registrations
+-- rather than from fixtures.
+--
+-- WHY A GATE OF ITS OWN. No scripted provider receives the catalog: only
+-- `live_ports`' `model_step` calls `tools_with_extensions`, so every DST
+-- profile is green whatever the catalog holds. MEASURED 2026-10-04 on cf54dff9
+-- with `tools_with_extensions` returning `[]`: `make check_core` green, and
+-- `make dst` red in `test_coverage` alone, through tool_catalog.ail's own
+-- inline tests. Those tests build their entries by hand. They hold the
+-- mechanism and say nothing about what microrag or ailang_tools register.
+--
+-- THE ROWS. Each order goes through the generated registry, exactly as a
+-- session's `extensions.order` does:
+--
+--   wrapper loaded           a CONTROL. An order whose extension did not
+--                            register passes the two rows below vacuously.
+--   every name once          the #204 defect: a wrapped native name sent twice,
+--                            which Anthropic, Gemini and xAI reject with a 400.
+--   native schemas unchanged a wrapper takes the native arguments, so the model
+--                            must be shown the native schema for that name.
+--   native tools only        microrag and ailang_tools advertise no tool of
+--                            their own, so their catalog is the native seven.
+--
+-- `TOOL_CATALOG_ALL` is every installable extension at once. The Makefile
+-- derives it from src/core/ext/registry_generated.ail, so the row covers an
+-- extension added later without a list kept here going stale.
+
+module scripts/dst/tool_catalog_registry_dst
+
+import std/io (println, exit)
+import std/env (getEnvOr)
+import std/ai (ToolSchema)
+import std/list as List (length)
+import src/core/config (load_runtime_config, RuntimeConfig)
+import src/core/ext/registry_generated (parse_core_ext_order)
+import src/core/tool_catalog (tools, tools_with_extensions)
+import pkg/sunholo/motoko_ext_abi/types (ExtRuntime, ExtEntry, Capability, ToolProvider)
+
+pure func count_named(xs: [ToolSchema], name: string) -> int {
+  match xs {
+    [] => 0,
+    x :: rest => (if x.name == name then 1 else 0) + count_named(rest, name)
+  }
+}
+
+pure func contains_name(names: [string], name: string) -> bool {
+  match names {
+    [] => false,
+    n :: rest => if n == name then true else contains_name(rest, name)
+  }
+}
+
+-- The names the catalog carries more than once, each listed once.
+pure func repeated_names(all: [ToolSchema], xs: [ToolSchema], seen: [string]) -> [string] {
+  match xs {
+    [] => [],
+    x :: rest =>
+      if count_named(all, x.name) > 1 && not contains_name(seen, x.name)
+      then x.name :: repeated_names(all, rest, x.name :: seen)
+      else repeated_names(all, rest, seen)
+  }
+}
+
+pure func same_schema(catalog: [ToolSchema], native: ToolSchema) -> bool {
+  match catalog {
+    [] => false,
+    x :: rest =>
+      if x.name == native.name
+      then x.description == native.description && x.parameters == native.parameters
+      else same_schema(rest, native)
+  }
+}
+
+-- The native names whose FIRST schema in the catalog is not the native one.
+pure func changed_natives(catalog: [ToolSchema], natives: [ToolSchema]) -> [string] {
+  match natives {
+    [] => [],
+    n :: rest => if same_schema(catalog, n) then changed_natives(catalog, rest) else n.name :: changed_natives(catalog, rest)
+  }
+}
+
+pure func atoms_claim(caps: [Capability], name: string) -> bool {
+  match caps {
+    [] => false,
+    ToolProvider(names, _) :: rest => contains_name(names, name) || atoms_claim(rest, name),
+    _ :: rest => atoms_claim(rest, name)
+  }
+}
+
+pure func entries_claim(entries: [ExtEntry], name: string) -> bool {
+  match entries {
+    [] => false,
+    e :: rest => atoms_claim(e.caps, name) || entries_claim(rest, name)
+  }
+}
+
+pure func unclaimed(entries: [ExtEntry], names: [string]) -> [string] {
+  match names {
+    [] => [],
+    n :: rest => if entries_claim(entries, n) then unclaimed(entries, rest) else n :: unclaimed(entries, rest)
+  }
+}
+
+pure func csv(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: [] => x,
+    x :: rest => "${x},${csv(rest)}"
+  }
+}
+
+func check(label: string, ok: bool, why: string) -> int ! {IO} {
+  if ok then { let _ = println("  ✓ ${label}"); 0 }
+  else { let _ = println("  ✗ ${label} — ${why}"); 1 }
+}
+
+-- `wraps` is the native names the order's extensions must be seen to claim;
+-- `native_only` says the order advertises no tool of its own.
+func row(order: string, wraps: [string], native_only: bool, cfg: RuntimeConfig) -> int ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let _ = println("order: ${order}");
+  let rt: ExtRuntime = { registry: parse_core_ext_order(order, cfg), strict_mode: false, verification: cfg.verification };
+  let catalog = tools_with_extensions(rt);
+  let missing = unclaimed(rt.registry.entries, wraps);
+  let repeated = repeated_names(catalog, catalog, []);
+  let changed = changed_natives(catalog, tools());
+  let a = check("wrapper loaded: ${show(List.length(rt.registry.entries))} registered, claiming ${csv(wraps)}", List.length(missing) == 0, "no registered ToolProvider claims ${csv(missing)}, so the rows below would pass with nothing to deduplicate");
+  let b = check("every name once (${show(List.length(catalog))} tools)", List.length(repeated) == 0, "sent more than once: ${csv(repeated)}");
+  let c = check("native schemas unchanged", List.length(changed) == 0, "not the native schema: ${csv(changed)}");
+  let d = if native_only
+    then check("native tools only", List.length(catalog) == List.length(tools()), "${show(List.length(catalog))} tools where the native ${show(List.length(tools()))} were expected")
+    else 0;
+  a + b + c + d
+}
+
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let cfg = load_runtime_config();
+  let all = getEnvOr("TOOL_CATALOG_ALL", "");
+  let file_tools = ["WriteFile", "EditFile", "ReadFile"];
+  let r1 = row("ailang_tools", file_tools, true, cfg);
+  let r2 = row("microrag", ["WriteFile"], true, cfg);
+  let r3 = row("ailang_tools,microrag", file_tools, true, cfg);
+  let r4 = row("microrag,ailang_tools", file_tools, true, cfg);
+  -- An unset list is a failure, not a skipped row: a gate that quietly runs
+  -- four rows of five reads the same as one that ran them all.
+  let r5 = if all == ""
+    then check("TOOL_CATALOG_ALL is set", false, "run this through `make tool_catalog_registry`, which derives the list from registry_generated.ail")
+    else row(all, file_tools, false, cfg);
+  let failures = r1 + r2 + r3 + r4 + r5;
+  if failures == 0 then println("tool_catalog_registry PASS")
+  else {
+    let _ = println("tool_catalog_registry FAIL count=${show(failures)}");
+    exit(1)
+  }
+}
