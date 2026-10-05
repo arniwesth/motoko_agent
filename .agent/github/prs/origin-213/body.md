@@ -119,7 +119,14 @@ compactor.
 - [x] **P1 measurements, through the real runtime on seven models:** the right skill was loaded in
   the first response in 88% to 100% of matching sessions, and `Skill` was never called in 135
   control sessions. The checkable action was done in 53 of 54 sessions. A 16,000-character index
-  was accepted by seven provider families. OpenAI was ruled out of scope and not tested.
+  was accepted by seven provider families. OpenAI was ruled out of scope and not tested. These
+  were measured on the P1 prototype, whose code is not in this PR.
+- [x] **Two live sessions on the final code, 2026-10-05,** on `deepseek-v4-pro` and
+  `muse-spark-1.3-contributor`, with the committed `skills` profile and a fixture workdir. In both
+  the model called `Skill` first, read the bundled file under the directory the result named, and
+  wrote the file the skill asked for, with no error event and no other change. It shows the final
+  code works end to end; it is two sessions and does not re-measure the rates above.
+  `evidence/live/`.
 - [ ] **One layout is not covered.** A session whose workdir is a subdirectory of the directory it
   was launched from loads no extension at all, for a reason in the TUI and core. It was ruled its
   own issue, which has not been filed. A10 holds for the other layout.
