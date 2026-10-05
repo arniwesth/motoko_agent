@@ -19,12 +19,13 @@ The extension is opt-in. It is wired into the registry and has a named profile, 
 is not in the default profile (ADR D11). All of PLAN-001 is implemented, P0 to P6. The operator
 closed gate G1 on 2026-10-04 and gate G2 on 2026-10-05.
 
-**Still a draft.** Three DST gates are red on an extension this PR does not touch, CI has not yet
-run on the implementation, and the change has not been reviewed. See Test evidence.
+**Still a draft.** The implementation has been reviewed twice by two independent reviewers, and
+both now say merge. Three DST gates that CI does not run are red on an extension this PR does not
+touch. See Test evidence.
 
 ## Changes
 
-45 commits, 362 files. 283 of the files are evidence under
+60 commits, 475 files. 417 of the files are evidence under
 `.agent/projects/037_skills_system/evidence/`.
 
 - **Documents (project 037).** Research, ADR-001, PLAN-001, two rounds of independent review, the
@@ -46,6 +47,12 @@ run on the implementation, and the change has not been reviewed. See Test eviden
 - **P6, the DST position.** `ailang_tools` and then `skills` named in the four profiles' omitted
   lists, with the pins that moved: the four `src/core/dst_driver_*.ail` modules, three scripts
   under `scripts/dst/` and two fixture files under `tools/ext_ambient_inventory/`.
+- **R3, after the review.** The five fixes the implementation review held the merge for, and one
+  test assertion from its second round: a `SKILL.md` that is not a regular file refuses as V3 and
+  no longer hangs startup; `make verify_skills_tests`, and a CI step that runs it and
+  `verify_skills_refusal`; `scripts/verify_skills_call.ail`, which dispatches a `Skill` call
+  through the real host, with ten more checks in the suite; and a test in each of the four DST
+  profile modules that names the extensions it omits. `evidence/r3/`.
 - chore(github) commits recording this PR.
 
 One archive is larger than anything now on `main`:
@@ -64,6 +71,11 @@ One archive is larger than anything now on `main`:
 - `.agent/projects/037_skills_system/REVIEW-001-codex-gpt-6-astra.md`
 - `.agent/projects/037_skills_system/REVIEW-002-claude-fable-5.1.md`
 - `.agent/projects/037_skills_system/REVIEW-002-codex-gpt-6-astra.md`
+- `.agent/projects/037_skills_system/REVIEW-003-claude-fable-5.1.md` and
+  `REVIEW-003-codex-gpt-6-astra.md`: the implementation review
+- `.agent/projects/037_skills_system/REVIEW-004-claude-fable-5.1.md` and
+  `REVIEW-004-codex-gpt-6-astra.md`: its second round
+- `.agent/projects/037_skills_system/LEG-R3.md`
 - `.agent/projects/037_skills_system/LEG-P0.md`, `LEG-P1.1.md`, `LEG-P1.2.md`, `LEG-P1.3a.md`,
   `LEG-P1.3b-e.md`, `LEG-P2.md`, `LEG-P3.md`, `LEG-P4.md`, `LEG-P5.md`, `LEG-P6.md`
 
@@ -85,11 +97,13 @@ compactor.
 
 ## Test evidence
 
-- [x] **Package tests, re-run on 2026-10-05 at `77d9c75e`:** `ailang test` on `skills.ail`,
-  `a6b_test.ail` and `register.ail`: 62, 11 and 18 tests, 91 passed, 0 failed.
-- [x] **`make verify_skills_refusal`, re-run the same day:** 41 passed, 0 failed, through the real
-  runtime entry under the sandbox. It covers a fixture for R1 and each of V1 to V8, the controls
-  that must start, and the digest behaviour of A2.
+- [x] **Package tests, re-run on 2026-10-05 at `a74bdcc2`:** `make verify_skills_tests`, which
+  runs `ailang test` on `skills.ail`, `a6b_test.ail` and `register.ail`: 62, 11 and 18 tests, 91
+  passed, 0 failed.
+- [x] **`make verify_skills_refusal`, re-run the same day at `a74bdcc2`:** 51 passed, 0 failed,
+  through the real runtime entry. It covers a fixture for R1 and each of V1 to V8 (a named pipe
+  among them), the controls that must start, the digest behaviour of A2, a `Skill` call
+  dispatched through the real host, and one start without the sandbox.
 - [x] **The gates of ADR A7, from the delegate's table at `7e6f6ab6`**
   (`evidence/p6/GATES.tsv`), not re-run for this record: 14 green and 3 red, and none newly red
   against the P0 baseline. `declared_vs_performed` went from red to green.
@@ -100,7 +114,8 @@ compactor.
   has been filed for `test_dummy` yet.
 - [x] **Mutation checks by the delegates**, in each part's evidence: 55 mutants in P3, 45 in P4,
   12 in P5 and 4 in P6, all recorded as killed. P3's and P4's scripts count any failing run as a
-  kill, which is looser than the discipline proposed in PR #219.
+  kill, which is looser than the discipline proposed in PR #219. R3 follows that discipline: 18
+  mutants, each killed by the committed check named for it before the run.
 - [x] **P1 measurements, through the real runtime on seven models:** the right skill was loaded in
   the first response in 88% to 100% of matching sessions, and `Skill` was never called in 135
   control sessions. The checkable action was done in 53 of 54 sessions. A 16,000-character index
@@ -108,5 +123,16 @@ compactor.
 - [ ] **One layout is not covered.** A session whose workdir is a subdirectory of the directory it
   was launched from loads no extension at all, for a reason in the TUI and core. It was ruled its
   own issue, which has not been filed. A10 holds for the other layout.
-- [ ] **CI has not run on the implementation.** It runs when this is pushed.
-- [ ] **Not reviewed.**
+- [x] **Reviewed twice, by Codex (GPT-6-Astra) and Claude (Fable 5.1), each alone in its own
+  worktree.** Round 1 at `4c9f9c25`: both said merge after fixes, and four findings held the
+  merge. Round 2 at `e7d635ef`, by fresh sessions: both say merge, and no finding holds it. Each
+  reviewer also broke rules of its own choosing to see whether a test noticed. Three such mutants
+  survived across the two rounds, and each now fails a committed check. Records: `REVIEW-003-*`
+  and `REVIEW-004-*`. There is no third round; `REVIEW-004` says why.
+- [ ] **Five review notes are not fixed and are with the operator:** the reserved key can reach
+  the host from the operator's own `ailang_tools.json`; the unsandboxed-launch guard sees "unset"
+  and not "set to something else"; invalid UTF-8 and control characters in a skill are accepted;
+  one test compares against a literal copy of a core encoding; and a red `test_dummy` comparison
+  would hide a wrong pin beside it.
+- [x] **CI passed at `4c9f9c25`,** all nine checks, before the fixes. The fixes add a CI step that
+  runs the package's tests and the refusal suite; the checks on this PR show its first run.
