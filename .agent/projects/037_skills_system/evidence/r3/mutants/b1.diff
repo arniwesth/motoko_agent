@@ -1,0 +1,13 @@
+diff --git a/packages/motoko-ext-skills/skills.ail b/packages/motoko-ext-skills/skills.ail
+index a3036b5e..92591dd4 100644
+--- a/packages/motoko-ext-skills/skills.ail
++++ b/packages/motoko-ext-skills/skills.ail
+@@ -235,7 +235,7 @@ pure func name_violations(path: string, dir_name: string, mapping: Json) -> [Vio
+     None => [violation(V5, path, "`name` is missing")],
+     Some(JString(s)) => {
+       let breaks = broken_clauses([
+-        { broken: s != dir_name, text: concat(["differs from the directory name `", dir_name, "`"]) }
++        { broken: false, text: concat(["differs from the directory name `", dir_name, "`"]) }
+       ]) ++ name_rule_breaks(s);
+       match breaks {
+         [] => [],

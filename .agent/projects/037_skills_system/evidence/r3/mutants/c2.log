@@ -1,0 +1,83 @@
+OK started  no root at all -- exit 0, no error event, one Skill schema
+OK          A1: with none, the description says so and `name` has no enum
+OK started  an empty root -- exit 0, no error event, one Skill schema
+OK          A1: with none, the description says so and `name` has no enum
+OK started  nine valid skills, one per scalar style, one with malformed optional fields -- exit 0, no error event, one Skill schema
+OK          A1: the description names all nine in name order, one line each
+OK          A1: the description is the instruction, then the index, and nothing else
+OK          A1: the enum is the nine names, in name order
+FAIL          D7: under the sandbox, the registration's config record says the sandbox was set: the check did not hold
+     SKILL_SCHEMAS 1
+     SKILL_SCHEMA {"name":"Skill","description":"Load a skill by name. Skills are task-specific instructions. Before starting a task that matches a skill's description, call Skill with its name to load the instructions. Do not load a skill that does not match the task. The first line of the result is the skill's directory, relative to the working directory; file paths in the skill's text are relative to that directory. If an earlier Skill result shows as elided or cut short and you still need that skill, call Skill again with the same name.\n\nAvailable skills:\n- alpha: A plain scalar.\n- anchored
+     SKILLS_CONFIG {"root":".motoko/skills","skills":[{"name":"alpha","description":"A plain scalar."},{"name":"anchored","description":"An anchored name and a tagged description."},{"name":"b-literal","description":"first line\nsecond line\n"},{"name":"crlf-bom","description":"CRLF and a byte-order mark."},{"name":"folded-strip","description":"folded and stripped"},{"name":"multi-line","description":"line one line two"},{"name":"quoted","description":"Tab\there: yes # still text"},{"name":"single-q","description":"It's quoted: yes # still text"},{"name":"workdir-stamp","description":"Stamp the wor
+     EXT_SET_DIGEST sha256:d0805bbf62f2d9f6d968de3bd4508ad28d67e1ad9820a46f867b08dfa486c74b
+     EXT_CONFIG_DIGEST sha256:1288e080b4104d8887c324078a769c53a9586e107ad5c6464634b1f8a652ec70
+     SYSTEM_PREFIX_DIGEST sha256:2a707ed9d750df0376bfdf16777d9b64289cfee0406899c10a3d83d636912cc0
+     stderr: Warning: dependency sunholo/motoko_ext_skills content changed (locked: sha256:0cc7459f3afeca0a8..., current: sha256:a20e2aa843c7398a2...)
+     stderr: Run 'ailang lock' to update
+OK started  a skill behind a relative symlink inside the workdir -- exit 0, no error event, one Skill schema
+OK          the symlinked skill is in the index and the enum
+OK started  a SKILL.md that is a relative symlink to a regular file inside the workdir -- exit 0, no error event, one Skill schema
+OK          that skill is in the index and the enum
+OK refused  R1 the root is a regular file -- exit 2, one error event naming R1: .motoko/skills
+OK refused  R1 the root is a symlink leaving the workdir -- exit 2, one error event naming R1: .motoko/skills
+OK refused  R1 the root is an absolute-target symlink -- exit 2, one error event naming R1: .motoko/skills
+OK refused  R1 the root is a dangling symlink (not one of the ADR's three) -- exit 2, one error event naming R1: .motoko/skills
+OK refused  V1 a directory with no SKILL.md -- exit 2, one error event naming V1: .motoko/skills/empty
+OK refused  V1 skill.md is not SKILL.md -- exit 2, one error event naming V1: .motoko/skills/lower
+OK refused  V2 an entry that is neither a file nor a directory -- exit 2, one error event naming V2: .motoko/skills/far
+OK refused  V3 SKILL.md has no read permission -- exit 2, one error event naming V3: .motoko/skills/locked/SKILL.md
+OK refused  V3 SKILL.md is a directory -- exit 2, one error event naming V3: .motoko/skills/dirmd/SKILL.md
+OK refused  V3 SKILL.md is a symlink leaving the workdir -- exit 2, one error event naming V3: .motoko/skills/far/SKILL.md
+OK refused  V3 SKILL.md is a named pipe -- exit 2, one error event naming V3: .motoko/skills/pipe/SKILL.md
+OK          the reason says it is not a regular file
+OK refused  V4 no frontmatter block -- exit 2, one error event naming V4: .motoko/skills/nofm/SKILL.md
+OK refused  V4 the block is not terminated -- exit 2, one error event naming V4: .motoko/skills/open/SKILL.md
+OK refused  V4 the block does not decode as YAML -- exit 2, one error event naming V4: .motoko/skills/badyaml/SKILL.md
+OK refused  V4 the block decodes to something other than a mapping -- exit 2, one error event naming V4: .motoko/skills/seq/SKILL.md
+OK refused  V5 name differs from the directory name -- exit 2, one error event naming V5: .motoko/skills/renamed/SKILL.md
+OK refused  V6 description is empty after trimming -- exit 2, one error event naming V6: .motoko/skills/blank/SKILL.md
+OK refused  V7 SKILL.md is too large to deliver whole -- exit 2, one error event naming V7: .motoko/skills/huge/SKILL.md
+OK refused  V8 the index is over budget -- exit 2, one error event naming V8: .motoko/skills
+OK refused  two violations, both named -- exit 2, one error event naming V1: .motoko/skills/empty, V5: .motoko/skills/renamed/SKILL.md
+OK refused  the same two under extensions.strict = true -- exit 2, one error event naming V1: .motoko/skills/empty, V5: .motoko/skills/renamed/SKILL.md
+OK started  profile skills (.motoko/config/skills) on a valid tree -- exit 0, no error event, one Skill schema
+OK refused  profile skills on a broken tree -- exit 2, one error event naming V1: .motoko/skills/empty
+OK A2       nothing changed -- ext_set_digest and system_prefix_digest unchanged, ext_config_digest same, resume continues
+OK A2       a valid skill added -- ext_set_digest and system_prefix_digest unchanged, ext_config_digest moves, resume continues
+OK A2       and removed again -- ext_set_digest and system_prefix_digest unchanged, ext_config_digest same, resume continues
+OK A2       a valid skill removed -- ext_set_digest and system_prefix_digest unchanged, ext_config_digest moves, resume continues
+OK A2       a description reworded -- ext_set_digest and system_prefix_digest unchanged, ext_config_digest moves, resume continues
+OK A2       only a body reworded -- ext_set_digest and system_prefix_digest unchanged, ext_config_digest same, resume continues
+OK A2       every skill removed (none left) -- ext_set_digest and system_prefix_digest unchanged, ext_config_digest moves, resume continues
+OK A2       control: the resume row refuses a header with another ext_set_digest
+OK A2       control: ext_set_digest differs under a profile with another extension set
+OK refused  A2 an invalid change refuses startup -- exit 2, one error event naming V5: .motoko/skills/alpha/SKILL.md
+FAIL          A9: sandboxed, a valid skill loads: the directory line, then the file as it is on disk: the check did not hold
+     OK started: profile=probe entries=1 loaded=skills
+     SKILLS_CONFIG {"root":".motoko/skills","skills":[{"name":"alpha","description":"A plain scalar."},{"name":"anchored","description":"An anchored name and a tagged description."},{"name":"b-literal","description":"first line\nsecond line\n"},{"name":"crlf-bom","description":"CRLF and a byte-order mark."},{"name":"folded-strip","description":"folded and stripped"},{"name":"multi-line","description":"line one line two"},{"name":"quoted","description":"Tab\there: yes # still text"},{"name":"single-q","description":"It's quoted: yes # still text"},{"name":"workdir-stamp","description":"Stamp the wor
+     SKILL_CALL {"name":"workdir-stamp","handled":true,"exit_code":1,"stdout":"","stderr":"Skill: nothing was loaded. This runtime was started without AILANG_FS_SANDBOXX and its working directory is '/tmp/tmp.sFOjBdtR89/c2-valid-set', not '.'. Without the sandbox .motoko/skills is read from the directory the runtime was started in, so the skills indexed at startup may not be this working directory's. Do not call Skill again in this session."}
+     SKILL_CALL {"name":"nope","handled":true,"exit_code":1,"stdout":"","stderr":"Skill: nothing was loaded. This runtime was started without AILANG_FS_SANDBOXX and its working directory is '/tmp/tmp.sFOjBdtR89/c2-valid-set', not '.'. Without the sandbox .motoko/skills is read from the directory the runtime was started in, so the skills indexed at startup may not be this working directory's. Do not call Skill again in this session."}
+     stderr: Warning: dependency sunholo/motoko_ext_skills content changed (locked: sha256:0cc7459f3afeca0a8..., current: sha256:a20e2aa843c7398a2...)
+     stderr: Run 'ailang lock' to update
+     stderr: CACHE_WRITE_FAILED module=src/core/session stage=encoding path=scripts/.ailang/cache/compile/modules/src__core__session/coretypeinfo.gob: ARTIFACT_TOO_LARGE: scripts/.ailang/cache/compile/modules/src__core__session/coretypeinfo.gob: artifact exceeds blob byte limit; using fresh compilation
+FAIL          A9: sandboxed, a name not in the index is an error that lists the nine names: the check did not hold
+     OK started: profile=probe entries=1 loaded=skills
+     SKILLS_CONFIG {"root":".motoko/skills","skills":[{"name":"alpha","description":"A plain scalar."},{"name":"anchored","description":"An anchored name and a tagged description."},{"name":"b-literal","description":"first line\nsecond line\n"},{"name":"crlf-bom","description":"CRLF and a byte-order mark."},{"name":"folded-strip","description":"folded and stripped"},{"name":"multi-line","description":"line one line two"},{"name":"quoted","description":"Tab\there: yes # still text"},{"name":"single-q","description":"It's quoted: yes # still text"},{"name":"workdir-stamp","description":"Stamp the wor
+     SKILL_CALL {"name":"workdir-stamp","handled":true,"exit_code":1,"stdout":"","stderr":"Skill: nothing was loaded. This runtime was started without AILANG_FS_SANDBOXX and its working directory is '/tmp/tmp.sFOjBdtR89/c2-valid-set', not '.'. Without the sandbox .motoko/skills is read from the directory the runtime was started in, so the skills indexed at startup may not be this working directory's. Do not call Skill again in this session."}
+     SKILL_CALL {"name":"nope","handled":true,"exit_code":1,"stdout":"","stderr":"Skill: nothing was loaded. This runtime was started without AILANG_FS_SANDBOXX and its working directory is '/tmp/tmp.sFOjBdtR89/c2-valid-set', not '.'. Without the sandbox .motoko/skills is read from the directory the runtime was started in, so the skills indexed at startup may not be this working directory's. Do not call Skill again in this session."}
+     stderr: Warning: dependency sunholo/motoko_ext_skills content changed (locked: sha256:0cc7459f3afeca0a8..., current: sha256:a20e2aa843c7398a2...)
+     stderr: Run 'ailang lock' to update
+     stderr: CACHE_WRITE_FAILED module=src/core/session stage=encoding path=scripts/.ailang/cache/compile/modules/src__core__session/coretypeinfo.gob: ARTIFACT_TOO_LARGE: scripts/.ailang/cache/compile/modules/src__core__session/coretypeinfo.gob: artifact exceeds blob byte limit; using fresh compilation
+OK          D7: unsandboxed, the registration's config record says the sandbox was not set
+FAIL          D7: unsandboxed with an absolute workdir that is not the process's directory, a Skill call returns D7's error and loads nothing: the check did not hold
+     OK started: profile=probe entries=1 loaded=skills
+     SKILLS_CONFIG {"root":".motoko/skills","skills":[],"sandbox_set":false}
+     SKILL_CALL {"name":"good","handled":true,"exit_code":1,"stdout":"","stderr":"Skill: nothing was loaded. This runtime was started without AILANG_FS_SANDBOXX and its working directory is '/tmp/tmp.sFOjBdtR89/d7-unsandboxed-elsewhere', not '.'. Without the sandbox .motoko/skills is read from the directory the runtime was started in, so the skills indexed at startup may not be this working directory's. Do not call Skill again in this session."}
+     stderr: Warning: dependency sunholo/motoko_ext_skills content changed (locked: sha256:0cc7459f3afeca0a8..., current: sha256:a20e2aa843c7398a2...)
+     stderr: Run 'ailang lock' to update
+     stderr: CACHE_WRITE_FAILED module=src/core/session stage=encoding path=scripts/.ailang/cache/compile/modules/src__core__session/coretypeinfo.gob: ARTIFACT_TOO_LARGE: scripts/.ailang/cache/compile/modules/src__core__session/coretypeinfo.gob: artifact exceeds blob byte limit; using fresh compilation
+NOTE a skill directory that cannot be listed (ADR D1, not covered by the guarantee): exit 1, 0 error events; Error: execution failed: listDir: openat .motoko/skills/sealed: permission denied
+verify_skills_refusal: 47 passed, 4 failed
+make: *** [Makefile:2669: verify_skills_refusal] Error 1
+exit=2

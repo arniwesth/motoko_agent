@@ -1,0 +1,13 @@
+diff --git a/packages/motoko-ext-skills/register.ail b/packages/motoko-ext-skills/register.ail
+index 03208f93..7d3cb387 100644
+--- a/packages/motoko-ext-skills/register.ail
++++ b/packages/motoko-ext-skills/register.ail
+@@ -342,7 +342,7 @@ func skills_handle(ctx: ProviderCtx, call: ToolCallEnvelope) -> ToolHandleOutcom
+ -- ============================================================================
+ 
+ export func register_with_config(_cfg: a) -> ExtRegistration ! {Env, FS} {
+-  let sandbox_set = getEnvOr(sandbox_variable(), "") != "";
++  let sandbox_set = true;
+   let found = scan(read_root());
+   {
+     config: skills_config(found, sandbox_set),
