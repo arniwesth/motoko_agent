@@ -2811,6 +2811,20 @@ verify_repetition_guard:
 	echo "$$out" | grep -E '^(OK|FAIL)'; \
 	[ $$rc -eq 0 ] || (echo "verify_repetition_guard: the no-progress loop guard regressed" && exit 1)
 
+# The boot runs as a session's does (037 ADR-001 D1), in two respects.
+#
+# UNDER THE SANDBOX, AILANG_FS_SANDBOX set to the repository root. The TUI pins
+# the runtime's sandbox to the workdir, and std/fs answers differently with it:
+# a relative path resolves against the sandbox root, and a symlink that leaves
+# it reads as neither file nor directory. An extension that scans a directory
+# at registration (skills: .motoko/skills) could otherwise pass here and be
+# refused in a session, or the reverse.
+#
+# THE REJECTION IS PRINTED. A registration the host refuses is one JSONL
+# `error` event on stdout and exit 2 (registry_generated.ail, `parse_tokens`).
+# The filter used to keep only lines matching `Error|UNKNOWN`, which that
+# lower-case event does not, so a refused extension printed its name and no
+# reason.
 verify_extensions:
 	@profile=$${MOTOKO_CONFIG:-$(PROFILE)}; \
 	cfg=".motoko/config/$$profile/config.json"; \
@@ -2827,6 +2841,7 @@ verify_extensions:
 	for ext in $$exts; do \
 		out=$$(MOTOKO_PROFILE_DIR="$$PWD/.motoko/config/$$profile" \
 		      AILANG_RELAX_MODULES=1 \
+		      AILANG_FS_SANDBOX="$$PWD" \
 		      ailang run --caps Net,AI,SharedMem,IO,Env,Clock,FS,Process,Stream \
 		        --ai-stub --entry main \
 		        scripts/verify_extension_boot.ail -- "$$ext" 2>&1); \
@@ -2836,7 +2851,7 @@ verify_extensions:
 			ok=$$((ok + 1)); \
 		else \
 			echo "  ✗ $$ext"; \
-			echo "$$out" | sed -E 's/\x1b\[[0-9;]*[a-zA-Z]//g' | grep -E "Error|UNKNOWN" | head -3 | sed 's/^/      /'; \
+			echo "$$out" | sed -E 's/\x1b\[[0-9;]*[a-zA-Z]//g' | grep -E 'Error|UNKNOWN|"type":"error"' | head -3 | sed 's/^/      /'; \
 			fail=$$((fail + 1)); \
 			failed_names="$$failed_names $$ext"; \
 		fi; \
