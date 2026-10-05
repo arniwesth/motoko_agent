@@ -1,0 +1,101 @@
+./scripts/dst/run_park_resume.sh
+=== park_resume (PLAN-003 P4, ADR-003 D7) ===
+live wake_read reads the cursor first (P4 Part 2, ADR-003 D7):
+  ✓ live_cursor: the reply is the seeded Settled observation, not the host's
+  ✓ live_cursor: the cursor is consumed
+  ✓ live_cursor: the world advanced once, class WakeRead
+the delegate run parks, and its journal folds three ways to Parked (P4 Part 3):
+  ✓ first_run: the run parks once on `w4.r0.0.p0` [h1], wakes settled, ends Ok
+  ✓ after park_entered: the journal ends in `park` and plans to Parked(p, None)
+  ✓ after wake_received: the journal ends in `wake` and plans to Parked(p, Some(w))
+  ✓ park, exit: the host's exit keeps the park (P4-Q4) and plans to Parked(p, None)
+  ✓ untruncated: the whole run folds to run_finished, not Parked
+resume after wake_received: <R'>.p0 seeded from the wake child, served from the cursor, run opened at p1:
+  ✓ resume_after_wake: SessionResumed is the first record, exactly once
+  ✓ resume_after_wake: the resumed frame's ParkEntered is `w4.r1.0.p0` at step 0 on [h1], before any run
+  ✓ resume_after_wake: exactly one WakeReceived for `w4.r1.0.p0`, settled on h1 with the child's detail
+  ✓ resume_after_wake: WakeIdentity names `w4.r1.0.p0`, served from the cursor (ok), then `w4.r1.0.p1`
+  ✓ resume_after_wake: the resumed run's own park is `w4.r1.0.p1` on [h2] (initial_park_ordinal(true))
+  ✓ resume_after_wake: the wake message told the model to call DelegateCheck once; the run ends Ok with the final answer
+  ✓ resume_after_wake: SessionStart(R') follows WakeReceived in the trace; the wake read is witnessed once per park
+  ✓ exactly once: in the two-frame journal `run_started(R')` comes AFTER the `wake` for `w4.r1.0.p0`
+  ✓ exactly once: the two-frame journal refolds to a `last` that is not Parked, and plans
+  ✓ exactly once: the two-frame journal's history is the resumed run's final history
+resume after park_entered: no wake child, the re-observation is answered by the world's cursor:
+  ✓ resume_after_park: ParkEntered `w4.r1.0.p0` on [h1], then WakeReceived settled from the RE-OBSERVATION
+  ✓ resume_after_park: the run opens and its own park is `w4.r1.0.p1`; it ends Ok
+  ✓ resume_after_park: the two-frame journal refolds to not Parked
+resume park, exit: re-observation at T2 is HostError(wake_read unbound), waits kept:
+  ✓ resume_park_exit: WakeReceived for `w4.r1.0.p0` is HostError("wake_read unbound"), wait_id ""
+  ✓ resume_park_exit: the waits are KEPT — the resumed run's next park `w4.r1.0.p1` still waits on [h1]
+  ✓ resume_park_exit: the model was told the host could not observe the waits
+  ✓ resume_park_exit: the two-frame journal refolds to not Parked
+resume with Aborted: WakeReceived, no run, folds to open:wake:aborted:
+  ✓ resume_aborted: WakeReceived(aborted) for `w4.r1.0.p0` carries the command
+  ✓ resume_aborted: NO run opens — no SessionStart, no HistorySeeded, no ProviderCallPrepared, no RunSummary
+  ✓ resume_aborted: the frame returns the folded history, between turns, not suspended
+  ✓ resume_aborted: the two-frame journal folds to open:wake:aborted
+resume with a mismatched reply: dropped with one warning, nothing appended, no run, no re-issue loop:
+PARK_DROPS resume_dropped 1
+  ✓ resume_dropped: one ParkEntered `w4.r1.0.p0` on [h1] and NO WakeReceived
+  ✓ resume_dropped: no run opens and the cursor element was consumed by the dropped read
+  ✓ resume_dropped: the frame returns the folded history, between turns
+  ✓ resume_dropped: the two-frame journal keeps the re-issued park `w4.r1.0.p0` open for the next resume
+the resumed journal (Part 7's input): w4.r1.0.p0 consumed once, run_started(w4.r1.0) after it:
+  ✓ resume_twice_base: one WakeReceived for `w4.r1.0.p0`, settled on h1 with the first wake's detail; the run ends Ok
+  ✓ resume_twice_base: the two-frame journal has `run_started(w4.r1.0)` after the `wake` for `w4.r1.0.p0`, and each consumed wake's line once
+resume_twice_started: the second resume re-offers nothing — no cursor seeded, no WakeIdentity, no run:
+  ✓ resume_twice_started: the resumed journal's last entry is `open:run_started`, not Parked
+  ✓ resume_twice_started: the second frame is SessionResumed alone — no ParkEntered, no WakeReceived, no SessionStart, no ProviderCallPrepared
+  ✓ resume_twice_started: no WakeIdentity is recorded and no wake_read is witnessed
+  ✓ resume_twice_started: the world's cursor is untouched — the decoy is still its head, nothing seeded ahead of it
+  ✓ resume_twice_started: the frame returns the folded history, between turns, not suspended
+  ✓ resume_twice_started: the three-frame journal refolds to not Parked and holds each consumed wake's line exactly once
+resume_twice_finished: the second resume re-offers nothing — no cursor seeded, no WakeIdentity, no run:
+  ✓ resume_twice_finished: the resumed journal's last entry is `run_finished`, not Parked
+  ✓ resume_twice_finished: the second frame is SessionResumed alone — no ParkEntered, no WakeReceived, no SessionStart, no ProviderCallPrepared
+  ✓ resume_twice_finished: no WakeIdentity is recorded and no wake_read is witnessed
+  ✓ resume_twice_finished: the world's cursor is untouched — the decoy is still its head, nothing seeded ahead of it
+  ✓ resume_twice_finished: the frame returns the folded history, between turns, not suspended
+  ✓ resume_twice_finished: the three-frame journal refolds to not Parked and holds each consumed wake's line exactly once
+resume_twice_parked: the resumed run's own park is re-issued as w4.r2.0.p0; the first wake is not re-offered:
+  ✓ resume_twice_parked: the resumed journal ends in the run's own `park` `w4.r1.0.p1` on [h2], no wake child
+  ✓ resume_twice_parked: the re-issued park is `w4.r2.0.p0` at step 0 on [h2], before any run
+  ✓ resume_twice_parked: exactly one WakeReceived, for `w4.r2.0.p0`, settled on h2 with the world's detail — none for `w4.r1.0.p0`, none with the first wake's detail
+  ✓ resume_twice_parked: the only WakeIdentity names `w4.r2.0.p0` on h2 (the re-observation), none names `w4.r1.0.p0`
+  ✓ resume_twice_parked: the run opens once (`w4.r2.0`) and ends Ok with the final answer
+  ✓ exactly once, twice: the three-frame journal has `run_started(w4.r2.0)` after the `wake` for `w4.r2.0.p0`, and each consumed wake's line once
+  ✓ exactly once, twice: the three-frame journal refolds to not Parked, plans, and its history is the run's final history
+park_resume_dst PASS
+  ✓ the in-process rows passed (exit 0)
+  ✓ all 11 rows reported
+  ✓ frame live_cursor is printed once, closed
+  ✓ frame first_run is printed once, closed
+  ✓ frame resume_after_wake is printed once, closed
+  ✓ frame resume_after_park is printed once, closed
+  ✓ frame resume_park_exit is printed once, closed
+  ✓ frame resume_aborted is printed once, closed
+  ✓ frame resume_dropped is printed once, closed
+  ✓ frame resume_twice_base is printed once, closed
+  ✓ frame resume_twice_started is printed once, closed
+  ✓ frame resume_twice_finished is printed once, closed
+  ✓ frame resume_twice_parked is printed once, closed
+  ✓ live_cursor: no wake_request reaches stdout (the host already answered)
+  ✓ resume_dropped: one warning per dropped reply (drops=1, warnings=1)
+  ✓ resume_dropped: no wake_received reaches the wire
+  ✓ resume_after_wake: no reply is dropped
+  ✓ resume_after_park: no reply is dropped
+  ✓ resume_park_exit: no reply is dropped
+  ✓ resume_aborted: no reply is dropped
+  ✓ resume_after_wake: exactly one wake_received for w4.r1.0.p0 and one session_start for w4.r1.0 on the wire
+  ✓ resume_after_wake: exactly once, on the wire — wake_received(w4.r1.0.p0) precedes session_start(w4.r1.0)
+  ✓ resume_aborted: no session_start on the wire (no run opens)
+  ✓ abort/dropped: no error event in either frame
+  ✓ resume_twice_started: nothing park-shaped on the wire — no wake_request, wake_received, park_entered or session_start
+  ✓ resume_twice_started: exactly one session_resumed on the wire, and no error
+  ✓ resume_twice_finished: nothing park-shaped on the wire — no wake_request, wake_received, park_entered or session_start
+  ✓ resume_twice_finished: exactly one session_resumed on the wire, and no error
+  ✓ resume_twice_parked: exactly one wake_received, for w4.r2.0.p0 on h2, and one session_start for w4.r2.0; none for w4.r1.0.p0; no wake_request
+  ✓ resume_twice_parked: exactly once, on the wire — wake_received(w4.r2.0.p0) precedes session_start(w4.r2.0); no error
+park_resume gate PASS
+exit=0

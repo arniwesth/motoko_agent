@@ -1,0 +1,22 @@
+  ok  control_prose_only.ail             CONTROL prose and literals [] (resolved clean)
+  ok  shape_bare_module.ail              computed/unqualified access ['bare-module']
+  ok  shape_module_alias.ail             alias (whole module)       ['module-alias']
+  ok  shape_no_cached_interface.ail      producer gap (precondition) ['no-cached-interface']
+  ok  shape_unknown_builtin.ail          builtin, effects unknown   ['unknown-builtin']
+  ok  cache precondition      18/18 std modules resolved
+  ok  yield 4 of 19      compaction_structural, decision_framework, empty_stop_guard, progress_contract_guard
+  ok  resolution asserted    18 package directories, member by member
+
+self-test: 11 failure(s)
+  FAIL control_ambient_builtin.ail: expected ['AMBIENT'], got ['no-cached-interface']  [CONTROL ambient builtin]
+  FAIL control_ambient_import.ail: expected ['AMBIENT'], got ['no-cached-interface']  [CONTROL ambient import]
+  FAIL control_multiline_import.ail: expected ['AMBIENT'], got ['no-cached-interface', 'no-cached-interface']  [CONTROL wrapped symbol list]
+  FAIL control_pure_builtin.ail: expected [], got ['no-cached-interface']  [CONTROL builtin, proven pure]
+  FAIL control_pure_unannotated.ail: expected [], got ['no-cached-interface']  [CONTROL closed empty row]
+  FAIL control_renamed_symbol.ail: expected ['AMBIENT'], got ['no-cached-interface']  [CONTROL symbol rename]
+  FAIL control_type_in_effect_module.ail: expected [], got ['no-cached-interface']  [CONTROL type, effectful mod]
+  FAIL shape_effect_variable.ail: expected ['effect-variable'], got ['no-cached-interface']  [effect-variable row]
+  FAIL shape_symbol_not_in_interface.ail: expected ['symbol-not-in-interface'], got ['no-cached-interface']  [re-export / wrapper]
+  FAIL TWO-SIDED CONTROL: no fixture is reported AMBIENT, so nothing shows the matcher is sensitive to an ambient effect at all.
+  FAIL YIELD: expected 18 registrable extensions resolved through ailang.toml, got 19
+exit=1

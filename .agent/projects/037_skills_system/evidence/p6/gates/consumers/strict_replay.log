@@ -1,0 +1,522 @@
+→ Type checking...
+→ Effect checking...
+✓ Running scripts/dst/strict_replay_dst.ail
+CACHE_WRITE_FAILED module=src/core/session stage=encoding path=/workspaces/motoko_agent-skills/.ailang/lane/strict_replay/compile/modules/src__core__session/coretypeinfo.gob: ARTIFACT_TOO_LARGE: /workspaces/motoko_agent-skills/.ailang/lane/strict_replay/compile/modules/src__core__session/coretypeinfo.gob: artifact exceeds blob byte limit; using fresh compilation
+strict_replay_dst: WI-A13 stage 3 — strict replay against driver_only
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":1,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":2,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":3,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":4,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":5,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":6,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":7,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":8,"class":"file_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":9,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":10,"class":"file_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":11,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":12,"class":"file_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":13,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":14,"class":"clock_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":15,"class":"clock_read"}
+{"schema_version":"1","session_id":"session_0","type":"history_seeded","run_id":"session_0.r0.0","messages":[{"role":"system","content":"s","tool_calls":[],"tool_call_id":"","images":[]},{"role":"user","content":"u","tool_calls":[],"tool_call_id":"","images":[]}],"digest":"sha256:9d0887cc8698e4606b5f92943460579ca339f183e7eb84dc5bf56c2df3f51759","digests":["sha256:43f143c97aea950fae356a6650e18846baa4d0140892fff2f5b7ed46a0227c35","sha256:9d0887cc8698e4606b5f92943460579ca339f183e7eb84dc5bf56c2df3f51759"]}
+{"schema_version":"1","session_id":"session_0","type":"context_limit_resolved","run_id":"session_0.r0.0","context_limit":0,"context_limit_source":{"arm":"unknown","origin":"","profile_miss":"profile_config_absent","catalogue_miss":"catalogue_absent","model":""}}
+{"schema_version":"1","session_id":"session_0","type":"thinking_stream_start","step":0,"stream_id":"step-0","model":"phase-c-model"}
+{"schema_version":"1","session_id":"session_0","type":"provider_call_prepared","step":0,"msg_count":2,"estimated_input_tokens":1,"system_prefix_count":1,"system_prefix_chars":1,"system_prefix_digest":"sha256:34074df4973df0b370f04613c2cfa54fa71859d293bda0804dcecdcacbb8fdb8","payload_digest":"sha256:ec46a71c5287ff7757ff68bd95d57b77268702abba4633545aaf24196d7a63b1","model":"phase-c-model"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_delta","step":0,"stream_id":"step-0","seq":0,"text_delta":"chunk-one"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_delta","step":0,"stream_id":"step-0","seq":0,"text_delta":"chunk-two"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":16,"class":"model_step"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_stream_end","step":0,"stream_id":"step-0","status":"completed"}
+{"schema_version":"1","session_id":"session_0","type":"thinking","step":0,"text":"s0","finish_reason":"tool_calls","tool_calls":3,"input_tokens":200,"output_tokens":100,"cost_usd":0}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":0,"message":{"role":"assistant","content":"s0","tool_calls":[{"id":"s0a","name":"T","arguments":"{}"},{"id":"s0b","name":"T","arguments":"{}"},{"id":"s0c","name":"T","arguments":"{}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:d6cb99cefe09da1770942106bb3001074d6e622d9f02862b77e807ba5b680e4b"}
+{"schema_version":"1","session_id":"session_0","type":"state_delta","run_id":"session_0.r0.0","step":0,"cumulative":{"provider_calls_started":1,"provider_calls_completed":1,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":200,"last_output_tokens":100,"last_estimated_input_tokens":1},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_calls","request_id":"step-0","step":0,"stream_id":"step-0","tool_calls":[{"id":"s0a","tool":"T","arguments":{}},{"id":"s0b","tool":"T","arguments":{}},{"id":"s0c","tool":"T","arguments":{}}]}
+{"schema_version":"1","session_id":"session_0","type":"tool_pending","step":0,"stream_id":"step-0","tool":"T","id":"s0a","reason":"strict replay: approval required"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":17,"class":"tool_exec"}
+{"schema_version":"1","session_id":"session_0","type":"v2_tool_dispatch_start","step":0,"stream_id":"step-0","tool":"T","id":"s0a"}
+{"schema_version":"1","session_id":"session_0","type":"v2_tool_dispatch_complete","step":0,"stream_id":"step-0","id":"s0a"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":18,"class":"clock_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":19,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":20,"class":"tool_exec"}
+{"schema_version":"1","session_id":"session_0","type":"tool_pending","step":0,"stream_id":"step-0","tool":"T","id":"s0b","reason":"strict replay: approval required"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":21,"class":"tool_exec"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_denied","step":0,"stream_id":"step-0","tool":"T","id":"s0b","reason":"bravo"}
+{"schema_version":"1","session_id":"session_0","type":"tool_pending","step":0,"stream_id":"step-0","tool":"T","id":"s0c","reason":"strict replay: approval required"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":22,"class":"tool_exec"}
+{"schema_version":"1","session_id":"session_0","type":"v2_tool_dispatch_start","step":0,"stream_id":"step-0","tool":"T","id":"s0c"}
+{"schema_version":"1","session_id":"session_0","type":"v2_tool_dispatch_complete","step":0,"stream_id":"step-0","id":"s0c"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":23,"class":"clock_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":24,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":25,"class":"tool_exec"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_results","request_id":"step-0","step":0,"stream_id":"step-0","results":[{"tool_call_id":"s0a","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":{}},{"tool_call_id":"s0b","exit_code":1,"stdout":"","stderr":"","truncated":false,"payload":{"error":true,"denied_by_policy":true,"tool":"T","reason":"bravo"}},{"tool_call_id":"s0c","exit_code":1,"stdout":"","stderr":"","truncated":false,"payload":{"error":true,"tool":"T","fault_class":"ToolFailed","detail":"{\"code\":\"E_BOOM\",\"message\":\"boom\",\"tool_call_id\":\"s0c\"}"}}]}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":0,"message":{"role":"tool","content":"OK-ALPHA","tool_calls":[],"tool_call_id":"s0a","images":[]},"replaces_previous":false,"digest_after":"sha256:87b2b25db634bfa31addb6da8185142ee83d85f7c663c1d1c130f679ba44e772"}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":0,"message":{"role":"tool","content":"{\"error\":true,\"denied_by_policy\":true,\"tool\":\"T\",\"reason\":\"bravo\"}","tool_calls":[],"tool_call_id":"s0b","images":[]},"replaces_previous":false,"digest_after":"sha256:2ad9deb42f4496dde6bc2b9f9cfed6230757f19ebca8ce41259d09846cbaf007"}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":0,"message":{"role":"tool","content":"{\"error\":true,\"tool\":\"T\",\"fault_class\":\"ToolFailed\",\"detail\":\"{\\\"code\\\":\\\"E_BOOM\\\",\\\"message\\\":\\\"boom\\\",\\\"tool_call_id\\\":\\\"s0c\\\"}\"}","tool_calls":[],"tool_call_id":"s0c","images":[]},"replaces_previous":false,"digest_after":"sha256:bc97ee1fb847866c64f77bb48a3ba51497bdd5f8ca4da89b8208bcfdf8e36d17"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_stream_start","step":1,"stream_id":"step-1","model":"phase-c-model"}
+{"schema_version":"1","session_id":"session_0","type":"provider_call_prepared","step":1,"msg_count":6,"estimated_input_tokens":53,"system_prefix_count":1,"system_prefix_chars":1,"system_prefix_digest":"sha256:34074df4973df0b370f04613c2cfa54fa71859d293bda0804dcecdcacbb8fdb8","payload_digest":"sha256:2b7cc3c963fa0c8123e2c54bdf33cd9f274f156a2203a26f7db2c3b87c0b3336","model":"phase-c-model"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":26,"class":"model_step"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_stream_end","step":1,"stream_id":"step-1","status":"completed"}
+{"schema_version":"1","session_id":"session_0","type":"thinking","step":1,"text":"s1","finish_reason":"tool_calls","tool_calls":1,"input_tokens":200,"output_tokens":100,"cost_usd":0}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":1,"message":{"role":"assistant","content":"s1","tool_calls":[{"id":"s1a","name":"T","arguments":"{}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:2d3c5dea865de1c1fd594e1b450612ce1d65e4f05f68d3777dd25a7f2be07875"}
+{"schema_version":"1","session_id":"session_0","type":"state_delta","run_id":"session_0.r0.0","step":1,"cumulative":{"provider_calls_started":2,"provider_calls_completed":2,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":200,"last_output_tokens":100,"last_estimated_input_tokens":53},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_calls","request_id":"step-1","step":1,"stream_id":"step-1","tool_calls":[{"id":"s1a","tool":"T","arguments":{}}]}
+{"schema_version":"1","session_id":"session_0","type":"tool_pending","step":1,"stream_id":"step-1","tool":"T","id":"s1a","reason":"strict replay: approval required"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":27,"class":"tool_exec"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_denied","step":1,"stream_id":"step-1","tool":"T","id":"s1a","reason":"timeout — no approval received"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_results","request_id":"step-1","step":1,"stream_id":"step-1","results":[{"tool_call_id":"s1a","exit_code":1,"stdout":"","stderr":"","truncated":false,"payload":{"error":true,"denied_by_policy":true,"tool":"T","reason":"timeout — no approval received"}}]}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":1,"message":{"role":"tool","content":"{\"error\":true,\"denied_by_policy\":true,\"tool\":\"T\",\"reason\":\"timeout — no approval received\"}","tool_calls":[],"tool_call_id":"s1a","images":[]},"replaces_previous":false,"digest_after":"sha256:2f70067ec9b4d0abc46ffe34982cab289370364c7ca44a1f445c4a8be22d1946"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_stream_start","step":2,"stream_id":"step-2","model":"phase-c-model"}
+{"schema_version":"1","session_id":"session_0","type":"provider_call_prepared","step":2,"msg_count":8,"estimated_input_tokens":76,"system_prefix_count":1,"system_prefix_chars":1,"system_prefix_digest":"sha256:34074df4973df0b370f04613c2cfa54fa71859d293bda0804dcecdcacbb8fdb8","payload_digest":"sha256:afd562b268c6e2ff8d50c306b74d4bdeab109fd257e58a91b78c94154fbd9496","model":"phase-c-model"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":28,"class":"model_step"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_stream_end","step":2,"stream_id":"step-2","status":"completed"}
+{"schema_version":"1","session_id":"session_0","type":"thinking","step":2,"text":"s2","finish_reason":"tool_calls","tool_calls":1,"input_tokens":200,"output_tokens":100,"cost_usd":0}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":2,"message":{"role":"assistant","content":"s2","tool_calls":[{"id":"s2a","name":"T","arguments":"{}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:7e92e7cdbc88e5139e80f8c49cf5abba2c3ae497628238ce461134e848cbd095"}
+{"schema_version":"1","session_id":"session_0","type":"state_delta","run_id":"session_0.r0.0","step":2,"cumulative":{"provider_calls_started":3,"provider_calls_completed":3,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":200,"last_output_tokens":100,"last_estimated_input_tokens":76},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_calls","request_id":"step-2","step":2,"stream_id":"step-2","tool_calls":[{"id":"s2a","tool":"T","arguments":{}}]}
+{"schema_version":"1","session_id":"session_0","type":"tool_pending","step":2,"stream_id":"step-2","tool":"T","id":"s2a","reason":"strict replay: approval required"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":29,"class":"tool_exec"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_denied","step":2,"stream_id":"step-2","tool":"T","id":"s2a","reason":"timeout — no approval received"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_results","request_id":"step-2","step":2,"stream_id":"step-2","results":[{"tool_call_id":"s2a","exit_code":1,"stdout":"","stderr":"","truncated":false,"payload":{"error":true,"denied_by_policy":true,"tool":"T","reason":"timeout — no approval received"}}]}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":2,"message":{"role":"tool","content":"{\"error\":true,\"denied_by_policy\":true,\"tool\":\"T\",\"reason\":\"timeout — no approval received\"}","tool_calls":[],"tool_call_id":"s2a","images":[]},"replaces_previous":false,"digest_after":"sha256:89b12ad7e649f4eb2f32e271c928a35512418cb24e941f3e8b785ec81c1ea703"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_stream_start","step":3,"stream_id":"step-3","model":"phase-c-model"}
+{"schema_version":"1","session_id":"session_0","type":"provider_call_prepared","step":3,"msg_count":10,"estimated_input_tokens":99,"system_prefix_count":1,"system_prefix_chars":1,"system_prefix_digest":"sha256:34074df4973df0b370f04613c2cfa54fa71859d293bda0804dcecdcacbb8fdb8","payload_digest":"sha256:ae965556c8b68d6d2a23a1c15317546d2a051e2a65ede599531e018c899831ba","model":"phase-c-model"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":30,"class":"model_step"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_stream_end","step":3,"stream_id":"step-3","status":"completed"}
+{"schema_version":"1","session_id":"session_0","type":"thinking","step":3,"text":"s3","finish_reason":"tool_calls","tool_calls":1,"input_tokens":200,"output_tokens":100,"cost_usd":0}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":3,"message":{"role":"assistant","content":"s3","tool_calls":[{"id":"s3a","name":"T","arguments":"{}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:a2146398dd17b67206ec5382ed29ce50e506596d934fce50e9aa0998ba8f45f0"}
+{"schema_version":"1","session_id":"session_0","type":"state_delta","run_id":"session_0.r0.0","step":3,"cumulative":{"provider_calls_started":4,"provider_calls_completed":4,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":200,"last_output_tokens":100,"last_estimated_input_tokens":99},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_calls","request_id":"step-3","step":3,"stream_id":"step-3","tool_calls":[{"id":"s3a","tool":"T","arguments":{}}]}
+{"schema_version":"1","session_id":"session_0","type":"tool_pending","step":3,"stream_id":"step-3","tool":"T","id":"s3a","reason":"strict replay: approval required"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":31,"class":"tool_exec"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_denied","step":3,"stream_id":"step-3","tool":"T","id":"s3a","reason":"timeout — no approval received"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_results","request_id":"step-3","step":3,"stream_id":"step-3","results":[{"tool_call_id":"s3a","exit_code":1,"stdout":"","stderr":"","truncated":false,"payload":{"error":true,"denied_by_policy":true,"tool":"T","reason":"timeout — no approval received"}}]}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":3,"message":{"role":"tool","content":"{\"error\":true,\"denied_by_policy\":true,\"tool\":\"T\",\"reason\":\"timeout — no approval received\"}","tool_calls":[],"tool_call_id":"s3a","images":[]},"replaces_previous":false,"digest_after":"sha256:bcbbc16aee600e3e58eba4ea83a2aad7e36662fd562d2532a1c3b6cdccaaab08"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_stream_start","step":4,"stream_id":"step-4","model":"phase-c-model"}
+{"schema_version":"1","session_id":"session_0","type":"provider_call_prepared","step":4,"msg_count":12,"estimated_input_tokens":122,"system_prefix_count":1,"system_prefix_chars":1,"system_prefix_digest":"sha256:34074df4973df0b370f04613c2cfa54fa71859d293bda0804dcecdcacbb8fdb8","payload_digest":"sha256:ca7c9ef4c7263eb9fea68922d5387038f35b18f0e1649799fca2a875c7ad5005","model":"phase-c-model"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":32,"class":"model_step"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_stream_end","step":4,"stream_id":"step-4","status":"completed"}
+{"schema_version":"1","session_id":"session_0","type":"thinking","step":4,"text":"stub: script exhausted","finish_reason":"stop","tool_calls":0,"input_tokens":0,"output_tokens":0,"cost_usd":0}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":4,"message":{"role":"assistant","content":"stub: script exhausted","tool_calls":[],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:efdbbe0a185fe8c77e2126ad72aa67046c2cc26e780cc590d246f7de70607ffc"}
+{"schema_version":"1","session_id":"session_0","type":"state_delta","run_id":"session_0.r0.0","step":4,"cumulative":{"provider_calls_started":5,"provider_calls_completed":5,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":0,"last_output_tokens":0,"last_estimated_input_tokens":122},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":33,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":34,"class":"clock_read"}
+{"schema_version":"1","session_id":"session_0","type":"run_summary","model":"phase-c-model","motoko_commit":"dev","finish_reason":"stop","steps_executed":5,"usage":{"input_tokens":800,"output_tokens":400,"total_tokens":1200},"total_cost_usd":0,"total_cost_millicents":0,"duration_ms":21,"error":"","cumulative":{"provider_calls_started":5,"provider_calls_completed":5,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"world_ordinal":34}
+{"schema_version":"1","session_id":"session_0","type":"done","step":4,"output":"stub: script exhausted"}
+
+rich: discovery recorded 31 interactions
+CENSUS rich expect_provider=5 expect_tool=2 expect_approval=6 expect_wake=0 expect_extension_effect=0 environment_read=13 runtime_random_draw=0 advance_clock=5 file_write=0 file_remove=0 dir_make=0
+  ✓ rich: the discovery run ended Ok as the scenario intends
+  ✓ rich: the program's manifest validates against driver_only/34
+  ✓ rich: replay metadata is projected from the manifest, not restated
+  ✓ rich: the reconstituted world accounts for the program, in both directions
+rich: reconstituted script=4 approvals=3 tools=2 clock=0
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":1,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":2,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":3,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":4,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":5,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":6,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":7,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":8,"class":"file_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":9,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":10,"class":"file_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":11,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":12,"class":"file_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":13,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":14,"class":"clock_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":15,"class":"clock_read"}
+{"schema_version":"1","session_id":"session_0","type":"history_seeded","run_id":"session_0.r0.0","messages":[{"role":"system","content":"s","tool_calls":[],"tool_call_id":"","images":[]},{"role":"user","content":"u","tool_calls":[],"tool_call_id":"","images":[]}],"digest":"sha256:9d0887cc8698e4606b5f92943460579ca339f183e7eb84dc5bf56c2df3f51759","digests":["sha256:43f143c97aea950fae356a6650e18846baa4d0140892fff2f5b7ed46a0227c35","sha256:9d0887cc8698e4606b5f92943460579ca339f183e7eb84dc5bf56c2df3f51759"]}
+{"schema_version":"1","session_id":"session_0","type":"context_limit_resolved","run_id":"session_0.r0.0","context_limit":0,"context_limit_source":{"arm":"unknown","origin":"","profile_miss":"profile_config_absent","catalogue_miss":"catalogue_absent","model":""}}
+{"schema_version":"1","session_id":"session_0","type":"thinking_stream_start","step":0,"stream_id":"step-0","model":"phase-c-model"}
+{"schema_version":"1","session_id":"session_0","type":"provider_call_prepared","step":0,"msg_count":2,"estimated_input_tokens":1,"system_prefix_count":1,"system_prefix_chars":1,"system_prefix_digest":"sha256:34074df4973df0b370f04613c2cfa54fa71859d293bda0804dcecdcacbb8fdb8","payload_digest":"sha256:ec46a71c5287ff7757ff68bd95d57b77268702abba4633545aaf24196d7a63b1","model":"phase-c-model"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_delta","step":0,"stream_id":"step-0","seq":0,"text_delta":"chunk-one"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_delta","step":0,"stream_id":"step-0","seq":0,"text_delta":"chunk-two"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":16,"class":"model_step"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_stream_end","step":0,"stream_id":"step-0","status":"completed"}
+{"schema_version":"1","session_id":"session_0","type":"thinking","step":0,"text":"s0","finish_reason":"tool_calls","tool_calls":3,"input_tokens":200,"output_tokens":100,"cost_usd":0}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":0,"message":{"role":"assistant","content":"s0","tool_calls":[{"id":"s0a","name":"T","arguments":"{}"},{"id":"s0b","name":"T","arguments":"{}"},{"id":"s0c","name":"T","arguments":"{}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:d6cb99cefe09da1770942106bb3001074d6e622d9f02862b77e807ba5b680e4b"}
+{"schema_version":"1","session_id":"session_0","type":"state_delta","run_id":"session_0.r0.0","step":0,"cumulative":{"provider_calls_started":1,"provider_calls_completed":1,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":200,"last_output_tokens":100,"last_estimated_input_tokens":1},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_calls","request_id":"step-0","step":0,"stream_id":"step-0","tool_calls":[{"id":"s0a","tool":"T","arguments":{}},{"id":"s0b","tool":"T","arguments":{}},{"id":"s0c","tool":"T","arguments":{}}]}
+{"schema_version":"1","session_id":"session_0","type":"tool_pending","step":0,"stream_id":"step-0","tool":"T","id":"s0a","reason":"strict replay: approval required"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":17,"class":"tool_exec"}
+{"schema_version":"1","session_id":"session_0","type":"v2_tool_dispatch_start","step":0,"stream_id":"step-0","tool":"T","id":"s0a"}
+{"schema_version":"1","session_id":"session_0","type":"v2_tool_dispatch_complete","step":0,"stream_id":"step-0","id":"s0a"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":18,"class":"clock_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":19,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":20,"class":"tool_exec"}
+{"schema_version":"1","session_id":"session_0","type":"tool_pending","step":0,"stream_id":"step-0","tool":"T","id":"s0b","reason":"strict replay: approval required"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":21,"class":"tool_exec"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_denied","step":0,"stream_id":"step-0","tool":"T","id":"s0b","reason":"bravo"}
+{"schema_version":"1","session_id":"session_0","type":"tool_pending","step":0,"stream_id":"step-0","tool":"T","id":"s0c","reason":"strict replay: approval required"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":22,"class":"tool_exec"}
+{"schema_version":"1","session_id":"session_0","type":"v2_tool_dispatch_start","step":0,"stream_id":"step-0","tool":"T","id":"s0c"}
+{"schema_version":"1","session_id":"session_0","type":"v2_tool_dispatch_complete","step":0,"stream_id":"step-0","id":"s0c"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":23,"class":"clock_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":24,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":25,"class":"tool_exec"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_results","request_id":"step-0","step":0,"stream_id":"step-0","results":[{"tool_call_id":"s0a","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":{}},{"tool_call_id":"s0b","exit_code":1,"stdout":"","stderr":"","truncated":false,"payload":{"error":true,"denied_by_policy":true,"tool":"T","reason":"bravo"}},{"tool_call_id":"s0c","exit_code":1,"stdout":"","stderr":"","truncated":false,"payload":{"error":true,"tool":"T","fault_class":"ToolFailed","detail":"{\"code\":\"E_BOOM\",\"message\":\"boom\",\"tool_call_id\":\"s0c\"}"}}]}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":0,"message":{"role":"tool","content":"OK-ALPHA","tool_calls":[],"tool_call_id":"s0a","images":[]},"replaces_previous":false,"digest_after":"sha256:87b2b25db634bfa31addb6da8185142ee83d85f7c663c1d1c130f679ba44e772"}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":0,"message":{"role":"tool","content":"{\"error\":true,\"denied_by_policy\":true,\"tool\":\"T\",\"reason\":\"bravo\"}","tool_calls":[],"tool_call_id":"s0b","images":[]},"replaces_previous":false,"digest_after":"sha256:2ad9deb42f4496dde6bc2b9f9cfed6230757f19ebca8ce41259d09846cbaf007"}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":0,"message":{"role":"tool","content":"{\"error\":true,\"tool\":\"T\",\"fault_class\":\"ToolFailed\",\"detail\":\"{\\\"code\\\":\\\"E_BOOM\\\",\\\"message\\\":\\\"boom\\\",\\\"tool_call_id\\\":\\\"s0c\\\"}\"}","tool_calls":[],"tool_call_id":"s0c","images":[]},"replaces_previous":false,"digest_after":"sha256:bc97ee1fb847866c64f77bb48a3ba51497bdd5f8ca4da89b8208bcfdf8e36d17"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_stream_start","step":1,"stream_id":"step-1","model":"phase-c-model"}
+{"schema_version":"1","session_id":"session_0","type":"provider_call_prepared","step":1,"msg_count":6,"estimated_input_tokens":53,"system_prefix_count":1,"system_prefix_chars":1,"system_prefix_digest":"sha256:34074df4973df0b370f04613c2cfa54fa71859d293bda0804dcecdcacbb8fdb8","payload_digest":"sha256:2b7cc3c963fa0c8123e2c54bdf33cd9f274f156a2203a26f7db2c3b87c0b3336","model":"phase-c-model"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":26,"class":"model_step"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_stream_end","step":1,"stream_id":"step-1","status":"completed"}
+{"schema_version":"1","session_id":"session_0","type":"thinking","step":1,"text":"s1","finish_reason":"tool_calls","tool_calls":1,"input_tokens":200,"output_tokens":100,"cost_usd":0}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":1,"message":{"role":"assistant","content":"s1","tool_calls":[{"id":"s1a","name":"T","arguments":"{}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:2d3c5dea865de1c1fd594e1b450612ce1d65e4f05f68d3777dd25a7f2be07875"}
+{"schema_version":"1","session_id":"session_0","type":"state_delta","run_id":"session_0.r0.0","step":1,"cumulative":{"provider_calls_started":2,"provider_calls_completed":2,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":200,"last_output_tokens":100,"last_estimated_input_tokens":53},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_calls","request_id":"step-1","step":1,"stream_id":"step-1","tool_calls":[{"id":"s1a","tool":"T","arguments":{}}]}
+{"schema_version":"1","session_id":"session_0","type":"tool_pending","step":1,"stream_id":"step-1","tool":"T","id":"s1a","reason":"strict replay: approval required"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":27,"class":"tool_exec"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_denied","step":1,"stream_id":"step-1","tool":"T","id":"s1a","reason":"timeout — no approval received"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_results","request_id":"step-1","step":1,"stream_id":"step-1","results":[{"tool_call_id":"s1a","exit_code":1,"stdout":"","stderr":"","truncated":false,"payload":{"error":true,"denied_by_policy":true,"tool":"T","reason":"timeout — no approval received"}}]}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":1,"message":{"role":"tool","content":"{\"error\":true,\"denied_by_policy\":true,\"tool\":\"T\",\"reason\":\"timeout — no approval received\"}","tool_calls":[],"tool_call_id":"s1a","images":[]},"replaces_previous":false,"digest_after":"sha256:2f70067ec9b4d0abc46ffe34982cab289370364c7ca44a1f445c4a8be22d1946"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_stream_start","step":2,"stream_id":"step-2","model":"phase-c-model"}
+{"schema_version":"1","session_id":"session_0","type":"provider_call_prepared","step":2,"msg_count":8,"estimated_input_tokens":76,"system_prefix_count":1,"system_prefix_chars":1,"system_prefix_digest":"sha256:34074df4973df0b370f04613c2cfa54fa71859d293bda0804dcecdcacbb8fdb8","payload_digest":"sha256:afd562b268c6e2ff8d50c306b74d4bdeab109fd257e58a91b78c94154fbd9496","model":"phase-c-model"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":28,"class":"model_step"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_stream_end","step":2,"stream_id":"step-2","status":"completed"}
+{"schema_version":"1","session_id":"session_0","type":"thinking","step":2,"text":"s2","finish_reason":"tool_calls","tool_calls":1,"input_tokens":200,"output_tokens":100,"cost_usd":0}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":2,"message":{"role":"assistant","content":"s2","tool_calls":[{"id":"s2a","name":"T","arguments":"{}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:7e92e7cdbc88e5139e80f8c49cf5abba2c3ae497628238ce461134e848cbd095"}
+{"schema_version":"1","session_id":"session_0","type":"state_delta","run_id":"session_0.r0.0","step":2,"cumulative":{"provider_calls_started":3,"provider_calls_completed":3,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":200,"last_output_tokens":100,"last_estimated_input_tokens":76},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_calls","request_id":"step-2","step":2,"stream_id":"step-2","tool_calls":[{"id":"s2a","tool":"T","arguments":{}}]}
+{"schema_version":"1","session_id":"session_0","type":"tool_pending","step":2,"stream_id":"step-2","tool":"T","id":"s2a","reason":"strict replay: approval required"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":29,"class":"tool_exec"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_denied","step":2,"stream_id":"step-2","tool":"T","id":"s2a","reason":"timeout — no approval received"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_results","request_id":"step-2","step":2,"stream_id":"step-2","results":[{"tool_call_id":"s2a","exit_code":1,"stdout":"","stderr":"","truncated":false,"payload":{"error":true,"denied_by_policy":true,"tool":"T","reason":"timeout — no approval received"}}]}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":2,"message":{"role":"tool","content":"{\"error\":true,\"denied_by_policy\":true,\"tool\":\"T\",\"reason\":\"timeout — no approval received\"}","tool_calls":[],"tool_call_id":"s2a","images":[]},"replaces_previous":false,"digest_after":"sha256:89b12ad7e649f4eb2f32e271c928a35512418cb24e941f3e8b785ec81c1ea703"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_stream_start","step":3,"stream_id":"step-3","model":"phase-c-model"}
+{"schema_version":"1","session_id":"session_0","type":"provider_call_prepared","step":3,"msg_count":10,"estimated_input_tokens":99,"system_prefix_count":1,"system_prefix_chars":1,"system_prefix_digest":"sha256:34074df4973df0b370f04613c2cfa54fa71859d293bda0804dcecdcacbb8fdb8","payload_digest":"sha256:ae965556c8b68d6d2a23a1c15317546d2a051e2a65ede599531e018c899831ba","model":"phase-c-model"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":30,"class":"model_step"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_stream_end","step":3,"stream_id":"step-3","status":"completed"}
+{"schema_version":"1","session_id":"session_0","type":"thinking","step":3,"text":"s3","finish_reason":"tool_calls","tool_calls":1,"input_tokens":200,"output_tokens":100,"cost_usd":0}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":3,"message":{"role":"assistant","content":"s3","tool_calls":[{"id":"s3a","name":"T","arguments":"{}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:a2146398dd17b67206ec5382ed29ce50e506596d934fce50e9aa0998ba8f45f0"}
+{"schema_version":"1","session_id":"session_0","type":"state_delta","run_id":"session_0.r0.0","step":3,"cumulative":{"provider_calls_started":4,"provider_calls_completed":4,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":200,"last_output_tokens":100,"last_estimated_input_tokens":99},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_calls","request_id":"step-3","step":3,"stream_id":"step-3","tool_calls":[{"id":"s3a","tool":"T","arguments":{}}]}
+{"schema_version":"1","session_id":"session_0","type":"tool_pending","step":3,"stream_id":"step-3","tool":"T","id":"s3a","reason":"strict replay: approval required"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":31,"class":"tool_exec"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_denied","step":3,"stream_id":"step-3","tool":"T","id":"s3a","reason":"timeout — no approval received"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_results","request_id":"step-3","step":3,"stream_id":"step-3","results":[{"tool_call_id":"s3a","exit_code":1,"stdout":"","stderr":"","truncated":false,"payload":{"error":true,"denied_by_policy":true,"tool":"T","reason":"timeout — no approval received"}}]}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":3,"message":{"role":"tool","content":"{\"error\":true,\"denied_by_policy\":true,\"tool\":\"T\",\"reason\":\"timeout — no approval received\"}","tool_calls":[],"tool_call_id":"s3a","images":[]},"replaces_previous":false,"digest_after":"sha256:bcbbc16aee600e3e58eba4ea83a2aad7e36662fd562d2532a1c3b6cdccaaab08"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_stream_start","step":4,"stream_id":"step-4","model":"phase-c-model"}
+{"schema_version":"1","session_id":"session_0","type":"provider_call_prepared","step":4,"msg_count":12,"estimated_input_tokens":122,"system_prefix_count":1,"system_prefix_chars":1,"system_prefix_digest":"sha256:34074df4973df0b370f04613c2cfa54fa71859d293bda0804dcecdcacbb8fdb8","payload_digest":"sha256:ca7c9ef4c7263eb9fea68922d5387038f35b18f0e1649799fca2a875c7ad5005","model":"phase-c-model"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":32,"class":"model_step"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_stream_end","step":4,"stream_id":"step-4","status":"completed"}
+{"schema_version":"1","session_id":"session_0","type":"thinking","step":4,"text":"stub: script exhausted","finish_reason":"stop","tool_calls":0,"input_tokens":0,"output_tokens":0,"cost_usd":0}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":4,"message":{"role":"assistant","content":"stub: script exhausted","tool_calls":[],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:efdbbe0a185fe8c77e2126ad72aa67046c2cc26e780cc590d246f7de70607ffc"}
+{"schema_version":"1","session_id":"session_0","type":"state_delta","run_id":"session_0.r0.0","step":4,"cumulative":{"provider_calls_started":5,"provider_calls_completed":5,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":0,"last_output_tokens":0,"last_estimated_input_tokens":122},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":33,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":34,"class":"clock_read"}
+{"schema_version":"1","session_id":"session_0","type":"run_summary","model":"phase-c-model","motoko_commit":"dev","finish_reason":"stop","steps_executed":5,"usage":{"input_tokens":800,"output_tokens":400,"total_tokens":1200},"total_cost_usd":0,"total_cost_millicents":0,"duration_ms":21,"error":"","cumulative":{"provider_calls_started":5,"provider_calls_completed":5,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"world_ordinal":34}
+{"schema_version":"1","session_id":"session_0","type":"done","step":4,"output":"stub: script exhausted"}
+  ✓ rich: the exact program replays to an identical interaction log
+  ✓ rich: the replay reproduces the terminal outcome
+rich: replay witness provider=5 tool=2 approval_reads=6 approvals_served=3 clock_delta=23ms
+  ✓ rich: the REPLAYED run's log accounts for it, against witnesses the recorder did not write
+  ✓ rich: every witness the grading consumes is non-zero
+  ✓ rich: the surviving fixture carries every shape the specification protects
+  ✓ rich: no two of the surviving fixture's quantities are equal
+  ✓ rich: the replay's recorded provider steps equal the driver's own
+  ✓ rich: a program and a log with the SAME defect match perfectly
+  ✓ rich: …and the independent witnesses reject it anyway
+  mutations (each must go red):
+  ✓ replay-unused-interaction ← the replay stops one interaction early
+  ✓ replay-program-exhausted ← the replay makes one request more than the program holds
+  ✓ replay-wrong-kind ← one provider request arrives as a clock advance
+  ✓ replay-wrong-origin ← one provider request comes from a different producer
+  ✓ replay-unsafe-identity-mismatch ← one tool request carries a different call id
+  ✓ replay-projection-differs ← one request projection differs
+  ✓ replay-outcome-differs ← the world served the right request and a different answer
+  regression replay (D2's second mode), on the same real logs:
+  ✓ rich: an exact replay is regression-clean AND records nothing
+      regression replay: 0 fatal, 1 recorded difference(s)
+    - [replay-projection-differs] at interaction position 12 the program records request projection 'model_step model=phase-c-model msg_count=2' and the driver produced 'model_step model=phase-c-model msg_count=2 (drifted)'; strict replay requires the recorded projections to match, and the projection is what carries the arguments and message digests D2 says are recorded rather than silently discarded
+  ✓ rich: a differing request projection is RECORDED and the replay continues
+  ✓ rich: a differing outcome is RECORDED and the replay continues
+  ✓ rich: causal identity and both walk arms stay FATAL in regression mode
+  ✓ rich: no fatal rule was quietly recorded as a difference instead
+  ✓ rich: an undecodable schema version refuses replay
+  ✓ rich: a provider outcome that cannot be read back refuses replay
+  ✓ rich: a mismatch returns a typed HarnessFailure with position and projection
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":1,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":2,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":3,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":4,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":5,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":6,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":7,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":8,"class":"file_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":9,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":10,"class":"file_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":11,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":12,"class":"file_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":13,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":14,"class":"clock_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":15,"class":"clock_read"}
+{"schema_version":"1","session_id":"session_0","type":"history_seeded","run_id":"session_0.r0.0","messages":[{"role":"system","content":"s","tool_calls":[],"tool_call_id":"","images":[]},{"role":"user","content":"u","tool_calls":[],"tool_call_id":"","images":[]}],"digest":"sha256:9d0887cc8698e4606b5f92943460579ca339f183e7eb84dc5bf56c2df3f51759","digests":["sha256:43f143c97aea950fae356a6650e18846baa4d0140892fff2f5b7ed46a0227c35","sha256:9d0887cc8698e4606b5f92943460579ca339f183e7eb84dc5bf56c2df3f51759"]}
+{"schema_version":"1","session_id":"session_0","type":"context_limit_resolved","run_id":"session_0.r0.0","context_limit":0,"context_limit_source":{"arm":"unknown","origin":"","profile_miss":"profile_config_absent","catalogue_miss":"catalogue_absent","model":""}}
+{"schema_version":"1","session_id":"session_0","type":"thinking_stream_start","step":0,"stream_id":"step-0","model":"phase-c-model"}
+{"schema_version":"1","session_id":"session_0","type":"provider_call_prepared","step":0,"msg_count":2,"estimated_input_tokens":1,"system_prefix_count":1,"system_prefix_chars":1,"system_prefix_digest":"sha256:34074df4973df0b370f04613c2cfa54fa71859d293bda0804dcecdcacbb8fdb8","payload_digest":"sha256:ec46a71c5287ff7757ff68bd95d57b77268702abba4633545aaf24196d7a63b1","model":"phase-c-model"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_delta","step":0,"stream_id":"step-0","seq":0,"text_delta":"chunk-one"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_delta","step":0,"stream_id":"step-0","seq":0,"text_delta":"chunk-two"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":16,"class":"model_step"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_stream_end","step":0,"stream_id":"step-0","status":"completed"}
+{"schema_version":"1","session_id":"session_0","type":"thinking","step":0,"text":"s0","finish_reason":"tool_calls","tool_calls":3,"input_tokens":200,"output_tokens":100,"cost_usd":0}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":0,"message":{"role":"assistant","content":"s0","tool_calls":[{"id":"s0a","name":"T","arguments":"{}"},{"id":"s0b","name":"T","arguments":"{}"},{"id":"s0c","name":"T","arguments":"{}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:d6cb99cefe09da1770942106bb3001074d6e622d9f02862b77e807ba5b680e4b"}
+{"schema_version":"1","session_id":"session_0","type":"state_delta","run_id":"session_0.r0.0","step":0,"cumulative":{"provider_calls_started":1,"provider_calls_completed":1,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":200,"last_output_tokens":100,"last_estimated_input_tokens":1},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_calls","request_id":"step-0","step":0,"stream_id":"step-0","tool_calls":[{"id":"s0a","tool":"T","arguments":{}},{"id":"s0b","tool":"T","arguments":{}},{"id":"s0c","tool":"T","arguments":{}}]}
+{"schema_version":"1","session_id":"session_0","type":"tool_pending","step":0,"stream_id":"step-0","tool":"T","id":"s0a","reason":"strict replay: approval required"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":17,"class":"tool_exec"}
+{"schema_version":"1","session_id":"session_0","type":"v2_tool_dispatch_start","step":0,"stream_id":"step-0","tool":"T","id":"s0a"}
+{"schema_version":"1","session_id":"session_0","type":"v2_tool_dispatch_complete","step":0,"stream_id":"step-0","id":"s0a"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":18,"class":"clock_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":19,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":20,"class":"tool_exec"}
+{"schema_version":"1","session_id":"session_0","type":"tool_pending","step":0,"stream_id":"step-0","tool":"T","id":"s0b","reason":"strict replay: approval required"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":21,"class":"tool_exec"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_denied","step":0,"stream_id":"step-0","tool":"T","id":"s0b","reason":"bravo"}
+{"schema_version":"1","session_id":"session_0","type":"tool_pending","step":0,"stream_id":"step-0","tool":"T","id":"s0c","reason":"strict replay: approval required"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":22,"class":"tool_exec"}
+{"schema_version":"1","session_id":"session_0","type":"v2_tool_dispatch_start","step":0,"stream_id":"step-0","tool":"T","id":"s0c"}
+{"schema_version":"1","session_id":"session_0","type":"v2_tool_dispatch_complete","step":0,"stream_id":"step-0","id":"s0c"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":23,"class":"clock_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":24,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":25,"class":"tool_exec"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_results","request_id":"step-0","step":0,"stream_id":"step-0","results":[{"tool_call_id":"s0a","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":{}},{"tool_call_id":"s0b","exit_code":1,"stdout":"","stderr":"","truncated":false,"payload":{"error":true,"denied_by_policy":true,"tool":"T","reason":"bravo"}},{"tool_call_id":"s0c","exit_code":1,"stdout":"","stderr":"","truncated":false,"payload":{"error":true,"tool":"T","fault_class":"ToolFailed","detail":"{\"code\":\"E_BOOM\",\"message\":\"boom\",\"tool_call_id\":\"s0c\"}"}}]}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":0,"message":{"role":"tool","content":"OK-ALPHA","tool_calls":[],"tool_call_id":"s0a","images":[]},"replaces_previous":false,"digest_after":"sha256:87b2b25db634bfa31addb6da8185142ee83d85f7c663c1d1c130f679ba44e772"}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":0,"message":{"role":"tool","content":"{\"error\":true,\"denied_by_policy\":true,\"tool\":\"T\",\"reason\":\"bravo\"}","tool_calls":[],"tool_call_id":"s0b","images":[]},"replaces_previous":false,"digest_after":"sha256:2ad9deb42f4496dde6bc2b9f9cfed6230757f19ebca8ce41259d09846cbaf007"}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":0,"message":{"role":"tool","content":"{\"error\":true,\"tool\":\"T\",\"fault_class\":\"ToolFailed\",\"detail\":\"{\\\"code\\\":\\\"E_BOOM\\\",\\\"message\\\":\\\"boom\\\",\\\"tool_call_id\\\":\\\"s0c\\\"}\"}","tool_calls":[],"tool_call_id":"s0c","images":[]},"replaces_previous":false,"digest_after":"sha256:bc97ee1fb847866c64f77bb48a3ba51497bdd5f8ca4da89b8208bcfdf8e36d17"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_stream_start","step":1,"stream_id":"step-1","model":"phase-c-model"}
+{"schema_version":"1","session_id":"session_0","type":"provider_call_prepared","step":1,"msg_count":6,"estimated_input_tokens":53,"system_prefix_count":1,"system_prefix_chars":1,"system_prefix_digest":"sha256:34074df4973df0b370f04613c2cfa54fa71859d293bda0804dcecdcacbb8fdb8","payload_digest":"sha256:2b7cc3c963fa0c8123e2c54bdf33cd9f274f156a2203a26f7db2c3b87c0b3336","model":"phase-c-model"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":26,"class":"model_step"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_stream_end","step":1,"stream_id":"step-1","status":"completed"}
+{"schema_version":"1","session_id":"session_0","type":"thinking","step":1,"text":"s1","finish_reason":"tool_calls","tool_calls":1,"input_tokens":200,"output_tokens":100,"cost_usd":0}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":1,"message":{"role":"assistant","content":"s1","tool_calls":[{"id":"s1a","name":"T","arguments":"{}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:2d3c5dea865de1c1fd594e1b450612ce1d65e4f05f68d3777dd25a7f2be07875"}
+{"schema_version":"1","session_id":"session_0","type":"state_delta","run_id":"session_0.r0.0","step":1,"cumulative":{"provider_calls_started":2,"provider_calls_completed":2,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":200,"last_output_tokens":100,"last_estimated_input_tokens":53},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_calls","request_id":"step-1","step":1,"stream_id":"step-1","tool_calls":[{"id":"s1a","tool":"T","arguments":{}}]}
+{"schema_version":"1","session_id":"session_0","type":"tool_pending","step":1,"stream_id":"step-1","tool":"T","id":"s1a","reason":"strict replay: approval required"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":27,"class":"tool_exec"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_denied","step":1,"stream_id":"step-1","tool":"T","id":"s1a","reason":"timeout — no approval received"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_results","request_id":"step-1","step":1,"stream_id":"step-1","results":[{"tool_call_id":"s1a","exit_code":1,"stdout":"","stderr":"","truncated":false,"payload":{"error":true,"denied_by_policy":true,"tool":"T","reason":"timeout — no approval received"}}]}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":1,"message":{"role":"tool","content":"{\"error\":true,\"denied_by_policy\":true,\"tool\":\"T\",\"reason\":\"timeout — no approval received\"}","tool_calls":[],"tool_call_id":"s1a","images":[]},"replaces_previous":false,"digest_after":"sha256:2f70067ec9b4d0abc46ffe34982cab289370364c7ca44a1f445c4a8be22d1946"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_stream_start","step":2,"stream_id":"step-2","model":"phase-c-model"}
+{"schema_version":"1","session_id":"session_0","type":"provider_call_prepared","step":2,"msg_count":8,"estimated_input_tokens":76,"system_prefix_count":1,"system_prefix_chars":1,"system_prefix_digest":"sha256:34074df4973df0b370f04613c2cfa54fa71859d293bda0804dcecdcacbb8fdb8","payload_digest":"sha256:afd562b268c6e2ff8d50c306b74d4bdeab109fd257e58a91b78c94154fbd9496","model":"phase-c-model"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":28,"class":"model_step"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_stream_end","step":2,"stream_id":"step-2","status":"completed"}
+{"schema_version":"1","session_id":"session_0","type":"thinking","step":2,"text":"s2","finish_reason":"tool_calls","tool_calls":1,"input_tokens":200,"output_tokens":100,"cost_usd":0}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":2,"message":{"role":"assistant","content":"s2","tool_calls":[{"id":"s2a","name":"T","arguments":"{}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:7e92e7cdbc88e5139e80f8c49cf5abba2c3ae497628238ce461134e848cbd095"}
+{"schema_version":"1","session_id":"session_0","type":"state_delta","run_id":"session_0.r0.0","step":2,"cumulative":{"provider_calls_started":3,"provider_calls_completed":3,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":200,"last_output_tokens":100,"last_estimated_input_tokens":76},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_calls","request_id":"step-2","step":2,"stream_id":"step-2","tool_calls":[{"id":"s2a","tool":"T","arguments":{}}]}
+{"schema_version":"1","session_id":"session_0","type":"tool_pending","step":2,"stream_id":"step-2","tool":"T","id":"s2a","reason":"strict replay: approval required"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":29,"class":"tool_exec"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_denied","step":2,"stream_id":"step-2","tool":"T","id":"s2a","reason":"timeout — no approval received"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_results","request_id":"step-2","step":2,"stream_id":"step-2","results":[{"tool_call_id":"s2a","exit_code":1,"stdout":"","stderr":"","truncated":false,"payload":{"error":true,"denied_by_policy":true,"tool":"T","reason":"timeout — no approval received"}}]}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":2,"message":{"role":"tool","content":"{\"error\":true,\"denied_by_policy\":true,\"tool\":\"T\",\"reason\":\"timeout — no approval received\"}","tool_calls":[],"tool_call_id":"s2a","images":[]},"replaces_previous":false,"digest_after":"sha256:89b12ad7e649f4eb2f32e271c928a35512418cb24e941f3e8b785ec81c1ea703"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_stream_start","step":3,"stream_id":"step-3","model":"phase-c-model"}
+{"schema_version":"1","session_id":"session_0","type":"provider_call_prepared","step":3,"msg_count":10,"estimated_input_tokens":99,"system_prefix_count":1,"system_prefix_chars":1,"system_prefix_digest":"sha256:34074df4973df0b370f04613c2cfa54fa71859d293bda0804dcecdcacbb8fdb8","payload_digest":"sha256:ae965556c8b68d6d2a23a1c15317546d2a051e2a65ede599531e018c899831ba","model":"phase-c-model"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":30,"class":"model_step"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_stream_end","step":3,"stream_id":"step-3","status":"completed"}
+{"schema_version":"1","session_id":"session_0","type":"thinking","step":3,"text":"s3","finish_reason":"tool_calls","tool_calls":1,"input_tokens":200,"output_tokens":100,"cost_usd":0}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":3,"message":{"role":"assistant","content":"s3","tool_calls":[{"id":"s3a","name":"T","arguments":"{}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:a2146398dd17b67206ec5382ed29ce50e506596d934fce50e9aa0998ba8f45f0"}
+{"schema_version":"1","session_id":"session_0","type":"state_delta","run_id":"session_0.r0.0","step":3,"cumulative":{"provider_calls_started":4,"provider_calls_completed":4,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":200,"last_output_tokens":100,"last_estimated_input_tokens":99},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_calls","request_id":"step-3","step":3,"stream_id":"step-3","tool_calls":[{"id":"s3a","tool":"T","arguments":{}}]}
+{"schema_version":"1","session_id":"session_0","type":"tool_pending","step":3,"stream_id":"step-3","tool":"T","id":"s3a","reason":"strict replay: approval required"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":31,"class":"tool_exec"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_denied","step":3,"stream_id":"step-3","tool":"T","id":"s3a","reason":"timeout — no approval received"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_results","request_id":"step-3","step":3,"stream_id":"step-3","results":[{"tool_call_id":"s3a","exit_code":1,"stdout":"","stderr":"","truncated":false,"payload":{"error":true,"denied_by_policy":true,"tool":"T","reason":"timeout — no approval received"}}]}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":3,"message":{"role":"tool","content":"{\"error\":true,\"denied_by_policy\":true,\"tool\":\"T\",\"reason\":\"timeout — no approval received\"}","tool_calls":[],"tool_call_id":"s3a","images":[]},"replaces_previous":false,"digest_after":"sha256:bcbbc16aee600e3e58eba4ea83a2aad7e36662fd562d2532a1c3b6cdccaaab08"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_stream_start","step":4,"stream_id":"step-4","model":"phase-c-model"}
+{"schema_version":"1","session_id":"session_0","type":"provider_call_prepared","step":4,"msg_count":12,"estimated_input_tokens":122,"system_prefix_count":1,"system_prefix_chars":1,"system_prefix_digest":"sha256:34074df4973df0b370f04613c2cfa54fa71859d293bda0804dcecdcacbb8fdb8","payload_digest":"sha256:ca7c9ef4c7263eb9fea68922d5387038f35b18f0e1649799fca2a875c7ad5005","model":"phase-c-model"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":32,"class":"model_step"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_stream_end","step":4,"stream_id":"step-4","status":"completed"}
+{"schema_version":"1","session_id":"session_0","type":"thinking","step":4,"text":"stub: script exhausted","finish_reason":"stop","tool_calls":0,"input_tokens":0,"output_tokens":0,"cost_usd":0}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":4,"message":{"role":"assistant","content":"stub: script exhausted","tool_calls":[],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:efdbbe0a185fe8c77e2126ad72aa67046c2cc26e780cc590d246f7de70607ffc"}
+{"schema_version":"1","session_id":"session_0","type":"state_delta","run_id":"session_0.r0.0","step":4,"cumulative":{"provider_calls_started":5,"provider_calls_completed":5,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":0,"last_output_tokens":0,"last_estimated_input_tokens":122},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":33,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":34,"class":"clock_read"}
+{"schema_version":"1","session_id":"session_0","type":"run_summary","model":"phase-c-model","motoko_commit":"dev","finish_reason":"stop","steps_executed":5,"usage":{"input_tokens":800,"output_tokens":400,"total_tokens":1200},"total_cost_usd":0,"total_cost_millicents":0,"duration_ms":21,"error":"","cumulative":{"provider_calls_started":5,"provider_calls_completed":5,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"world_ordinal":34}
+{"schema_version":"1","session_id":"session_0","type":"done","step":4,"output":"stub: script exhausted"}
+  ✓ rich: two replays of one program produce the same log
+  ✓ rich: the replayed log is itself a structurally valid program
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":1,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":2,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":3,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":4,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":5,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":6,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":7,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":8,"class":"file_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":9,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":10,"class":"file_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":11,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":12,"class":"file_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":13,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":14,"class":"clock_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":15,"class":"clock_read"}
+{"schema_version":"1","session_id":"session_0","type":"history_seeded","run_id":"session_0.r0.0","messages":[{"role":"system","content":"s","tool_calls":[],"tool_call_id":"","images":[]},{"role":"user","content":"u","tool_calls":[],"tool_call_id":"","images":[]}],"digest":"sha256:9d0887cc8698e4606b5f92943460579ca339f183e7eb84dc5bf56c2df3f51759","digests":["sha256:43f143c97aea950fae356a6650e18846baa4d0140892fff2f5b7ed46a0227c35","sha256:9d0887cc8698e4606b5f92943460579ca339f183e7eb84dc5bf56c2df3f51759"]}
+{"schema_version":"1","session_id":"session_0","type":"context_limit_resolved","run_id":"session_0.r0.0","context_limit":0,"context_limit_source":{"arm":"unknown","origin":"","profile_miss":"profile_config_absent","catalogue_miss":"catalogue_absent","model":""}}
+{"schema_version":"1","session_id":"session_0","type":"thinking_stream_start","step":0,"stream_id":"step-0","model":"phase-c-model"}
+{"schema_version":"1","session_id":"session_0","type":"provider_call_prepared","step":0,"msg_count":2,"estimated_input_tokens":1,"system_prefix_count":1,"system_prefix_chars":1,"system_prefix_digest":"sha256:34074df4973df0b370f04613c2cfa54fa71859d293bda0804dcecdcacbb8fdb8","payload_digest":"sha256:ec46a71c5287ff7757ff68bd95d57b77268702abba4633545aaf24196d7a63b1","model":"phase-c-model"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_delta","step":0,"stream_id":"step-0","seq":0,"text_delta":"chunk-one"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_delta","step":0,"stream_id":"step-0","seq":0,"text_delta":"chunk-two"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":16,"class":"model_step"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_stream_end","step":0,"stream_id":"step-0","status":"completed"}
+{"schema_version":"1","session_id":"session_0","type":"thinking","step":0,"text":"s0","finish_reason":"tool_calls","tool_calls":3,"input_tokens":200,"output_tokens":100,"cost_usd":0}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":0,"message":{"role":"assistant","content":"s0","tool_calls":[{"id":"s0a","name":"T","arguments":"{}"},{"id":"s0b","name":"T","arguments":"{}"},{"id":"s0c","name":"T","arguments":"{}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:d6cb99cefe09da1770942106bb3001074d6e622d9f02862b77e807ba5b680e4b"}
+{"schema_version":"1","session_id":"session_0","type":"state_delta","run_id":"session_0.r0.0","step":0,"cumulative":{"provider_calls_started":1,"provider_calls_completed":1,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":200,"last_output_tokens":100,"last_estimated_input_tokens":1},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_calls","request_id":"step-0","step":0,"stream_id":"step-0","tool_calls":[{"id":"s0a","tool":"T","arguments":{}},{"id":"s0b","tool":"T","arguments":{}},{"id":"s0c","tool":"T","arguments":{}}]}
+{"schema_version":"1","session_id":"session_0","type":"tool_pending","step":0,"stream_id":"step-0","tool":"T","id":"s0a","reason":"strict replay: approval required"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":17,"class":"tool_exec"}
+{"schema_version":"1","session_id":"session_0","type":"v2_tool_dispatch_start","step":0,"stream_id":"step-0","tool":"T","id":"s0a"}
+{"schema_version":"1","session_id":"session_0","type":"v2_tool_dispatch_complete","step":0,"stream_id":"step-0","id":"s0a"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":18,"class":"clock_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":19,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":20,"class":"tool_exec"}
+{"schema_version":"1","session_id":"session_0","type":"tool_pending","step":0,"stream_id":"step-0","tool":"T","id":"s0b","reason":"strict replay: approval required"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":21,"class":"tool_exec"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_denied","step":0,"stream_id":"step-0","tool":"T","id":"s0b","reason":"bravo"}
+{"schema_version":"1","session_id":"session_0","type":"tool_pending","step":0,"stream_id":"step-0","tool":"T","id":"s0c","reason":"strict replay: approval required"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":22,"class":"tool_exec"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_denied","step":0,"stream_id":"step-0","tool":"T","id":"s0c","reason":"timeout — no approval received"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_results","request_id":"step-0","step":0,"stream_id":"step-0","results":[{"tool_call_id":"s0a","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":{}},{"tool_call_id":"s0b","exit_code":1,"stdout":"","stderr":"","truncated":false,"payload":{"error":true,"denied_by_policy":true,"tool":"T","reason":"bravo"}},{"tool_call_id":"s0c","exit_code":1,"stdout":"","stderr":"","truncated":false,"payload":{"error":true,"denied_by_policy":true,"tool":"T","reason":"timeout — no approval received"}}]}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":0,"message":{"role":"tool","content":"OK-ALPHA","tool_calls":[],"tool_call_id":"s0a","images":[]},"replaces_previous":false,"digest_after":"sha256:87b2b25db634bfa31addb6da8185142ee83d85f7c663c1d1c130f679ba44e772"}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":0,"message":{"role":"tool","content":"{\"error\":true,\"denied_by_policy\":true,\"tool\":\"T\",\"reason\":\"bravo\"}","tool_calls":[],"tool_call_id":"s0b","images":[]},"replaces_previous":false,"digest_after":"sha256:2ad9deb42f4496dde6bc2b9f9cfed6230757f19ebca8ce41259d09846cbaf007"}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":0,"message":{"role":"tool","content":"{\"error\":true,\"denied_by_policy\":true,\"tool\":\"T\",\"reason\":\"timeout — no approval received\"}","tool_calls":[],"tool_call_id":"s0c","images":[]},"replaces_previous":false,"digest_after":"sha256:682d479f555108bc12e718f8c635caf1ab0d4377757d8a03c8bf1830819bf2e9"}
+{"schema_version":"1","session_id":"session_0","type":"run_suspended","session_id":"session_0","run_id":"session_0.r0.0","reason":"budget_exhausted","step":1}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":23,"class":"clock_read"}
+{"schema_version":"1","session_id":"session_0","type":"run_summary","model":"phase-c-model","motoko_commit":"dev","finish_reason":"max_steps","steps_executed":1,"usage":{"input_tokens":200,"output_tokens":100,"total_tokens":300},"total_cost_usd":0,"total_cost_millicents":0,"duration_ms":9,"error":"step budget exhausted","cumulative":{"provider_calls_started":1,"provider_calls_completed":1,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"world_ordinal":23}
+
+maxsteps: discovery recorded 20 interactions
+CENSUS maxsteps expect_provider=1 expect_tool=1 expect_approval=3 expect_wake=0 expect_extension_effect=0 environment_read=11 runtime_random_draw=0 advance_clock=4 file_write=0 file_remove=0 dir_make=0
+  ✓ maxsteps: the discovery run ended Err as the scenario intends
+  ✓ maxsteps: the program's manifest validates against driver_only/34
+  ✓ maxsteps: replay metadata is projected from the manifest, not restated
+  ✓ maxsteps: the reconstituted world accounts for the program, in both directions
+maxsteps: reconstituted script=1 approvals=2 tools=1 clock=0
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":1,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":2,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":3,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":4,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":5,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":6,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":7,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":8,"class":"file_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":9,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":10,"class":"file_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":11,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":12,"class":"file_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":13,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":14,"class":"clock_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":15,"class":"clock_read"}
+{"schema_version":"1","session_id":"session_0","type":"history_seeded","run_id":"session_0.r0.0","messages":[{"role":"system","content":"s","tool_calls":[],"tool_call_id":"","images":[]},{"role":"user","content":"u","tool_calls":[],"tool_call_id":"","images":[]}],"digest":"sha256:9d0887cc8698e4606b5f92943460579ca339f183e7eb84dc5bf56c2df3f51759","digests":["sha256:43f143c97aea950fae356a6650e18846baa4d0140892fff2f5b7ed46a0227c35","sha256:9d0887cc8698e4606b5f92943460579ca339f183e7eb84dc5bf56c2df3f51759"]}
+{"schema_version":"1","session_id":"session_0","type":"context_limit_resolved","run_id":"session_0.r0.0","context_limit":0,"context_limit_source":{"arm":"unknown","origin":"","profile_miss":"profile_config_absent","catalogue_miss":"catalogue_absent","model":""}}
+{"schema_version":"1","session_id":"session_0","type":"thinking_stream_start","step":0,"stream_id":"step-0","model":"phase-c-model"}
+{"schema_version":"1","session_id":"session_0","type":"provider_call_prepared","step":0,"msg_count":2,"estimated_input_tokens":1,"system_prefix_count":1,"system_prefix_chars":1,"system_prefix_digest":"sha256:34074df4973df0b370f04613c2cfa54fa71859d293bda0804dcecdcacbb8fdb8","payload_digest":"sha256:ec46a71c5287ff7757ff68bd95d57b77268702abba4633545aaf24196d7a63b1","model":"phase-c-model"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_delta","step":0,"stream_id":"step-0","seq":0,"text_delta":"chunk-one"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_delta","step":0,"stream_id":"step-0","seq":0,"text_delta":"chunk-two"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":16,"class":"model_step"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_stream_end","step":0,"stream_id":"step-0","status":"completed"}
+{"schema_version":"1","session_id":"session_0","type":"thinking","step":0,"text":"s0","finish_reason":"tool_calls","tool_calls":3,"input_tokens":200,"output_tokens":100,"cost_usd":0}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":0,"message":{"role":"assistant","content":"s0","tool_calls":[{"id":"s0a","name":"T","arguments":"{}"},{"id":"s0b","name":"T","arguments":"{}"},{"id":"s0c","name":"T","arguments":"{}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:d6cb99cefe09da1770942106bb3001074d6e622d9f02862b77e807ba5b680e4b"}
+{"schema_version":"1","session_id":"session_0","type":"state_delta","run_id":"session_0.r0.0","step":0,"cumulative":{"provider_calls_started":1,"provider_calls_completed":1,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":200,"last_output_tokens":100,"last_estimated_input_tokens":1},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_calls","request_id":"step-0","step":0,"stream_id":"step-0","tool_calls":[{"id":"s0a","tool":"T","arguments":{}},{"id":"s0b","tool":"T","arguments":{}},{"id":"s0c","tool":"T","arguments":{}}]}
+{"schema_version":"1","session_id":"session_0","type":"tool_pending","step":0,"stream_id":"step-0","tool":"T","id":"s0a","reason":"strict replay: approval required"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":17,"class":"tool_exec"}
+{"schema_version":"1","session_id":"session_0","type":"v2_tool_dispatch_start","step":0,"stream_id":"step-0","tool":"T","id":"s0a"}
+{"schema_version":"1","session_id":"session_0","type":"v2_tool_dispatch_complete","step":0,"stream_id":"step-0","id":"s0a"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":18,"class":"clock_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":19,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":20,"class":"tool_exec"}
+{"schema_version":"1","session_id":"session_0","type":"tool_pending","step":0,"stream_id":"step-0","tool":"T","id":"s0b","reason":"strict replay: approval required"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":21,"class":"tool_exec"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_denied","step":0,"stream_id":"step-0","tool":"T","id":"s0b","reason":"bravo"}
+{"schema_version":"1","session_id":"session_0","type":"tool_pending","step":0,"stream_id":"step-0","tool":"T","id":"s0c","reason":"strict replay: approval required"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":22,"class":"tool_exec"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_denied","step":0,"stream_id":"step-0","tool":"T","id":"s0c","reason":"timeout — no approval received"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_results","request_id":"step-0","step":0,"stream_id":"step-0","results":[{"tool_call_id":"s0a","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":{}},{"tool_call_id":"s0b","exit_code":1,"stdout":"","stderr":"","truncated":false,"payload":{"error":true,"denied_by_policy":true,"tool":"T","reason":"bravo"}},{"tool_call_id":"s0c","exit_code":1,"stdout":"","stderr":"","truncated":false,"payload":{"error":true,"denied_by_policy":true,"tool":"T","reason":"timeout — no approval received"}}]}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":0,"message":{"role":"tool","content":"OK-ALPHA","tool_calls":[],"tool_call_id":"s0a","images":[]},"replaces_previous":false,"digest_after":"sha256:87b2b25db634bfa31addb6da8185142ee83d85f7c663c1d1c130f679ba44e772"}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":0,"message":{"role":"tool","content":"{\"error\":true,\"denied_by_policy\":true,\"tool\":\"T\",\"reason\":\"bravo\"}","tool_calls":[],"tool_call_id":"s0b","images":[]},"replaces_previous":false,"digest_after":"sha256:2ad9deb42f4496dde6bc2b9f9cfed6230757f19ebca8ce41259d09846cbaf007"}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":0,"message":{"role":"tool","content":"{\"error\":true,\"denied_by_policy\":true,\"tool\":\"T\",\"reason\":\"timeout — no approval received\"}","tool_calls":[],"tool_call_id":"s0c","images":[]},"replaces_previous":false,"digest_after":"sha256:682d479f555108bc12e718f8c635caf1ab0d4377757d8a03c8bf1830819bf2e9"}
+{"schema_version":"1","session_id":"session_0","type":"run_suspended","session_id":"session_0","run_id":"session_0.r0.0","reason":"budget_exhausted","step":1}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":23,"class":"clock_read"}
+{"schema_version":"1","session_id":"session_0","type":"run_summary","model":"phase-c-model","motoko_commit":"dev","finish_reason":"max_steps","steps_executed":1,"usage":{"input_tokens":200,"output_tokens":100,"total_tokens":300},"total_cost_usd":0,"total_cost_millicents":0,"duration_ms":9,"error":"step budget exhausted","cumulative":{"provider_calls_started":1,"provider_calls_completed":1,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"world_ordinal":23}
+  ✓ maxsteps: the exact program replays to an identical interaction log
+  ✓ maxsteps: the replay reproduces the terminal outcome
+maxsteps: replay witness provider=1 tool=1 approval_reads=3 approvals_served=2 clock_delta=11ms
+  ✓ maxsteps: the REPLAYED run's log accounts for it, against witnesses the recorder did not write
+  ✓ maxsteps: every witness the grading consumes is non-zero
+  ✓ maxsteps: the replay's recorded provider steps equal the driver's own
+  ✓ maxsteps: a program and a log with the SAME defect match perfectly
+  ✓ maxsteps: …and the independent witnesses reject it anyway
+  mutations (each must go red):
+  ✓ replay-unused-interaction ← the replay stops one interaction early
+  ✓ replay-program-exhausted ← the replay makes one request more than the program holds
+  ✓ replay-wrong-kind ← one provider request arrives as a clock advance
+  ✓ replay-wrong-origin ← one provider request comes from a different producer
+  ✓ replay-unsafe-identity-mismatch ← one tool request carries a different call id
+  ✓ replay-projection-differs ← one request projection differs
+  ✓ replay-outcome-differs ← the world served the right request and a different answer
+  regression replay (D2's second mode), on the same real logs:
+  ✓ maxsteps: an exact replay is regression-clean AND records nothing
+      regression replay: 0 fatal, 1 recorded difference(s)
+    - [replay-projection-differs] at interaction position 12 the program records request projection 'model_step model=phase-c-model msg_count=2' and the driver produced 'model_step model=phase-c-model msg_count=2 (drifted)'; strict replay requires the recorded projections to match, and the projection is what carries the arguments and message digests D2 says are recorded rather than silently discarded
+  ✓ maxsteps: a differing request projection is RECORDED and the replay continues
+  ✓ maxsteps: a differing outcome is RECORDED and the replay continues
+  ✓ maxsteps: causal identity and both walk arms stay FATAL in regression mode
+  ✓ maxsteps: no fatal rule was quietly recorded as a difference instead
+  ✓ maxsteps: an undecodable schema version refuses replay
+  ✓ maxsteps: a provider outcome that cannot be read back refuses replay
+  ✓ maxsteps: a mismatch returns a typed HarnessFailure with position and projection
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":1,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":2,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":3,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":4,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":5,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":6,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":7,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":8,"class":"file_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":9,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":10,"class":"file_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":11,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":12,"class":"file_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":13,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":14,"class":"clock_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":15,"class":"clock_read"}
+{"schema_version":"1","session_id":"session_0","type":"history_seeded","run_id":"session_0.r0.0","messages":[{"role":"system","content":"s","tool_calls":[],"tool_call_id":"","images":[]},{"role":"user","content":"u","tool_calls":[],"tool_call_id":"","images":[]}],"digest":"sha256:9d0887cc8698e4606b5f92943460579ca339f183e7eb84dc5bf56c2df3f51759","digests":["sha256:43f143c97aea950fae356a6650e18846baa4d0140892fff2f5b7ed46a0227c35","sha256:9d0887cc8698e4606b5f92943460579ca339f183e7eb84dc5bf56c2df3f51759"]}
+{"schema_version":"1","session_id":"session_0","type":"context_limit_resolved","run_id":"session_0.r0.0","context_limit":0,"context_limit_source":{"arm":"unknown","origin":"","profile_miss":"profile_config_absent","catalogue_miss":"catalogue_absent","model":""}}
+{"schema_version":"1","session_id":"session_0","type":"thinking_stream_start","step":0,"stream_id":"step-0","model":"phase-c-model"}
+{"schema_version":"1","session_id":"session_0","type":"provider_call_prepared","step":0,"msg_count":2,"estimated_input_tokens":1,"system_prefix_count":1,"system_prefix_chars":1,"system_prefix_digest":"sha256:34074df4973df0b370f04613c2cfa54fa71859d293bda0804dcecdcacbb8fdb8","payload_digest":"sha256:ec46a71c5287ff7757ff68bd95d57b77268702abba4633545aaf24196d7a63b1","model":"phase-c-model"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_delta","step":0,"stream_id":"step-0","seq":0,"text_delta":"chunk-one"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_delta","step":0,"stream_id":"step-0","seq":0,"text_delta":"chunk-two"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":16,"class":"model_step"}
+{"schema_version":"1","session_id":"session_0","type":"thinking_stream_end","step":0,"stream_id":"step-0","status":"completed"}
+{"schema_version":"1","session_id":"session_0","type":"thinking","step":0,"text":"s0","finish_reason":"tool_calls","tool_calls":3,"input_tokens":200,"output_tokens":100,"cost_usd":0}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":0,"message":{"role":"assistant","content":"s0","tool_calls":[{"id":"s0a","name":"T","arguments":"{}"},{"id":"s0b","name":"T","arguments":"{}"},{"id":"s0c","name":"T","arguments":"{}"}],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:d6cb99cefe09da1770942106bb3001074d6e622d9f02862b77e807ba5b680e4b"}
+{"schema_version":"1","session_id":"session_0","type":"state_delta","run_id":"session_0.r0.0","step":0,"cumulative":{"provider_calls_started":1,"provider_calls_completed":1,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"telemetry":{"last_input_tokens":200,"last_output_tokens":100,"last_estimated_input_tokens":1},"ext_artifacts_digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_calls","request_id":"step-0","step":0,"stream_id":"step-0","tool_calls":[{"id":"s0a","tool":"T","arguments":{}},{"id":"s0b","tool":"T","arguments":{}},{"id":"s0c","tool":"T","arguments":{}}]}
+{"schema_version":"1","session_id":"session_0","type":"tool_pending","step":0,"stream_id":"step-0","tool":"T","id":"s0a","reason":"strict replay: approval required"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":17,"class":"tool_exec"}
+{"schema_version":"1","session_id":"session_0","type":"v2_tool_dispatch_start","step":0,"stream_id":"step-0","tool":"T","id":"s0a"}
+{"schema_version":"1","session_id":"session_0","type":"v2_tool_dispatch_complete","step":0,"stream_id":"step-0","id":"s0a"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":18,"class":"clock_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":19,"class":"env_read"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":20,"class":"tool_exec"}
+{"schema_version":"1","session_id":"session_0","type":"tool_pending","step":0,"stream_id":"step-0","tool":"T","id":"s0b","reason":"strict replay: approval required"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":21,"class":"tool_exec"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_denied","step":0,"stream_id":"step-0","tool":"T","id":"s0b","reason":"bravo"}
+{"schema_version":"1","session_id":"session_0","type":"tool_pending","step":0,"stream_id":"step-0","tool":"T","id":"s0c","reason":"strict replay: approval required"}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":22,"class":"tool_exec"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_denied","step":0,"stream_id":"step-0","tool":"T","id":"s0c","reason":"timeout — no approval received"}
+{"schema_version":"1","session_id":"session_0","type":"native_tool_results","request_id":"step-0","step":0,"stream_id":"step-0","results":[{"tool_call_id":"s0a","exit_code":0,"stdout":"","stderr":"","truncated":false,"payload":{}},{"tool_call_id":"s0b","exit_code":1,"stdout":"","stderr":"","truncated":false,"payload":{"error":true,"denied_by_policy":true,"tool":"T","reason":"bravo"}},{"tool_call_id":"s0c","exit_code":1,"stdout":"","stderr":"","truncated":false,"payload":{"error":true,"denied_by_policy":true,"tool":"T","reason":"timeout — no approval received"}}]}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":0,"message":{"role":"tool","content":"OK-ALPHA","tool_calls":[],"tool_call_id":"s0a","images":[]},"replaces_previous":false,"digest_after":"sha256:87b2b25db634bfa31addb6da8185142ee83d85f7c663c1d1c130f679ba44e772"}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":0,"message":{"role":"tool","content":"{\"error\":true,\"denied_by_policy\":true,\"tool\":\"T\",\"reason\":\"bravo\"}","tool_calls":[],"tool_call_id":"s0b","images":[]},"replaces_previous":false,"digest_after":"sha256:2ad9deb42f4496dde6bc2b9f9cfed6230757f19ebca8ce41259d09846cbaf007"}
+{"schema_version":"1","session_id":"session_0","type":"history_appended","run_id":"session_0.r0.0","step":0,"message":{"role":"tool","content":"{\"error\":true,\"denied_by_policy\":true,\"tool\":\"T\",\"reason\":\"timeout — no approval received\"}","tool_calls":[],"tool_call_id":"s0c","images":[]},"replaces_previous":false,"digest_after":"sha256:682d479f555108bc12e718f8c635caf1ab0d4377757d8a03c8bf1830819bf2e9"}
+{"schema_version":"1","session_id":"session_0","type":"run_suspended","session_id":"session_0","run_id":"session_0.r0.0","reason":"budget_exhausted","step":1}
+{"schema_version":"1","session_id":"session_0","type":"world_request","ordinal":23,"class":"clock_read"}
+{"schema_version":"1","session_id":"session_0","type":"run_summary","model":"phase-c-model","motoko_commit":"dev","finish_reason":"max_steps","steps_executed":1,"usage":{"input_tokens":200,"output_tokens":100,"total_tokens":300},"total_cost_usd":0,"total_cost_millicents":0,"duration_ms":9,"error":"step budget exhausted","cumulative":{"provider_calls_started":1,"provider_calls_completed":1,"stage_applied_total":0,"stage_rejected_total":0,"compaction_ai_applied":0},"world_ordinal":23}
+  ✓ maxsteps: two replays of one program produce the same log
+  ✓ maxsteps: the replayed log is itself a structurally valid program
+
+strict_replay_dst PASS
+  ✓ discovery and replay agree with the driver's own wire emissions (provider=10, tool=4 over the pair)
+  ✓ src/core/ports.ail (recorded-outcome codec round trips)
+  ✓ src/core/dst_replay.ail
+exit=0
