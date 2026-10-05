@@ -3,6 +3,9 @@
 Date: 2026-09-14
 Status: Research note (no decision taken; candidate follow-ons listed in §7)
 Grounded at: branch `arniwesth/013-plan003-and-herdr`, HEAD `d5edebf`
+Re-grounded: 2026-10-01 at `main`, HEAD `4023bf08` — see §8. Rows 3 and 4 of §2 name the wrong
+  executor (§8.1), and follow-ons 2, 3 and 4 of §7 have changed status (§8.2). §1–§7 are left as
+  written.
 Source:
 - Can Bölük, *The Harness Playbook*, 2026-09-02 — stencil.so/blog/harness-playbook. Nine
   chapters and two appendices; each chapter pairs a "What omp taught us" postmortem with a
@@ -356,3 +359,106 @@ discovery surface is worth building before the primitives are deepened.
 5. **RESEARCH** — Directors over ADR-002 D2's pipeline: what a stack that the journal carries and
    the status tool reports would cost, measured against the three guards and DP7. Depends on
    nothing; decides whether 3 above should carry an `owner` field from the start.
+
+---
+
+## 8. Re-grounding addendum (2026-10-01)
+
+Grounded at `main`, HEAD `4023bf08`, 194 commits after `d5edebf`. Method: the post re-read in
+full; the coordinates behind each §2 row and each §7 follow-on re-checked in the tree. Rows not
+named here were re-checked and stand: 7 (`ExtCtx.context_limit: int`, "0 means unknown",
+`types.ail:721–726`), 12 (seven native tools, `tool_catalog.ail:165`; extension schemas still
+concatenated, `:114–150`), 13 (`ToolCallEnvelope = { id, tool, arguments }`, `types.ail:78`) and
+15 (`pi-tui ^0.64.0`; `ui.ts` now 4,525 lines). Still no decision taken.
+
+### 8.1 Correction: rows 3 and 4 name the wrong executor
+
+Rows 3 and 4, §0 item 2 and §3.2 say tools execute on the TypeScript host through `POST /exec`.
+That was not true at `d5edebf` and is not true now.
+
+- **Native `BashExec` and `RunTests` run inside the AILANG child.** `run_native_call` calls
+  `run_process_result` (`src/core/tool_runtime.ail:244`, `:974`), which calls `std/process.exec`
+  (`:9`). `ports.ail:558`, `session.ail:1272–1282` and `runtime-process.ts:946–956` each say so in
+  prose. `git show d5edebf:src/core/tool_runtime.ail` has the same call at the same line.
+- **`/exec` on the env-server has no caller in core.** `exec_backend` (`backend.ail:85`) is exported
+  and unused; `supervisor.ail:8` imports only `start_or_connect_backend`. The env-server is still
+  live for `/scratchpad-cell` (`exec_scratchpad_cell`), `/compose` and its claim-check, and
+  `callSubagentModel`. The 8,000 / 2,000-char slice row 4 cites applies to scratchpad cells
+  (`env-server.ts:547–553`), which do carry a `truncated` flag (`:558`), and to the dead `/exec`.
+
+What bounds a native call is therefore the AILANG process effect:
+
+| | behaviour | coordinates |
+|---|---|---|
+| Blocking time | The runtime's `--process-timeout` (default 30 s) plus a 5 s `WaitDelay`. The tool schema's `timeout_secs` is not read by the dispatcher. The one knob is `MOTOKO_PROCESS_TIMEOUT` / profile `tools.process_timeout`. | `runtime-process.ts:946–958` |
+| On timeout | `Err(Timeout(ms))` → `exit_code: 1`, **empty** stdout, stderr `timeout after 35005ms`. Partial output is discarded. A grandchild can outlive the killed shell; the `WaitDelay` exists so the orphan cannot hold the pipe open. | `tool_runtime.ail:925`, `:997–1020`; `ailang/internal/effects/process.go:119–129` |
+| Output | Over the limit the call is an `Err(OutputLimitExceeded(n))` → `exit_code: 1`, **empty** stdout, stderr `output limit exceeded: N bytes`. The output is dropped whole, not truncated. | `tool_runtime.ail:926`; `process.go:165–168` |
+| Truncation flag | `meta.truncated` is `out.truncated`; `stdout_total_bytes` is `length(stdout)`, so the record never says how much was dropped. The TUI projection hardcodes `truncated: false`. | `tool_runtime.ail:251–262`; `session.ail:2049` |
+
+The Go coordinates were read in the local `ailang/` checkout, which is at `v0.33.1-87` and behind
+the pinned `v0.47.2`; the 10 MB default limit (`process_context.go:29`) is from that checkout
+only. The 30 s + 5 s wall and the empty-stdout result are confirmed for the installed binary by
+the `runtime-process.ts` comment.
+
+Consequences for the reading:
+
+- **§3.2's "inverted placement" does not hold for native tools.** The verified child both decides
+  and executes; the unverified code under it is AILANG's Go effect runtime, not `env-server.ts`.
+  The post's runtime critique still lands, in a different place: executor, policy and loop state
+  share one process, so there is no boundary whose death cannot take the session with it, and the
+  kill does not reach what the command spawned. Row 4's "the 21:36 zombie sweep" and "~35 s" are
+  this path (30 + 5), not `execSync`.
+- **Row 4's "central but silent" is too kind.** The bound is central and loud, and it loses
+  everything: a timeout or an oversize result reaches the model as exit 1 with no output, the same
+  code a failed command returns. That is the post's missing `<diag>` and 034's undisclosed effect
+  (§8.3) in one result.
+- **§4.2 changes shape.** "Shrink `env-server.ts` to the stub" becomes: delete the unreached `/exec`
+  and `exec_backend`; treat the stub question as one about `std/process` and upstream (partial
+  output on `Timeout`, a process-group kill); keep the move of claim-check and `callSubagentModel`
+  behind `ports` as a separate item. §6's batch-skip risk attaches to that last item only.
+
+### 8.2 Status of the §7 follow-ons
+
+| # | §7 said | at `4023bf08` |
+|---|---|---|
+| 1 | Roster experiment, half a day, independent | Not run: nothing under `.agent/` or `evidence/` records it. Unchanged. |
+| 2 | **ABI minor** for `intent`, `version`, `diagnostics` | **No longer a minor.** ABI 8.0 landed (`f7df893c`, `08669414`) with the 8.x rule: "a record this package exports no constructor for does not gain a field within 8.x at all" (`types.ail:12–31`). `ToolCallEnvelope`, `ToolResultEnvelope` and `ToolSchema` have no exported constructor, so a field on any of them waits for 9.0. The same data fits existing fields: intent as an `i` key inside `arguments: Json` (which is how the post carries it), diagnostics inside `metadata: Json`, and tool versions in a core-side table stamped into the journal header beside `ext_set_digest`. "Lands before ADR-004 P1" is achievable only by that route. |
+| 3 | ADR for a background-command wait, "depends on PLAN-003 P4 being scheduled" | **Dependency met.** P4 Parts 1–7 landed 2026-09-14/15 (`686da160` … `298bec5e`): `park_entered` and `wake_received` are journal-class (`session-journal.ts:40–58`), the resumer consumes the park, and the live gate ran. Row 5's "`session-journal.ts:40–46` records that they do not yet exist" is stale. `WaitDescriptor` still has three arms (`phase_vocab.ail:442–445`); the fourth is unbuilt. |
+| 4 | PLAN for the executor stub | Reframed by §8.1. |
+| 5 | RESEARCH on Directors | Not started. ABI 8.0 added `DecisionSolverJudge` and `DecisionToolPolicy` (`types.ail:1978–1992`): prepare/interpret pairs that return the existing `FinalizeDecision` and `ToolPolicyDecision` votes. Composition is unchanged, so §3.3 stands. A Director capability is a `Capability` variant and so a 9.0 item by rule 2. |
+
+§5's "speculative compaction before P4" has its stated precondition met as well. The branch and
+splice operations it also needs still do not exist.
+
+### 8.3 New since the note
+
+- **034 overlaps §4.2's diagnostics half.**
+  `../034_ambiguous_tool_outcomes/NOTE-scope-effect-unknown-tool-faults.md` (2026-09-29, untracked
+  at this grounding) starts from the same `run_process_result` lines as §8.1. Its Phase 0 — split
+  `ProcessError` by whether the process started and disclose effects `none` or `unknown` to the
+  model — is the post's structured diagnostic with a second field. Both change every tool fault
+  message the model reads, and 034 §3 prices that as moving the prompt-sensitive eval baselines.
+  One shape (truncation, timeout, effect disclosure), one wire change.
+- **034's delegation follow-up overlaps §4.1.** A delegate reported `Lost` that settled late is the
+  same ambiguity one level up; a job primitive with one settle path is where it would be answered.
+- **The release line.** `../033_release/ADR-001-release-scope.md` G5 was met 2026-09-23 and the tag
+  has not been cut. Nothing in §8.4 items 1–4 touches the ABI; item 5 is after the tag by
+  construction.
+
+### 8.4 Candidate order, revised
+
+1. **Tool diagnostics, with 034 Phase 0** — in `metadata`, projected into the tool message. Fixes
+   the empty-stdout results of §8.1. No ABI change.
+2. **The roster experiment** (§4.5). Unchanged.
+3. **Background command as the fourth `WaitDescriptor` arm** (§4.1). Now unblocked.
+4. **Intent as an argument, versions in a core table** (§4.3 by the §8.2 route).
+5. **Directors** — research only, 9.0.
+
+### 8.5 In the post, without a candidate here
+
+- **AutoQA** — a tool through which the agent reports what a tool did wrong. No equivalent found
+  under `src/` or `packages/`. It costs one permanent schema (row 12's tax).
+- **Charitable dialect, strict semantics** for tool arguments. `arguments_undecodable`
+  (`tool_phase.ail:328`) detects a truncated argument string; nothing found that repairs a
+  well-formed call in another harness's shape. Not examined beyond a grep, and it matters most for
+  the qwen, deepseek and hunyuan profiles row 6 lists.

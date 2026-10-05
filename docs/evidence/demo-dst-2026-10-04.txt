@@ -1,0 +1,159 @@
+make demo_dst — observed tool output, 2026-10-04
+HEAD at launch: cf54dff9 (working tree had existing edits)
+Session: session_1791114342309-8f538e40c49b7fc5
+Launch: env -u MODEL MOTOKO_HEADLESS=1 TERM=xterm make demo_dst
+This extract includes returned tool stdout/stderr, not the model narration.
+The printed exit=2 in step 6 is the intentional mutant failure; the shell wrapper returned 0.
+
+STEP 0
+Tool wrapper exit: 0
+session.ail clean
+
+STEP 1
+Tool wrapper exit: 0
+exit=0
+  rich: seed=110 v=1 interactions=43 draws=111 clock=138 ended=Ok
+  pairA: seed=132 v=1 interactions=24 draws=47 clock=15 ended=Ok
+  pairB: seed=12 v=1 interactions=24 draws=47 clock=98 ended=Ok
+  repeat: seed=132 v=1 interactions=24 draws=47 clock=15 ended=Ok
+SEEDROW pairA seed=132 version=1 n=24 outcomes_len=24 digest=864106749
+SEEDROW pairB seed=12 version=1 n=24 outcomes_len=24 digest=484525277
+SEEDROW repeat seed=132 version=1 n=24 outcomes_len=24 digest=864106749
+  ✓ changing the seed changes the program, and changing nothing else changes nothing
+  ✓ generator-ignores-its-seed ← a run built with a constant seed under three different requested seeds
+seeded generator: all axes green
+  ✓ different seeds produce different programs at EQUAL interaction count (n=24, digests 864106749 vs 484525277)
+
+STEP 2
+Tool wrapper exit: 0
+exit=0  ✓ scheduled corpus run: 4 seed(s) completed against a declared minimum of 4
+exit=0  ✓ scheduled corpus run: 4 seed(s) completed against a declared minimum of 4
+  window: epoch 42: 4 seed(s) from 13 over space [1, 26] (stride 4)
+    rot-seed-13 [fixed-seed] motoko_driver_only/1 seed 13
+        manifest: driver_only/32
+        classes: approval_denied
+        branches: session.c2_loop/approval_denied
+    rot-seed-14 [fixed-seed] motoko_driver_only/1 seed 14
+        manifest: driver_only/32
+        classes: (none)
+        branches: (none)
+    rot-seed-15 [fixed-seed] motoko_driver_only/1 seed 15
+        manifest: driver_only/32
+        classes: ToolDeadlineExceeded, approval_denied
+        branches: tool_phase.tool_outcome_message/ToolDeadlineExceeded, session.c2_loop/approval_denied
+    rot-seed-16 [fixed-seed] motoko_driver_only/1 seed 16
+        manifest: driver_only/32
+        classes: (none)
+        branches: (none)
+IDENTICAL across two processes:
+seed 13	identity: 8d3fbc7641b5
+seed 14	identity: b603ae7c2377
+seed 15	identity: 4856117ed514
+seed 16	identity: 781ce0e53b66
+
+STEP 3
+Tool wrapper exit: 0
+diff --git a/src/core/session.ail b/src/core/session.ail
+index 624ae175..490d9739 100644
+--- a/src/core/session.ail
++++ b/src/core/session.ail
+@@ -2354 +2354 @@ func session_policy_init(ports: Ports, world: WorldState, model: string, step_bu
+-  let r_base = ports.env_get(advance(r_retry.next_state, EnvRead), "OPENAI_BASE_URL", "");
++  let r_base = ports.env_get(advance(r_persist.next_state, EnvRead), "OPENAI_BASE_URL", "");
+
+STEP 4
+Tool wrapper exit: 0
+✓ No errors found!
+
+STEP 5
+Tool wrapper exit: 0
+exit=0  ✓ scheduled corpus run: 4 seed(s) completed against a declared minimum of 4
+1,4c1,4
+< seed 13	identity: 8d3fbc7641b5
+< seed 14	identity: b603ae7c2377
+< seed 15	identity: 4856117ed514
+< seed 16	identity: 781ce0e53b66
+---
+> seed 13	identity: be867c5e62bf
+> seed 14	identity: 45f388254a58
+> seed 15	identity: 6da422c02f1c
+> seed 16	identity: 2ade9ceeee9c
+
+STEP 6
+Tool wrapper exit: 0
+exit=2
+strict_replay_dst: WI-A13 stage 3 — strict replay against driver_only
+rich: discovery recorded 30 interactions
+  ✓ rich: the discovery run ended Ok as the scenario intends
+  ✓ rich: the exact program replays to an identical interaction log
+  ✓ rich: the replay reproduces the terminal outcome
+  ✗ rich: the REPLAYED run's log accounts for it, against witnesses the recorder did not write — 1 finding(s) above
+strict_replay_dst FAIL
+[discovery-env-read-under-recorded] this scenario's control flow reaches 1 read(s) of 'MOTOKO_RETRY_STREAM_ERROR' and the log records 0
+
+STEP 7
+Tool wrapper exit: 0
+      [discovery-env-read-under-recorded] this scenario's control flow reaches 1 read(s) of 'MOTOKO_RETRY_STREAM_ERROR' and the log records 0; the env class has no runtime witness, so this count is derived from the driver's source and the scenario's control flow — provenance evidence, not capability evidence, and it must be reported as a different KIND from the other six classes rather than added into one completeness number
+  ✗ rich: the REPLAYED run's log accounts for it, against witnesses the recorder did not write — 1 finding(s) above
+  ✓ rich: every witness the grading consumes is non-zero
+
+STEP 8
+Tool wrapper exit: 0
+session.ail byte-identical to HEAD
+
+STEP 9
+Tool wrapper exit: 0
+✓ No errors found!
+exit=0  ✓ scheduled corpus run: 4 seed(s) completed against a declared minimum of 4
+identities back to baseline
+exit=0
+strict_replay_dst: WI-A13 stage 3 — strict replay against driver_only
+rich: discovery recorded 31 interactions
+  ✓ rich: the REPLAYED run's log accounts for it, against witnesses the recorder did not write
+strict_replay_dst PASS
+
+STEP 10
+Tool wrapper exit: 0
+exit=0
+  ✓ shipped catalogue validates: 11 classes, all 11 required ids present
+      extension_effect_fault: the selected D5 profile installs an extension with an effectful hook that issues this world request; driver_only installs none, so it waives this class by construction (plan P4)
+  i 4 recorded coverage gap(s):
+      provider_protocol_inconsistent_result — an internally inconsistent StepResult, as opposed to a malformed ToolCall.arguments string
+      provider_partial_stream_then_error — an ADVERSARIAL partial stream: emissions whose content the driver has begun to act on before the error arrives
+      approval_deadline_exceeded — a CLOCK-DRIVEN approval deadline
+      extension_effect_fault — every world-request class reached through ExtPorts OTHER than the provider fault, which WI-B2b closed
+  ✓ physical-fault exclusion carries all five 007 D1.3 reopen triggers
+
+Independent byte-for-byte comparison with pre-run backup: True
+
+Outer make demo_dst process exit: 0
+Final runtime summary:
+{
+  "schema_version": "1",
+  "session_id": "session_1791114342309-8f538e40c49b7fc5",
+  "type": "run_summary",
+  "model": "openrouter/xiaomi/mimo-v2.6-pro",
+  "motoko_commit": "dev",
+  "finish_reason": "stop",
+  "steps_executed": 12,
+  "usage": {
+    "input_tokens": 201551,
+    "output_tokens": 13580,
+    "cache_read_input_tokens": 184960,
+    "cache_creation_input_tokens": 0,
+    "total_tokens": 215131
+  },
+  "total_cost_usd": 0,
+  "total_cost_millicents": 0,
+  "duration_ms": 1009969,
+  "error": "",
+  "cumulative": {
+    "provider_calls_started": 12,
+    "provider_calls_completed": 12,
+    "stage_applied_total": 0,
+    "stage_rejected_total": 0,
+    "compaction_ai_applied": 0
+  },
+  "world_ordinal": 58
+}
+No dp7_verifier_rejected event was recorded. Finalizer check_core stdout was not surfaced.
