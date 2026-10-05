@@ -750,11 +750,17 @@ func test_d7_unsandboxed_launch_with_another_workdir_does_not_load() -> bool ! {
   {
     let unsandboxed = skills_config(two_skills(), false);
     let elsewhere = call_with(unsandboxed, Some(stamp_md("")), "/srv/project", 0, name_arg("workdir-stamp"));
+    let relative = call_with(unsandboxed, Some(stamp_md("")), "sub", 0, name_arg("workdir-stamp"));
     elsewhere.exit_code == 1
       && elsewhere.stdout == ""
       && elsewhere.stderr == unsandboxed_error("/srv/project")
       && contains(elsewhere.stderr, "started without AILANG_FS_SANDBOX and its working directory is '/srv/project', not '.'")
       && elsewhere.world == untouched_world(Some(stamp_md("")))
+      -- a relative workdir other than `.` is elsewhere too: the same error, nothing read
+      && relative.exit_code == 1
+      && relative.stdout == ""
+      && relative.stderr == unsandboxed_error("sub")
+      && relative.world == untouched_world(Some(stamp_md("")))
       -- unsandboxed with the workdir `.`: loads
       && call_with(unsandboxed, Some(stamp_md("")), ".", 0, name_arg("workdir-stamp")).exit_code == 0
       -- sandboxed with another workdir (the TUI's layout 1): loads
