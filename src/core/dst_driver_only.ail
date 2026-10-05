@@ -1207,6 +1207,21 @@ pure func test_omission_is_named() -> bool
     }
   }
 
+-- The two entries 037 P6 added are in the list BY NAME. Nothing else in this
+-- file reads an id past the first: with `skills` misspelt in the list above,
+-- every other test here passed (037 REVIEW-003). A check, not a pin: it holds
+-- no count and no version.
+pure func test_skills_and_ailang_tools_are_omitted_by_name() -> bool
+  tests [((), true)]
+  {
+    omits(driver_only().omitted_extensions, "skills")
+      && omits(driver_only().omitted_extensions, "ailang_tools")
+  }
+
+pure func omits(os: [{ extension_id: string, reason: string }], id: string) -> bool {
+  match os { [] => false, o :: rest => if o.extension_id == id then true else omits(rest, id) }
+}
+
 -- The waiver list is READ from the catalogue, so it cannot fall behind it. A
 -- transcribed list would pass a count check the day it was written and fail
 -- silently the day a conditional class was added.

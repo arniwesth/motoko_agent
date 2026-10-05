@@ -517,3 +517,14 @@ pure func test_installed_and_omitted_are_disjoint() -> bool
   {
     disjoint(omitted_ids(driver_plus_herdr().omitted_extensions), installed_extension_ids())
   }
+
+-- The two entries 037 P6 added are in the list BY NAME. The count above says
+-- how long the list is and disjointness says what is NOT in it: with `skills`
+-- misspelt in `not_installed`, both held (037 REVIEW-003). A check, not a pin:
+-- it holds no count and no version.
+pure func test_skills_and_ailang_tools_are_omitted_by_name() -> bool
+  tests [((), true)]
+  {
+    let ids = omitted_ids(driver_plus_herdr().omitted_extensions);
+    contains_str(ids, "skills") && contains_str(ids, "ailang_tools")
+  }
