@@ -1,0 +1,155 @@
+-- verify_skills_startup — the runtime's startup, up to the point where a
+-- broken skill tree refuses it (037 ADR-001 D1, D2; acceptance A1, A2, A3).
+--
+-- Usage (driven by `make verify_skills_refusal`, which builds the fixture
+-- workdirs and sets AILANG_FS_SANDBOX to each):
+--   ailang run ... scripts/verify_skills_startup.ail -- <workdir> <profile>
+--   ailang run ... scripts/verify_skills_startup.ail -- <workdir> <profile> \
+--       <ext_set_digest> <system_prefix_digest>
+--
+-- It makes the two calls `rpc.run_with_config` makes before `session_start`:
+-- `load_config_from_cli`, then `init_runtime_with_config`. A registration the
+-- host refuses ends the process there, inside the generated registry: one
+-- JSONL `error` event on stdout and exit 2. Nothing in this script prints or
+-- exits on that path, so what a fixture run shows is the host's refusal.
+--
+-- When startup is not refused it prints what A1 and A2 are stated over:
+--   OK started ...          the registry that was built
+--   SKILL_SCHEMAS n         how many schemas named `Skill` the catalogue holds
+--   SKILL_SCHEMA {...}      each one, as a JSON line (`parameters` is a string)
+--   EXT_SET_DIGEST          `runtime.ext_set_digest`, what a resume compares
+--   EXT_CONFIG_DIGEST       `registry_normalize.ext_config_digest` of the
+--                           `skills` entry (031 ADR-001 D2; no runtime caller
+--                           records it yet, 037 ADR-001 D4)
+--   SYSTEM_PREFIX_DIGEST    `system_prefix_digest_for` over a FIXED base prompt
+--                           folded through this registry's PromptShaper atoms.
+--                           It is not a session's digest (that is built from
+--                           SYSTEM.md and the task); it moves exactly when an
+--                           extension in this registry changes the prompt.
+-- With the two digests of an earlier run as arguments it also prints the
+-- journal's own compatibility row for a resume under the same profile and
+-- workdir: `RESUME continues`, or `RESUME refused: <refusal id>`.
+module scripts/verify_skills_startup
+
+import std/io (println)
+import std/env (getArgs)
+import std/json (encode, jo, kv, js, ja)
+import std/list as List (length)
+import std/option (Option, Some, None)
+import std/string (join, startsWith)
+import src/core/config (RuntimeConfig, load_config_from_cli)
+import src/core/types (Msg)
+import src/core/phase_vocab (msgs_to_messages, system_prefix_digest_for)
+import src/core/tool_catalog (tools_with_extensions)
+import src/core/journal (HeaderEntry, ResumeContext, resume_refusal, refusal_id)
+import src/core/ext/runtime (init_runtime_with_config, loaded_extension_names, ext_set_digest, dispatch_build_system_prompt)
+import src/core/ext/registry_normalize (ext_config_digest)
+import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry, empty_tool_evidence)
+import pkg/sunholo/motoko_ext_abi/types (ExtRuntime, ExtEntry, ToolSchema, NotReached, empty_ext_world)
+
+func skill_schemas(schemas: [ToolSchema]) -> [ToolSchema] {
+  match schemas {
+    [] => [],
+    s :: rest => if s.name == "Skill" then s :: skill_schemas(rest) else skill_schemas(rest)
+  }
+}
+
+func print_schemas(schemas: [ToolSchema]) -> () ! {IO} {
+  match schemas {
+    [] => (),
+    s :: rest => {
+      let _ = println("SKILL_SCHEMA ${encode(jo([kv("name", js(s.name)), kv("description", js(s.description)), kv("parameters", js(s.parameters))]))}");
+      print_schemas(rest)
+    }
+  }
+}
+
+func skills_config_digest(entries: [ExtEntry]) -> string {
+  match entries {
+    [] => "<no skills entry>",
+    e :: rest => if startsWith(e.id, "skills#") then ext_config_digest(e) else skills_config_digest(rest)
+  }
+}
+
+-- The system-prompt context `rpc.run_with_config` builds, with a fixed task
+-- and model so that only the registry varies between two runs.
+func prefix_digest(rt: ExtRuntime, workdir: string) -> string ! {IO, Clock} {
+  let ctx = {
+    task: "verify_skills_startup",
+    step: 0,
+    model: "stub",
+    cwd: workdir,
+    hybrid_tools: false,
+    budget: { total: 0, solver: 0, verifier: 0 },
+    mode: "default",
+    workdir: workdir,
+    env_server_url: "",
+    budget_remaining: 0,
+    history_slice: [],
+    state_key: "core:ext:system",
+    finish_reason: "",
+    work_in_flight: [],
+    open_waits: ja([]),
+    context_limit: 0,
+    ports: noop_ext_ports(),
+    artifacts: empty_ext_artifacts(),
+    telemetry: zero_token_telemetry(), verification: NotReached, tool_evidence: empty_tool_evidence(), decision_state: None, world: empty_ext_world()
+  };
+  let system = dispatch_build_system_prompt(rt, ctx, "verify_skills_startup: the fixed base system prompt");
+  let system_msg: Msg = { role: "system", content: system, tool_calls: [], tool_call_id: "" };
+  system_prefix_digest_for(msgs_to_messages([system_msg]))
+}
+
+-- The journal's compatibility row (ADR-003 D5), for a session whose header
+-- recorded `before_*` and is resumed under the registry built now.
+func resume_line(cfg: RuntimeConfig, workdir: string, before_ext: string, before_prefix: string, now_ext: string, now_prefix: string) -> string {
+  let h: HeaderEntry = {
+    schema_version: 1,
+    session_id: "verify_skills_startup",
+    workdir: workdir,
+    profile: cfg.profile,
+    ext_set_digest: before_ext,
+    model: "stub",
+    system_prefix_digest: before_prefix,
+    boot: {
+      task: "verify_skills_startup", env_url: "", hybrid_tools: false,
+      budget: { total: 0, solver: 0, verifier: 0 }, step_budget: 0, ohmy_pi: false,
+      max_cost_millicents: 0,
+      cost_rates: { input_per_1m_millicents: 0, output_per_1m_millicents: 0 }
+    }
+  };
+  let ctx: ResumeContext = {
+    workdir: workdir, ext_set_digest: now_ext, system_prefix_digest: now_prefix,
+    profile: cfg.profile, leased: false, force: false
+  };
+  match resume_refusal(h, ctx) {
+    None => "RESUME continues",
+    Some(r) => "RESUME refused: ${refusal_id(r)}"
+  }
+}
+
+func report(workdir: string, profile: string, before: Option[{ ext: string, prefix: string }]) -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let cfg = load_config_from_cli(["--workdir", workdir, "--profile", profile]);
+  let rt = init_runtime_with_config(cfg);
+  let schemas = skill_schemas(tools_with_extensions(rt));
+  let now_ext = ext_set_digest(rt);
+  let now_prefix = prefix_digest(rt, workdir);
+  let _ = println("OK started: profile=${cfg.profile} strict=${show(cfg.extensions.strict)} entries=${show(List.length(rt.registry.entries))} loaded=${join(",", loaded_extension_names(rt))}");
+  let _ = println("SKILL_SCHEMAS ${show(List.length(schemas))}");
+  let _ = print_schemas(schemas);
+  let _ = println("EXT_SET_DIGEST ${now_ext}");
+  let _ = println("EXT_CONFIG_DIGEST ${skills_config_digest(rt.registry.entries)}");
+  let _ = println("SYSTEM_PREFIX_DIGEST ${now_prefix}");
+  match before {
+    None => (),
+    Some(b) => println(resume_line(cfg, workdir, b.ext, b.prefix, now_ext, now_prefix))
+  }
+}
+
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  match getArgs() {
+    [workdir, profile] => report(workdir, profile, None),
+    [workdir, profile, ext, prefix] => report(workdir, profile, Some({ ext: ext, prefix: prefix })),
+    _ => println("FAIL usage: verify_skills_startup.ail -- <workdir> <profile> [<ext_set_digest> <system_prefix_digest>]")
+  }
+}

@@ -2646,6 +2646,21 @@ verify_strict_extensions:
 	if [ $$rc -eq 2 ] && echo "$$out" | grep -q 'extensions.strict.*registers no capability atom'; then echo "OK strict: an empty registration refused to start (exit 2)"; \
 	else echo "FAIL strict/empty: rc=$$rc"; echo "$$out" | tail -3; echo "verify_strict_extensions: a strict profile started without an extension that registered nothing"; exit 1; fi
 
+# 037 ADR-001 A3, A1 and A2: a broken skill tree refuses startup. One fixture
+# workdir per rule of D1 (R1 three ways, V1-V8 with V4's four cases, one with
+# two violations), each run with AILANG_FS_SANDBOX set to it: the process must
+# exit 2 with exactly one JSONL `error` event naming the rule and the path. The
+# controls must start with one `Skill` schema: no root, an empty root, and a
+# valid set with every scalar style. Then the digests: a change to the index
+# moves ext_config_digest alone and a resume continues; a body edit moves
+# nothing. The script builds its fixtures and says what each case checks.
+#
+# NOT a prerequisite of check_core: `skills` is in no profile CI boots (ADR
+# D11), and this adds about 45 s. It is one word on that line when it is wanted.
+.PHONY: verify_skills_refusal
+verify_skills_refusal:
+	@bash scripts/verify_skills_refusal.sh
+
 verify_native_path_guard:
 	@out=$$(AILANG_RELAX_MODULES=1 ailang run --caps IO,FS,Process,Env,Clock --entry main \
 		scripts/verify_native_path_guard.ail 2>/dev/null); rc=$$?; \
