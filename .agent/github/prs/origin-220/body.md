@@ -70,6 +70,9 @@ ailang test src/core/tool_catalog.ail     8 tests: 8 passed
 make tool_catalog_registry                tool_catalog_registry PASS (19 extensions registered, 73 tools)
 make check_core                           green, exit 0
 make dst                                  53 targets, 47 pass, 6 fail (the same 6 that fail on main; see below)
+make new_contract_policy                  2 in-scope new pure funcs, both justified and checked; 17 more test-only
+make verify_classify_check                OK, register agrees
+make verify_core                          15 contracts proven, 1 blocked, 0 files failed
 ```
 
 Both new checks fail without the fix. With the one line in `tools_with_extensions` put back:
