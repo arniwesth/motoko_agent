@@ -2653,13 +2653,44 @@ verify_strict_extensions:
 # controls must start with one `Skill` schema: no root, an empty root, and a
 # valid set with every scalar style. Then the digests: a change to the index
 # moves ext_config_digest alone and a resume continues; a body edit moves
-# nothing. The script builds its fixtures and says what each case checks.
+# nothing. Last, D7 and A9 through the real host and the live port
+# (scripts/verify_skills_call.ail): the config record's sandbox flag, a `Skill`
+# call that loads, one that names no skill, and one from an unsandboxed start
+# whose workdir is elsewhere. Every start runs under a timeout, so a startup
+# that hangs is a failed check. The script builds its fixtures and says what
+# each case checks.
 #
-# NOT a prerequisite of check_core: `skills` is in no profile CI boots (ADR
-# D11), and this adds about 45 s. It is one word on that line when it is wanted.
+# NOT a prerequisite of check_core, which every session's local baseline runs:
+# `skills` is in no profile check_core boots (ADR D11), and this takes about
+# 2 min. CI runs it on every pull request as its own step, with
+# verify_skills_tests (.github/workflows/verify-extensions.yml, job `core`).
 .PHONY: verify_skills_refusal
 verify_skills_refusal:
 	@bash scripts/verify_skills_refusal.sh
+
+# The skills package's inline tests (037 ADR-001): the rules of D1, D3, D8, D9
+# and D10 as pure functions in skills.ail, A6b in a6b_test.ail, and the config,
+# the catalogue and the handler over a stub port in register.ail. `test_coverage`
+# walks src/core only, so this target is what runs them.
+#
+# Each file's COUNT line is read, never only an exit status (WI-A17's rule:
+# `ailang test` exits 0 when every test was skipped). A file passes when it ran
+# at least one test and none failed or was skipped; a file that does not
+# compile prints no count line and fails here.
+.PHONY: verify_skills_tests
+verify_skills_tests:
+	@fail=0; for f in skills.ail a6b_test.ail register.ail; do \
+		out=$$(ailang test --no-color packages/motoko-ext-skills/$$f 2>&1 < /dev/null); \
+		line=$$(printf '%s\n' "$$out" | grep -E '^[0-9]+ tests:' | tail -1); \
+		if printf '%s\n' "$$line" | grep -qE '^[1-9][0-9]* tests: [0-9]+ passed, 0 failed, 0 skipped'; then \
+			echo "  ✓ packages/motoko-ext-skills/$$f: $$line"; \
+		else \
+			echo "  ✗ packages/motoko-ext-skills/$$f: $${line:-no count line}"; \
+			printf '%s\n' "$$out" | grep -vE '^ *✓ |^ +at |^$$' | cut -c1-400 | tail -30; \
+			fail=1; \
+		fi; \
+	done; \
+	[ $$fail -eq 0 ] || { echo "verify_skills_tests: the skills package's inline tests are not all passing"; exit 1; }
 
 verify_native_path_guard:
 	@out=$$(AILANG_RELAX_MODULES=1 ailang run --caps IO,FS,Process,Env,Clock --entry main \

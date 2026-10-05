@@ -98,6 +98,14 @@ jobs:
           DAGR_REQUIRED: '1'
         run: make check_core
 
+      # 037 ADR-001. Its own step, and not part of check_core: `skills` is in
+      # no profile check_core boots (D11), and test_coverage walks src/core
+      # only, so nothing else here runs the package's inline tests or starts
+      # the runtime on a skill tree. ~15 s and ~2 min locally; two of the
+      # refusal suite's starts import src/core/session (see dst_gates_heavy).
+      - name: skills (the package's inline tests + verify_skills_refusal)
+        run: make --keep-going verify_skills_tests verify_skills_refusal
+
       - name: smoke_no_delegated_storm (ohmy_pi=false across shipped profiles)
         run: make smoke_no_delegated_storm
 
