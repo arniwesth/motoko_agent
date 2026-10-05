@@ -304,3 +304,47 @@ no-read-permission case is skipped.
 | `gates/` | `HEAD.txt`, `STATUS.txt`, one log per gate, and `COMPARE_p6_repin_to_r3.txt` |
 | `gates_herdr_orchestrator_off/` | `declared_vs_performed` with `HERDR_ORCHESTRATOR=off` |
 | `tests/` | `ailang test` on `registry_normalize.ail` and the four profile modules at `4fd22883` |
+
+## After the second review
+
+The second review round found a mutant that every committed check let through. It was
+not among the 17 above: in `launched_elsewhere`
+(`packages/motoko-ext-skills/register.ail:294`), `workdir != "."` changed to
+`startsWith(workdir, "/")`. Every committed D7 check used an absolute workdir, so an
+unsandboxed launch with a relative workdir other than `.` was checked by nothing. "No
+survivor" in "The result" above is true of the 17 mutants that were run and of no more.
+
+Before the fix, at `e7d635ef`, the mutant was applied and `register.ail`'s 18 tests
+passed. That run was made to check the report and its log was not kept. The suite was not
+run under the mutant then; the reviewer reports that all 51 checks pass.
+
+**The fix, `d7d9dea3`.** `test_d7_unsandboxed_launch_with_another_workdir_does_not_load`
+gains one case: with the sandbox unset and the workdir `sub`, the call exits 1, returns
+D7's error for `sub`, has no stdout, and leaves the world as it was given, so nothing was
+read. The edit is in the file's last test. The lines other files cite in `register.ail`
+(`:92`, `:331`, `:344`) are where they were. `84ea6a71` re-locks: `ailang lock` changed
+`generated_at` and the package's content hash.
+
+**The runs**, by `mutate_r3_second_review.sh`, once, at `84ea6a71`
+(`second_review/HEAD.txt`), on a clean tree. This time the re-lock came before the run.
+
+| Run | Result |
+|---|---|
+| `make verify_skills_tests`, unmutated | exit 0: 62, 11 and 18 tests, all passed |
+| `make verify_skills_refusal`, unmutated | exit 0: 51 passed, 0 failed |
+| mutant `c6`, `ailang test` on `register.ail` | exit 1: 17 of 18 passed; the one failure is the named test |
+
+**The mutant row**, appended to `mutants.tsv` as its eighteenth:
+
+| id | rule | change | check expected to fail | exit | result |
+|---|---|---|---|---|---|
+| `c6` | D7: an unsandboxed start with a relative workdir other than `.` returns D7's error | `workdir != "."` to `startsWith(workdir, "/")` | `test_d7_unsandboxed_launch_with_another_workdir_does_not_load` | 1 | killed |
+
+The check was named in the script before the run. The mutant type-checks, and no other
+test failed. The kill rule is the first run's.
+
+The gates were not run again: the change is one case in an inline test of the package and
+two lines of the lock. Nothing was pushed.
+
+New files: `mutate_r3_second_review.sh`, and `second_review/` with `HEAD.txt`, the two
+baseline logs, and the mutant's diff, type-check log and run log.
