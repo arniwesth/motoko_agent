@@ -1,0 +1,41 @@
+# 037 P5: the worktree root given a broken skill tree for this run only (.motoko/skills/empty has no SKILL.md; .motoko/skills/renamed/SKILL.md names other-name), then removed.
+# command: MOTOKO_CONFIG=skills make verify_extensions   (HEAD d8a631f76243549106941ce2f405f39ddb876223 + the uncommitted recipe)
+  ✓ empty_stop_guard register_with_config
+  ✓ progress_contract_guard register_with_config
+  ✓ compaction_ai register_with_config
+  ✓ context_mode register_with_config
+  ✓ exa_search register_with_config
+  ✓ compaction_structural register_with_config
+  ✗ skills
+      {"type":"error","message":"extension registry rejected: [registration-refused] extension 'skills#0' refuses its own registration through the config key 'registration_refusal' (037 ADR-001 D2): skills: 2 violations under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V1: .motoko/skills/empty: the directory has no SKILL.md (exact case) [2] V5: .motoko/skills/renamed/SKILL.md: `name` (`other-name`) differs from the directory name `renamed`"}
+verify_extensions (skills): 6 booted, 1 failed
+FAILED: skills
+make: *** [Makefile:2844: verify_extensions] Error 1
+# exit 2
+
+# the same boot through the filter the recipe had before (grep -E "Error|UNKNOWN"): what it printed for the refused extension
+# boot exit 2
+  ✗ skills
+# (end of the old filter's output: no line)
+
+# without the sandbox (the recipe before): the same tree, the same boot
+# boot exit 2
+{"type":"error","message":"extension registry rejected: [registration-refused] extension 'skills#0' refuses its own registration through the config key 'registration_refusal' (037 ADR-001 D2): skills: 2 violations under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V1: .motoko/skills/empty: the directory has no SKILL.md (exact case) [2] V5: .motoko/skills/rename
+
+# ---- why the sandbox: the worktree root given one skill that is a symlink to a valid skill OUTSIDE the repository (.motoko/skills/linked -> <scratch>/outside/linked), for this run only
+# without the sandbox (the recipe before): the boot of skills
+# boot exit 0
+OK: skills register_with_config returned without panic
+# with the recipe as it is now: MOTOKO_CONFIG=skills make verify_extensions
+  ✓ empty_stop_guard register_with_config
+  ✓ progress_contract_guard register_with_config
+  ✓ compaction_ai register_with_config
+  ✓ context_mode register_with_config
+  ✓ exa_search register_with_config
+  ✓ compaction_structural register_with_config
+  ✗ skills
+      {"type":"error","message":"extension registry rejected: [registration-refused] extension 'skills#0' refuses its own registration through the config key 'registration_refusal' (037 ADR-001 D2): skills: 1 violation under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V2: .motoko/skills/linked: is neither a regular file nor a directory (under the sandbox a symlink that leaves the workdir, or has an absolute target, reads this way)"}
+verify_extensions (skills): 6 booted, 1 failed
+FAILED: skills
+make: *** [Makefile:2844: verify_extensions] Error 1
+# exit 2

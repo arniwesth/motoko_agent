@@ -1,0 +1,48 @@
+ailang: AILANG v0.47.2   HEAD: 3b8494a54fcd74962455a9c670e9b15183718e55
+
+RUN 1: A3 through the real entry: two violations (V1, V5) beside a valid skill
+  exit 2
+  JSONL error events: 1
+  session_start events (the runtime's first): 0
+  error: "extension registry rejected: [registration-refused] extension 'skills#0' refuses its own registration through the config key 'registration_refusal' (037 ADR-001 D2): skills: 2 violations under .motoko/skills; startup is refused until every one is fixed (037 ADR-001 D1). [1] V1: .motoko/skills/empty: the directory has no SKILL.md (exact case) [2] V5: .motoko/skills/renamed/SKILL.md: `name` (`other-name`) differs from the directory name `renamed`"
+
+RUN 2: A2 base: two valid skills (alpha, beta)
+  exit 0
+  JSONL error events: 0
+  session_start events (the runtime's first): 1
+  loaded_extensions: skills
+  header.system_prefix_digest: sha256:f1b8555b784a3d30a2d34778073c9903de1361c5bea49aee343716b7e6191796
+  header.ext_set_digest:       sha256:d0805bbf62f2d9f6d968de3bd4508ad28d67e1ad9820a46f867b08dfa486c74b
+
+RUN 3: A2: a valid skill added (gamma)
+  exit 0
+  JSONL error events: 0
+  session_start events (the runtime's first): 1
+  loaded_extensions: skills
+  header.system_prefix_digest: sha256:f1b8555b784a3d30a2d34778073c9903de1361c5bea49aee343716b7e6191796
+  header.ext_set_digest:       sha256:d0805bbf62f2d9f6d968de3bd4508ad28d67e1ad9820a46f867b08dfa486c74b
+
+RUN 4: A2: gamma removed, alpha's description reworded
+  exit 0
+  JSONL error events: 0
+  session_start events (the runtime's first): 1
+  loaded_extensions: skills
+  header.system_prefix_digest: sha256:f1b8555b784a3d30a2d34778073c9903de1361c5bea49aee343716b7e6191796
+  header.ext_set_digest:       sha256:d0805bbf62f2d9f6d968de3bd4508ad28d67e1ad9820a46f867b08dfa486c74b
+
+RUN 5: A2: alpha's description restored, only its body reworded
+  exit 0
+  JSONL error events: 0
+  session_start events (the runtime's first): 1
+  loaded_extensions: skills
+  header.system_prefix_digest: sha256:f1b8555b784a3d30a2d34778073c9903de1361c5bea49aee343716b7e6191796
+  header.ext_set_digest:       sha256:d0805bbf62f2d9f6d968de3bd4508ad28d67e1ad9820a46f867b08dfa486c74b
+
+RUN 6: A2 / D12: no root at all
+  exit 0
+  JSONL error events: 0
+  session_start events (the runtime's first): 1
+  loaded_extensions: skills
+  header.system_prefix_digest: sha256:f1b8555b784a3d30a2d34778073c9903de1361c5bea49aee343716b7e6191796
+  header.ext_set_digest:       sha256:d0805bbf62f2d9f6d968de3bd4508ad28d67e1ad9820a46f867b08dfa486c74b
+

@@ -1,0 +1,9 @@
+# 037 P5: the same-key row with the package's export changed, for this run only, to "registration-refusal" (packages/motoko-ext-skills/skills.ail, registration_refusal_key); the file is restored afterwards.
+# command: ailang run --caps IO --entry main scripts/dst/registry_multiplicity_dst.ail   (HEAD 3b8494a54fcd74962455a9c670e9b15183718e55)
+  -- 037 D2: a registration whose config carries registration_refusal --
+  ✓ config carries registration_refusal (non-empty string): [registration-refused] extension 'refuse#6' refuses its own registration through the config key 'registration_refusal' (037 ADR-001 D2): fixture: this extension found its own root broken and lists every violation here (one; two)
+  ✓ the same config on the 'second ToolPolicy' list (read before the walk): [registration-refused] extension 'refuse#7' refuses its own registration through the config key 'registration_refusal' (037 ADR-001 D2): fixture: this extension found its own root broken and lists every violation here (one; two)
+  ✓ config carries registration_refusal = "" (the control): accepted -- the entry carries config {"registration_refusal":""} unchanged and all 11 atoms
+  ✗ the extension and the host use the same key: extension 'registration-refusal' vs host 'registration_refusal' (equal: false; the host refuses the extension's spelling: false; a near-miss key is accepted: true)
+registry_multiplicity_dst FAIL
+# exit 1
