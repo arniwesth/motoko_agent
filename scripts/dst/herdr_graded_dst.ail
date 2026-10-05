@@ -409,7 +409,7 @@ pure func graded_program(w: WorldState, initial: WorldState) -> ExecutionProgram
       synthetic_environment: initial.env,
       files: [],
       clock_epoch: initial.clock_ms,
-      extension_profile: "driver_plus_herdr/2"
+      extension_profile: "driver_plus_herdr/3"
     },
     bounds: {
       max_interactions: 256,
@@ -740,7 +740,7 @@ func scenario_the_record_shows_the_substance() -> bool ! {IO} {
   let _ = println("STATEMENT ${herdr_coverage_statement()}");
   let _ = println("      ${herdr_coverage_statement()}");
   let partition_ok = List.length(d.installed_packages) == 1
-                       && List.length(d.omitted_extensions) == 17
+                       && List.length(d.omitted_extensions) == 18
                        && all_reasoned(d.omitted_extensions);
   let ok = s.covered_hooks == 3 && s.world_mediating_hooks == 2
              && s.no_op_hooks == 0 && s.excluded_hooks == 1
@@ -790,7 +790,7 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, SharedMem, Stream, Trac
   let rec = scenario_the_record();
   let _ = println("HERDR-GRADED: the profile record loads clean and its clauses bind:  ${show(rec)}");
   if dispatched && succeeded && served && disc && rec then
-    println("HERDR-GRADED: PASS — the ToolProvider path is reachable under DST, the run is recorded, graded, validated and strictly replayed, and driver_plus_herdr/2 rests on it")
+    println("HERDR-GRADED: PASS — the ToolProvider path is reachable under DST, the run is recorded, graded, validated and strictly replayed, and driver_plus_herdr/3 rests on it")
   else {
     let _ = println("HERDR-GRADED: FAIL — the call sequence desynchronised or an effect reached the live world");
     let _ = show_each(tools);

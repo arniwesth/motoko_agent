@@ -212,7 +212,13 @@ export pure func no_ops_id() -> string { "driver_plus_no_ops" }
 -- entries) to the extension's OWN list (`registered_atoms_of`, 4 entries in
 -- all). `check_no_op_profile.py` cross-checks each claim against B2's
 -- enumeration, which is what turned v10 red — as B8 §5 said it would.
-export pure func no_ops_version() -> string { "21" }
+-- v22 (2026-10-05, 037 PLAN-001 P6, the repair). RE-ISSUED because the omitted
+-- list changed: `ailang_tools` is named in it, with its own measured reason
+-- (see `not_installed`). It had been in ailang.toml's [extensions] packages and
+-- in neither list of this profile, which is what `make driver_plus_no_ops` was
+-- red on at 037's baseline (501cd879). Nothing installed, covered, excluded or
+-- routed changes; the omitted count goes 14 -> 15.
+export pure func no_ops_version() -> string { "22" }
 
 -- The same attribution table `driver_only` binds, at the same identity. Two
 -- profiles referring to one table is the case D4's rule was written for: a
@@ -647,6 +653,15 @@ pure func not_installed() -> [OmittedExtension] {
                   -- claim is checked rather than asserted.
                   "herdr", "mcp", "microrag", "omnigraph", "repetition_guard", "scratchpad",
                   "test_dummy"], barrier_reason())
+    -- `ailang_tools` joined ailang.toml's [extensions] packages and this profile named
+    -- it in neither list: `make driver_plus_no_ops` was red on it when 037 recorded its
+    -- baseline (501cd879). It has its own entry and not a place in the list above,
+    -- because `barrier_reason()` counts the extensions that share it and what stands
+    -- against this one is narrower: one gated atom whose handler performs its effects
+    -- itself. Re-measured for this entry with `make ext_ambient_inventory` and
+    -- `make ext_hook_scope` at 0f4724de, not carried over from the others.
+    ++ [{ extension_id: "ailang_tools",
+          reason: "NOT INSTALLED: it is not in the zero-barrier set this profile's install list is defined as, and that is a measurement. Until 037 P6 (2026-10-05) this profile named it in neither list. Measured at 0f4724de: classifier 3 (make ext_ambient_inventory) reports it AMBIENT, with 6 ambient sources in a 3-module closure (std/process.exec; std/fs.readFileResult, writeFileResult, mkdirAllResult and isDir; std/env.getEnvOr) and 0 ExtPorts field calls, so criterion 2's first clause fails on evidence and the per-(extension, slot) derivation in tools/profile_definition/check_fixtures.py clears nothing for it. make ext_hook_scope lists one of the six as registration-only (std/env.getEnvOr) and reports its hook scope HOOK-UNRESOLVED. It registers one atom, a ToolProvider claiming WriteFile, EditFile and ReadFile, and handles them for .ail paths: write_ail and edit_ail declare ! {FS, Process} and reach std/fs and std/process directly, writing the file and running `ailang check` themselves, and the outcome returns next_state: ctx.world as it was handed. So the effects are the hook's own and leave outside ctx.ports; a registration read is not the whole of it. ToolProvider is the gated kind, so the slot could be excluded, but an install with its only atom excluded would cover nothing. Per WI-D2's rule a reason names what would have to CHANGE: the handler's file and process effects reaching the world through mediated ports, which is the package's change and not this profile's. check_no_op_profile.py fails if a zero-barrier extension appears in this list." }]
 }
 
 -- ---------------------------------------------------------------------------
@@ -971,7 +986,7 @@ pure func test_installed_and_omitted_are_disjoint() -> bool
   {
     let d = driver_plus_no_ops();
     disjoint(omitted_ids(d.omitted_extensions), installed_extension_ids())
-      && List.length(d.omitted_extensions) == 14
+      && List.length(d.omitted_extensions) == 15
   }
 
 pure func omitted_ids(os: [OmittedExtension]) -> [string] {

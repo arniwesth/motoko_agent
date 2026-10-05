@@ -106,6 +106,12 @@ import src/core/dst_event_vocabulary as Vocab (event_vocabulary_version)
 
 export pure func herdr_profile_id() -> string { "driver_plus_herdr" }
 
+-- v3 (2026-10-05, 037 PLAN-001 P6, the repair). RE-ISSUED because the omitted
+-- list changed: `ailang_tools` is named in it, with its own measured reason
+-- (see `not_installed`). Nothing installed, covered, excluded or routed changes;
+-- the omitted count goes 17 -> 18, and the acceptance script's count and its
+-- `extension_profile` literal follow.
+--
 -- v2 (2026-09-14, PLAN-003 task PINDH). RE-ISSUED under D4, and for two stale
 -- facts rather than a changed claim. (1) The attribution table was re-baselined
 -- at PLAN-003 P1 Part 4 and again at P3 Part 3, and this profile was missing from
@@ -120,7 +126,7 @@ export pure func herdr_profile_id() -> string { "driver_plus_herdr" }
 -- Neither changes what is installed, covered, excluded or routed.
 --
 -- v1. First issue; there is no predecessor to re-issue from.
-export pure func herdr_profile_version() -> string { "2" }
+export pure func herdr_profile_version() -> string { "3" }
 
 -- The revision the measurements below were taken at.
 export pure func measured_at() -> string { "8470c3f" }
@@ -300,11 +306,20 @@ pure func barrier_reason() -> string {
 
 -- D5 field 10. Seventeen, and herdr is not among them for the first time in the
 -- project — it is the installed one.
+--
+-- EIGHTEEN FROM v3 (037 P6, 2026-10-05). `ailang_tools` was in ailang.toml's
+-- [extensions] packages and in neither list here. No gate holds this profile to
+-- the partition (`make driver_plus_herdr` was green without the entry), so
+-- nothing went red on it; 037 ADR-001 D13 found it by reading the four files.
+-- It has its own reason, re-measured with `make ext_ambient_inventory` and
+-- `make ext_hook_scope` at 0f4724de.
 pure func not_installed() -> [OmittedExtension] {
   omit_each(["a2a", "agentcli", "ailang_docs", "compaction_ai", "compaction_structural",
              "compose", "context_mode", "decision_framework", "empty_stop_guard",
              "exa_search", "mcp", "microrag", "omnigraph", "progress_contract_guard",
              "repetition_guard", "scratchpad", "test_dummy"], barrier_reason())
+    ++ [{ extension_id: "ailang_tools",
+          reason: "NOT INSTALLED, and on a barrier rather than by choice. Until 037 P6 (2026-10-05) this profile named it in neither list. Measured at 0f4724de: classifier 3 (make ext_ambient_inventory) reports it AMBIENT, with 6 ambient sources in a 3-module closure (std/process.exec; std/fs.readFileResult, writeFileResult, mkdirAllResult and isDir; std/env.getEnvOr) and 0 ExtPorts field calls, so criterion 2's first clause fails on evidence. make ext_hook_scope lists one of the six as registration-only (std/env.getEnvOr) and reports its hook scope HOOK-UNRESOLVED. It registers one atom, a ToolProvider claiming WriteFile, EditFile and ReadFile, and handles them for .ail paths: write_ail and edit_ail declare ! {FS, Process} and reach std/fs and std/process directly, writing the file and running `ailang check` themselves, and the outcome returns next_state: ctx.world as it was handed. So the effects are the hook's own and leave outside ctx.ports; a registration read is not the whole of it. The graded session does not rescue it: this profile records one, through herdr, which never dispatches this extension, and a run that did would find no world-mediated, origin-tagged effect to record for a handler that does not use the ports. Per WI-D2's rule a reason names what would have to CHANGE: the handler's file and process effects reaching the world through mediated ports, which is the package's change and not this profile's." }]
 }
 
 export pure func driver_plus_herdr() -> ProfileDefinition {
@@ -460,7 +475,7 @@ pure func test_four_atoms_one_exclusion_two_on_discovery() -> bool
     List.length(registered_atoms()) == 4
       && List.length(excluded_slot_ids()) == 1
       && List.length(criterion_2_slot_ids()) == 2
-      && List.length(driver_plus_herdr().omitted_extensions) == 17
+      && List.length(driver_plus_herdr().omitted_extensions) == 18
   }
 
 pure func test_two_hooks_mediate_substantively() -> bool
