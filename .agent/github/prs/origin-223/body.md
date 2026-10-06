@@ -3,12 +3,13 @@ repo: arniwesth/motoko_agent
 pr: 223
 branch: docs/011-adr-003-judge-recoveries-on-real-runs
 ticket: null
-title: "docs(011): ADR-003 (proposed) — judge wrong recoveries on real runs, with the mutation spike behind it"
+title: "docs(011): ADR-003 (accepted) — judge wrong recoveries on real runs, with the mutation spike behind it"
 ---
 
 ## Summary
 
-Adds ADR-003 (Proposed) to project 011: how DST should judge a wrong recovery on a real run. It
+Adds ADR-003 to project 011, accepted by the operator on 2026-10-06: how DST should judge a wrong
+recovery on a real run. It
 comes out of the operator-feasibility spike `RESEARCH-test-axes-beyond-dst.md` §3.3 asked for, which
 found two single-edit driver defects that pass the whole of `make dst` and showed that the
 invariant set does not see them even when it is evaluated over the corpus. The spike's plan, its
@@ -20,6 +21,7 @@ Documents only. No source, gate or `Makefile` change.
 
 - docs(011): the mutation operator-feasibility spike — plan, findings and evidence
 - docs(011): ADR-003 (proposed) — how DST should judge a wrong recovery on a real run
+- docs(011): ADR-003 accepted — the operator's six rulings of 2026-10-06
 
 47 files changed.
 
@@ -38,9 +40,9 @@ D7 and does not reopen it (ADR-003 D8). It applies
 
 - **Nothing a session does changes.** Checked: `git diff --name-only origin/main HEAD` outside
   `.agent/` is empty.
-- **ADR-003 is on record as Proposed, with five items for the operator to rule on.** It records
-  that the direction of D2–D5 was accepted in conversation on 2026-10-06 and that nothing is ruled
-  in writing.
+- **ADR-003 is on record as Accepted.** Its *Rulings* section holds the operator's six rulings of
+  2026-10-06, given in conversation after a recommendation for each decision. Nothing is
+  implemented, and six items of its *Not decided* list stay open.
 - **The first part that implements it hands in a `mutants.tsv`.** ADR-003 D6 names six one-edit
   mutants that must each turn its rule red, and the controls that must stay green. Checked by
   reading that part's evidence.
