@@ -25,6 +25,10 @@ Read `../../NOTE-spike-findings-mutation-operator-feasibility.md` for the result
   - `prototype.diff`, `proto_apply.py` — part 4's prototype of the rule changes. Never merged.
   - `prototype2.diff`, `proto2_apply.py`, `mutants5.py`, `predictions5.tsv`, `run_probe5.sh`,
     `score5.py` — part 5: the amended rules and the reviewers' six mutants.
+  - `drive6.sh`, `compare6.py`, `control6.sh` — part 6: `make eval_matrix` without and with the
+    prototype, their comparison, and the known-bad control. The generated `MATRIX.tsv` files and
+    the suites' raw logs are not committed; `results/part6-*` holds the comparison, each run's
+    suite exit codes and the known-bad control's lines.
   - `Makefile-private-paths.diff` — the one edit the spike worktree carried: private output paths
     for seven fixed `/tmp` names, so another session's sweep could not overwrite them.
 - `results/` — each part's score table and sequence log, and the summary block of each full sweep.

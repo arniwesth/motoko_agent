@@ -360,6 +360,33 @@ inline tests pass, and the probe reports nothing on any of the sixteen members.
 `M2`, `M6`, `M9`, `T3`, `R3`, `R4`, `R5`. Clean in both: the other eleven, among them `R6`, the
 generator rewind, which one reviewer had already run.
 
+## Part 6, 2026-10-06 — the journal control, with the prototype
+
+This section was written after the runs. There is no predictions file for this part: nothing was
+predicted for the comparison, and the one expectation stated before its run is the known-bad
+control's, below.
+
+**Why.** ADR-003 D6, as ruled, makes the other real-run callers of `evaluate` the first control
+before any rule is accepted. They are in project 013's evaluator (`src/eval/journal/`), and
+`make eval_matrix` is the target that runs them. Running it with the prototype costs under an hour
+and says before a plan is written whether D2 or D3 turns a healthy journal run red.
+
+**Runs**, in the spike worktree at `259265b5`, one after the other (`drive6.sh`):
+1. `make eval_matrix` on the unmutated tree.
+2. The same with `proto2_apply.py` applied to the working tree, hash-checked against part 5's.
+3. A known-bad control (`control6.sh`): the prototype with one wrong row in D2's table,
+   `StepBudgetExhausted` implying `error`, run against `witness_live_test.ail` and
+   `candidate_checks_live_test.ail` alone. Stated before it ran: the two suites should go red if
+   they evaluate a suspended run.
+
+**Comparison** (`compare6.py`): each suite's exit code, each case's observed verdict, first
+finding and position, and each case's join status. A file or row missing on one side is reported,
+never counted as equal.
+
+**Q13 — Does the prototype add anything to the matrix's baseline?**
+- *Confirms the rules are safe there* if the two runs are identical and the known-bad control is red.
+- *Falsifies* if any suite or row differs, or the known-bad control stays green.
+
 ## What survives, and where it goes
 
 `NOTE-spike-findings-mutation-operator-feasibility.md`, beside this file: one table, the five

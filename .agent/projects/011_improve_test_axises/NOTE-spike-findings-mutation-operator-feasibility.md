@@ -1,6 +1,6 @@
 # Findings: do single-site mutants of the driver's recovery branches get killed?
 
-Date: 2026-10-05, finished 2026-10-06 00:10 UTC. Parts 2 to 5 and the corrections after review added 2026-10-06. Status: complete.
+Date: 2026-10-05, finished 2026-10-06 00:10 UTC. Parts 2 to 6 and the corrections after review added 2026-10-06. Status: complete.
 
 _Executed `PLAN-spike-mutation-operator-feasibility.md` in full, with one recorded deviation.
 **Q1, Q2 and Q3 confirm. Q4: of eleven mutants, nine turn `make dst` red and two do not. Q5
@@ -390,6 +390,53 @@ and on all six gate checks.
 **Prediction score, part 5.** 24 of 24, both columns. Read it for what it is: the rules were
 written from these mutants.
 
+## Part 6 — the journal control, with the prototype. **CONFIRMS, within three limits.**
+
+Planned in the plan's *Part 6* section, which was written after the runs and says so.
+`make eval_matrix` is project 013's: the test contract of ADR-004's evaluator, 621 cases in 28
+suites. Two of that evaluator's checks call `evaluate`: A8 at admission (`bridge.ail`) and K4 for
+candidates (`candidate_checks.ail`).
+
+| run | exit | seconds | suites red | rows |
+|---|---|---|---|---|
+| unmutated tree | 2 | 1,062 | 3 of 28 | 419 credited, 129 equal, 29 failed, 33 missing, 11 inapplicable |
+| prototype applied | 2 | 831 | the same 3 | the same, row for row |
+
+- **Q13 confirms.** No suite's exit code, no row's observation and no row's join status differs
+  between the two runs (`results/part6-compare.txt`).
+- **The suites that evaluate real runs are green in both**: `witness_live_test.ail`,
+  `candidate_checks_live_test.ail`, `admission_live_test.ail`.
+- **The known-bad control is red**, so those suites can see. With `StepBudgetExhausted` implying
+  `error`, `witness_live_test.ail` fails on its suspended run with
+  `A8:outcome-summary-disagree@aggregate:invariants:outcome-agreement`, and
+  `candidate_checks_live_test.ail` fails at admission. With the prototype as written the same run
+  reports no finding (`results/part6-known-bad.txt`).
+
+**The baseline is red, for reasons that are not this spike's.**
+- `scripts/eval/test_candidate.py`: 27 failed, 96 passed, 1 error. The failures sampled are refused
+  before running with `ProtectedRegionTouched`: `session.ail`'s imports no longer match the
+  protected manifest pinned at `65003110`.
+- `tools/eval_protected/selftest.py`: its generator fails a parser cross-check on types in
+  `src/core/ports.ail`, which leaves 33 rows missing. That file has not changed since the pin. The
+  cause was not established.
+- `src/eval/journal/candidate_checks.ail`: one pure test fails with `effect 'FS' requires capability`.
+- The operator's last matrix output, of 2026-09-17 at `d74079d6`, has one failing row. 58 rows
+  differ from it today.
+
+**Three limits.**
+1. **The committed-tree path was not reached.** `test_candidate.py` assembles its trees from a
+   commit, so an uncommitted prototype is not in them. At this commit those candidates are refused
+   before they run in any case.
+2. **Only D2's `Err` half has a known-bad control here.** Nothing shows these suites would see a
+   wrong D3, and no journal run in them was shown to contain a retry.
+3. **The prototype has no D4.** The record's new field is the part of ADR-003 that edits the
+   callers of `execution_of`, and four of its five call sites are under `src/eval/journal/`
+   (`bridge.ail:61`, `witness_live_test.ail:295` and `:296`, `candidate_checks_run.ail:108`). This
+   run says nothing about that edit.
+
+So `make eval_matrix` cannot be read as green or red at this commit. Like `make dst`, it has to be
+read as a difference against the unmutated tree.
+
 ## Corrections after REVIEW-001, 2026-10-06
 
 Each is something this note or ADR-003 v0.1 said and a reviewer showed to be wrong. All were
@@ -514,4 +561,5 @@ are in the spike worktree until it is removed. The decision drawn from this note
 `mutants3.py`, `predictions3.tsv`, `run_set3.sh`, `score3.py`, `score3_selftest.py`, `out3/`.
 Part 4: `proto_apply.py`, `prototype.diff`, `mutants4.py`, `predictions4.tsv`, `run_probe4.sh`,
 `score4.py`, `out4/`. Part 5: `proto2_apply.py`, `prototype2.diff`, `mutants5.py`,
-`predictions5.tsv`, `run_probe5.sh`, `score5.py`, `out5/`.
+`predictions5.tsv`, `run_probe5.sh`, `score5.py`, `out5/`. Part 6: `drive6.sh`, `compare6.py`,
+`control6.sh`, `out6/`.
