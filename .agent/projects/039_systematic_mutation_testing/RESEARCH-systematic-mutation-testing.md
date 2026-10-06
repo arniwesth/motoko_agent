@@ -19,6 +19,7 @@ Relates to:
 - [035 research note][r035], §4.3, §5 and §6.5: evidence fields per property, mutation verdicts, the generator comparison.
 - [The mutation discipline][rule]: one mutant per stated rule, and the kill rule.
 - `papers/motoko-dst-report/DRAFT-3.md`, §7.5 and §9.2: the report's statement that a systematic study is separate work.
+- [`NOTE-dst-and-mutation-testing-as-one-method.md`](NOTE-dst-and-mutation-testing-as-one-method.md): the thesis that simulation and mutation complete each other, and what publishing it would need. Kept apart from this survey.
 
 ## 1. Question and short answer
 
