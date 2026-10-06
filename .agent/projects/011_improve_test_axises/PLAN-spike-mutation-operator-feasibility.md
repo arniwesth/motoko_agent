@@ -325,6 +325,41 @@ census balances on every member.
 **Out of scope.** New constructors, mutant rows in `invariants_dst`, a `make` target, the tool and
 approval balances, any change on `main`.
 
+## Part 5, 2026-10-06 — a prototype of the amended rules, after two reviews
+
+The predictions file was written and hashed before the 24 rows were launched
+(`tmp/spike/predictions5.tsv`, sha256 `b264d63c0068ffd8…`, recorded in `out5/sequence.log`). This
+section was written after they ran.
+
+**Why.** ADR-003 v0.1 was reviewed separately by Codex (GPT-6-Astra) and Claude Fable 5.1. Both
+found rules that pass defects they are meant to guard, and one found a witness v0.1 had missed.
+The detector discipline says a detector found unsound in review is built, not respecified. So the
+amendment's rules were run before they were written into the ADR.
+
+**The prototype.** `proto2_apply.py`: in `dst_invariants.ail`, outcome agreement by the reason the
+error code implies, and the no-repeat rule over the driver's own steps. In the probe
+(`families_probe3`), six gate checks over the run's configuration, its returned trace and the
+delta of its world: calls within the budget; no retry with one step of budget or less; steps
+numbered from zero without a gap; a provider-call balance; a tool-dispatch balance; contiguous
+request ordinals.
+
+**Rows.** The eighteen of part 4 and six from the reviews (`mutants5.py`): a provider failure
+reported as `max_steps`; a suspension reported as an internal failure; a retry that advances by
+two; a failure finalize that drops the capture read's successor; a step machine that allows one
+call past the budget; a retry that keeps the successor's log and rewinds its generator.
+
+**Survival, measured before any mutant.** `make invariants` and `make stream_parity` pass, the nine
+inline tests pass, and the probe reports nothing on any of the sixteen members.
+
+**Q12 — Does each amended rule go red on the mutant written against it, and nothing healthy?**
+- *Confirms* if the first five review mutants and the earlier rows go red on the rule named for
+  them, and the unmutated bank and `K0` stay clean.
+- *Falsifies* if any stays clean, or a control goes red.
+
+**Predictions.** Red in the set: `K2`, `M1`, `M3`, `M3m`, `R1`, `R2`. Red in the gate checks: `M1`,
+`M2`, `M6`, `M9`, `T3`, `R3`, `R4`, `R5`. Clean in both: the other eleven, among them `R6`, the
+generator rewind, which one reviewer had already run.
+
 ## What survives, and where it goes
 
 `NOTE-spike-findings-mutation-operator-feasibility.md`, beside this file: one table, the five

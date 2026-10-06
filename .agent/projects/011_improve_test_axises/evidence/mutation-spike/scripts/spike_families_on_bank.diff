@@ -1,5 +1,5 @@
 --- scripts/dst/corpus_pr_dst.ail	2026-10-05 18:46:42.414515985 +0000
-+++ scripts/dst/spike_families_on_bank.ail	2026-10-06 10:31:19.410070963 +0000
++++ scripts/dst/spike_families_on_bank.ail	2026-10-06 13:00:23.983509825 +0000
 @@ -180,7 +180,7 @@
  -- waiving condition, and a class nobody waived that nobody reached is a
  -- coverage gap, not a permission.
@@ -21,11 +21,11 @@
 +import src/core/dst_invariants (Violation, NoReplay, evaluate, violation_rule, violation_family, family_id)
 +-- part 4 (prototype rules computed on the probe side; never merges)
 +import src/core/dst_invariants (violation_message)
-+import src/core/phase_vocab (LedgerRecord, WireRecord, ProviderCallPrepared, StreamErrorRetry)
++import src/core/phase_vocab (LedgerRecord, WireRecord, ProviderCallPrepared, StreamErrorRetry, WorldRequest, V2ToolDispatchStart)
  import src/core/test/stub_step (GeneratedWorld, RecordingWorld)
  import src/core/ports (ScriptedStep, WorldState, empty_world_state, ProviderOutcome, ProviderServed, ProviderScriptExhausted, ProviderUndecodable, decode_provider_outcome)
  import src/core/types (Msg)
-@@ -1230,3 +1239,138 @@
+@@ -1230,3 +1239,253 @@
      exit(1)
    }
  }
@@ -162,5 +162,120 @@
 +  let initial = empty_terminal_world();
 +  let r = run_recording("corpus_constructed", initial);
 +  let _ = spk_row2("constructed-empty-terminal", r, initial.clock_ms, 12);
++  println("FAMPROBE end")
++}
++
++
++-- ============================================================================
++-- SPIKE ONLY, part 5 — the prototype of ADR-003 v0.2's draft. NEVER MERGES.
++-- ============================================================================
++-- A = the invariant set with the v0.2 rule changes in dst_invariants.ail.
++-- X = six gate-side rules, each stated over the run's own configuration, its returned
++-- trace and the DELTA of its world over the world it started from:
++--   step-budget:provider-calls-exceed-budget
++--   step-budget:retry-with-budget-at-most-one     a retry at a step with budget - step <= 1
++--   progress:driver-steps-not-contiguous          provider-call steps are not 0, 1, 2, ...
++--   census:provider-calls-unbalanced              trace calls != provider interactions logged
++--   census:tool-dispatches-unbalanced             trace dispatch starts != tool interactions logged
++--   witness:ordinals-not-contiguous               world_request ordinals are not +1 from the
++--                                                 starting world's to the returned world's
++
++pure func spk_steps(rs: [LedgerRecord]) -> [int] {
++  match rs {
++    [] => [],
++    r :: rest =>
++      match r {
++        WireRecord(e) => match e { ProviderCallPrepared(i) => i.step :: spk_steps(rest), _ => spk_steps(rest) },
++        _ => spk_steps(rest)
++      }
++  }
++}
++
++pure func spk_contiguous_from(xs: [int], want: int) -> bool {
++  match xs { [] => true, x :: rest => if x == want then spk_contiguous_from(rest, want + 1) else false }
++}
++
++pure func spk_ordinals(rs: [LedgerRecord]) -> [int] {
++  match rs {
++    [] => [],
++    r :: rest =>
++      match r {
++        WireRecord(e) => match e { WorldRequest(i) => i.ordinal :: spk_ordinals(rest), _ => spk_ordinals(rest) },
++        _ => spk_ordinals(rest)
++      }
++  }
++}
++
++pure func spk_last_or(xs: [int], d: int) -> int {
++  match xs { [] => d, x :: rest => spk_last_or(rest, x) }
++}
++
++pure func spk_dispatch_starts(rs: [LedgerRecord]) -> int {
++  match rs {
++    [] => 0,
++    r :: rest =>
++      (match r { WireRecord(e) => match e { V2ToolDispatchStart(_) => 1, _ => 0 }, _ => 0 }) + spk_dispatch_starts(rest)
++  }
++}
++
++pure func spk_log_kind(xs: [Interaction], kind: string) -> int {
++  match xs {
++    [] => 0,
++    i :: rest => (if interaction_kind(i) == kind then 1 else 0) + spk_log_kind(rest, kind)
++  }
++}
++
++pure func spk_edge_retries2(rs: [LedgerRecord], budget: int) -> int {
++  match rs {
++    [] => 0,
++    r :: rest =>
++      (match r {
++         WireRecord(e) => match e { StreamErrorRetry(i) => if budget - i.step <= 1 then 1 else 0, _ => 0 },
++         _ => 0
++       }) + spk_edge_retries2(rest, budget)
++  }
++}
++
++func spk_row3(label: string, r: TracedSessionResult, initial: WorldState, budget: int) -> () ! {IO} {
++  let a = evaluate(execution_of(r, initial.clock_ms, NoReplay, 0 - 1, budget - 1, 0, [], unknown_replay_metadata()));
++  let steps = spk_steps(r.trace.records);
++  let calls = List.length(steps);
++  let logged = spk_log_kind(r.world.log, "expect_provider") - spk_log_kind(initial.log, "expect_provider");
++  let edge = spk_edge_retries2(r.trace.records, budget);
++  let ords = spk_ordinals(r.trace.records);
++  let ord_ok = spk_contiguous_from(ords, initial.ordinal + 1) && spk_last_or(ords, initial.ordinal) == r.world.ordinal;
++  let starts = spk_dispatch_starts(r.trace.records);
++  let tools = spk_log_kind(r.world.log, "expect_tool") - spk_log_kind(initial.log, "expect_tool");
++  let x1 = if calls > budget then ["step-budget:provider-calls-exceed-budget"] else [];
++  let x2 = if edge > 0 then ["step-budget:retry-with-budget-at-most-one"] else [];
++  let x3 = if spk_contiguous_from(steps, 0) then [] else ["progress:driver-steps-not-contiguous"];
++  let x4 = if calls != logged then ["census:provider-calls-unbalanced"] else [];
++  let x5 = if starts != tools then ["census:tool-dispatches-unbalanced"] else [];
++  let x6 = if ord_ok then [] else ["witness:ordinals-not-contiguous"];
++  let ended = match r.result { Ok(_) => "ok", Err(_) => "err" };
++  let _ = println("FAMROW ${label} ended=${ended} n=${List.length(r.world.log)} A=[${spk_join(spk_rules(a))}] B=[${spk_join(x1 ++ x2 ++ x3 ++ x4 ++ x5 ++ x6)}]");
++  let _ = spk_say(label, spk_messages(a));
++  println("FAMNUM ${label} calls=${calls} logged=${logged} budget=${budget} edge_retries=${edge} dispatch_starts=${starts} tools_logged=${tools} ordinals=${List.length(ords)} last_ordinal=${spk_last_or(ords, initial.ordinal)} world_ordinal=${r.world.ordinal}")
++}
++
++func spk_seeds3(es: [BankEntry])
++  -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
++  match es {
++    [] => (),
++    e :: rest => {
++      let initial = generated_world(e.seed);
++      let r = run_generated("corpus_${e.seed}", initial);
++      let _ = spk_row3("seed-${e.seed}", r, initial, 12);
++      spk_seeds3(rest)
++    }
++  }
++}
++
++export func families_probe3() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
++  let _ = println("FAMPROBE begin");
++  let _ = spk_seeds3(fixed_bank());
++  let initial = empty_terminal_world();
++  let r = run_recording("corpus_constructed", initial);
++  let _ = spk_row3("constructed-empty-terminal", r, initial, 12);
 +  println("FAMPROBE end")
 +}

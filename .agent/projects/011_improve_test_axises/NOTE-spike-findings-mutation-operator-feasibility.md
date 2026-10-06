@@ -1,6 +1,6 @@
 # Findings: do single-site mutants of the driver's recovery branches get killed?
 
-Date: 2026-10-05, finished 2026-10-06 00:10 UTC. Parts 2, 3 and 4 added 2026-10-06. Status: complete.
+Date: 2026-10-05, finished 2026-10-06 00:10 UTC. Parts 2 to 5 and the corrections after review added 2026-10-06. Status: complete.
 
 _Executed `PLAN-spike-mutation-operator-feasibility.md` in full, with one recorded deviation.
 **Q1, Q2 and Q3 confirm. Q4: of eleven mutants, nine turn `make dst` red and two do not. Q5
@@ -349,6 +349,86 @@ balances on every one.
   field, and adding one touches every site that builds the record.
 - **Still unread.** The suspend and park path, which may return `Ok` with another finish reason.
 
+## Part 5 — the amended rules, after two reviews. **CONFIRMS.**
+
+Planned in the plan's *Part 5* section; the predictions were hashed before the rows ran. Two
+reviews of ADR-003 v0.1 (`REVIEW-001-adr-003-*`) found rules that pass what they are meant to
+guard. Part 5 ran the amended rules, and the reviewers' own mutants, before the amendment was
+written. The prototype is `evidence/mutation-spike/scripts/prototype2.diff`; the worktree's source
+is back at HEAD. `FINAL INTEGRITY: PASS`.
+
+**Survival first.** With the prototype on the unmutated tree: `make invariants` and
+`make stream_parity` pass, the nine inline tests pass, and all sixteen members are clean on the set
+and on all six gate checks.
+
+| row | invariant set, amended | gate checks | evidence |
+|---|---|---|---|
+| unmutated, K0 | clean | clean | |
+| K2, M3, M3m | **red** | clean | as part 4 |
+| `R1` a provider failure reported as `max_steps` | **red**, 5 members | clean | `err code='E_PROVIDER_PROTOCOL'` against `finish_reason='max_steps'` |
+| `R2` a suspension reported as an internal failure | **red**, 1 member | clean | `err code='StepBudgetExhausted'` against `finish_reason='error'` |
+| M1 | **red**, 4 members | **red** | the repeat; steps not from zero without a gap; 14 calls on 12 |
+| `R3` a retry that advances by two | clean | **red**, 4 members | steps not contiguous |
+| `R5` one call past the budget | clean | **red**, 1 member | 13 calls on a budget of 12 |
+| M9 | clean | **red**, 1 member | a retry with one step of budget left |
+| M2 | clean | **red**, 4 members | provider balance and request ordinals, both |
+| M6 the approval successor | clean | **red**, 12 members | request ordinals |
+| `R4` the failure finalize drops the capture read | clean | **red**, 4 members | request ordinals |
+| T3 the tool successor | clean | **red**, 10 members | tool-dispatch balance |
+| `R6` the generator rewind | clean | clean | every count and ordinal survives |
+| K1, M4, M5, M7, M8, M10, M12, T1, T2 | clean | clean | |
+
+- **Q12 confirms.** Each amended rule goes red on the mutant written against it, and no control does.
+- **`R1` and `R2` passed the v0.1 prototype's rule and fail the amended one.** That pair is the
+  reviewers' finding, reproduced.
+- **`M6` and `T3` are now caught on the corpus.** In parts 1 to 4 only scripted gates saw them.
+- **`R6` is the first mutant of this spike that nothing sees**: not the gates of part 1 that were
+  run on it by its reviewer, not the set, not the six checks. It is a loss of part of a successor.
+- **Still clean on the corpus and caught elsewhere:** `K1`, `M12` (dropped before any witness),
+  `M4`, `M5`, `M7`, `M8`, `M10`. `T1` is not reached by the corpus and `T2` by nothing probed.
+
+**Prediction score, part 5.** 24 of 24, both columns. Read it for what it is: the rules were
+written from these mutants.
+
+## Corrections after REVIEW-001, 2026-10-06
+
+Each is something this note or ADR-003 v0.1 said and a reviewer showed to be wrong. All were
+re-observed first-hand before being accepted. The text above is left as written except where
+marked; the wrong version is the one a reader would re-derive.
+
+1. **"Survive the whole of `make dst`" is not literally true.** The unmutated sweep exits 2 with
+   four targets red in the spike worktree. `M1` and `M3` add no failure line to that baseline.
+2. **`corpus_pr`'s `provider_failure_finalize×11` is not eleven executions of that branch.** The
+   recipe counts any matching `error` field: 7 run summaries and 4 retry records.
+3. **Under `M3` not all seven summaries carry `E_PROVIDER_PROTOCOL`.** Six do; one carries
+   `E_PROVIDER_TIMEOUT`.
+4. **`T3`'s `strict_replay` line was misread.** It is the gate's own fixture check, which expects
+   exactly one call-id mismatch and found none. The mutant destroyed the fixture's tool evidence;
+   it did not make the driver send a different call id.
+5. **"Reached by no gate" for `T2` exceeds the measurement.** The reach probes covered six gates
+   and the bank probe, not all of `DST_TARGETS`.
+6. **`ledger_parity`'s reach of `T1` is an inference from its exit status.** Its recipe does not
+   print the probe's panic. Said in part 3; kept here because the scorer rightly did not credit it.
+7. **`score3.py` treats a gate that timed out as green.** A planted input with every gate at exit
+   124 scores NOT REACHED. No part-3 gate timed out, so the table stands; the scorer is wrong.
+8. **The check against 100 run summaries on the sweep's wire supports less than ADR-003 v0.1 said.**
+   That log holds no `stream_error_retry` event, so it says nothing about retried runs, and the
+   wire carries no returned outcome. v0.2 drops it as support.
+9. **"12 record literals in 7 files" was a grep count.** `ExecutionUnderTest` is built in full at
+   two sites, and `execution_of` has five callers.
+10. **Three statements in parts 1 and 2 were overtaken by parts 4 and 5 and not updated**: that
+    nothing was "changed or tested" toward a fix, that the candidates were "none built or tested",
+    and that whether the driver's steps are in the returned trace "was not checked". They are; see
+    part 4.
+11. **The wire-difference counts (272, 350, 14, 0, 294, 5) had no stated method.** They are the
+    lines of `diff` output marked `<` or `>` between the two wires, JSON lines only, with
+    `duration_ms` masked. A reviewer counting another way got 282 and 398.
+12. **Part 1's statement that the checks guarding recovery branches "are presence checks" was too
+    broad**, and part 4 already narrowed it: scripted fixtures carry exact assertions.
+
+Found by a reviewer and not about this note: `run_v2_session_traced_with_persist_retries`
+(`src/core/session.ail:4480`) starts its run from the pre-init world. See ADR-003 *Not decided*.
+
 ## Three things about the gates, found on the way
 
 1. **`corpus_pr`'s verdict depends on wall time.** Run beside four other gates it is red with every
@@ -433,4 +513,5 @@ are in the spike worktree until it is removed. The decision drawn from this note
 `run_probe_all.sh`, `score2.py`, `score2_selftest.py`, and `tmp/spike/out2/`. Part 3:
 `mutants3.py`, `predictions3.tsv`, `run_set3.sh`, `score3.py`, `score3_selftest.py`, `out3/`.
 Part 4: `proto_apply.py`, `prototype.diff`, `mutants4.py`, `predictions4.tsv`, `run_probe4.sh`,
-`score4.py`, `out4/`.
+`score4.py`, `out4/`. Part 5: `proto2_apply.py`, `prototype2.diff`, `mutants5.py`,
+`predictions5.tsv`, `run_probe5.sh`, `score5.py`, `out5/`.

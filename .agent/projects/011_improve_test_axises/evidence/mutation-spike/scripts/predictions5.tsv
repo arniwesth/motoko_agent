@@ -1,0 +1,28 @@
+# SPIKE ONLY — part 5 predictions for the v0.2 prototype, written after the unmutated probe was
+# seen clean and before any mutant ran through it (2026-10-06).
+# A = the invariant set with D2' (reason by error code) and D3. X = the six gate-side rules.
+# id	A	X	rule expected if red	confidence	reason
+K0	clean	clean		high	comment only
+K1	clean	clean		medium	the env successor is dropped before any witness drains it, so the ordinals stay contiguous
+K2	RED	clean	outcome-agreement:outcome-summary-disagree	high	Ok with a failure reason
+M1	RED	RED	bounded-progress:provider-step-repeated; progress:driver-steps-not-contiguous	high	a repeated step is also not 0,1,2,...; seed-19 passes its budget
+M2	clean	RED	census:provider-calls-unbalanced; witness:ordinals-not-contiguous	high	both measured separately already: the census in part 4, the ordinals on the part-1 wires
+M3	RED	clean	outcome-agreement:outcome-summary-disagree	high	Err with stop
+M3m	RED	clean	outcome-agreement:outcome-summary-disagree	high	Ok with error
+M4	clean	clean		high	wire against trace
+M5	clean	clean		high	wire against trace
+M6	clean	RED	witness:ordinals-not-contiguous	high	12 of 18 runs on the part-1 wire
+M7	clean	clean		high	message label
+M8	clean	clean		high	message detail
+M9	clean	RED	step-budget:retry-with-budget-at-most-one	high	a retry at step 11 of 12
+M10	clean	clean		medium	more retries, all inside the budget, steps still 0,1,2,...
+M12	clean	clean		medium	as K1: dropped before a witness
+T1	clean	clean		high	the bank does not reach this handoff
+T2	clean	clean		high	nothing reaches it
+T3	clean	RED	census:tool-dispatches-unbalanced	medium	Fable measured it with its own probe; the drop is before the witness, so the ordinals stay contiguous
+R1	RED	clean	outcome-agreement:outcome-summary-disagree	high	a provider error code implies 'error', the summary says max_steps
+R2	RED	clean	outcome-agreement:outcome-summary-disagree	high	StepBudgetExhausted implies max_steps, the summary says error
+R3	clean	RED	progress:driver-steps-not-contiguous	high	steps read 0 1 3
+R4	clean	RED	witness:ordinals-not-contiguous	medium	Fable measured it; the capture read's ordinal goes missing from the returned world
+R5	clean	RED	step-budget:provider-calls-exceed-budget	medium	Fable measured 13 calls on seed-244
+R6	clean	clean		medium	Astra ran it: log, counts and ordinals all survive a rewound generator
