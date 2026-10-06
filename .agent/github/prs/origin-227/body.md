@@ -3,29 +3,35 @@ repo: arniwesth/motoko_agent
 pr: 227
 branch: docs/039-systematic-mutation-testing-research
 ticket: null
-title: "docs(039): systematic mutation testing — a research note, and the thesis that simulation and mutation complete each other"
+title: "docs(039): systematic mutation testing — a research note, a literature review, and the thesis it narrowed"
 ---
 
 ## Summary
 
-Opens project 039 with two documents. The research note asks what *Property-Based Mutation
+Opens project 039 with three documents. The research note asks what *Property-Based Mutation
 Testing* (Bartocci et al., ICST 2023) adds to how Motoko mutates its own source, and what it
-would take to make that practice systematic. The thesis note records a claim that came out of it:
-a deterministic simulation harness and source mutation each supply what the other lacks. The
-operator asked for both on 2026-10-06, and said of the second that it "might down the line be
-publishable". Nothing is built and no mutant was run.
+would take to make that practice systematic. The thesis note recorded a claim that came out of
+it: a deterministic simulation harness and source mutation each supply what the other lacks. The
+literature review then tested that claim and found it published already, so the thesis note is
+rewritten here to say what is left. The operator asked for each step on 2026-10-06. Nothing is
+built and no mutant was run.
 
 ## Changes
 
 - docs(039): research note — systematic mutation testing
 - docs(039): thesis note — deterministic simulation and source mutation complete each other
+- docs(039): literature review — prior art for combining DST with mutation testing
+- docs(039): thesis note narrowed after the literature review
 
-2 files changed.
+11 files changed.
 
 ## Governing docs
 
 - `.agent/projects/039_systematic_mutation_testing/RESEARCH-systematic-mutation-testing.md`
+- `.agent/projects/039_systematic_mutation_testing/RESEARCH-prior-art-dst-and-mutation-testing.md`
 - `.agent/projects/039_systematic_mutation_testing/NOTE-dst-and-mutation-testing-as-one-method.md`
+- `.agent/projects/039_systematic_mutation_testing/evidence/literature-review/README.md`, and the
+  seven notes files it describes
 
 What they build on, none of it edited here:
 
@@ -54,8 +60,6 @@ The DST report draft's citation of the paper is #226.
   note.
 - **039 is the next free number.** 038 is taken on a branch.
 
-If it should live in 011 after all, it is a two-file move.
-
 ## What the research note says
 
 - **Motoko already uses the paper's kill criterion.** A mutant counts as killed only when the
@@ -75,38 +79,59 @@ If it should live in 011 after all, it is a two-file move.
   needs no new gate; and, if drawn mutants pay, a few mutants on the changed lines of each core
   change.
 
-## What the thesis note says
+It gets three small edits in the last commit: a pointer to the review, credit to hardware
+verification for the stages in its §4.2, and "oracle gap" replaced, since that term is published
+with another meaning.
 
-It is kept apart from the survey because it is a claim with a novelty argument, and it will
-change as evidence arrives. 011's `NOTE-dst-substrate-versus-oracle.md` is the precedent.
+## What the literature review says
 
-- **The claim.** Mutants are the ground truth a simulation harness lacks: for the strength of each
-  invariant family, the quality of a generation policy, and the value of each corpus member. And
-  determinism gives mutation three measurements where it usually has one: whether the run reached
-  the mutated code, whether it differed from the original under the same seed, and whether a rule
-  fired.
-- **The loop.** Those three measurements give a verdict per mutant, and each verdict feeds a
-  different part of the harness: a world for the generator, a candidate corpus member, a rule, or
-  a recorded kill.
-- **Prior art.** Four web queries found no study combining simulation testing of the FoundationDB
-  kind with systematic source mutation. The note says that is absence in a shallow search, and
-  marks how each neighbour was read. Most were a search result or a title.
-- **What a paper would need.** Seven rows of evidence with today's state, and the objections a
-  reviewer would raise first.
-- **Where it belongs eventually.** A results section in the DST report, or an experience report
-  of its own. Not decided, and nothing is edited into the report.
+- **The thesis is not new in its core.** Every element has a dated precedent.
+- **The reach / differs / detected sort is hardware verification's.** A commercial tool has
+  sorted injected faults into non-activated, non-propagated, non-detected and detected since
+  2007, with "non-propagated" defined against the same test without the fault. Unit-test research
+  rebuilt it in 2019 and 2024.
+- **Mutants as a yardstick are a decade old**: for property sets, for generators and for corpora.
+- **The pairing with simulation testing was published on 2026-09-25**, by Antithesis, as a post
+  and an open agent skill. On rqlite it reports 19 mutant injections over 46 runs and 11 of 13
+  safety properties falsified.
+- **Looked for and not found:** a same-seed, whole-trace comparison of a mutant against the
+  unmutated run on a simulation harness for software; a drawn mutant population run against one;
+  kill sets per member of a fixed seed corpus; any of it on a seeded simulation of an agent loop.
+- **How far to trust it.** About 160 searches through one search engine, no citation index. The
+  engine's machine summaries were wrong repeatedly. Every "not found" is weak evidence, and a
+  source read only as an abstract or a summary is labelled a lead.
+
+## What the thesis note says now
+
+The first version is the second commit on this branch. It said nobody seemed to have written the
+combination down. The last commit rewrites it, under the same filename.
+
+- **Six corrections, kept on the page.** Among them: the novelty claim; the Antithesis skill
+  described as "guidance, not a system or a study" from one line of 035's note, before the skill
+  was read; and Etna described from a search result as doing something it does not.
+- **The classification now carries hardware's names, with credit.**
+- **What is left is a transfer and a measurement, not a method.** The same-seed differential on a
+  simulation harness, used blind, with its confusion matrix. Mutants nobody chose, with the split
+  of how they die. Kill sets per corpus member. And a realistic defect that removes its own
+  evidence, which the nearest prior work files under mutants to redesign and the spike read as a
+  blind spot of a single-channel oracle.
+- **Threats the review adds.** The same seed may not be the same world once a mutant changes the
+  driver's requests. A mutant can break determinism. Mutating the checks themselves is missing
+  from both versions.
+- **Three checks before any public statement of novelty:** a citation-index pass, the Antithesis
+  skill's scripts and platform, and a full read of every source the review marks a lead.
 
 ## Predicted outcome
 
 - **A session planning mutation work has one place to start from.** Checked by the next such plan
   citing the research note for the verdict vocabulary and the cost tiers. 011 §3.3 and 035 §6.5
   do not point here yet.
-- **The thesis has a home that is not the report.** Checked by the report's next revision either
-  taking a claim from the thesis note or leaving it, with the evidence table saying which rows
-  exist by then.
+- **Nobody claims the combination as new on the strength of this repository.** Checked by the DST
+  report's next revision crediting hardware verification and Antithesis if it reports mutation
+  results.
 - **Nothing a session does changes.** Checked: `git diff --name-only origin/main...HEAD` outside
   `.agent/` is empty.
-- **Nothing is decided.** Both notes propose. The pilot waits for `corpus_judge`; the coupling
+- **Nothing is decided.** The notes propose. The pilot waits for `corpus_judge`; the coupling
   check does not.
 
 ## Test evidence
@@ -121,17 +146,26 @@ change as evidence arrives. 011's `NOTE-dst-substrate-versus-oracle.md` is the p
   Makefile, script or workflow. 14 `scripts/dst/*.ail` files mention a mutant. The spike's
   `mutants.tsv` holds the ids the research note lists. 037's `p5`, `p6` and `r3` tables carry a
   column for the check expected to fail. `039` is used by no fetched branch.
-- [x] **Every figure in the thesis note is quoted from the spike findings.** The control's
-  1,609 identical lines, the three wire-difference counts, `T3`'s three requests against none,
-  and nine of eleven by five kinds of check.
-- [x] **Every relative link in both notes resolves, and every link label is defined.** A loop over
-  the reference definitions, run from the notes' directory.
+- [x] **The two sources that overturn the first thesis note were fetched by the committing
+  session**: the Antithesis post (title, author, date, outcome names and the rqlite figures) and
+  the Chronicle abstract.
+- [x] **All eight markdown files of the Antithesis mutation-testing skill were read in full**, at
+  commit `1fd8470d`. The word "seed" occurs in none of them. The coordinator's note in the
+  evidence folder has the quotes.
+- [x] **The report was read in full by the committing session** and amended in six places after
+  the skill was read.
+- [x] **No search key is in the committed text.** A fixed-string search of the report and the
+  notes for the key's value finds nothing.
+- [x] **Every relative link in the three documents and the evidence README resolves, and every
+  link label is defined.**
 - [ ] No mutant was run. Every Motoko figure is inherited from the spike findings or the plan.
-- [ ] The Meta paper was read only in part, and the Trail of Bits post through a tool that
-  summarises. The research note's header says so.
-- [ ] The thesis note's prior-art search is four web queries. Etna, the model-checking coverage
-  work, *Vacuity in testing* and *State Field Coverage* were not read; its table says how far
-  each was.
+- [ ] The six researchers' notes were not read by the committing session. It read each
+  researcher's summary and the report written from the notes.
+- [ ] Most sources in the review were read as keyword passages, extracts or abstracts. The
+  report's table says which.
+- [ ] No citation index was used. Who cites the paper, the hardware work or the unit-test tools
+  was answered by semantic search and is probably incomplete.
+- [ ] The Antithesis skill's shell scripts and its hosted platform were not examined.
 - [ ] The count of fix commits touching `src/core` (71, of which 22 touch a test or a DST script)
   is a grep. No commit in it was read.
 - [ ] Not reviewed by a second session.
