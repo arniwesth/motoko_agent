@@ -1,7 +1,7 @@
 # ADR-003: How should DST judge a wrong recovery on a real run?
 
-**Status:** Proposed. The operator accepted the direction of D2–D5 in conversation on 2026-10-06;
-nothing is ruled in writing and nothing is implemented on `main`.
+**Status:** **Accepted 2026-10-06.** The operator accepted all six rulings of *Rulings*, as
+recommended. Nothing is implemented on `main`.
 **Date:** 2026-10-06. Grounded at HEAD `259265b5`, AILANG v0.47.2 (`e939cba`).
 
 Relates to:
@@ -92,12 +92,12 @@ All measured on 2026-10-05 and -06 in a throwaway worktree. The findings note ca
 
 For each detector: what it reads, when it is red, and where it stops being sound.
 
-**D1. The invariant set is evaluated on every corpus member's run, in its own gate.**
+**D1. The invariant set is evaluated on every corpus member's run, in its own gate.** *(Ruled 2026-10-06.)*
 `execution_of` over each member's `TracedSessionResult`, then `evaluate`. Red on any finding. Not
 inside `corpus_pr`: that target gates on its own wall clock, and a red here should name a family.
 Sound for the `driver_only` bank and the trajectories its sixteen members walk, and no further.
 
-**D2. Outcome agreement is exact and two-sided.** The returned outcome is `Ok` if and only if the
+**D2. Outcome agreement is exact and two-sided.** *(Ruled 2026-10-06.)* The returned outcome is `Ok` if and only if the
 terminal summary's finish reason is the success reason. At HEAD one finalize site returns `Ok` and
 it is the success one (`src/core/session.ail:3402`); every other reason returns `Err`. A
 budget-suspended run returns `Err` on `max_steps` (`c2_suspend`, `:2760`), and the park arm either
@@ -106,28 +106,28 @@ the unmutated full sweep, 100 run summaries: `stop` never carries an error and e
 always does. The table lives in one exhaustive match beside `TerminationReason`, so a new reason
 is a compile error there and not a default. Its own `Violation` constructor.
 
-**D3. Bounded progress reads the driver's own step numbers.** The `step` on each
+**D3. Bounded progress reads the driver's own step numbers.** *(Ruled 2026-10-06.)* The `step` on each
 `ProviderCallPrepared` record in the returned trace (`src/core/session.ail:3807`) must not repeat.
 `ProviderStepRepeated` keeps its meaning, the recorder's count. Its own constructor. No healthy
 run repeats one: 0 of the 100 runs on the unmutated sweep's wire. The three loop transitions that
 keep the step (`:3417`, `:3480`, `:3697`) do not lead to a second provider call at it. Sound within
 one run's trace.
 
-**D4. The execution record carries the run's step budget, and two rules read it.** Provider calls
+**D4. The execution record carries the run's step budget, and two rules read it.** *(Ruled 2026-10-06.)* Provider calls
 in the trace do not exceed it. No `StreamErrorRetry` is recorded at a step with one step of budget
 left, which is `recovery.should_retry_stream_error`'s contract stated over an execution. The value
 is the one the run was started with, and a negative value means undeclared, as for the two
 budgets the record already carries. **No decision budget is declared by this ADR**:
 `dst_invariants.ail` says a bound it chose "would be a bound no profile agreed to".
 
-**D5. Provider calls balance across two channels, on the corpus.** The count of
+**D5. Provider calls balance across two channels, on the corpus.** *(Ruled 2026-10-06.)* The count of
 `ProviderCallPrepared` in the returned trace equals the count of provider interactions in the
 world's log. This is the discovery contract's class balance for one class, with a witness taken
 from the trace alone. It lives in D1's gate until the census in *Not decided* item 1 exists.
 **It is a gate check, not a family rule**: it is sound only for a world that records, and the
 scripted adapter `stream_parity` also drives records no interaction at all.
 
-**D6. Acceptance is by named mutants.** A rule is accepted when its mutant has been seen red on
+**D6. Acceptance is by named mutants.** *(Ruled 2026-10-06.)* A rule is accepted when its mutant has been seen red on
 that rule and the controls green.
 
 | rule | mutant, one edit | must go red |
@@ -146,7 +146,8 @@ that and is not a kill. Every mutant so far was written by the author of the rul
 acceptance gate a reviewer adds a handful without seeing this table, as the mutation discipline
 allows. The run happens once, at the commit handed in, and is not a CI gate.
 
-**D7. Corpus identities are not pinned by this ADR.** Option 3.
+**D7. Corpus identities are not pinned by this ADR.** *(Ruled 2026-10-06.)* Option 3. Existing
+pins, the depth canary's among them, are not touched.
 
 **D8. No reopen of 009 ADR-001 D7.** Checked against its text. "The runner applies reusable
 invariants to the returned outcome and complete trace" is D1. "Agreement between returned outcome
@@ -223,10 +224,20 @@ By source surface, per `sequence-implementation-handoffs-by-source-surface.md`:
 
 Items 1 and 2 of *Not decided* are their own decision.
 
-## For the operator to rule on
+## Rulings
 
-1. D2: the exact two-sided rule, and that it freezes today's table.
-2. D3 and D4: the driver's step numbers and a declared step budget as what bounded progress reads.
-3. D5 now, with the rest of the census deferred to *Not decided* item 1.
-4. D1: a separate gate, not a row in `corpus_pr`.
-5. D7: no pins.
+**All six accepted by the operator on 2026-10-06**, in conversation, after a recommendation had
+been given for each decision: "I agree with the recommendations. Add my rulings." Each is ruled as
+this document states it. Three carry a tightening the recommendation added, marked below.
+
+| # | Ruling |
+|---|---|
+| 1 | D2: outcome agreement is exact and two-sided, and it freezes today's table. |
+| 2 | D3 and D4: bounded progress reads the driver's own step numbers, and a step budget carried on the execution record. A negative budget means undeclared *(tightening)*. No decision budget is declared. |
+| 3 | D5: the provider-call balance goes on the corpus now, as a gate check and not a family rule *(tightening)*. The tool and approval balances are deferred to *Not decided* item 1. |
+| 4 | D1: a separate gate, not a row in `corpus_pr`. |
+| 5 | D6: acceptance by named mutants. A reviewer adds a handful without seeing the table, and the run happens once, at the commit handed in *(tightening)*. |
+| 6 | D7: corpus identities are not pinned. Existing pins stay as they are. |
+
+**Not ruled.** D8 is the author's reading of 009 ADR-001 D7, checked against its text and not put
+to the operator. Items 1 to 3 and 5 to 7 of *Not decided* stay open.
