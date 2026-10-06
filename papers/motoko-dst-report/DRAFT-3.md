@@ -734,6 +734,12 @@ expected checker turns red. The framed-wire checker and driver-leaf inventory
 include such negative controls. Their tests support those specific detection
 claims; a systematic study across all families remains separate work.
 
+Motoko's mutation discipline, adopted after this report's snapshot, uses a
+property-based kill criterion in the sense of Bartocci et al. (2023): a mutant
+counts as killed only when the check written for the broken rule fails. It does
+not yet compute a property-based mutation score or generate mutants by operator.
+[Mutation discipline][mutationrule]; [Bartocci et al., ICST 2023][pbmt].
+
 The inventory itself is another possible failure point. If a capability list
 quietly omits a newly added kind, every downstream checker may agree on an
 incomplete population. Motoko uses derived counts, source inventories,
@@ -911,13 +917,18 @@ External background references:
    [Project documentation][tiger].
 3. Antithesis. *Deterministic simulation testing — how it works and when to use it*.
    [Official documentation][antithesis].
+4. Ezio Bartocci, Leonardo Mariani, Dejan Nickovic, and Drishti Yadav.
+   *Property-Based Mutation Testing*. ICST 2023. [arXiv:2301.13615][pbmt].
 
-The external references support the brief background discussion in §2.1.
+References 1 to 3 support the brief background discussion in §2.1; reference 4
+supports the kill-criterion comparison in §7.5.
 No claim of exhaustive related-work coverage or literature-wide novelty is made.
 
 [fdb]: https://www.foundationdb.org/files/fdb-paper.pdf
 [tiger]: https://github.com/tigerbeetle/tigerbeetle/blob/main/docs/ARCHITECTURE.md
 [antithesis]: https://antithesis.com/docs/resources/deterministic_simulation_testing/
+[pbmt]: https://arxiv.org/abs/2301.13615
+[mutationrule]: ../../.agent/meta-decisions/mutate-each-stated-rule-once-and-see-its-test-fail.md
 [original]: DRAFT.md
 [originalreview]: REVIEW-round1.md
 [taxonomy]: ../../.agent/projects/007_dst_consolidation/ADR-001-motoko-dst-definition-and-taxonomy.md
