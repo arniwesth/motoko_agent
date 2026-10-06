@@ -32,8 +32,7 @@ asks of an edit:
   qualifications where omitting one would change a claim" is why the paragraph says the
   discipline was adopted after the report's snapshot.
 
-The research behind the comparison is a separate pull request, from branch
-`docs/039-systematic-mutation-testing-research`.
+The research behind the comparison is a separate pull request, #227.
 
 ## The text
 
