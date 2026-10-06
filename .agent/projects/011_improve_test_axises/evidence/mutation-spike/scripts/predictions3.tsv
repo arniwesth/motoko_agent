@@ -1,0 +1,11 @@
+# SPIKE ONLY — part 3 predictions, written before any part-3 row ran (2026-10-06).
+# Reach probes: which gates go red with `panic: division by zero`, i.e. execute that handoff with a real advance.
+# id	corpus_pr	strict_replay	discovery	stream_parity	ledger_parity	world_state	bank_probe	confidence	reason
+P1	green	green	green	RED	RED	RED	no crash	medium	the bank's policy sends every call to approval, so its batches never finish with an executed tool; the scripted gates run tools without approval
+P2	green	green	green	green	green	green	no crash	low	needs a tool executed and then an approval in ONE dispatch; no world here is known to do that
+P3	RED	RED	RED	green	green	green	crash	medium	every executed tool on the bank and in the approve scenarios goes through the approval arm
+# Mutants: which gates go red, and what the invariant set says on the bank (setting A).
+# id	corpus_pr	strict_replay	discovery	stream_parity	ledger_parity	world_state	bank_families_A	confidence	reason
+T1	green	green	green	green	RED	RED	clean	low	world_state's advancement rows are the WI-A12 assertion for exactly this; stream_parity reaches it and checks only stream parity
+T2	green	green	green	green	green	green	clean	low	not reached, so INCONCLUSIVE rather than survived
+T3	RED	RED	RED	green	green	green	clean	medium	strict_replay and discovery hold the log against the wire (`[discovery-under-recorded] … 'expect_tool'`); corpus_pr loses its tool fault classes; the families read only the log the mutant erased

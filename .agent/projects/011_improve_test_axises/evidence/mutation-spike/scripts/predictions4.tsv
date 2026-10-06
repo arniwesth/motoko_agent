@@ -1,0 +1,22 @@
+# SPIKE ONLY — part 4 predictions for the PROTOTYPE, written after the unmutated probe was seen clean
+# and before any mutant ran through it (2026-10-06).
+# A = the invariant set with the two prototype rule changes. X = the three probe-side rules.
+# id	A	X	rule expected if red	confidence	reason
+K0	clean	clean		high	comment only
+K1	clean	clean		high	an env read's record is lost; neither rule reads env reads
+K2	RED	clean	outcome-agreement:outcome-summary-disagree	high	Ok with error text (the existing condition) and Ok with finish 'error' (the new one)
+M1	RED	RED	bounded-progress:provider-step-repeated	high	the driver's step repeats on every retry; seed-19 also makes 14 calls on a 12-step budget
+M2	clean	RED	census:provider-calls-unbalanced	medium	the driver's steps still advance, but the trace counts calls whose log record went with the dropped world
+M3	RED	clean	outcome-agreement:outcome-summary-disagree	high	Err with finish 'stop' on the five members that end in a provider failure
+M3m	RED	clean	outcome-agreement:outcome-summary-disagree	high	Ok with finish 'error' on every member that ends Ok
+M4	clean	clean		high	wire against trace; no rule here reads the wire
+M5	clean	clean		high	as M4
+M6	clean	clean		medium	approval records are lost, not provider ones
+M7	clean	clean		high	message label
+M8	clean	clean		high	message detail
+M9	clean	RED	step-budget:retry-with-one-step-left	high	the extra retry is at step 11 of 12
+M10	clean	clean		medium	more retries, none at the edge and none past the budget; corpus_pr's code check is what sees this
+M12	clean	clean		high	as K1
+T1	clean	clean		high	the bank does not reach this handoff
+T2	clean	clean		high	nothing reaches it
+T3	clean	clean		medium	tool records are lost, not provider ones; the tool balance is the separate item

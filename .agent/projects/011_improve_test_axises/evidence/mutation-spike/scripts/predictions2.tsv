@@ -1,0 +1,17 @@
+# SPIKE ONLY — part 2 predictions, written after the unmutated probe ran and before any mutant did.
+# id	A (retry bound 11, no decision budget)	B (stream_parity's 12 and 3)	expected rule if red	confidence	reason
+K0	clean	same as baseline		high	comment only
+K1	clean	same as baseline		medium	the env witness is a discovery-contract rule over source; evaluate() has no source-derived count
+M1	RED	RED	bounded-progress:provider-step-repeated	high	the retried call reuses its step index, so one provider step ordinal repeats in the log
+M2	clean	RED	bounded-progress:retry-bound-exceeded	low	the discarded successor takes its own log record with it; only a small declared retry bound sees the loop
+M3	clean	same as baseline		high	outcome_agreement_findings compares the outcome with the summary's error text and never reads finish_reason
+M4	clean	same as baseline		medium	the record goes to the wire through ledger_emit; evaluate() reads the returned trace and stream emissions only
+M5	clean	same as baseline		medium	the record is in the returned trace; its absence from the wire is not visible to a single execution
+M6	clean	same as baseline		low	the wire-against-log approval count is a discovery-contract rule, not one of the families
+M7	clean	same as baseline		medium	the families read the world's served outcome, not how the driver labelled it
+M8	clean	same as baseline		high	nothing reads the detail of a fault message
+M9	clean	same as baseline		medium	one extra retry stays under both bounds
+M10	clean	RED	bounded-progress:retry-bound-exceeded	low	more retries per member; whether any member passes 3 is a guess
+M12	clean	same as baseline		medium	as K1: no family counts env or file reads against source
+# Added 2026-10-06 after the thirteen rows above had run and BEFORE K2 ran: a known-bad control for setting A.
+K2	RED	RED	outcome-agreement:outcome-summary-disagree	high	positive control: the failure finalize returns Ok while the summary keeps its error text; if A stays clean the probe cannot see a family violation at all
