@@ -1,0 +1,74 @@
+# make dst at 59d5cbb9, clean checkout, 2026-10-06: closing summary and the red targets' failing lines
+
+─── make dst ──────────────────────────────────────────────────────────
+  2085s wall, -j8, load 1.66 2.82 4.72
+  full log: .ailang/dst-last.log
+
+  FAILED (4):
+    driver_plus_compose          NEW — this one is yours
+    driver_plus_no_ops           NEW — this one is yours
+    ext_hook_scope               NEW — this one is yours
+    ext_hook_scope_selftest      NEW — this one is yours
+
+  NOTE: driver_plus_herdr is listed in DST_KNOWN_RED but PASSED.
+        Drop it from that list in the Makefile — an expected-failure
+        list that outlives the failure teaches the next reader to
+        ignore a real one.
+
+  NOTE: herdr_graded is listed in DST_KNOWN_RED but PASSED.
+        Drop it from that list in the Makefile — an expected-failure
+        list that outlives the failure teaches the next reader to
+        ignore a real one.
+
+  exit 2 — make's "errors were encountered". See the NEW rows above.
+───────────────────────────────────────────────────────────────────────
+
+## make errors
+make[2]: *** [Makefile:1477: driver_plus_compose] Error 1
+make[2]: *** [Makefile:3463: ext_hook_scope_selftest] Error 1
+make[2]: *** [Makefile:1429: driver_plus_no_ops] Error 1
+make[2]: *** [Makefile:3460: ext_hook_scope] Error 1
+make[1]: *** [Makefile:705: dst] Error 2
+
+## driver_plus_compose, driver_plus_no_ops (one line each, cut at 400 characters)
+FAIL: B2 reads 'test_dummy's registration as None, not `config-caps` (ABI 8.0); its atom count cannot be enumerated, so the denominator for it is UNKNOWN rather than eight. Rejections: ['tail expression `if getEnvOr("                          ", "") == " " then { ` builds the capability list by an expression rather than writing it as a literal -- literal lists only']
+FAIL: B2 reads 'test_dummy's registration as None, not `config-caps` (ABI 8.0); its atom count cannot be enumerated, so the denominator for it is UNKNOWN rather than eight. Rejections: ['tail expression `if getEnvOr("                          ", "") == " " then { ` builds the capability list by an expression rather than writing it as a literal -- literal lists only']
+
+## ext_hook_scope
+REGISTRATION SHAPE: pass 19 of 20; fail 1
+  binding rejections      0  (-)  -- ADR D2: red by these on the unmigrated tree
+  head rejections         1  (return-shape-unsupported: the 7.4 bare list, or a record not at the registration tail)
+  delegation rejections   0
+  caps rejections         1
+  enumeration             0  (list-not-enumerable)
+GATE: RED -- exit 1 from the registration-shape field alone. Green means every
+installable extension passes; P1.2 migrates the sites and P1.2's batches flip them.
+
+## ext_hook_scope_selftest
+hook-scope self-test: 4 failure(s)
+  FAIL YIELD HOOK-PORT-MEDIATED: expected ['decision_framework', 'empty_stop_guard', 'mcp', 'progress_contract_guard', 'repetition_guard', 'skills', 'test_dummy'], derived ['decision_framework', 'empty_stop_guard', 'mcp', 'progress_contract_guard', 'repetition_guard', 'skills'] (residue ['test_dummy
+  FAIL YIELD capability-list atoms: expected {'a2a': 2, 'agentcli': 2, 'ailang_docs': 3, 'ailang_tools': 1, 'compaction_ai': 1, 'compaction_structural': 1, 'compose': 4, 'context_mode': 4, 'decision_framework': 1, 'empty_stop_guard': 1, 'exa_search': 2, 'herdr': 6, 'mcp': 1, 'microrag': 3, 'omnigrap
+  FAIL YIELD registration heads: expected {'a2a': 'config-caps', 'agentcli': 'config-caps', 'ailang_docs': 'config-caps', 'ailang_tools': 'config-caps', 'compaction_ai': 'config-caps', 'compaction_structural': 'config-caps', 'compose': 'config-caps', 'context_mode': 'config-caps', 'decision_framewor
+  FAIL YIELD registration shape: expected {'a2a': 'pass', 'agentcli': 'pass', 'ailang_docs': 'pass', 'ailang_tools': 'pass', 'compaction_ai': 'pass', 'compaction_structural': 'pass', 'compose': 'pass', 'context_mode': 'pass', 'decision_framework': 'pass', 'empty_stop_guard': 'pass', 'exa_search': 'p
+
+## the corpus gate's rows and wire witness
+CORPUSROW seed-1 kind=fixed-seed seed=1 n=46 ended=Ok bytes=8628
+CORPUSROW seed-2 kind=fixed-seed seed=2 n=25 ended=Ok bytes=5075
+CORPUSROW seed-4 kind=fixed-seed seed=4 n=36 ended=Ok bytes=6825
+CORPUSROW seed-5 kind=fixed-seed seed=5 n=15 ended=Err bytes=2688
+CORPUSROW seed-7 kind=fixed-seed seed=7 n=17 ended=Err bytes=3248
+CORPUSROW seed-9 kind=fixed-seed seed=9 n=18 ended=Ok bytes=3372
+CORPUSROW seed-10 kind=fixed-seed seed=10 n=22 ended=Ok bytes=3943
+CORPUSROW seed-12 kind=fixed-seed seed=12 n=24 ended=Ok bytes=4402
+CORPUSROW seed-15 kind=fixed-seed seed=15 n=31 ended=Ok bytes=5929
+CORPUSROW seed-19 kind=fixed-seed seed=19 n=41 ended=Err bytes=8854
+CORPUSROW seed-30 kind=fixed-seed seed=30 n=15 ended=Err bytes=2696
+CORPUSROW seed-32 kind=fixed-seed seed=32 n=21 ended=Err bytes=3974
+CORPUSROW seed-62 kind=fixed-seed seed=62 n=24 ended=Ok bytes=4535
+CORPUSROW seed-141 kind=promoted-regression seed=141 n=34 ended=Ok bytes=6915
+CORPUSROW seed-244 kind=fixed-seed seed=244 n=61 ended=Err bytes=11501
+CORPUSROW constructed-empty-terminal kind=constructed-for-class seed=0 n=15 ended=Ok bytes=2524
+-- D11's operator-accepted minimum, selected from measured CI cost --
+  ✓ wire witness, branch-reached: approval_denied×35 empty_stop_finalize×1 ToolFailed×3 ToolCorrelationMismatch×5 ToolDeadlineExceeded×3 stream_error_retry×4 provider_failure_finalize×11 malformed_arguments×6 (against 67 executed dispatch batch(es), so neither side of the approval decision is unwalked)
+  ✓ measured CI cost, WHOLE TARGET: 82000 ms against a declared ceiling of 180000 ms
+-- D11's operator-accepted minimum, selected from measured CI cost --

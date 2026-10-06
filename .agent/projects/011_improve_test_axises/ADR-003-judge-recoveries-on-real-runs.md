@@ -4,7 +4,11 @@
 independent reviews then found that four of them rested on things that do not hold, and the
 operator accepted the v0.2 amendment with three tightenings the same day (*Rulings*). v0.2 revises
 D2, D3, D4, D5, D6 and D8, narrows D7's wording, and adds D9 and D10. Nothing is implemented on
-`main`.
+`main`. **Amended the same day by rulings 13 to 16**, on findings of
+`PLAN-judge-recoveries-on-real-runs.md` and of its review: D4's budget is held by the gate and not
+on the execution record; D6's journal precondition is the whole matrix read row for row; the gate
+is also named in a CI workflow; a red row reports what 009 D8 lists, with the program by
+reference. The amended passages are marked with their ruling.
 **Date:** 2026-10-06. Grounded at HEAD `259265b5`, AILANG v0.47.2 (`e939cba`).
 
 Reviewed, separately, by Codex (GPT-6-Astra) and Claude Fable 5.1:
@@ -113,7 +117,13 @@ For each detector: what it reads, when it is red, and where it stops being sound
 gates on its own wall clock, and a red here should name a rule. Sound for the `driver_only` bank and
 the trajectories its sixteen members walk, and no further: it is not 009 D11's rotating search. The
 gate declares its budgets in one place: the step budget of D4, a retry budget one below it, and no
-decision budget. It bridges only results that carry a terminal summary (D2).
+decision budget. It bridges only results that carry a terminal summary (D2). *(Ruling 15.)* The
+target is in `DST_TARGETS` and is also named in a CI workflow, as its own step beside `corpus_pr`:
+no workflow runs `make dst`, so a target in that list alone is run only by hand. *(Ruling 16.)* On
+a red row the gate reports the twelve things 009 ADR-001 D8 lists for a generated failure. It
+takes the exact serialized program by reference, to the artifact `corpus_pr` persisted for the
+same member, and persists none of its own: both gates run the same sixteen programs in the same
+job, and a second writer of the corpus store would race with the first.
 
 **D2. Outcome agreement is by reason.** *(Ruled 2026-10-06, as revised in v0.2.)* The returned
 outcome is `Ok` if and only if the terminal summary finished `stop`. An `Err` outcome's summary
@@ -150,9 +160,16 @@ Its own `Violation` constructor.
   the step with no provider call (`:3535`). The bank never parks. If it gains a member that does,
   this check is restated with it.
 
-**D4. The execution record carries the run's effective step budget, and the gate states two rules
-against it.** *(Ruled 2026-10-06, as revised in v0.2, with a tightening.)*
+**D4. The gate declares the run's effective step budget and states two rules against it.**
+*(Ruled 2026-10-06, as revised in v0.2, with a tightening; amended by ruling 13.)*
 
+- **Where the value lives.** *(Ruling 13.)* In the gate. v0.1 put it on the execution record
+  because its two rules were family rules, and a family rule can read nothing else. v0.2 moved the
+  rules to the gate and left the field behind, with the gate as its only reader and four call
+  sites in project 013's evaluator stating a value nothing read. So `ExecutionUnderTest` gains no
+  field and `execution_of` keeps its eight parameters. The gate declares the budget once and gives
+  that one value to the run and to the two rules. If a later decision makes either rule a family
+  rule, the field is added then, with its reader.
 - **What the value is.** The budget the driver enforced. `session_policy_init` turns a non-positive
   argument into 8 (`src/core/session.ail:2351`), and the step machine reads a policy budget of 0 as
   unlimited (`src/core/step_machine.ail:103`). So a gate that started its run with a positive
@@ -232,6 +249,12 @@ No rule is accepted until each has run, and the first comes first.
   runs, and the last asserts no finding. They are the one existing place the new rules could turn
   a healthy run red. They run under `make eval_matrix`, which is outside `make dst` and named by
   no workflow, so nothing else would notice. The Makefile gives that run 25 to 40 minutes.
+  *(Ruling 14.)* The control is the whole matrix, compared row for row with that of the last
+  tree without D2 and D3, and the three suites that evaluate real runs (`witness_live_test`,
+  `candidate_checks_live_test`, `admission_live_test`) exit 0 in both. The reference is named by
+  what it lacks because, once the rules are committed, the parent of a later commit already has
+  them and a comparison with it is identical whatever they do. Measured at `59d5cbb9`: 821 s, and
+  identical in all 621 rows to the spike's matrix at `259265b5`.
 - **A valid retry with two steps of budget left.** The corpus has two members at exactly their
   budget, but its retries are at steps 1 and 8 of 12, nowhere near the edge.
 - **A mutant for D5's over-recorded direction.**
@@ -304,8 +327,9 @@ against its text, and corrected after both reviews:
 **Costs.**
 - One more gate. The probe runs the whole bank, the set and the six checks in about 40 seconds,
   nearly all of it one compile of the driver module.
-- D4's field touches the two places that build the record in full (`dst_execution.ail:110`,
-  `invariants_dst.ail:409`) and the five callers of `execution_of`.
+- D4 touches no record and no caller of `execution_of` *(ruling 13)*. v0.2 priced a field here:
+  the two places that build the record in full and the five callers, four of them in project
+  013's evaluator.
 - Each new constructor touches the rule, family and message matches, the sample list and one
   mutant row in `invariants_dst`. Counts quoted in the DST report draft move.
 - D2 freezes today's table of codes and reasons. A partial success on `max_steps`, or a new failure
@@ -348,15 +372,19 @@ against its text, and corrected after both reviews:
 
 By source surface, per `sequence-implementation-handoffs-by-source-surface.md`:
 
-1. **The record.** D4's field with every site stating a value; no behaviour changes. Sweep.
+1. **The bank.** *(Ruling 13 replaces v0.2's step, "the record: D4's field with every site stating
+   a value".)* The corpus script exports its bank and run helpers and states its step budget once;
+   no behaviour changes. Sweep.
 2. **The rules.** D2 and D3's family half, with their constructors, their mutant rows in
    `invariants_dst`, and D2's table. New pure functions under `src/core` need a contract or a
    checked `-- contracts:` line.
 3. **The gate.** D1, the gate half of D3, D4's two rules, D5, D9 and D10 as one script and one
-   target, added to `DST_TARGETS`.
+   target, added to `DST_TARGETS` and to a workflow *(ruling 15)*.
 4. **Acceptance.** The four controls D6 makes a precondition, `make eval_matrix` first. Then D6's
    mutants, and a reviewer's own, run once at the commit handed in. `mutants.tsv`, the script and
    the commit go into this project's evidence.
+
+The plan is `PLAN-judge-recoveries-on-real-runs.md`.
 
 ## Rulings
 
@@ -385,3 +413,22 @@ rulings."
 | 10 | 5 | D6's table of twelve and its list of what is known and not seen. | The four controls still owed are a precondition of acceptance, the journal callers first. |
 | 11 | — | D8 as corrected: no reopen of 009 ADR-001. D5, D9 and D10 belong to 009 D2, not to D7's discovery contract. | — |
 | 12 | — | No second general review round of this ADR. The next independent check is the implementation's acceptance run, with the mutants a reviewer adds unseen. | — |
+
+**On three findings of the plan, ruled by the operator on 2026-10-06**, in conversation, after
+`PLAN-judge-recoveries-on-real-runs.md` had put each as a question with a recommendation: "I will
+go with your recommendations". Every other ruling stands as given.
+
+| # | Amends | Ruling |
+|---|---|---|
+| 13 | 8 | D4's effective step budget is declared and held by the gate. The execution record gains no field and `execution_of` keeps eight parameters. The definition of the value, the undeclared case and the two rules stand as ruled. |
+| 14 | 10 | D6's journal precondition is the whole of `make eval_matrix`, read row for row against the last tree without D2 and D3, with the three suites that evaluate real runs exiting 0 in both. |
+| 15 | 4 | The gate is in `DST_TARGETS` and is also named in a CI workflow, as its own step beside `corpus_pr`. It stays a separate target and outside `corpus_pr`'s wall clock. |
+
+**On one finding of the plan's review, ruled by the operator on 2026-10-06**, in conversation,
+after `REVIEW-001-plan-judge-recoveries-claude-opus-5.5.md` had shown the plan settling it in a
+sentence and the revised plan had put it as a question with a recommendation: "I will go with your
+recommendation".
+
+| # | Amends | Ruling |
+|---|---|---|
+| 16 | — | A red row of D1's gate reports the twelve items of 009 ADR-001 D8. The serialized program is given by reference to the artifact `corpus_pr` persisted for that member; the gate persists none. This does not reopen 009: D8's "copy-pasteable local replay command or artifact reference" is met by the reference. |
