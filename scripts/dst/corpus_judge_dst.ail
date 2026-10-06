@@ -1,0 +1,999 @@
+-- scripts/dst/corpus_judge_dst.ail
+--
+-- 011 ADR-003 D1: THE INVARIANT SET, AND SIX TWO-CHANNEL CHECKS, ON EVERY CORPUS
+-- MEMBER'S REAL RUN.
+--
+-- ============================================================================
+-- WHAT THIS GATE CLAIMS
+-- ============================================================================
+--
+-- That each of the fixed bank's sixteen runs — the same sixteen `make corpus_pr`
+-- builds, started by the same code from the same file — is clean on
+-- `dst_invariants.evaluate` and on six checks of this gate's own, and that each
+-- of those six can fire.
+--
+-- Until this gate the invariant set met a run the driver produced in one place,
+-- `stream_parity_dst`, on a two-step script with no fault. The corpus is where
+-- the recovery branches run, and nothing evaluated the set there.
+--
+-- THE SIX CHECKS ARE GATE CHECKS, NOT FAMILY RULES (ADR-003 D3 to D5, D9, D10,
+-- and the scope paragraph after D10). Each holds one thing the run recorded
+-- against a second channel:
+--
+--   steps-not-contiguous              `ProviderCallPrepared.step` in the returned
+--                                     trace is 0, 1, 2, … (D3, the gate half)
+--   provider-calls-exceed-budget      those records do not outnumber the step
+--                                     budget (D4)
+--   retry-at-budget-edge              no `StreamErrorRetry` at a step where the
+--                                     budget minus the step is 1 or less (D4)
+--   provider-calls-unbalanced         those records against the provider
+--                                     interactions the run added to the log (D5)
+--   tool-dispatches-unbalanced        `V2ToolDispatchStart` records against the
+--                                     tool interactions the run added (D10)
+--   request-ordinals-not-contiguous   `WorldRequest.ordinal` runs +1 from the
+--                                     starting world's ordinal to the returned
+--                                     world's (D9)
+--
+-- They live in this script and not under `src/core` by ruling: they are sound on
+-- the `driver_only` bank, where they were measured clean, and nowhere else yet.
+-- A park whose reply is dropped advances the step with no provider call, and a
+-- hook that calls the model logs a provider interaction with no prepared record,
+-- so the first and the fourth are wrong as rules about any run.
+--
+-- ============================================================================
+-- THE BANK IS IMPORTED, NOT COPIED
+-- ============================================================================
+--
+-- `run_seed_member` and `run_constructed_member` are `corpus_pr_dst`'s own, and
+-- its `build_seed` and `build_constructed` call them too. This script does not
+-- name a hook id, a world or a program. `bank_step_budget()` is the value those
+-- helpers pass to the driver AND the value the two budget rules below are held
+-- against (ruling 13): one value, so the budget this gate declares cannot differ
+-- from the budget the run was given.
+--
+-- It builds, persists and keys nothing. `corpus_pr` deletes and rewrites
+-- `.ailang/dst-corpus`; a second writer there would race with it whenever the two
+-- targets are run by hand.
+--
+-- ============================================================================
+-- THE WAYS THIS COULD BE GREEN AND WORTHLESS, AND WHAT STOPS EACH
+-- ============================================================================
+--
+--   1. A CHECK THAT CANNOT FIRE. Each rule id has a constructed input that must
+--      produce exactly that id, one for each direction of the two balances, and
+--      one input on which all six are silent.
+--   2. A CHECK THAT SAW NOTHING. A contiguity test over an empty list is true.
+--      The gate is red if a member's trace holds no prepared call or no request
+--      ordinal, if no member recorded a retry, or if no member dispatched a
+--      tool. Every member's rule rows are printed BEFORE that verdict: a defect
+--      that empties a trace trips the guard on every member, and the rule it
+--      broke has to be on the screen as well.
+--   3. A RULE THAT WAS NOT EVALUATED, READ AS PASSED. An undeclared step budget
+--      prints the two budget rules as not evaluated, and on a bank member that
+--      is red. So is a family other than replay-consistency going unevaluated,
+--      and so is a result with no terminal summary, which is not bridged at all
+--      (D2's boundary: `parked_frame_only` returns `Ok` with none).
+--   4. THE BUDGET EDGE NEVER VISITED. The bank's retries are at steps 1 and 8 of
+--      12. Two scripted controls put a retryable provider error at the edge: at
+--      budget 2 it is retried and the run ends on `stop`; at budget 1 it is not.
+--
+-- ============================================================================
+-- WHAT THIS DOES NOT PROVE
+-- ============================================================================
+--
+-- Nothing about a profile other than `driver_only`, or about a trajectory the
+-- sixteen members do not walk; this is not 009 D11's rotating search. The replay
+-- family is not evaluated on any member: these are discovery runs and the
+-- obligation is `NoReplay`. No bank run ends on its cost cap or on compaction, so
+-- those two rows of D2's table are judged on no real run here. ADR-003's
+-- "known, and not seen" list and its "Not decided" list stand as written.
+
+module scripts/dst/corpus_judge_dst
+
+import std/io (println, exit)
+import std/list as List (length)
+import std/string (startsWith)
+import std/option (Option, None, Some)
+import std/result (Result, Ok, Err)
+import std/fs as FS (fileExists)
+import src/core/session (TracedSessionResult)
+import src/core/ports (ScriptedStep, WorldState)
+import src/core/test/stub_step (prose_step, scripted_world_state)
+import src/core/phase_vocab (
+  LedgerRecord, WireRecord, RunSummary,
+  ProviderCallPrepared, StreamErrorRetry, WorldRequest, V2ToolDispatchStart,
+  run_summary_finish_reason
+)
+import src/core/dst_interaction (Interaction, interaction_kind)
+import src/core/dst_execution (execution_of)
+import src/core/dst_result (unknown_replay_metadata)
+import src/core/dst_invariants (
+  NoReplay, Violation, evaluate, violation_family, violation_rule, violation_message,
+  family_id, first_failed_invariant, FamilyEvidence, family_evidence, invariant_set_version
+)
+import src/core/dst_discovery (DiscoveryFinding, UnderRecorded, OverRecorded, class_balance)
+import src/core/dst_program (ExecutionProgram)
+import src/core/dst_profile (ExecutionManifest)
+import src/core/dst_persistence (artifact_path)
+import src/core/dst_driver_only (driver_only_version)
+import src/core/dst_event_vocabulary (event_vocabulary_version)
+import scripts/dst/corpus_pr_dst (
+  BankEntry, MemberRun, fixed_bank, bank_step_budget,
+  run_seed_member, run_constructed_member, run_recording_at, store_root
+)
+
+-- ---------------------------------------------------------------------------
+-- Reporting
+-- ---------------------------------------------------------------------------
+
+func report(label: string, ok: bool, detail: string) -> bool ! {IO} {
+  let _ = if ok then println("  ✓ ${label}")
+          else println("  ✗ ${label}\n      ${detail}");
+  ok
+}
+
+pure func join_with(xs: [string], sep: string) -> string {
+  match xs {
+    [] => "",
+    x :: [] => x,
+    x :: rest => "${x}${sep}${join_with(rest, sep)}"
+  }
+}
+
+pure func int_strs(xs: [int]) -> [string] {
+  match xs { [] => [], x :: rest => "${x}" :: int_strs(rest) }
+}
+
+pure func ints(xs: [int]) -> string { "[${join_with(int_strs(xs), ",")}]" }
+
+pure func strings_equal(a: [string], b: [string]) -> bool {
+  match a {
+    [] => match b { [] => true, _ :: _ => false },
+    x :: xs => match b { [] => false, y :: ys => if x == y then strings_equal(xs, ys) else false }
+  }
+}
+
+pure func ints_equal(a: [int], b: [int]) -> bool {
+  match a {
+    [] => match b { [] => true, _ :: _ => false },
+    x :: xs => match b { [] => false, y :: ys => if x == y then ints_equal(xs, ys) else false }
+  }
+}
+
+pure func contains_str(xs: [string], t: string) -> bool {
+  match xs { [] => false, x :: rest => if x == t then true else contains_str(rest, t) }
+}
+
+pure func union_strs(seen: [string], xs: [string]) -> [string] {
+  match xs {
+    [] => seen,
+    x :: rest => union_strs(if contains_str(seen, x) then seen else seen ++ [x], rest)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- THE BUDGETS, DECLARED IN ONE PLACE (ADR-003 D1 and D4, ruling 13)
+-- ---------------------------------------------------------------------------
+--
+-- The step budget is the one the driver ENFORCED. `session_policy_init` turns a
+-- non-positive argument into 8 and the step machine reads a policy budget of 0
+-- as unlimited, so a run started with a positive budget declares that number and
+-- any other run declares none: a negative value, under which the two budget
+-- rules are reported as not evaluated. A zero is never copied, and the driver's
+-- default is not restated here, which would be wrong the day it changes.
+--
+-- The retry budget is one below the step budget: a retry needs more than one
+-- step left. There is no decision budget. `dst_invariants` says a bound it chose
+-- "would be a bound no profile agreed to", and `driver_only` declares none.
+
+type Budgets = { step: int, retry: int, decision: int }
+
+pure func budgets_for(started_with: int) -> Budgets {
+  if started_with > 0
+  then { step: started_with, retry: started_with - 1, decision: 0 - 1 }
+  else { step: 0 - 1, retry: 0 - 1, decision: 0 - 1 }
+}
+
+pure func budget_word(b: int) -> string { if b < 0 then "undeclared" else "${b}" }
+
+-- ---------------------------------------------------------------------------
+-- Reading the two channels
+-- ---------------------------------------------------------------------------
+--
+-- One side is the returned TRACE, which the driver appends to as it goes. The
+-- other is the WORLD the run was handed back: its interaction log and its
+-- request ordinal. A recovery branch that continues from the wrong world leaves
+-- the trace intact and the world short, which is why neither side is derived
+-- from the other here.
+--
+-- The log counts are a DELTA over the world the run started from (D5's third
+-- premise), so a resumed run would not be charged for its predecessor.
+
+type Observed = {
+  records: [LedgerRecord],
+  ordinal_start: int,
+  ordinal_end: int,
+  providers_logged: int,
+  tools_logged: int
+}
+
+pure func count_kind(xs: [Interaction], kind: string) -> int {
+  match xs {
+    [] => 0,
+    i :: rest => (if interaction_kind(i) == kind then 1 else 0) + count_kind(rest, kind)
+  }
+}
+
+pure func observe(initial: WorldState, run: TracedSessionResult) -> Observed {
+  { records: run.trace.records,
+    ordinal_start: initial.ordinal,
+    ordinal_end: run.world.ordinal,
+    providers_logged: count_kind(run.world.log, "expect_provider") - count_kind(initial.log, "expect_provider"),
+    tools_logged: count_kind(run.world.log, "expect_tool") - count_kind(initial.log, "expect_tool") }
+}
+
+pure func prepared_steps(rs: [LedgerRecord]) -> [int] {
+  match rs {
+    [] => [],
+    r :: rest =>
+      match r {
+        WireRecord(e) => match e { ProviderCallPrepared(i) => i.step :: prepared_steps(rest), _ => prepared_steps(rest) },
+        _ => prepared_steps(rest)
+      }
+  }
+}
+
+pure func retry_steps(rs: [LedgerRecord]) -> [int] {
+  match rs {
+    [] => [],
+    r :: rest =>
+      match r {
+        WireRecord(e) => match e { StreamErrorRetry(i) => i.step :: retry_steps(rest), _ => retry_steps(rest) },
+        _ => retry_steps(rest)
+      }
+  }
+}
+
+pure func request_ordinals(rs: [LedgerRecord]) -> [int] {
+  match rs {
+    [] => [],
+    r :: rest =>
+      match r {
+        WireRecord(e) => match e { WorldRequest(i) => i.ordinal :: request_ordinals(rest), _ => request_ordinals(rest) },
+        _ => request_ordinals(rest)
+      }
+  }
+}
+
+pure func dispatch_starts(rs: [LedgerRecord]) -> int {
+  match rs {
+    [] => 0,
+    r :: rest =>
+      (match r { WireRecord(e) => match e { V2ToolDispatchStart(_) => 1, _ => 0 }, _ => 0 })
+        + dispatch_starts(rest)
+  }
+}
+
+pure func contiguous_from(xs: [int], want: int) -> bool {
+  match xs { [] => true, x :: rest => if x == want then contiguous_from(rest, want + 1) else false }
+}
+
+pure func last_or(xs: [int], d: int) -> int {
+  match xs { [] => d, x :: rest => last_or(rest, x) }
+}
+
+-- A run of ints for a row: "0..11 (12)" when it is contiguous, the list when it
+-- is not, so a clean row is short and a red one shows the break.
+pure func span(xs: [int]) -> string {
+  match xs {
+    [] => "none",
+    x :: [] => "${x} (1)",
+    x :: _ =>
+      if contiguous_from(xs, x) then "${x}..${last_or(xs, x)} (${List.length(xs)})"
+      else ints(xs)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- THE SIX CHECKS
+-- ---------------------------------------------------------------------------
+--
+-- Each returns ONE row, whatever it finds, so a rule that was not evaluated is
+-- a row that says so and not a row that is missing.
+
+type CheckVerdict = CheckClean | CheckRed | CheckNotEvaluated
+
+type CheckRow = { rule: string, verdict: CheckVerdict, facts: string }
+
+-- The six rule ids. `PLAN-judge-recoveries-on-real-runs.md` fixes them as the
+-- contract with acceptance, which counts a mutant only when the id it names is
+-- the one printed.
+pure func rule_steps() -> string { "steps-not-contiguous" }
+pure func rule_calls() -> string { "provider-calls-exceed-budget" }
+pure func rule_edge() -> string { "retry-at-budget-edge" }
+pure func rule_providers() -> string { "provider-calls-unbalanced" }
+pure func rule_tools() -> string { "tool-dispatches-unbalanced" }
+pure func rule_ordinals() -> string { "request-ordinals-not-contiguous" }
+
+pure func gate_rule_ids() -> [string] {
+  [rule_steps(), rule_calls(), rule_edge(), rule_providers(), rule_tools(), rule_ordinals()]
+}
+
+pure func check_steps(o: Observed) -> CheckRow {
+  let steps = prepared_steps(o.records);
+  if contiguous_from(steps, 0)
+  then { rule: rule_steps(), verdict: CheckClean, facts: "prepared steps ${span(steps)}" }
+  else { rule: rule_steps(), verdict: CheckRed,
+         facts: "the trace's provider_call_prepared steps are ${ints(steps)}; on a corpus run they are 0, 1, 2, … with no gap and no repeat" }
+}
+
+pure func check_calls(o: Observed, b: Budgets) -> CheckRow {
+  let calls = List.length(prepared_steps(o.records));
+  if b.step < 0
+  then { rule: rule_calls(), verdict: CheckNotEvaluated,
+         facts: "the step budget is undeclared, so ${calls} provider call(s) were held against nothing" }
+  else if calls > b.step
+  then { rule: rule_calls(), verdict: CheckRed,
+         facts: "the trace holds ${calls} provider call(s) against a declared step budget of ${b.step}" }
+  else { rule: rule_calls(), verdict: CheckClean, facts: "${calls} call(s) on a budget of ${b.step}" }
+}
+
+-- The budget conjunct of `recovery.should_retry_stream_error`'s contract, stated
+-- over an execution: a retry needs `remaining_step_budget > 1`.
+pure func edge_retries(steps: [int], budget: int) -> [int] {
+  match steps {
+    [] => [],
+    s :: rest => (if budget - s <= 1 then [s] else []) ++ edge_retries(rest, budget)
+  }
+}
+
+pure func check_edge(o: Observed, b: Budgets) -> CheckRow {
+  let retries = retry_steps(o.records);
+  if b.step < 0
+  then { rule: rule_edge(), verdict: CheckNotEvaluated,
+         facts: "the step budget is undeclared, so the retries at ${ints(retries)} were held against nothing" }
+  else {
+    let bad = edge_retries(retries, b.step);
+    if List.length(bad) > 0
+    then { rule: rule_edge(), verdict: CheckRed,
+           facts: "a stream_error_retry is recorded at step(s) ${ints(bad)} of a declared budget of ${b.step}; a retry needs more than one step left" }
+    else { rule: rule_edge(), verdict: CheckClean, facts: "retries at ${ints(retries)} on a budget of ${b.step}" }
+  }
+}
+
+-- Both directions from `dst_discovery.class_balance`'s one comparison, which is
+-- written as the two arms of a single `if` so that neither can be dropped
+-- without the other. The direction is in the row because acceptance names it:
+-- a successor dropped before its witness leaves the log BELOW the trace, and a
+-- record that was never appended leaves it ABOVE.
+pure func balance_direction(f: DiscoveryFinding) -> string {
+  match f {
+    UnderRecorded(_, _, _) => "log below trace",
+    OverRecorded(_, _, _) => "log above trace",
+    _ => "unbalanced"
+  }
+}
+
+pure func balance_row(rule: string, kind: string, record: string, witnessed: int, logged: int) -> CheckRow {
+  match class_balance(kind, witnessed, logged) {
+    [] => { rule: rule, verdict: CheckClean, facts: "trace=${witnessed} log=${logged}" },
+    f :: _ => { rule: rule, verdict: CheckRed,
+                facts: "${balance_direction(f)}: the trace holds ${witnessed} ${record} record(s) and the run added ${logged} ${kind} interaction(s) to the log" }
+  }
+}
+
+pure func check_providers(o: Observed) -> CheckRow {
+  balance_row(rule_providers(), "expect_provider", "provider_call_prepared",
+              List.length(prepared_steps(o.records)), o.providers_logged)
+}
+
+pure func check_tools(o: Observed) -> CheckRow {
+  balance_row(rule_tools(), "expect_tool", "v2_tool_dispatch_start",
+              dispatch_starts(o.records), o.tools_logged)
+}
+
+pure func check_ordinals(o: Observed) -> CheckRow {
+  let ords = request_ordinals(o.records);
+  if contiguous_from(ords, o.ordinal_start + 1) && last_or(ords, o.ordinal_start) == o.ordinal_end
+  then { rule: rule_ordinals(), verdict: CheckClean,
+         facts: "ordinals ${span(ords)} from a world at ${o.ordinal_start} to a world at ${o.ordinal_end}" }
+  else { rule: rule_ordinals(), verdict: CheckRed,
+         facts: "the trace's world_request ordinals are ${span(ords)}; the run started from a world at ${o.ordinal_start} and returned one at ${o.ordinal_end}, and they do not run +1 from the first to the second" }
+}
+
+pure func gate_checks(o: Observed, b: Budgets) -> [CheckRow] {
+  [check_steps(o), check_calls(o, b), check_edge(o, b),
+   check_providers(o), check_tools(o), check_ordinals(o)]
+}
+
+pure func rules_with(rows: [CheckRow], red: bool) -> [string] {
+  match rows {
+    [] => [],
+    r :: rest =>
+      (match r.verdict {
+         CheckRed => if red then [r.rule] else [],
+         CheckNotEvaluated => if red then [] else [r.rule],
+         CheckClean => []
+       }) ++ rules_with(rest, red)
+  }
+}
+
+pure func red_rules(rows: [CheckRow]) -> [string] { rules_with(rows, true) }
+pure func unevaluated_rules(rows: [CheckRow]) -> [string] { rules_with(rows, false) }
+
+pure func row_rules(rows: [CheckRow]) -> [string] {
+  match rows { [] => [], r :: rest => r.rule :: row_rules(rest) }
+}
+
+pure func facts_of(rows: [CheckRow], rule: string) -> string {
+  match rows { [] => "", r :: rest => if r.rule == rule then r.facts else facts_of(rest, rule) }
+}
+
+pure func verdict_word(v: CheckVerdict) -> string {
+  match v { CheckClean => "clean", CheckRed => "RED", CheckNotEvaluated => "not-evaluated" }
+}
+
+-- Step 2 of the header's list, as a function so a constructed row can show it
+-- fires: what a trace must hold for a clean row about it to mean anything.
+pure func nothing_to_judge(o: Observed) -> [string] {
+  (if List.length(prepared_steps(o.records)) == 0 then ["no prepared call"] else [])
+    ++ (if List.length(request_ordinals(o.records)) == 0 then ["no request ordinal"] else [])
+}
+
+-- ---------------------------------------------------------------------------
+-- Judging one run: bridge, evaluate, check
+-- ---------------------------------------------------------------------------
+
+type Judged = {
+  label: string,
+  n: int,
+  ended: string,
+  finish: Option[string],
+  set: [Violation],
+  first_failed: Option[string],
+  families_unevaluated: [string],
+  rows: [CheckRow],
+  obs: Observed
+}
+
+pure func unevaluated_families(fe: [FamilyEvidence]) -> [string] {
+  match fe {
+    [] => [],
+    e :: rest => (if e.evaluated then [] else [e.family]) ++ unevaluated_families(rest)
+  }
+}
+
+-- THE BRIDGE CALL. Nothing here is a default:
+--
+--   the clock        is the STARTING world's. Zero would make a world seeded at
+--                    another epoch read as having spent time it did not.
+--   the obligation   is `NoReplay`: this is a discovery run and owes its program
+--                    nothing, so the replay family is not evaluated on any
+--                    member. The gate says so in one line; it does not pass it.
+--   the budgets      are `Budgets`, declared above. The decision budget is
+--                    undeclared.
+--   the two audit    are supplied, not derived, as `dst_execution` asks: this
+--   counts           gate ran no routing audit and reports none.
+--
+-- A result with no terminal summary is NOT bridged (D2's boundary). `finish` is
+-- then `None`, the set is not evaluated, and the caller reads that as red.
+pure func judge(label: string, initial: WorldState, run: TracedSessionResult, b: Budgets) -> Judged {
+  let obs = observe(initial, run);
+  let ended = match run.result { Ok(_) => "Ok", Err(_) => "Err" };
+  let finish = run_summary_finish_reason(run.trace);
+  let rows = gate_checks(obs, b);
+  match finish {
+    None =>
+      { label: label, n: List.length(run.world.log), ended: ended, finish: finish,
+        set: [], first_failed: None, families_unevaluated: [], rows: rows, obs: obs },
+    Some(_) => {
+      let x = execution_of(run, initial.clock_ms, NoReplay, b.decision, b.retry, 0, [],
+                           unknown_replay_metadata());
+      { label: label, n: List.length(run.world.log), ended: ended, finish: finish,
+        set: evaluate(x), first_failed: first_failed_invariant(x),
+        families_unevaluated: unevaluated_families(family_evidence(x)), rows: rows, obs: obs }
+    }
+  }
+}
+
+pure func bridged(j: Judged) -> bool {
+  match j.finish { Some(_) => true, None => false }
+}
+
+-- What "clean" means for a run, in one place. Not evaluated is not clean.
+pure func rows_clean(rows: [CheckRow]) -> bool {
+  List.length(red_rules(rows)) == 0 && List.length(unevaluated_rules(rows)) == 0
+}
+
+pure func is_clean(j: Judged) -> bool {
+  bridged(j) && List.length(j.set) == 0 && rows_clean(j.rows)
+}
+
+pure func set_rules(vs: [Violation]) -> [string] {
+  match vs {
+    [] => [],
+    v :: rest => "${family_id(violation_family(v))}/${violation_rule(v)}" :: set_rules(rest)
+  }
+}
+
+pure func finish_word(f: Option[string]) -> string {
+  match f { Some(r) => r, None => "none" }
+}
+
+-- The rows. One `<tag>ROW` per run in `corpus_pr`'s terms (`n=`, `ended=`), then
+-- one `<tag>` row per rule, naming the rule whether it is clean or not.
+--
+-- The tag says what was judged, so that a count of one kind cannot include
+-- another: `JUDGE` is a bank member, and its sixteen `JUDGEROW`s can be laid
+-- beside `corpus_pr`'s `CORPUSROW`s; `CONTROL` is a budget-edge control;
+-- `SELFCHECK` is a constructed input.
+pure func tag_member() -> string { "JUDGE" }
+pure func tag_control() -> string { "CONTROL" }
+pure func tag_selfcheck() -> string { "SELFCHECK" }
+
+func print_set_findings(tag: string, label: string, vs: [Violation]) -> () ! {IO} {
+  match vs {
+    [] => (),
+    v :: rest => {
+      let _ = println("${tag} ${label} ${violation_rule(v)} RED ${family_id(violation_family(v))}: ${violation_message(v)}");
+      print_set_findings(tag, label, rest)
+    }
+  }
+}
+
+func print_check_rows(tag: string, label: string, rows: [CheckRow]) -> () ! {IO} {
+  match rows {
+    [] => (),
+    r :: rest => {
+      let _ = println("${tag} ${label} ${r.rule} ${verdict_word(r.verdict)} ${r.facts}");
+      print_check_rows(tag, label, rest)
+    }
+  }
+}
+
+func print_judged(tag: string, j: Judged) -> () ! {IO} {
+  let _ = println("${tag}ROW ${j.label} n=${j.n} ended=${j.ended} finish=${finish_word(j.finish)} set=[${join_with(set_rules(j.set), ",")}] checks=[${join_with(red_rules(j.rows), ",")}] not_evaluated=[${join_with(unevaluated_rules(j.rows), ",")}]");
+  let _ =
+    if not bridged(j)
+    then println("${tag} ${j.label} invariant-set not-evaluated the result carries no terminal run_summary, so it is not a run that finalized and was not bridged")
+    else if List.length(j.set) == 0
+    then println("${tag} ${j.label} invariant-set clean no finding; unevaluated=${join_with(j.families_unevaluated, ",")}")
+    else println("${tag} ${j.label} invariant-set RED ${List.length(j.set)} finding(s); unevaluated=${join_with(j.families_unevaluated, ",")}");
+  let _ = print_set_findings(tag, j.label, j.set);
+  print_check_rows(tag, j.label, j.rows)
+}
+
+-- ---------------------------------------------------------------------------
+-- What the bank must hold for a clean verdict on it to mean anything
+-- ---------------------------------------------------------------------------
+
+pure func labels_where(js: [Judged], keep: (Judged) -> bool) -> [string] {
+  match js {
+    [] => [],
+    j :: rest => (if keep(j) then [j.label] else []) ++ labels_where(rest, keep)
+  }
+}
+
+pure func not_bridged(j: Judged) -> bool { not bridged(j) }
+pure func not_clean(j: Judged) -> bool { not is_clean(j) }
+pure func has_nothing_to_judge(j: Judged) -> bool { List.length(nothing_to_judge(j.obs)) > 0 }
+pure func recorded_a_retry(j: Judged) -> bool { List.length(retry_steps(j.obs.records)) > 0 }
+pure func dispatched_a_tool(j: Judged) -> bool { dispatch_starts(j.obs.records) > 0 }
+
+pure func no_retry() -> string { "no member recorded a retry" }
+pure func no_dispatch() -> string { "no member dispatched a tool" }
+
+-- The two conditions on the bank as a whole. Without a retry on some member
+-- `retry-at-budget-edge` is held against nothing, and without a dispatch
+-- `tool-dispatches-unbalanced` compares zero with zero sixteen times.
+pure func bank_saw_nothing(js: [Judged]) -> [string] {
+  (if List.length(labels_where(js, recorded_a_retry)) == 0 then [no_retry()] else [])
+    ++ (if List.length(labels_where(js, dispatched_a_tool)) == 0 then [no_dispatch()] else [])
+}
+
+-- The families the set did not evaluate on a bridged run. Under `NoReplay` that
+-- is replay-consistency and nothing else; any other is a family whose inputs
+-- were empty on a run that should have filled them.
+pure func expected_unevaluated() -> [string] { ["replay-consistency"] }
+
+pure func unexpected_unevaluated(j: Judged) -> bool {
+  bridged(j) && not strings_equal(j.families_unevaluated, expected_unevaluated())
+}
+
+pure func all_unevaluated(js: [Judged]) -> [string] {
+  match js {
+    [] => [],
+    j :: rest => union_strs(j.families_unevaluated, all_unevaluated(rest))
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- EACH CHECK CAN FIRE, AND CAN STAY SILENT
+-- ---------------------------------------------------------------------------
+--
+-- Constructed TRACES, so the readers above are exercised and not only the
+-- arithmetic. The log side is given as the two counts `observe` would compute:
+-- an `Interaction` cannot be hand-built without restating the recorder, and the
+-- bank exercises that count sixteen times against a trace-side number it must
+-- equal.
+
+pure func prepared_at(step: int) -> LedgerRecord {
+  WireRecord(ProviderCallPrepared({
+    step: step, msg_count: 2, estimated_input_tokens: 0, system_prefix_count: 1,
+    system_prefix_chars: 1, system_prefix_digest: "", payload_digest: "", model: "constructed" }))
+}
+
+pure func retry_at(step: int) -> LedgerRecord {
+  WireRecord(StreamErrorRetry({ step: step, error: "constructed" }))
+}
+
+pure func request_at(ordinal: int) -> LedgerRecord {
+  WireRecord(WorldRequest({ ordinal: ordinal, request_class: "model_step" }))
+}
+
+pure func dispatch_at(step: int) -> LedgerRecord {
+  WireRecord(V2ToolDispatchStart({ step: step, stream_id: "constructed", tool: "bash", id: "c${step}" }))
+}
+
+pure func prepared_all(steps: [int]) -> [LedgerRecord] {
+  match steps { [] => [], s :: rest => prepared_at(s) :: prepared_all(rest) }
+}
+
+pure func requests_all(ords: [int]) -> [LedgerRecord] {
+  match ords { [] => [], o :: rest => request_at(o) :: requests_all(rest) }
+}
+
+pure func constructed(steps: [int], retry_step: int, ordinals: [int], ordinal_end: int,
+                      providers_logged: int, tools_logged: int) -> Observed {
+  { records: requests_all(ordinals) ++ prepared_all(steps) ++ [retry_at(retry_step), dispatch_at(0)],
+    ordinal_start: 0,
+    ordinal_end: ordinal_end,
+    providers_logged: providers_logged,
+    tools_logged: tools_logged }
+}
+
+-- THE GOOD ONE, on a budget of 4, and every bad one below differs from it in
+-- one argument. Its retry is at step 2: the LAST step at which one is allowed,
+-- so the edge row's step 3 is the first at which it is not.
+pure func good_budget() -> Budgets { budgets_for(4) }
+
+pure func good() -> Observed { constructed([0, 1, 2, 3], 2, [1, 2, 3, 4, 5], 5, 4, 1) }
+
+-- A constructed observation as the bank guards see a run: bridged and clean of
+-- set findings, because nothing was run and the set is not what these rows test.
+pure func as_judged(label: string, o: Observed, b: Budgets) -> Judged {
+  { label: label, n: 0, ended: "Ok", finish: Some("stop"), set: [], first_failed: None,
+    families_unevaluated: expected_unevaluated(), rows: gate_checks(o, b), obs: o }
+}
+
+func fires_alone(what: string, o: Observed, b: Budgets, rule: string) -> bool ! {IO} {
+  let rows = gate_checks(o, b);
+  report("${rule} fires on ${what}, and no other check does",
+         strings_equal(red_rules(rows), [rule]) && List.length(unevaluated_rules(rows)) == 0,
+         "expected exactly [${rule}]; red: [${join_with(red_rules(rows), ",")}]; not evaluated: [${join_with(unevaluated_rules(rows), ",")}]")
+}
+
+func fires_with_direction(what: string, o: Observed, rule: string, direction: string) -> bool ! {IO} {
+  let rows = gate_checks(o, good_budget());
+  let facts = facts_of(rows, rule);
+  let want = "${direction}: ";
+  report("${rule} fires on ${what}, as '${direction}', and no other check does",
+         strings_equal(red_rules(rows), [rule]) && startsWith(facts, want),
+         "expected exactly [${rule}] reported as '${direction}'; red: [${join_with(red_rules(rows), ",")}]; the row reads: ${facts}")
+}
+
+func scenario_each_check_fires() -> bool ! {IO} {
+  let _ = println("\n-- each check can fire, and can stay silent --");
+  let b = good_budget();
+  let ids = report("each run gets one row for each of the six rule ids, in a fixed order",
+                   strings_equal(row_rules(gate_checks(good(), b)), gate_rule_ids())
+                     && List.length(gate_rule_ids()) == 6,
+                   "rows: [${join_with(row_rules(gate_checks(good(), b)), ",")}]");
+  let silent = report("all six are silent on the good input: 4 calls on a budget of 4, a retry at step 2, both counts balanced, ordinals 1 to 5",
+                      rows_clean(gate_checks(good(), b)),
+                      "red: [${join_with(red_rules(gate_checks(good(), b)), ",")}]; not evaluated: [${join_with(unevaluated_rules(gate_checks(good(), b)), ",")}]");
+  let s1 = fires_alone("steps 0, 1, 3, 4 (a gap)",
+                       constructed([0, 1, 3, 4], 2, [1, 2, 3, 4, 5], 5, 4, 1), b, rule_steps());
+  let s2 = fires_alone("steps 1, 2, 3, 4 (not from zero)",
+                       constructed([1, 2, 3, 4], 2, [1, 2, 3, 4, 5], 5, 4, 1), b, rule_steps());
+  let c1 = fires_alone("5 calls on a budget of 4",
+                       constructed([0, 1, 2, 3, 4], 2, [1, 2, 3, 4, 5], 5, 5, 1), b, rule_calls());
+  let e1 = fires_alone("a retry at step 3 of 4",
+                       constructed([0, 1, 2, 3], 3, [1, 2, 3, 4, 5], 5, 4, 1), b, rule_edge());
+  let p1 = fires_with_direction("4 prepared records and 3 logged",
+                                constructed([0, 1, 2, 3], 2, [1, 2, 3, 4, 5], 5, 3, 1),
+                                rule_providers(), "log below trace");
+  let p2 = fires_with_direction("4 prepared records and 5 logged",
+                                constructed([0, 1, 2, 3], 2, [1, 2, 3, 4, 5], 5, 5, 1),
+                                rule_providers(), "log above trace");
+  let t1 = fires_with_direction("1 dispatch start and 0 logged",
+                                constructed([0, 1, 2, 3], 2, [1, 2, 3, 4, 5], 5, 4, 0),
+                                rule_tools(), "log below trace");
+  let t2 = fires_with_direction("1 dispatch start and 2 logged",
+                                constructed([0, 1, 2, 3], 2, [1, 2, 3, 4, 5], 5, 4, 2),
+                                rule_tools(), "log above trace");
+  let o1 = fires_alone("ordinals 1, 2, 4, 5 (a gap)",
+                       constructed([0, 1, 2, 3], 2, [1, 2, 4, 5], 5, 4, 1), b, rule_ordinals());
+  let o2 = fires_alone("ordinals 1 to 5 and a returned world at 4 (a successor dropped after its witness)",
+                       constructed([0, 1, 2, 3], 2, [1, 2, 3, 4, 5], 4, 4, 1), b, rule_ordinals());
+  let o3 = fires_alone("ordinals 2 to 5 from a world at 0 (the first request is missing)",
+                       constructed([0, 1, 2, 3], 2, [2, 3, 4, 5], 5, 4, 1), b, rule_ordinals());
+
+  -- THE UNDECLARED BUDGET (D4's tightening). The bank always declares, so this
+  -- row is the only place the path runs. Its rows are printed, because "reported
+  -- as not evaluated" is a claim about what is on the screen.
+  let undeclared = gate_checks(good(), budgets_for(0));
+  let _ = print_check_rows(tag_selfcheck(), "undeclared-budget", undeclared);
+  let u1 = report("a run started with a budget of 0 declares none: the two budget rules are NOT EVALUATED and the other four are clean",
+                  strings_equal(unevaluated_rules(undeclared), [rule_calls(), rule_edge()])
+                    && List.length(red_rules(undeclared)) == 0,
+                  "not evaluated: [${join_with(unevaluated_rules(undeclared), ",")}]; red: [${join_with(red_rules(undeclared), ",")}]");
+  let u2 = report("and not evaluated is not clean, which is what makes it red on a bank member",
+                  not rows_clean(undeclared),
+                  "rows with a rule not evaluated were read as clean");
+
+  -- THE EMPTY TRACE. All six are true of it, which is the reason the guard
+  -- exists and the reason it is shown to fire here.
+  let empty: Observed = { records: [], ordinal_start: 0, ordinal_end: 0, providers_logged: 0, tools_logged: 0 };
+  let v1 = report("an empty trace is clean on all six checks, and the guard names it: no prepared call, no request ordinal",
+                  rows_clean(gate_checks(empty, b))
+                    && strings_equal(nothing_to_judge(empty), ["no prepared call", "no request ordinal"]),
+                  "red: [${join_with(red_rules(gate_checks(empty, b)), ",")}]; the guard said: [${join_with(nothing_to_judge(empty), ",")}]");
+  let v2 = report("the guard is silent on the good input",
+                  List.length(nothing_to_judge(good())) == 0,
+                  "the guard said: [${join_with(nothing_to_judge(good()), ",")}]");
+
+  -- THE BANK AS A WHOLE. A bank of one run that made calls and requests, and
+  -- neither retried nor dispatched, is clean on every row and trips both.
+  let quiet: Observed = { records: requests_all([1, 2]) ++ prepared_all([0, 1]),
+                          ordinal_start: 0, ordinal_end: 2, providers_logged: 2, tools_logged: 0 };
+  let v3 = report("a bank with no retry and no dispatch is clean on all six checks, and the bank guard names both",
+                  rows_clean(gate_checks(quiet, b))
+                    && strings_equal(bank_saw_nothing([as_judged("quiet", quiet, b)]), [no_retry(), no_dispatch()]),
+                  "red: [${join_with(red_rules(gate_checks(quiet, b)), ",")}]; the guard said: [${join_with(bank_saw_nothing([as_judged("quiet", quiet, b)]), ",")}]");
+  let v4 = report("the bank guard is silent once a member holds a retry and a dispatch",
+                  List.length(bank_saw_nothing([as_judged("quiet", quiet, b), as_judged("good", good(), b)])) == 0,
+                  "the guard said: [${join_with(bank_saw_nothing([as_judged("quiet", quiet, b), as_judged("good", good(), b)]), ",")}]");
+
+  ids && silent && s1 && s2 && c1 && e1 && p1 && p2 && t1 && t2 && o1 && o2 && o3
+    && u1 && u2 && v1 && v2 && v3 && v4
+}
+
+-- ---------------------------------------------------------------------------
+-- THE BANK
+-- ---------------------------------------------------------------------------
+
+type BankJudged = { member: MemberRun, judged: Judged }
+
+func judge_member(m: MemberRun, b: Budgets) -> BankJudged ! {IO} {
+  let j = judge(m.label, m.initial, m.run, b);
+  let _ = print_judged(tag_member(), j);
+  { member: m, judged: j }
+}
+
+func judge_seeds(es: [BankEntry], b: Budgets)
+  -> [BankJudged] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  match es {
+    [] => [],
+    e :: rest => {
+      let here = judge_member(run_seed_member(e), b);
+      here :: judge_seeds(rest, b)
+    }
+  }
+}
+
+pure func judged_of(bs: [BankJudged]) -> [Judged] {
+  match bs { [] => [], b :: rest => b.judged :: judged_of(rest) }
+}
+
+-- ---------------------------------------------------------------------------
+-- THE TWO BUDGET-EDGE CONTROLS (ADR-003 D6's precondition)
+-- ---------------------------------------------------------------------------
+--
+-- NOT BANK MEMBERS, and nothing below adds one. They are two scripted worlds run
+-- through `run_recording_at`: the bank's own rig, with its recording adapter and
+-- its approval runtime, whose hooks do not call the model. Those are D5's
+-- premises, which is why the two balances and the ordinal check are applied to
+-- these runs as they are to the bank's and to no run outside this rig.
+--
+-- Each control states its step budget ONCE, to the run and to the rules.
+--
+-- Until these two rows no scripted scenario in the tree served a retryable
+-- provider error; only generated seeds reached the retry branch, and none of
+-- them near the edge.
+
+pure func timeout_step() -> ScriptedStep {
+  { prose_step("") | error_code: "E_PROVIDER_TIMEOUT",
+                     error_message: "constructed: a retryable provider timeout" }
+}
+
+type ControlRun = { judged: Judged, run: TracedSessionResult }
+
+func control(label: string, script: [ScriptedStep], step_budget: int)
+  -> ControlRun ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let initial = scripted_world_state(script);
+  let run = run_recording_at("corpus_judge_${label}", initial, step_budget);
+  let j = judge(label, initial, run, budgets_for(step_budget));
+  let _ = print_judged(tag_control(), j);
+  { judged: j, run: run }
+}
+
+pure func error_code_of(run: TracedSessionResult) -> string {
+  match run.result { Ok(_) => "", Err(e) => e.code }
+}
+
+func scenario_budget_edge_controls()
+  -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("\n-- the two budget-edge controls: scripted worlds under the bank's rig, not bank members --");
+
+  -- A VALID RETRY WITH TWO STEPS LEFT. The error arrives at step 0 of 2, the
+  -- last step at which `should_retry_stream_error` allows a retry.
+  let a = control("retry-with-two-steps-left", [timeout_step(), prose_step("done")], 2);
+  let a_steps = prepared_steps(a.judged.obs.records);
+  let a_retries = retry_steps(a.judged.obs.records);
+  let a1 = report("retry with two steps left: the run ends Ok on stop",
+                  a.judged.ended == "Ok" && finish_word(a.judged.finish) == "stop",
+                  "ended=${a.judged.ended} finish=${finish_word(a.judged.finish)}");
+  let a2 = report("retry with two steps left: prepared steps 0 and 1, one retry at step 0, two provider interactions logged",
+                  ints_equal(a_steps, [0, 1]) && ints_equal(a_retries, [0]) && a.judged.obs.providers_logged == 2,
+                  "prepared steps ${ints(a_steps)}, retries at ${ints(a_retries)}, ${a.judged.obs.providers_logged} provider interaction(s) logged");
+  let a3 = report("retry with two steps left: no finding from the set, none from the six checks",
+                  is_clean(a.judged),
+                  "set: [${join_with(set_rules(a.judged.set), ",")}]; red: [${join_with(red_rules(a.judged.rows), ",")}]; not evaluated: [${join_with(unevaluated_rules(a.judged.rows), ",")}]");
+
+  -- NO RETRY WITH ONE STEP LEFT. The same error at step 0 of 1.
+  let z = control("no-retry-with-one-step-left", [timeout_step()], 1);
+  let z_steps = prepared_steps(z.judged.obs.records);
+  let z_retries = retry_steps(z.judged.obs.records);
+  let z1 = report("no retry with one step left: the run ends Err with E_PROVIDER_TIMEOUT on error",
+                  z.judged.ended == "Err" && error_code_of(z.run) == "E_PROVIDER_TIMEOUT"
+                    && finish_word(z.judged.finish) == "error",
+                  "ended=${z.judged.ended} code='${error_code_of(z.run)}' finish=${finish_word(z.judged.finish)}");
+  let z2 = report("no retry with one step left: one prepared step, no retry record",
+                  ints_equal(z_steps, [0]) && List.length(z_retries) == 0,
+                  "prepared steps ${ints(z_steps)}, retries at ${ints(z_retries)}");
+  let z3 = report("no retry with one step left: no finding from the set, none from the six checks",
+                  is_clean(z.judged),
+                  "set: [${join_with(set_rules(z.judged.set), ",")}]; red: [${join_with(red_rules(z.judged.rows), ",")}]; not evaluated: [${join_with(unevaluated_rules(z.judged.rows), ",")}]");
+
+  a1 && a2 && a3 && z1 && z2 && z3
+}
+
+-- ---------------------------------------------------------------------------
+-- THE FAILURE RECORD (ruling 16): what 009 ADR-001 D8 lists
+-- ---------------------------------------------------------------------------
+--
+-- Printed for each bank member that is not clean. Two of D8's twelve items are
+-- the recipe's and not this process's: the source revision and the toolchain
+-- version, which `make corpus_judge` prints beneath these records, and the
+-- trace, which is the recipe's output file — it holds every member's wire, and
+-- the recipe keeps it and prints its path when the target is red.
+--
+-- THE SERIALIZED PROGRAM IS A REFERENCE. `corpus_pr`'s `build` persisted this
+-- member's program at `artifact_path(store_root(), program)`, and that file is
+-- what D8's replay consumes. This gate writes none. Its own re-run regenerates
+-- from the seed and is the quick reproduction, not the replay.
+
+pure func manifest_line(m: ExecutionManifest) -> string {
+  "profile_id=${m.profile_id} profile_version=${m.profile_version} source_revision=${m.source_revision} toolchain='${m.toolchain}' abi_version=${m.abi_version} event_vocabulary_version=${m.event_vocabulary_version} normalized_configuration=${m.normalized_configuration} extension_packages=${List.length(m.extension_packages)} classifier_2_set=[${join_with(m.classifier_2_set, ",")}] unrouted_fields=[${join_with(m.unrouted_fields, ",")}] scan_roots=[${join_with(m.scan_roots, ",")}] scan_root_commit=${m.scan_root_commit} profile_rules=${m.profile_rules_version} coverage_rules=${m.coverage_rules_version} attribution_rules=${m.attribution_rules_version} fault_catalogue=${m.fault_catalogue_version}"
+}
+
+pure func summary_error(rs: [LedgerRecord], d: string) -> string {
+  match rs {
+    [] => d,
+    r :: rest =>
+      match r {
+        WireRecord(e) => match e { RunSummary(i) => summary_error(rest, i.error), _ => summary_error(rest, d) },
+        _ => summary_error(rest, d)
+      }
+  }
+}
+
+-- `first_failed_invariant` for a family finding, the rule id for a gate check.
+pure func first_failed_line(j: Judged) -> string {
+  let checks = join_with(red_rules(j.rows), ", ");
+  let also = if checks == "" then "" else "; gate checks also red: ${checks}";
+  if not bridged(j) then "none evaluated: the result carries no terminal run_summary and was not bridged"
+  else match j.first_failed {
+    Some(f) => "${f}${also}",
+    None =>
+      if checks == "" then "none red; not evaluated: ${join_with(unevaluated_rules(j.rows), ", ")}"
+      else "gate check ${checks}"
+  }
+}
+
+func print_failure_record(b: BankJudged, budgets: Budgets) -> () ! {FS, IO} {
+  let p: ExecutionProgram = b.member.program;
+  let j = b.judged;
+  let path = artifact_path(store_root(), p);
+  let _ = println("\nFAILURE RECORD ${j.label} — what 009 ADR-001 D8 lists for a generated failure");
+  let _ = println("  program schema version   ${p.schema_version}");
+  let _ = println("  generator id             ${p.generator_id}");
+  let _ = println("  generator version        ${p.generator_version}");
+  let _ = println("  seed                     ${p.seed}");
+  let _ = if FS.fileExists(path)
+          then println("  serialized program       ${path} (by reference: the artifact `make corpus_pr` persisted for this member; this gate writes none)")
+          else println("  serialized program       ABSENT at ${path}. `make corpus_pr` writes it; run that first. This gate persists no program.");
+  let _ = println("  source revision          printed by the recipe, beneath these records");
+  let _ = println("  toolchain version        printed by the recipe, beneath these records");
+  let _ = println("  profile                  ${p.initial_world.extension_profile}, issued as driver_only version ${driver_only_version()}");
+  let _ = println("  execution manifest       ${manifest_line(p.manifest)}");
+  let _ = println("  event vocabulary         ${event_vocabulary_version()}");
+  let _ = println("  run configuration        step budget ${budget_word(budgets.step)}, retry budget ${budget_word(budgets.retry)}, decision budget ${budget_word(budgets.decision)}; bridged with the starting world's clock (${b.member.initial.clock_ms} ms), NoReplay, 0 ambient RNG reads and no forbidden effect site, both supplied; the rig's other arguments are those of this member's run helper in scripts/dst/corpus_pr_dst.ail at the source revision");
+  let _ = println("  first failed invariant   ${first_failed_line(j)}");
+  let _ = println("  terminal outcome         ended=${j.ended} finish_reason=${finish_word(j.finish)} error='${summary_error(j.obs.records, "")}'");
+  let _ = println("  trace                    the recipe's output file, kept when the target is red; its path is printed beneath these records");
+  println("  quick reproduction       make corpus_judge (it regenerates from the seed; the replay is the serialized program above)")
+}
+
+func print_failure_records(bs: [BankJudged], budgets: Budgets) -> () ! {FS, IO} {
+  match bs {
+    [] => (),
+    b :: rest => {
+      let _ = if is_clean(b.judged) then () else print_failure_record(b, budgets);
+      print_failure_records(rest, budgets)
+    }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- Entry point
+-- ---------------------------------------------------------------------------
+
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("011 ADR-003 D1 — the invariant set and six two-channel checks on every corpus member's real run (${invariant_set_version()})");
+
+  let checks_ok = scenario_each_check_fires();
+
+  -- THE BUDGETS, from the value the bank's run helpers pass to the driver.
+  let budgets = budgets_for(bank_step_budget());
+  let _ = println("\n-- the bank: every member's run, bridged and judged --");
+  let _ = println("budgets, declared once: step ${budget_word(budgets.step)} (bank_step_budget(), the value each member's run is started with), retry ${budget_word(budgets.retry)}, decision ${budget_word(budgets.decision)}");
+  let seeded = judge_seeds(fixed_bank(), budgets);
+  let constructed_member = judge_member(run_constructed_member(), budgets);
+  let bank = seeded ++ [constructed_member];
+
+  let controls_ok = scenario_budget_edge_controls();
+
+  -- THE VERDICT, after every rule row above.
+  let _ = println("\n-- the verdict on the bank --");
+  let js = judged_of(bank);
+  let members = List.length(js);
+  let unbridged = labels_where(js, not_bridged);
+  let dirty = labels_where(js, not_clean);
+  let a = report("all ${members} members carry a terminal summary and were bridged",
+                 List.length(unbridged) == 0,
+                 "not bridged, ${List.length(unbridged)} of ${members}: ${join_with(unbridged, ", ")}");
+  let b = report("all ${members} members are clean: no finding from the invariant set, none from the six checks, none not evaluated",
+                 List.length(dirty) == 0,
+                 "not clean, ${List.length(dirty)} of ${members}: ${join_with(dirty, ", ")}. The JUDGE rows above name each rule, and a failure record for each member follows.");
+  let _ = println("  families the set did not evaluate, over all ${members} members: ${join_with(all_unevaluated(js), ", ")} (the obligation is NoReplay: a discovery run owes its program nothing)");
+  let odd = labels_where(js, unexpected_unevaluated);
+  let c = report("no family other than ${join_with(expected_unevaluated(), ", ")} went unevaluated on a member",
+                 List.length(odd) == 0,
+                 "${join_with(odd, ", ")}: a family whose inputs were empty was not evaluated, and its silence is not a pass");
+
+  let _ = println("\n-- the gate saw something to judge --");
+  let hollow = labels_where(js, has_nothing_to_judge);
+  let retried = labels_where(js, recorded_a_retry);
+  let dispatched = labels_where(js, dispatched_a_tool);
+  let missing = bank_saw_nothing(js);
+  let d = report("every member's trace holds a prepared call and a request ordinal",
+                 List.length(hollow) == 0,
+                 "${join_with(hollow, ", ")}: a trace with neither satisfies every check above by holding nothing");
+  let e = report("a member recorded a retry (${List.length(retried)} of ${members}: ${join_with(retried, ", ")})",
+                 not contains_str(missing, no_retry()),
+                 "no member's trace holds a stream_error_retry, so retry-at-budget-edge was held against nothing on the bank");
+  let f = report("a member dispatched a tool (${List.length(dispatched)} of ${members})",
+                 not contains_str(missing, no_dispatch()),
+                 "no member's trace holds a v2_tool_dispatch_start, so tool-dispatches-unbalanced compared zero with zero on the bank");
+
+  let _ = print_failure_records(bank, budgets);
+
+  if checks_ok && controls_ok && a && b && c && d && e && f then
+    println("\n✓ corpus_judge: ${members} members, the invariant set and six checks, two budget-edge controls")
+  else {
+    let _ = println("\n✗ corpus_judge FAILED");
+    exit(1)
+  }
+}
