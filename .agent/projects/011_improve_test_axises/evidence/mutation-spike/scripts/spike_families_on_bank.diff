@@ -1,0 +1,281 @@
+--- scripts/dst/corpus_pr_dst.ail	2026-10-05 18:46:42.414515985 +0000
++++ scripts/dst/spike_families_on_bank.ail	2026-10-06 13:00:23.983509825 +0000
+@@ -180,7 +180,7 @@
+ -- waiving condition, and a class nobody waived that nobody reached is a
+ -- coverage gap, not a permission.
+ 
+-module scripts/dst/corpus_pr_dst
++module scripts/dst/spike_families_on_bank
+ 
+ import std/io (println, exit)
+ import std/list as List (length)
+@@ -196,6 +196,15 @@
+ import src/core/config (CostRates, VerificationConfig)
+ import src/core/session as Session
+ import src/core/session (TracedSessionResult)
++-- SPIKE ONLY (011 §3.3, part 2). NEVER MERGES. Everything in this file above the
++-- banner at the bottom is scripts/dst/corpus_pr_dst.ail verbatim, so the probe runs
++-- the SAME bank through the SAME driver configuration the PR corpus gate runs.
++import src/core/dst_execution (execution_of)
++import src/core/dst_result (unknown_replay_metadata)
++import src/core/dst_invariants (Violation, NoReplay, evaluate, violation_rule, violation_family, family_id)
++-- part 4 (prototype rules computed on the probe side; never merges)
++import src/core/dst_invariants (violation_message)
++import src/core/phase_vocab (LedgerRecord, WireRecord, ProviderCallPrepared, StreamErrorRetry, WorldRequest, V2ToolDispatchStart)
+ import src/core/test/stub_step (GeneratedWorld, RecordingWorld)
+ import src/core/ports (ScriptedStep, WorldState, empty_world_state, ProviderOutcome, ProviderServed, ProviderScriptExhausted, ProviderUndecodable, decode_provider_outcome)
+ import src/core/types (Msg)
+@@ -1230,3 +1239,253 @@
+     exit(1)
+   }
+ }
++
++
++-- ============================================================================
++-- SPIKE ONLY — the invariant set over every bank member's REAL run. NEVER MERGES.
++-- ============================================================================
++-- One FAMROW per member. A = the set evaluated with the driver's structural retry
++-- bound (step budget 12, a retry needs remaining budget > 1, so at most 11) and NO
++-- declared decision budget. B = `stream_parity_dst.ail`'s literal budgets (12, 3),
++-- the only precedent in the tree. Both are printed; neither is a verdict.
++
++pure func spk_rules(vs: [Violation]) -> [string] {
++  match vs {
++    [] => [],
++    v :: rest => "${family_id(violation_family(v))}:${violation_rule(v)}" :: spk_rules(rest)
++  }
++}
++
++pure func spk_join(xs: [string]) -> string {
++  match xs {
++    [] => "",
++    x :: rest => match rest { [] => x, _ => "${x},${spk_join(rest)}" }
++  }
++}
++
++func spk_row(label: string, r: TracedSessionResult, clock0: int) -> () ! {IO} {
++  let a = evaluate(execution_of(r, clock0, NoReplay, 0 - 1, 11, 0, [], unknown_replay_metadata()));
++  let b = evaluate(execution_of(r, clock0, NoReplay, 12, 3, 0, [], unknown_replay_metadata()));
++  let ended = match r.result { Ok(_) => "ok", Err(_) => "err" };
++  println("FAMROW ${label} ended=${ended} n=${List.length(r.world.log)} A=[${spk_join(spk_rules(a))}] B=[${spk_join(spk_rules(b))}]")
++}
++
++func spk_seeds(es: [BankEntry])
++  -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
++  match es {
++    [] => (),
++    e :: rest => {
++      let initial = generated_world(e.seed);
++      let r = run_generated("corpus_${e.seed}", initial);
++      let _ = spk_row("seed-${e.seed}", r, initial.clock_ms);
++      spk_seeds(rest)
++    }
++  }
++}
++
++export func families_probe() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
++  let _ = println("FAMPROBE begin");
++  let _ = spk_seeds(fixed_bank());
++  let initial = empty_terminal_world();
++  let r = run_recording("corpus_constructed", initial);
++  let _ = spk_row("constructed-empty-terminal", r, initial.clock_ms);
++  println("FAMPROBE end")
++}
++
++
++-- ============================================================================
++-- SPIKE ONLY, part 4 — the prototype. NEVER MERGES.
++-- ============================================================================
++-- A = the invariant set (driver's structural retry bound, no decision budget), which in
++-- this worktree carries the two prototype rule changes in dst_invariants.ail.
++-- X = three rules computed HERE from the run's own configuration and its two channels:
++--   step-budget:provider-calls-exceed-budget   provider calls in the trace > the step budget
++--   step-budget:retry-with-one-step-left        a StreamErrorRetry at step >= budget - 1
++--   census:provider-calls-unbalanced            provider calls in the TRACE != provider
++--                                               interactions in the world's LOG
++-- X is printed in the row's second slot so part 2's tested scorer reads it unchanged.
++
++pure func spk_prepared(rs: [LedgerRecord]) -> int {
++  match rs {
++    [] => 0,
++    r :: rest =>
++      (match r { WireRecord(e) => match e { ProviderCallPrepared(_) => 1, _ => 0 }, _ => 0 }) + spk_prepared(rest)
++  }
++}
++
++pure func spk_edge_retries(rs: [LedgerRecord], budget: int) -> int {
++  match rs {
++    [] => 0,
++    r :: rest =>
++      (match r {
++         WireRecord(e) => match e { StreamErrorRetry(i) => if i.step >= budget - 1 then 1 else 0, _ => 0 },
++         _ => 0
++       }) + spk_edge_retries(rest, budget)
++  }
++}
++
++pure func spk_log_providers(xs: [Interaction]) -> int {
++  match xs {
++    [] => 0,
++    i :: rest => (if interaction_kind(i) == "expect_provider" then 1 else 0) + spk_log_providers(rest)
++  }
++}
++
++pure func spk_messages(vs: [Violation]) -> [string] {
++  match vs { [] => [], v :: rest => violation_message(v) :: spk_messages(rest) }
++}
++
++func spk_say(label: string, xs: [string]) -> () ! {IO} {
++  match xs { [] => (), x :: rest => { let _ = println("FAMMSG ${label} | ${x}"); spk_say(label, rest) } }
++}
++
++func spk_row2(label: string, r: TracedSessionResult, clock0: int, budget: int) -> () ! {IO} {
++  let a = evaluate(execution_of(r, clock0, NoReplay, 0 - 1, budget - 1, 0, [], unknown_replay_metadata()));
++  let calls = spk_prepared(r.trace.records);
++  let logged = spk_log_providers(r.world.log);
++  let edge = spk_edge_retries(r.trace.records, budget);
++  let x1 = if calls > budget then ["step-budget:provider-calls-exceed-budget"] else [];
++  let x2 = if edge > 0 then ["step-budget:retry-with-one-step-left"] else [];
++  let x3 = if calls != logged then ["census:provider-calls-unbalanced"] else [];
++  let ended = match r.result { Ok(_) => "ok", Err(_) => "err" };
++  let _ = println("FAMROW ${label} ended=${ended} n=${List.length(r.world.log)} A=[${spk_join(spk_rules(a))}] B=[${spk_join(x1 ++ x2 ++ x3)}]");
++  let _ = spk_say(label, spk_messages(a));
++  println("FAMNUM ${label} provider_calls_trace=${calls} provider_calls_log=${logged} budget=${budget} edge_retries=${edge}")
++}
++
++func spk_seeds2(es: [BankEntry])
++  -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
++  match es {
++    [] => (),
++    e :: rest => {
++      let initial = generated_world(e.seed);
++      let r = run_generated("corpus_${e.seed}", initial);
++      let _ = spk_row2("seed-${e.seed}", r, initial.clock_ms, 12);
++      spk_seeds2(rest)
++    }
++  }
++}
++
++export func families_probe2() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
++  let _ = println("FAMPROBE begin");
++  let _ = spk_seeds2(fixed_bank());
++  let initial = empty_terminal_world();
++  let r = run_recording("corpus_constructed", initial);
++  let _ = spk_row2("constructed-empty-terminal", r, initial.clock_ms, 12);
++  println("FAMPROBE end")
++}
++
++
++-- ============================================================================
++-- SPIKE ONLY, part 5 — the prototype of ADR-003 v0.2's draft. NEVER MERGES.
++-- ============================================================================
++-- A = the invariant set with the v0.2 rule changes in dst_invariants.ail.
++-- X = six gate-side rules, each stated over the run's own configuration, its returned
++-- trace and the DELTA of its world over the world it started from:
++--   step-budget:provider-calls-exceed-budget
++--   step-budget:retry-with-budget-at-most-one     a retry at a step with budget - step <= 1
++--   progress:driver-steps-not-contiguous          provider-call steps are not 0, 1, 2, ...
++--   census:provider-calls-unbalanced              trace calls != provider interactions logged
++--   census:tool-dispatches-unbalanced             trace dispatch starts != tool interactions logged
++--   witness:ordinals-not-contiguous               world_request ordinals are not +1 from the
++--                                                 starting world's to the returned world's
++
++pure func spk_steps(rs: [LedgerRecord]) -> [int] {
++  match rs {
++    [] => [],
++    r :: rest =>
++      match r {
++        WireRecord(e) => match e { ProviderCallPrepared(i) => i.step :: spk_steps(rest), _ => spk_steps(rest) },
++        _ => spk_steps(rest)
++      }
++  }
++}
++
++pure func spk_contiguous_from(xs: [int], want: int) -> bool {
++  match xs { [] => true, x :: rest => if x == want then spk_contiguous_from(rest, want + 1) else false }
++}
++
++pure func spk_ordinals(rs: [LedgerRecord]) -> [int] {
++  match rs {
++    [] => [],
++    r :: rest =>
++      match r {
++        WireRecord(e) => match e { WorldRequest(i) => i.ordinal :: spk_ordinals(rest), _ => spk_ordinals(rest) },
++        _ => spk_ordinals(rest)
++      }
++  }
++}
++
++pure func spk_last_or(xs: [int], d: int) -> int {
++  match xs { [] => d, x :: rest => spk_last_or(rest, x) }
++}
++
++pure func spk_dispatch_starts(rs: [LedgerRecord]) -> int {
++  match rs {
++    [] => 0,
++    r :: rest =>
++      (match r { WireRecord(e) => match e { V2ToolDispatchStart(_) => 1, _ => 0 }, _ => 0 }) + spk_dispatch_starts(rest)
++  }
++}
++
++pure func spk_log_kind(xs: [Interaction], kind: string) -> int {
++  match xs {
++    [] => 0,
++    i :: rest => (if interaction_kind(i) == kind then 1 else 0) + spk_log_kind(rest, kind)
++  }
++}
++
++pure func spk_edge_retries2(rs: [LedgerRecord], budget: int) -> int {
++  match rs {
++    [] => 0,
++    r :: rest =>
++      (match r {
++         WireRecord(e) => match e { StreamErrorRetry(i) => if budget - i.step <= 1 then 1 else 0, _ => 0 },
++         _ => 0
++       }) + spk_edge_retries2(rest, budget)
++  }
++}
++
++func spk_row3(label: string, r: TracedSessionResult, initial: WorldState, budget: int) -> () ! {IO} {
++  let a = evaluate(execution_of(r, initial.clock_ms, NoReplay, 0 - 1, budget - 1, 0, [], unknown_replay_metadata()));
++  let steps = spk_steps(r.trace.records);
++  let calls = List.length(steps);
++  let logged = spk_log_kind(r.world.log, "expect_provider") - spk_log_kind(initial.log, "expect_provider");
++  let edge = spk_edge_retries2(r.trace.records, budget);
++  let ords = spk_ordinals(r.trace.records);
++  let ord_ok = spk_contiguous_from(ords, initial.ordinal + 1) && spk_last_or(ords, initial.ordinal) == r.world.ordinal;
++  let starts = spk_dispatch_starts(r.trace.records);
++  let tools = spk_log_kind(r.world.log, "expect_tool") - spk_log_kind(initial.log, "expect_tool");
++  let x1 = if calls > budget then ["step-budget:provider-calls-exceed-budget"] else [];
++  let x2 = if edge > 0 then ["step-budget:retry-with-budget-at-most-one"] else [];
++  let x3 = if spk_contiguous_from(steps, 0) then [] else ["progress:driver-steps-not-contiguous"];
++  let x4 = if calls != logged then ["census:provider-calls-unbalanced"] else [];
++  let x5 = if starts != tools then ["census:tool-dispatches-unbalanced"] else [];
++  let x6 = if ord_ok then [] else ["witness:ordinals-not-contiguous"];
++  let ended = match r.result { Ok(_) => "ok", Err(_) => "err" };
++  let _ = println("FAMROW ${label} ended=${ended} n=${List.length(r.world.log)} A=[${spk_join(spk_rules(a))}] B=[${spk_join(x1 ++ x2 ++ x3 ++ x4 ++ x5 ++ x6)}]");
++  let _ = spk_say(label, spk_messages(a));
++  println("FAMNUM ${label} calls=${calls} logged=${logged} budget=${budget} edge_retries=${edge} dispatch_starts=${starts} tools_logged=${tools} ordinals=${List.length(ords)} last_ordinal=${spk_last_or(ords, initial.ordinal)} world_ordinal=${r.world.ordinal}")
++}
++
++func spk_seeds3(es: [BankEntry])
++  -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
++  match es {
++    [] => (),
++    e :: rest => {
++      let initial = generated_world(e.seed);
++      let r = run_generated("corpus_${e.seed}", initial);
++      let _ = spk_row3("seed-${e.seed}", r, initial, 12);
++      spk_seeds3(rest)
++    }
++  }
++}
++
++export func families_probe3() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
++  let _ = println("FAMPROBE begin");
++  let _ = spk_seeds3(fixed_bank());
++  let initial = empty_terminal_world();
++  let r = run_recording("corpus_constructed", initial);
++  let _ = spk_row3("constructed-empty-terminal", r, initial, 12);
++  println("FAMPROBE end")
++}

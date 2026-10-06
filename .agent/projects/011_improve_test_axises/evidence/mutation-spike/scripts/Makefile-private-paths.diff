@@ -1,0 +1,142 @@
+diff --git a/Makefile b/Makefile
+index 1d7551d4..428ff44c 100644
+--- a/Makefile
++++ b/Makefile
+@@ -232,12 +232,12 @@ smoke_no_delegated_storm:
+ smoke_parity:
+ 	@bash -euo pipefail -c '\
+ 	if [ -n "$${PARITY_BASELINE:-}" ]; then \
+-		./scripts/dst/phase_a_event_parity.sh /tmp/phase_a_parity_after; \
+-		diff -r "$$PARITY_BASELINE" /tmp/phase_a_parity_after; \
++		./scripts/dst/phase_a_event_parity.sh $(CURDIR)/tmp/spike/phase_a_parity_after; \
++		diff -r "$$PARITY_BASELINE" $(CURDIR)/tmp/spike/phase_a_parity_after; \
+ 	else \
+-		./scripts/dst/phase_a_event_parity.sh /tmp/phase_a_parity_a; \
+-		./scripts/dst/phase_a_event_parity.sh /tmp/phase_a_parity_b; \
+-		diff -r /tmp/phase_a_parity_a /tmp/phase_a_parity_b; \
++		./scripts/dst/phase_a_event_parity.sh $(CURDIR)/tmp/spike/phase_a_parity_a; \
++		./scripts/dst/phase_a_event_parity.sh $(CURDIR)/tmp/spike/phase_a_parity_b; \
++		diff -r $(CURDIR)/tmp/spike/phase_a_parity_a $(CURDIR)/tmp/spike/phase_a_parity_b; \
+ 	fi'
+ 
+ # ADR-001 D1's substrate gate (WI-C2), asserted clause by clause.
+@@ -1782,11 +1782,11 @@ run_report:
+ latency_pair:
+ 	@set -eu; \
+ 	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+-	  --ai-stub --entry main scripts/dst/latency_pair_dst.ail < /dev/null > /tmp/latency_pair.out 2>&1 || \
+-	  { tail -40 /tmp/latency_pair.out; exit 1; }; \
+-	grep -v '^{' /tmp/latency_pair.out; \
+-	late=$$(grep -c '"fault_class":"ToolDeadlineExceeded"' /tmp/latency_pair.out || true); \
+-	total=$$(grep -c '"type":"native_tool_results"' /tmp/latency_pair.out || true); \
++	  --ai-stub --entry main scripts/dst/latency_pair_dst.ail < /dev/null > $(CURDIR)/tmp/spike/latency_pair.out 2>&1 || \
++	  { tail -40 $(CURDIR)/tmp/spike/latency_pair.out; exit 1; }; \
++	grep -v '^{' $(CURDIR)/tmp/spike/latency_pair.out; \
++	late=$$(grep -c '"fault_class":"ToolDeadlineExceeded"' $(CURDIR)/tmp/spike/latency_pair.out || true); \
++	total=$$(grep -c '"type":"native_tool_results"' $(CURDIR)/tmp/spike/latency_pair.out || true); \
+ 	if [ "$$late" -eq 0 ]; then \
+ 		echo "FAIL: the driver emitted no ToolDeadlineExceeded to the wire. Every"; \
+ 		echo "      assertion in the suite reads the interaction log, which the recorder"; \
+@@ -1848,17 +1848,17 @@ corpus_pr:
+ 	rm -rf .ailang/dst-corpus; \
+ 	start=$$(date +%s); \
+ 	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+-	  --ai-stub --entry main scripts/dst/corpus_pr_dst.ail < /dev/null > /tmp/corpus_pr.out 2>&1 || \
+-	  { grep -v '^{' /tmp/corpus_pr.out | tail -40; exit 1; }; \
+-	grep -v '^{' /tmp/corpus_pr.out; \
+-	denied=$$(grep -c '"type":"native_tool_denied"' /tmp/corpus_pr.out || true); \
+-	empty=$$(grep -c '"type":"empty_stop_finalize"' /tmp/corpus_pr.out || true); \
+-	tf=$$(grep -c '"fault_class":"ToolFailed"' /tmp/corpus_pr.out || true); \
+-	tcm=$$(grep -c '"fault_class":"ToolCorrelationMismatch"' /tmp/corpus_pr.out || true); \
+-	tde=$$(grep -c '"fault_class":"ToolDeadlineExceeded"' /tmp/corpus_pr.out || true); \
+-	retry=$$(grep -c '"type":"stream_error_retry"' /tmp/corpus_pr.out || true); \
+-	pfail=$$(grep -o '"error":"generated E_PROVIDER_[A-Z_]*"' /tmp/corpus_pr.out | wc -l); \
+-	badargs=$$(grep -o '"arguments":{}' /tmp/corpus_pr.out | wc -l); \
++	  --ai-stub --entry main scripts/dst/corpus_pr_dst.ail < /dev/null > tmp/spike/corpus_pr.out 2>&1 || \
++	  { grep -v '^{' tmp/spike/corpus_pr.out | tail -40; exit 1; }; \
++	grep -v '^{' tmp/spike/corpus_pr.out; \
++	denied=$$(grep -c '"type":"native_tool_denied"' tmp/spike/corpus_pr.out || true); \
++	empty=$$(grep -c '"type":"empty_stop_finalize"' tmp/spike/corpus_pr.out || true); \
++	tf=$$(grep -c '"fault_class":"ToolFailed"' tmp/spike/corpus_pr.out || true); \
++	tcm=$$(grep -c '"fault_class":"ToolCorrelationMismatch"' tmp/spike/corpus_pr.out || true); \
++	tde=$$(grep -c '"fault_class":"ToolDeadlineExceeded"' tmp/spike/corpus_pr.out || true); \
++	retry=$$(grep -c '"type":"stream_error_retry"' tmp/spike/corpus_pr.out || true); \
++	pfail=$$(grep -o '"error":"generated E_PROVIDER_[A-Z_]*"' tmp/spike/corpus_pr.out | wc -l); \
++	badargs=$$(grep -o '"arguments":{}' tmp/spike/corpus_pr.out | wc -l); \
+ 	for pair in "session.c2_loop/approval_denied:$$denied" \
+ 	            "session.c2_loop/empty_stop_finalize:$$empty" \
+ 	            "tool_phase.tool_outcome_message/ToolFailed:$$tf" \
+@@ -1888,7 +1888,7 @@ corpus_pr:
+ 		echo "      construction's justification and must be RECORDED rather than absorbed."; \
+ 		exit 1; \
+ 	fi; \
+-	served=$$(grep -c '"type":"native_tool_calls"' /tmp/corpus_pr.out || true); \
++	served=$$(grep -c '"type":"native_tool_calls"' tmp/spike/corpus_pr.out || true); \
+ 	if [ "$$served" -eq 0 ]; then \
+ 		echo "FAIL: the wire carries $$denied approval denials and NOT ONE executed tool call."; \
+ 		echo "      A bank in which the approval channel denied everything reaches"; \
+@@ -1909,9 +1909,9 @@ corpus_pr:
+ 		echo "      red rather than an empty pattern that matches nothing and passes."; \
+ 		exit 1; \
+ 	fi; \
+-	leak=$$(grep '"type":"stream_error_retry"' /tmp/corpus_pr.out | grep -cE "$$nonretry_re" || true); \
+-	fin_nonretry=$$(grep '"type":"run_summary"' /tmp/corpus_pr.out | grep -oE "\"error\":\"generated ($$nonretry_re)\"" | wc -l); \
+-	retry_retryable=$$(grep '"type":"stream_error_retry"' /tmp/corpus_pr.out | grep -cE "$$retry_re" || true); \
++	leak=$$(grep '"type":"stream_error_retry"' tmp/spike/corpus_pr.out | grep -cE "$$nonretry_re" || true); \
++	fin_nonretry=$$(grep '"type":"run_summary"' tmp/spike/corpus_pr.out | grep -oE "\"error\":\"generated ($$nonretry_re)\"" | wc -l); \
++	retry_retryable=$$(grep '"type":"stream_error_retry"' tmp/spike/corpus_pr.out | grep -cE "$$retry_re" || true); \
+ 	if [ "$$leak" -ne 0 ]; then \
+ 		echo "FAIL: $$leak stream_error_retry record(s) on the wire carry a NON-RETRYABLE"; \
+ 		echo "      provider error code. session.c2_loop branches on AIError.retryable through"; \
+@@ -2028,27 +2028,27 @@ corpus_pr:
+ corpus_rotating:
+ 	@set -eu; \
+ 	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+-	  --ai-stub --entry main scripts/dst/corpus_rotating_dst.ail < /dev/null > /tmp/corpus_rot.out 2>&1 || \
+-	  { grep -v '^{' /tmp/corpus_rot.out | tail -40; exit 1; }; \
+-	grep -v '^{' /tmp/corpus_rot.out; \
++	  --ai-stub --entry main scripts/dst/corpus_rotating_dst.ail < /dev/null > $(CURDIR)/tmp/spike/corpus_rot.out 2>&1 || \
++	  { grep -v '^{' $(CURDIR)/tmp/spike/corpus_rot.out | tail -40; exit 1; }; \
++	grep -v '^{' $(CURDIR)/tmp/spike/corpus_rot.out; \
+ 	job() { \
+ 		env MOTOKO_DST_SCALE=demo "$$@" ailang run \
+ 		  --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+ 		  --ai-stub --entry scheduled_run scripts/dst/corpus_rotating_dst.ail \
+-		  < /dev/null > /tmp/corpus_job.out 2>&1; \
++		  < /dev/null > $(CURDIR)/tmp/spike/corpus_job.out 2>&1; \
+ 	}; \
+ 	if job MOTOKO_DST_EPOCH=5; then \
+-		echo "  ✓ the job runs a real window off epoch 5: $$(grep -o 'WINDOWROW.*' /tmp/corpus_job.out)"; \
++		echo "  ✓ the job runs a real window off epoch 5: $$(grep -o 'WINDOWROW.*' $(CURDIR)/tmp/spike/corpus_job.out)"; \
+ 	else \
+ 		echo "FAIL: the scheduled job did not complete a clean window."; \
+-		grep -v '^{' /tmp/corpus_job.out | tail -30; exit 1; \
++		grep -v '^{' $(CURDIR)/tmp/spike/corpus_job.out | tail -30; exit 1; \
+ 	fi; \
+-	first5=$$(grep -o 'WINDOWROW epoch=5 first=[0-9]*' /tmp/corpus_job.out | head -1); \
++	first5=$$(grep -o 'WINDOWROW epoch=5 first=[0-9]*' $(CURDIR)/tmp/spike/corpus_job.out | head -1); \
+ 	if job MOTOKO_DST_EPOCH=6; then :; else \
+ 		echo "FAIL: the scheduled job did not complete a clean window at epoch 6."; \
+-		grep -v '^{' /tmp/corpus_job.out | tail -30; exit 1; \
++		grep -v '^{' $(CURDIR)/tmp/spike/corpus_job.out | tail -30; exit 1; \
+ 	fi; \
+-	first6=$$(grep -o 'WINDOWROW epoch=6 first=[0-9]*' /tmp/corpus_job.out | head -1); \
++	first6=$$(grep -o 'WINDOWROW epoch=6 first=[0-9]*' $(CURDIR)/tmp/spike/corpus_job.out | head -1); \
+ 	if [ -z "$$first5" ] || [ -z "$$first6" ]; then \
+ 		echo "FAIL: the job emitted no WINDOWROW to re-derive the rotation from."; \
+ 		exit 1; \
+@@ -2083,11 +2083,11 @@ corpus_rotating:
+ 			echo "      requires the epoch to resolve rather than default. Each of the four"; \
+ 			echo "      is forced into the REAL JOB here rather than asserted against a"; \
+ 			echo "      mutated validator, because the thing that has to fail is the job."; \
+-			grep -v '^{' /tmp/corpus_job.out | tail -20; \
++			grep -v '^{' $(CURDIR)/tmp/spike/corpus_job.out | tail -20; \
+ 			exit 1; \
+ 		fi; \
+-		rule=$$(grep -o 'REJECTED: [a-z-]*' /tmp/corpus_job.out | head -1); \
+-		rule=$${rule:-$$(grep -o '\[epoch-not-resolved\]' /tmp/corpus_job.out | head -1)}; \
++		rule=$$(grep -o 'REJECTED: [a-z-]*' $(CURDIR)/tmp/spike/corpus_job.out | head -1); \
++		rule=$${rule:-$$(grep -o '\[epoch-not-resolved\]' $(CURDIR)/tmp/spike/corpus_job.out | head -1)}; \
+ 		echo "  ✓ forced '$$name': the job exited $$rc — $$rule"; \
+ 	done; \
+ 	entry=$$(grep -o 'entry scheduled_run' .github/workflows/dst-corpora.yml | head -1); \
