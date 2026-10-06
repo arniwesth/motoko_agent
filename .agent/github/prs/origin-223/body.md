@@ -16,7 +16,7 @@ It comes out of the operator-feasibility spike `RESEARCH-test-axes-beyond-dst.md
 The spike found two single-edit driver defects that add no failure to `make dst`, and showed that
 the invariant set does not see them even when it is evaluated over the corpus. The spike's plan,
 its findings note, its evidence and both reviews are added with the ADR, because the ADR's numbers
-and its changes are theirs.
+and its changes are theirs. A handoff for the implementation plan is added last.
 
 Documents only. No source, gate or `Makefile` change.
 
@@ -27,8 +27,10 @@ Documents only. No source, gate or `Makefile` change.
 - docs(011): ADR-003 accepted — the operator's six rulings of 2026-10-06
 - docs(011): two reviews of ADR-003 and the spike's part 5 — the amended rules, run
 - docs(011): ADR-003 v0.2 accepted — the amendment after review, and the operator's rulings
+- docs(011): the spike's part 6 — the journal control, with the prototype
+- docs(011): handoff — write the plan that implements ADR-003
 
-58 files changed.
+67 files changed.
 
 ## Governing docs
 
@@ -38,6 +40,7 @@ Documents only. No source, gate or `Makefile` change.
 - `.agent/projects/011_improve_test_axises/NOTE-spike-findings-mutation-operator-feasibility.md`
 - `.agent/projects/011_improve_test_axises/PLAN-spike-mutation-operator-feasibility.md`
 - `.agent/projects/011_improve_test_axises/evidence/mutation-spike/README.md`
+- `.agent/projects/011_improve_test_axises/HANDOFF-write-judge-recoveries-plan.md`
 
 The ADR sits under `.agent/projects/009_motoko_dst_execution/ADR-001-deterministic-test-world-architecture.md`
 D2 and D7 and does not reopen it (ADR-003 D8). It applies
@@ -72,6 +75,9 @@ D1 and D7 keep their rulings.
 - **No rule is accepted before `make eval_matrix` has run with it.** D6 makes the journal callers
   of `evaluate` the first of four precondition controls. That target is outside `make dst` and
   named by no workflow.
+- **The implementation plan is written by a fresh session, from the handoff.** Per
+  `.agent/meta-decisions/author-each-artifact-in-the-session-whose-assets-it-consumes.md`. Checked
+  by `PLAN-judge-recoveries-on-real-runs.md` appearing in project 011 from another session.
 - **§3.3's planning figure stops being used.** The findings note measures a full sweep at 50
   minutes cold and about 31 warm against the 196 seconds §3.3 budgets. The research note itself is
   not edited here.
@@ -98,6 +104,11 @@ AILANG v0.47.2. They are in the findings note; the tables are in
   that breaks a stated rule goes red on that rule. One reviewer mutant, a retry that rewinds the
   generator, passes everything and is listed as known and unseen. 24 of 24 predicted; the rules
   were written from these mutants, so read that score for what it is.
+- [x] **Part 6, the journal control at prototype level.** `make eval_matrix` with the v0.2
+  prototype is identical to the unmutated tree's run: 28 suites, 621 rows. A known-bad control, one
+  wrong row in D2's table, turns both live journal suites red on their suspended run. The baseline
+  is itself red on 3 of 28 suites at `259265b5`, for reasons that are project 013's, so the matrix
+  is read as a difference.
 - [x] **Two independent reviews of v0.1**, each in its own worktree at the reviewed commit, each
   running its own probes. Every finding accepted was re-observed first. Dispositions are in the
   review records.
@@ -111,7 +122,10 @@ Not done:
 - [ ] No gate was run on this branch. It changes documents only.
 - [ ] v0.2 has not been read by a second reader. The operator ruled against a second general
   review round; the next independent check is the implementation's acceptance run.
-- [ ] The four controls D6 makes a precondition of acceptance have not been run.
+- [ ] Of the four controls D6 makes a precondition of acceptance, three have not been run. The
+  fourth, the journal callers, has been run with the prototype only: it had no D4, its
+  committed-tree path was not reached, and its known-bad control covers D2's `Err` half alone.
+- [ ] The generated `MATRIX.tsv` files and the matrix suites' raw logs are not committed.
 - [ ] `score3.py` treats a gate that timed out as green. No part-3 gate timed out; the scorer is
   left as it ran and the defect is recorded in the findings note.
 - [ ] The raw gate and sweep logs, about 50 MB, are not committed. They are in the spike worktree.
