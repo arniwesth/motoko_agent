@@ -19,7 +19,8 @@ Relates to:
 - [035 research note][r035], §4.3, §5 and §6.5: evidence fields per property, mutation verdicts, the generator comparison.
 - [The mutation discipline][rule]: one mutant per stated rule, and the kill rule.
 - `papers/motoko-dst-report/DRAFT-3.md`, §7.5 and §9.2: the report's statement that a systematic study is separate work.
-- [`NOTE-dst-and-mutation-testing-as-one-method.md`](NOTE-dst-and-mutation-testing-as-one-method.md): the thesis that simulation and mutation complete each other, and what publishing it would need. Kept apart from this survey.
+- [`NOTE-dst-and-mutation-testing-as-one-method.md`](NOTE-dst-and-mutation-testing-as-one-method.md): what is left of the thesis that simulation and mutation complete each other, after the literature review, and what publishing it would need. Kept apart from this survey.
+- [`RESEARCH-prior-art-dst-and-mutation-testing.md`](RESEARCH-prior-art-dst-and-mutation-testing.md): the literature review of 2026-10-06, written after this note. It finds the classification in §4.2 in hardware verification since 2007, and the pairing with simulation published by Antithesis in September 2026.
 
 ## 1. Question and short answer
 
@@ -199,7 +200,9 @@ A cell needs three states and, when a mutant is not killed, the stage it stopped
 
 - **Killed by this family**, on a named member, with the rule printed.
 - **Cannot see**, with one sentence saying why no run could make this family's rule false. This is the paper's φ-trivially different, and rule 4's sentence, per family.
-- **Not killed**, with the stage: not reached, reached with no difference on any observed channel, or different on an observed channel and not revealed. The last is an oracle gap.
+- **Not killed**, with the stage: not reached, reached with no difference on any observed channel, or different on an observed channel and not revealed. The last is a weak oracle.
+
+These stages are not ours. Hardware verification calls them non-activated, non-propagated and non-detected, and has sold tools that sort injected faults this way since 2007; see the [literature review](RESEARCH-prior-art-dst-and-mutation-testing.md).
 
 A fourth fact belongs beside the cell and not in it: which other check went red. [035 §6.5][r035] already lists these verdicts in prose.
 
