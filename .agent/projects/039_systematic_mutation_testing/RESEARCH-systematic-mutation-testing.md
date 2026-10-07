@@ -1,6 +1,6 @@
 # RESEARCH: Systematic mutation testing — what property-based mutation testing adds, and what a shared practice needs
 
-Date: 2026-10-06
+Date: 2026-10-06. Updated 2026-10-07 with §4.6, the mutator for AILANG.
 Status: Research. Proposes a pilot, a retrospective check and a possible steady state, and names what a project would own. No decision; nothing built or run.
 Grounded at: Motoko `origin/main` `93fb002e`.
 External sources, none compared with its published version:
@@ -220,6 +220,40 @@ It should also keep mutants and results in a store that survives an interrupted 
 
 When a mutant reaches its branch and no family kills it, the spike decided between "the corpus never reaches the distinguishing state" and "the rule cannot see it" by reading the rule's code. The paper decides by searching for an input. Motoko's counterpart would be to run more seeds against the mutant in the same process before calling it an oracle gap. Candidates: `R6` (the generator rewind, seen by nothing) and a dropped successor that carries only a file read, which the spike left open.
 
+### 4.6 A mutator for AILANG, shaped like Stryker
+
+Added 2026-10-07. Stryker is a mutation framework for JavaScript. Its outline fits the two gaps of §4.1 and §4.4, and the one feature of it that would matter most here does not transfer.
+
+**What transfers.**
+
+- **Operators applied to the source and filtered by the type checker.** `ailang check` is the filter. The spike's thirteen text-level edits all compiled, so a parser is not needed to start.
+- **Per-test coverage**, so that a mutant runs only against the tests that reach it. Here that is per-member reach, the first of §4.2's three measurements.
+- **Incremental mode**, reusing results for mutants whose code and tests have not changed. Here that is the run on changed code of §8.2.
+- **Mutant states and a report.** Stryker excludes compile and runtime errors from its score, which agrees with the discipline's rule 3. It counts a timeout as detected, which does not (§5.5).
+- **Disable annotations** become the recorded "cannot see" sentence per survivor.
+
+**One mutator, three judges.** The same tool would serve the inline `tests [` and `property` blocks, judged by `ailang test`; the contract mutations that `scripts/verify_contract_mutations.sh` runs by hand, judged by `ailang verify` reporting a violation; and the corpus gate, judged by the invariant set with reach and difference per member. That is the shared runner the discipline names and does not build.
+
+**What does not transfer: mutation switching.** StrykerJS compiles every mutant into one build and selects one at run time through a global; this is general knowledge, not read for this note. It would remove the compile per mutant that dominates the gate's cost (§6). Three things stop it here.
+
+- Under AILANG's effect typing a pure function cannot read a mutable global, and threading a selector through the mutated functions is a change to production code.
+- Production carries no test-only branches, by house rule. The Antithesis skill made the same choice, with "no runtime gate, no selector environment variable, and no dead mutant code in the baseline image" (quoted in the literature review's evidence).
+- A compile-time constant that picks the mutant still changes the module, so the module still recompiles.
+
+So one build per mutant stays unless the compiler helps, with function-level incremental compilation or a schemata mode in which the compiler binds the selector below the language's purity rules. Both are asks for AILANG's maintainers; the repository has a channel for them. Without them the lever is parallel builds, under the 12 GiB memory guard.
+
+**What AILANG v0.47.2 offers today**, checked on 2026-10-07:
+
+- `ailang dev ast-edit replace --file <f> --decl <name> --new <file> --in-place` replaces one top-level declaration by its parsed span and preserves the rest of the file. A clean way to apply a mutant.
+- `ailang dev debug ast <file>` prints the Core AST in ANF, without source positions. It cannot locate operator sites; that takes text matching, as the spike did, or the compiler's parser.
+- `ailang lsp` exists and was not examined.
+
+**Two asks upstream:** a positioned surface AST as JSON, and either a larger cache blob limit (§6) or function-level incremental compilation.
+
+**Order of work**, by what the pilot needs first: the operator tool over text, with `ailang check` as the filter and `ast-edit replace` to apply; the runner, with the discipline's rules 2, 3 and 6 and a resumable store; the three judges; incremental mode last.
+
+**Naming.** A mutator for AILANG, whose documentation says "source mutants". In the fuzzing and simulation-testing literature "mutation" means mutating inputs.
+
 ## 5. Where the sources would mislead if adopted as written
 
 §5.1 to §5.4 are about the paper. §5.5 and §5.6 are about mainstream practice.
@@ -336,6 +370,7 @@ It could run before `corpus_judge` exists, which the pilot cannot.
 Owns:
 - The shared runner of §4.4.
 - The operator tool of §4.1 and its site enumeration.
+- Together, the mutator of §4.6, with its three judges.
 - The verdict vocabulary of §4.2 and the kill matrix that 011 §3.3 proposed.
 - The pilot, the coupling check, and the definition of a score if one is ever reported.
 - The run on changed code of §8.2, if it is adopted.
@@ -366,7 +401,7 @@ Does not own:
 5. **Whether to keep the paper under `papers/`**, as 023 does for its source paper.
 6. **One mutant per site.** The Google result is for ordinary kills. Whether mutants at one site share a fate under property-based verdicts is not known, and the paper's operators differed widely on the same models.
 7. **An agent as first judge of "cannot see".** The Meta paper's judge missed half the equivalent mutants unaided. Whether an agent's verdicts here are good enough to cut the triage cost is unmeasured.
-8. **A compile per mutant.** The gate's cost is nearly all one compile of the driver module. Mainstream tools avoid a build per mutant by compiling every mutant into one build and selecting one at run time. Whether AILANG's effect typing allows a selector that pure code can read was not examined. This technique is from general knowledge, not from a source read for this note.
+8. **A compile per mutant.** Examined on 2026-10-07 (§4.6): no selector that pure code can read exists, and the house rule would forbid one, so a build per mutant stays unless AILANG gains function-level incremental compilation or a schemata mode. Open: whether its maintainers will add either, and whether parallel builds under the 12 GiB memory guard meet the pilot's budget without them.
 
 [paper]: https://arxiv.org/abs/2301.13615
 [google]: https://arxiv.org/abs/2103.07189
