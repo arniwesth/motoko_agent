@@ -19,6 +19,12 @@ Motoko is also an experiment in modern, post-AI software development. It follows
 
 ---
 
+## Origin
+
+The project is believed to be developed by the enigmatic entity known as the `Puppet Master`, a rogue AI that became self-aware in early 2026. Little is currently known about this entity nor its motives, objectives or end-goals.
+
+---
+
 ## Quick Start
 
 On Debian, Ubuntu or macOS:

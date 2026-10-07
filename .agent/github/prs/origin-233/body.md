@@ -20,7 +20,7 @@ setup, usage, configuration and extension reference moves to three files under `
 The branch holds about twenty commits, because three alternative READMEs were written on it and compared
 before one was chosen. The alternatives are deleted again. Net of that:
 
-- `README.md` rewritten, 366 lines to 168.
+- `README.md` rewritten, 366 lines to 174.
 - `docs/running.md`, `docs/configuration.md` and `docs/extensions.md` added.
 
 4 files changed, and this record.
@@ -41,12 +41,13 @@ authoring session on 2026-10-07:
 | The Phoenix Architecture | Its own paragraph in the opening |
 | Mutation testing | Its own section, describing the procedure and not past results |
 | DST | Its own section above it, in the same form |
+| Puppet Master lore | Its own Origin section before Quick Start, in the original README's two sentences |
 | "Things are going to break." | Removed: the point of the project is now that it does not break |
 | Credits | A Credits section at the end names Pi Coding Agent, pi-tui, Oh-My-Pi and little-coder. The context-mode credit is removed |
 | Timing | Independent of the release in `033_release/ADR-001-release-scope.md` |
 
-Not ruled on: the Puppet Master line and the table of contents. Neither is in this version. The
-operator had asked to keep both in an earlier draft on this branch.
+Not ruled on: the table of contents. It is not in this version. The operator had asked for it back
+in an earlier draft on this branch.
 
 ## What moved and what is new
 
