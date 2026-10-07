@@ -79,6 +79,43 @@ func resolve(name: string, cfg: RuntimeConfig) -> Option[ExtRegistration] ! {AI,
 -- that is not JSON with a `type`. A bare print would leave the operator with a
 -- runtime that exits 2 for no stated reason -- and, from a boot pre-spawn, a
 -- fresh runtime dying the same way on every prompt.
+--
+-- `admit_registration` is the boundary for ONE resolved registration: `Some`
+-- admits the entry, `None` omits it, and a refusal exits 2. It is exported so
+-- the empty-registration arms have a caller. No installable extension
+-- registers nothing, and the registration rule (031 ADR-001 D2 (a)) rejects
+-- one that would do so on a condition, so `make verify_strict_extensions`
+-- passes this function an empty registration of its own.
+export func admit_registration(id: string, reg: ExtRegistration, cfg: RuntimeConfig) -> Option[ExtEntry] ! {IO} {
+  match normalize_registration(id, reg.config, reg.caps) {
+    Err(e) => {
+      let _ = println(encode(jo([
+        kv("type", js("error")),
+        kv("message", js("extension registry rejected: ${rejection_message(e)}"))])));
+      let _ = exit(2);
+      None
+    },
+    Ok(entry) =>
+      if List.length(entry.caps) == 0 then {
+        -- D7 omits an empty registration. Under extensions.strict an
+        -- extension that declines to register (e.g. one gating on its
+        -- own config) is a profile that would run without it: refuse.
+        if cfg.extensions.strict then {
+          let _ = println(encode(jo([
+            kv("type", js("error")),
+            kv("message", js("extensions.strict: extension '${id}' registers no capability atom; refusing to start rather than run without it"))])));
+          let _ = exit(2);
+          None
+        } else {
+          let _ = println(encode(jo([
+            kv("type", js("warning")),
+            kv("message", js("extension '${id}' registers no capability atom; omitted from the registry (D7)"))])));
+          None
+        }
+      } else Some(entry)
+  }
+}
+
 func parse_tokens(xs: [string], idx: int, acc: [ExtEntry], cfg: RuntimeConfig) -> ExtRegistry ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   match xs {
     [] => { entries: acc },
@@ -104,36 +141,11 @@ func parse_tokens(xs: [string], idx: int, acc: [ExtEntry], cfg: RuntimeConfig) -
               kv("message", js("extension '${name}' in extensions.order is not installed; skipped"))])));
             parse_tokens(rest, idx + 1, acc, cfg)
           },
-        Some(reg) => {
-          let id = "${name}#${show(idx)}";
-          match normalize_registration(id, reg.config, reg.caps) {
-            Err(e) => {
-              let _ = println(encode(jo([
-                kv("type", js("error")),
-                kv("message", js("extension registry rejected: ${rejection_message(e)}"))])));
-              let _ = exit(2);
-              { entries: acc }
-            },
-            Ok(entry) =>
-              if List.length(entry.caps) == 0 then {
-                -- D7 omits an empty registration. Under extensions.strict an
-                -- extension that declines to register (e.g. one gating on its
-                -- own config) is a profile that would run without it: refuse.
-                if cfg.extensions.strict then {
-                  let _ = println(encode(jo([
-                    kv("type", js("error")),
-                    kv("message", js("extensions.strict: extension '${id}' registers no capability atom; refusing to start rather than run without it"))])));
-                  let _ = exit(2);
-                  { entries: acc }
-                } else {
-                  let _ = println(encode(jo([
-                    kv("type", js("warning")),
-                    kv("message", js("extension '${id}' registers no capability atom; omitted from the registry (D7)"))])));
-                  parse_tokens(rest, idx + 1, acc, cfg)
-                }
-              } else parse_tokens(rest, idx + 1, acc ++ [entry], cfg)
+        Some(reg) =>
+          match admit_registration("${name}#${show(idx)}", reg, cfg) {
+            Some(entry) => parse_tokens(rest, idx + 1, acc ++ [entry], cfg),
+            None => parse_tokens(rest, idx + 1, acc, cfg)
           }
-        }
       }
     }
   }
