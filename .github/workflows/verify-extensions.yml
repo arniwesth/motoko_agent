@@ -128,10 +128,17 @@ jobs:
       - name: DST AILANG gates — heavy
         run: make --keep-going terminal_trace smoke_driver world_state
 
-  # ~8 min. The remaining twelve gates, 267 s cold together: phase_c_l1 65,
-  # compaction_dst 59, profile_definition 47, driver_only 29, fault_catalogue 19,
-  # event_vocabulary 17, conformance 13, ext_call_inventory(_selftest) 15,
-  # attribution_table + profile_coverage + predicate_anchors 3.
+  # ~9 min. The remaining fourteen gates, 302 s cold together: phase_c_l1 65,
+  # compaction_dst 59, profile_definition 47, ext_hook_scope(_selftest) 35,
+  # driver_only 29, fault_catalogue 19, event_vocabulary 17, conformance 13,
+  # ext_call_inventory(_selftest) 15, attribution_table + profile_coverage +
+  # predicate_anchors 3.
+  #
+  # ext_hook_scope and its self-test joined on 2026-10-07. The registration-shape
+  # gate they carry was red on main from 2026-10-01 with no job running it: a
+  # fixture had gained a conditional registration (3159797d, #206), and four targets
+  # of `make dst` failed for every session that ran the sweep and for none that
+  # read CI.
   dst_gates_rest:
     name: DST gates (rest)
     runs-on: ubuntu-latest
@@ -172,7 +179,7 @@ jobs:
           make --keep-going compaction_dst conformance phase_c_l1 profile_coverage \
             profile_definition driver_only fault_catalogue event_vocabulary \
             attribution_table predicate_anchors ext_call_inventory \
-            ext_call_inventory_selftest
+            ext_call_inventory_selftest ext_hook_scope ext_hook_scope_selftest
 
   # ~11 min. The second coverage axis (WI-A17) plus smoke_parity: 334 s and
   # 108 s cold. check_core type-checks src/core and never runs its inline
