@@ -45,7 +45,7 @@ make build
 make demo_dst   # Needs an API key: a live model drives the demo
 ```
 
-Motoko breaks its own driver with a scripted one-line edit, which makes the driver lose the record of one environment variable it read. It then runs its checks on the broken code:
+Motoko plants a mutant in its own driver: a scripted one-line edit that makes the driver lose the record of one environment variable it read. It then runs its checks on the broken code:
 
 | Check | Result on the broken driver |
 |---|---|
@@ -64,7 +64,7 @@ Motoko then restores the file byte for byte. The [run note](docs/motoko-dst-demo
 - **Fault injection** - Modeled provider errors, tool failures, correlation mismatches, approval denials and deadlines
 - **Record and replay** - Recording ports turn a run into an execution program that replay serves again and checks
 - **Trace invariants** - 13 families, including tool pairing, budget accounting and journal fold; each reports whether it ran and on how much input
-- **Oracle validation** - Negative controls and targeted mutations show that a check can fail
+- **Mutation testing** - Source mutants and negative controls show that each check can fail, and which defects no check sees
 - **SMT contracts** - Z3-verified contracts on pure core functions, classified as substantive, tautology or spec-equals-body
 - **Effect-typed extensions** - A hook's signature states the effects it may perform, and a run can withhold a capability
 - **Durable sessions** - A session journal, checked reconstruction on resume, and park/wake for external waits
@@ -74,11 +74,23 @@ Learn more: [DST technical report](papers/motoko-dst-report/DRAFT-current.md) | 
 
 ---
 
+## Mutation Testing
+
+A test that has never failed has not been shown to detect anything. Motoko mutates its own source, and counts a mutant as killed only when the check written for the broken rule fails.
+
+- **Finding gaps** - Of eleven single-edit mutants in the driver's recovery code, nine turned the sweep red and two survived. The survivors became two new invariant rules and the `corpus_judge` gate
+- **Accepting the fix** - Fourteen mutants, each with its failing rule predicted in advance, were all killed as predicted. Of a blind reviewer's eight more, six were killed and two survived on code no corpus run reached; each of those now has a control run
+- **Contracts** - `make verify_mutations` deletes a condition from a guard and requires Z3 to report a violation with the expected counterexample
+
+Learn more: [Spike findings](.agent/projects/011_improve_test_axises/NOTE-spike-findings-mutation-operator-feasibility.md) | [Acceptance result](.agent/projects/011_improve_test_axises/evidence/judge-recoveries/acceptance-ce9cb247/README.md) | [The kill rule](.agent/meta-decisions/mutate-each-stated-rule-once-and-see-its-test-fail.md)
+
+---
+
 ## Limits
 
 - **Simulation boundary** - The modeled environment excludes the TypeScript host, the operating system and external services; extension coverage is specific to a profile
 - **Specifications** - Invariants address declared structural properties; contracts cover a small subset of pure functions
-- **Oracle sensitivity** - Controls and mutations give local evidence; no aggregate mutation score is reported
+- **Oracle sensitivity** - Mutants are chosen by hand and give local evidence; there is no drawn mutant population and no mutation score
 - **External validity** - Simulated runs say nothing about model quality or task success
 
 ---
