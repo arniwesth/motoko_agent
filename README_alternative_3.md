@@ -38,18 +38,23 @@ make strict_replay   # Replay, witnesses and recording completeness
 
 These use simulated provider responses and need no API key. `make dst` runs the full sweep.
 
-### A Planted Bug
+### Watch It Catch a Bug
 
-In a [recorded run](docs/motoko-dst-demo-run-2026-10-04.md), a one-line mutation made the driver reuse an earlier world state, which dropped one environment read from the recording.
+```bash
+make build
+make demo_dst   # Needs an API key: a live model drives the demo
+```
 
-| Check | Restored | Mutated |
-|---|---|---|
-| Type check | Passed | Passed |
-| Four-seed rotating corpus | Passed | Passed |
-| Recording and replay agree | Passed | Passed |
-| `make strict_replay` | Passed | Failed, naming the missing read |
+Motoko breaks its own driver with a scripted one-line edit, which makes the driver lose the record of one environment variable it read. It then runs its checks on the broken code:
 
-Replay agreement cannot show that a recording is complete. A separate check does. `make build && make demo_dst` repeats the demonstration with a live model.
+| Check | Result on the broken driver |
+|---|---|
+| Type check | Passes |
+| Seeded corpus | Passes |
+| Replay of the recorded run | Passes, because the recording and the replay share the gap |
+| `make strict_replay` | **Fails**, and names the missing read |
+
+Motoko then restores the file byte for byte. The [run note](docs/motoko-dst-demo-run-2026-10-04.md) records one such run.
 
 ---
 
