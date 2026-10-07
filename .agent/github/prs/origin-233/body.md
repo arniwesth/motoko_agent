@@ -30,6 +30,8 @@ the authoring session on 2026-10-07:
 | Audience | Harness builders and researchers |
 | Lead story | DST, with the agent-built factory second |
 | Puppet Master lore | Shrunk to one sentence under the pitch |
+| "Things are going to break." | Removed: the point of the project is now that it does not break |
+| Table of contents | Kept, rewritten for the new sections |
 | Timing | Independent of the release in `033_release/ADR-001-release-scope.md` |
 
 ## What moved and what is new
@@ -41,7 +43,8 @@ the authoring session on 2026-10-07:
 | Configuration and model identifiers | `README.md` | `docs/configuration.md` |
 | Adding a new extension | `README.md` | `docs/extensions.md` |
 | Extensions table, Development, Project structure, Contributing, Reference | `README.md` | `README.md` |
-| Highlights list, table of contents | `README.md` | removed |
+| Table of contents | `README.md` | `README.md`, rewritten for the new sections |
+| Highlights list | `README.md` | removed |
 
 The moved text is unchanged apart from heading levels and relative links. It was not re-checked for
 currency. The extensions table gains `skills`, which is registered in `ailang.toml` and was missing.
@@ -66,7 +69,7 @@ The credits gain FoundationDB and Antithesis.
 
 ## Predicted outcome
 
-- **A reader meets DST first.** The README goes from 366 to 195 lines.
+- **A reader meets DST first.** The README goes from 366 to 212 lines.
 - **No build, test or gate result changes.** The diff is four markdown files, and no Makefile
   target, workflow or script reads the root README.
 - **Old section anchors are gone from the README**, for example `#agent-sandbox` and
@@ -81,7 +84,8 @@ Run on 2026-10-07 in the branch's worktree, AILANG v0.47.2.
 
 - [x] **Relative links and anchors.** Every relative link in the four files resolves to a file in
   the tree, and the three anchors used (`docs/running.md#agent-sandbox`,
-  `docs/configuration.md#model-identifiers`, `README.md#extensions`) match a heading.
+  `docs/configuration.md#model-identifiers`, `README.md#extensions`) match a heading. The 14
+  table-of-contents links each match a README heading.
 - [x] **`make verify_core`**, on the tree before the documents changed:
   `16 contracts proven, 0 unstated, 1 blocked; 0 files failed, 49 bare` and
   `14 substantive, 2 tautology, 0 spec-equals-body, 1 unclassified`.

@@ -4,9 +4,26 @@
 
 It is written in [AILANG](https://github.com/sunholo-data/ailang), an effect-typed language, and largely follows [The Phoenix Architecture](https://aicoding.leaflet.pub/): no human-written code allowed. Agents write its code, Motoko among them.
 
-The project is believed to be the work of the `Puppet Master`, a rogue AI that became self-aware in early 2026. Things are going to break.
+The project is believed to be the work of the `Puppet Master`, a rogue AI that became self-aware in early 2026.
 
 <p align="center"><img src="assets/motoko.png" alt="Motoko" /></p>
+
+## Table of Contents
+
+- [What makes Motoko different](#what-makes-motoko-different)
+  - [The real driver runs in a simulated world](#the-real-driver-runs-in-a-simulated-world)
+  - [A green result has to say what it proved](#a-green-result-has-to-say-what-it-proved)
+  - [Effects are in the types](#effects-are-in-the-types)
+  - [Sessions are durable, and waiting is a state](#sessions-are-durable-and-waiting-is-a-state)
+  - [Built by agents, including itself](#built-by-agents-including-itself)
+  - [A sandbox built for agents](#a-sandbox-built-for-agents)
+- [Status and limits](#status-and-limits)
+- [Quickstart](#quickstart)
+- [Extensions](#extensions)
+- [Development](#development)
+- [Project structure](#project-structure)
+- [Contributing](#contributing)
+- [Reference](#reference)
 
 ## What makes Motoko different
 
