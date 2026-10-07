@@ -9,7 +9,7 @@
 
 > **Agent-written.** Motoko's code is written by coding agents, Motoko among them, and its own runtime is the principal system under test. The badges above are the live results of the simulation corpus and of the core type-check and test gates.
 
-Motoko is an experimental coding-agent harness written in [AILANG](https://github.com/sunholo-data/ailang). Its production session driver runs against a **deterministic test world**, so failures in state management and control flow can be reproduced, replayed and checked.
+Motoko is an experimental coding-agent harness written in [AILANG](https://github.com/sunholo-data/ailang). Its production session driver runs against a **deterministic test world**, so failures in state management and control flow can be reproduced, replayed and checked. The approach draws on **[FoundationDB](https://www.foundationdb.org/files/fdb-paper.pdf)** and **[Antithesis](https://antithesis.com/docs/resources/deterministic_simulation_testing/)**.
 
 Deterministic simulation testing is a bet on **recursive self-improvement** (RSI), the project's destination: a system that rewrites its own harness needs evidence that each change left it working, without a person reading the code.
 
@@ -149,12 +149,6 @@ motoko_agent/
 ├── papers/         # DST technical report
 └── .agent/         # Design archive (ADRs, plans, reviews, PR records)
 ```
-
----
-
-## Background
-
-Motoko's development model follows [The Phoenix Architecture](https://aicoding.leaflet.pub/) by Chad Fowler. Its simulation testing draws on [FoundationDB](https://www.foundationdb.org/files/fdb-paper.pdf) and [Antithesis](https://antithesis.com/docs/resources/deterministic_simulation_testing/). Other influences are [Pi Coding Agent](https://mariozechner.at/posts/2025-11-30-pi-coding-agent/), [Oh-My-Pi](https://github.com/can1357/oh-my-pi) and [little-coder](https://github.com/itayinbarr/little-coder).
 
 ---
 
