@@ -95,6 +95,8 @@ export OPENROUTER_API_KEY=sk-or-...   # or put it in .env
 make run
 ```
 
+Open a new shell after the installer, so that `ailang` and `bun` are on `PATH`.
+
 The script installs everything Motoko needs:
 
 | Dependency | Version |

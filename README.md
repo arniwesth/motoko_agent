@@ -35,13 +35,13 @@ export OPENROUTER_API_KEY=sk-or-...
 make run
 ```
 
-The default profile uses an OpenRouter model, so one key is enough. To let agents work unattended, use the [agent sandbox](docs/running.md#agent-sandbox). For complete setup instructions, see [Running Motoko](docs/running.md).
+Open a new shell after the installer, so that `ailang` and `bun` are on `PATH`. The default profile uses an OpenRouter model, so one key is enough. To let agents work unattended, use the [agent sandbox](docs/running.md#agent-sandbox). For complete setup instructions, see [Running Motoko](docs/running.md).
 
 ### Run the Simulation Tests
 
 ```bash
 make sync_packages
-make corpus_pr       # Fixed seeds and promoted regression programs
+make corpus_pr       # The fixed corpus: seeds and a constructed scenario
 make corpus_judge    # Invariants, additional checks and their negative controls
 make strict_replay   # Replay, witnesses and recording completeness
 ```
@@ -88,15 +88,14 @@ Learn more: [DST technical report](papers/motoko-dst-report/DRAFT-current.md) | 
 
 ## Deterministic Simulation Testing
 
-Motoko's core reaches the model, tools, files, environment, clock and approvals only through ports. Each port takes an explicit `WorldState` and returns its successor. A test swaps the live ports for a simulated world and runs the same production driver:
+Motoko's session driver reaches the model, tools, files, environment, clock and approvals through ports. Each port takes an explicit `WorldState` and returns its successor. A test swaps the live ports for a simulated world and runs the same production driver:
 
 1. **Generate** - A seeded generator answers each request the driver makes and injects faults: provider errors, tools that fail, answer late or answer the wrong call, and denied approvals. Time is virtual
-2. **Record** - Recording ports capture every interaction as an execution program
-3. **Replay** - The driver runs again against that program. Replay checks that it makes the same requests and consumes every recorded interaction
-4. **Judge** - Each run's trace is checked against 13 invariant families, such as tool pairing, budget accounting and journal fold. Each family reports whether it ran and on how much input
-5. **Keep** - A failure the nightly corpus finds is promoted into the fixed corpus as an exact program, before or with its fix
+2. **Record** - Recording ports log the recorded classes of interaction, among them model steps, tool runs, approvals, environment reads and clock advances, as an execution program. File and directory reads are served from the world and are not logged
+3. **Replay** - The driver runs again against that program. Replay checks each request against its recorded identity, a projection such as the model and message count of a model step, and that every recorded interaction is consumed
+4. **Judge** - A run's trace is checked against 13 invariant families, such as tool pairing, budget accounting and journal fold. Each family reports whether it ran and on how much input
 
-CI runs the fixed corpus on every pull request and a rotating corpus every night, whose seed window changes with the day. A result is scoped to a versioned execution profile, which names the installed extensions and what is excluded. `make dst` runs the full sweep of 53 targets.
+Not every run takes all four steps. CI runs the fixed corpus on every pull request, a bank of seeds and one constructed scenario, and `make corpus_judge` applies the invariant set to each of its runs. A rotating corpus runs every night with a seed window that changes with the day; its runs are checked for corpus, rotation and shard accounting, without replay or the invariant set. Promoting a nightly failure into the fixed corpus as an exact recorded program is the stated policy and is not built yet. A result is scoped to a versioned execution profile, which names the installed extensions and what is excluded. `make dst` runs the full sweep of 53 targets.
 
 Learn more: [DST technical report](papers/motoko-dst-report/DRAFT-current.md) | [Ports](src/core/ports.ail) | [Invariants](src/core/dst_invariants.ail) | [CI corpora](.github/workflows/dst-corpora.yml)
 
@@ -121,6 +120,8 @@ Learn more: [The rule](.agent/meta-decisions/mutate-each-stated-rule-once-and-se
 ## Limits
 
 - **Simulation boundary** - The modeled environment excludes the TypeScript host, the operating system and external services; extension coverage is specific to a profile
+- **Ports** - Two paths in the session driver bypass the ports: the capture of a failed provider payload writes a file, and the finalization verifier runs a subprocess
+- **Recording** - File and directory reads are not logged, and replay compares a projection of each request, not its full content
 - **Specifications** - Invariants address declared structural properties; contracts cover a small subset of pure functions
 - **Oracle sensitivity** - Mutants are chosen by hand and give local evidence; there is no drawn mutant population and no mutation score
 - **External validity** - Simulated runs say nothing about model quality or task success

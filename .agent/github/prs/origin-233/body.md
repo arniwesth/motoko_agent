@@ -20,7 +20,7 @@ setup, usage, configuration and extension reference moves to three files under `
 The branch holds about twenty commits, because three alternative READMEs were written on it and compared
 before one was chosen. The alternatives are deleted again. Net of that:
 
-- `README.md` rewritten, 366 lines to 174.
+- `README.md` rewritten, 366 lines to 175.
 - `docs/running.md`, `docs/configuration.md` and `docs/extensions.md` added.
 
 4 files changed, and this record.
@@ -72,7 +72,10 @@ and was missing.
 |---|---|
 | Ports, `WorldState`, the seeded generator, faults, recording, replay | `papers/motoko-dst-report/DRAFT-current.md` §2 and §3, `src/core/ports.ail` |
 | 13 invariant families, each reporting whether it ran and on how much input | `InvariantFamily` in `src/core/dst_invariants.ail`; the report, §7.3 |
-| A nightly failure is promoted to the fixed corpus before or with its fix | `src/core/dst_corpus.ail`, the `promoted-without-failure` rule |
+| Exact-program promotion of a nightly failure is policy and not built | `scripts/dst/corpus_pr_dst.ail` regenerates its one promoted member from a seed; `scripts/dst/corpus_rotating_dst.ail` keeps no program |
+| Which runs get replay and the invariant set | `evaluate` is called from `scripts/dst/corpus_judge_dst.ail` only, among the corpus scripts |
+| The two paths that bypass the ports | `capture_failing_payload` and `run_dp7_verifier` in `src/core/session.ail` |
+| File reads are not logged; replay compares a projection | `src/core/test/stub_step.ail`, the recording adapter set and the provider identity |
 | The fixed corpus on every pull request, a rotating corpus nightly, no API key | `.github/workflows/dst-corpora.yml`, which uses no secret |
 | Execution profiles | the report, §7.1 |
 | 53 sweep targets | `make dst_target_list` |
@@ -86,6 +89,30 @@ and was missing.
 
 Draft PR #227 was read for the mutation section. Nothing from project 039 is claimed or linked: it
 is proposed work, and its files are not on `main`.
+
+## Review
+
+Reviewed on 2026-10-07 at `9c6f17c4` by Codex on GPT-6.1-Sol (high reasoning), in a detached
+worktree, read-only, briefed to treat this description as a claim and check the repository. It
+reported five verified errors and four opinions. The authoring session checked the five against
+the source and fixed them in the commit after `9c6f17c4`:
+
+| Finding | Fix |
+|---|---|
+| "Each run's trace is checked against 13 invariant families": only `corpus_judge` calls the evaluator, and nightly runs are not replayed | The DST section says which runs get which steps |
+| Nightly failures "promoted as exact programs": the one promoted member is regenerated from a seed, and nothing retains a nightly program | Stated as policy that is not built; the step is removed |
+| The core reaches the outside "only through ports": the failed-payload capture and the finalization verifier do not | "only" removed, and both paths are listed under Limits |
+| Recording captures "every interaction" and replay checks "the same requests": file reads are not logged, and requests are compared by a projection | Both steps reworded, and a Limits line added |
+| The install commands leave `ailang` and `bun` off `PATH` in the calling shell | A sentence in the README and in `docs/running.md`. The original README had the same gap |
+
+Open, for the operator: say that a hook's signature *declares* its effects, since the ABI records
+that a declared row does not bound effects through function-valued record fields; present the
+mutation procedure as the prescribed discipline and add its control and baseline rule; flag on the
+demo command that it calls a live model, edits `session.ail` and must run alone; and put the
+simulation quick start before the agent quick start.
+
+The reviewer found the moved text in `docs/` unchanged in meaning, the counts and CI schedule
+correct, no broken links, and both badges returning "passing".
 
 ## Predicted outcome
 
