@@ -55,8 +55,10 @@ Motoko plants a mutant in its own driver: a scripted one-line edit that makes th
 |---|---|
 | Type check | Passes |
 | Seeded corpus | Passes |
-| Replay of the recorded run | Passes, because the recording and the replay share the gap |
+| Replay of the recorded run | Passes |
 | `make strict_replay` | **Fails**, and names the missing read |
+
+Replay passes because it compares the mutant with itself: the recording and the replay lose the same read. `make strict_replay` also holds the recording against a count that does not come from the recorder: the number of environment reads the driver's source says this scenario makes. That count is one and the recording has none, so the check fails and names the variable.
 
 Motoko then restores the file byte for byte. The [run note](docs/motoko-dst-demo-run-2026-10-04.md) records one such run.
 
