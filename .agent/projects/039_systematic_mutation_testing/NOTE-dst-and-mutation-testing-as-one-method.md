@@ -1,8 +1,10 @@
 # Thesis, narrowed: what is left of "simulation and mutation complete each other"
 
-Date: 2026-10-06. Status: revised the same day it was written, after a literature review. The
-first version's claim to novelty was wrong. Nothing was run for this note. Scope: what the review
-found, what the first version got wrong, what is left, and what a paper would have to measure.
+Date: 2026-10-06; the publication material moved out on 2026-10-07. Status: revised the same day
+it was written, after a literature review. The first version's claim to novelty was wrong.
+Nothing was run for this note. Scope: what the review found, what the first version got wrong,
+what is left, and the threats to it. What a paper or a post would need, and what to call this,
+is in [`NOTE-paper-considerations.md`][paper].
 
 _The first version said a deterministic simulation harness and source mutation each supply what
 the other lacks, and that nobody seemed to have written that down. A [review][review] the same day
@@ -121,46 +123,6 @@ The agent loop is a setting for the measurement and not a contribution by itself
   vacuity in the model-checking sense, defined for run-time monitors in 2008, and it applies
   directly to invariants over traces. Neither version of this note covers it.
 
-## What a paper would need
-
-| Evidence | Today | What it takes |
-|---|---|---|
-| The differential used blind, with its confusion matrix | Six survivors' diffs, read by hand | A drawn population; each mutant classified by the differential first and by a person second |
-| How many non-propagated mutants convert on fresh seeds | None | A second set of seeds for that class |
-| The kill-reason split for drawn mutants: panic, intended invariant, other check, survived | None | The operator tool and the pilot (research note, §8.1) |
-| How often a mutant makes the same seed a different world | One anecdote (`M2`) | A count of draws or requests per run, compared with the control's |
-| Kill sets per corpus member | One anecdote (`seed-19`) | A by-product of the pilot, if verdicts are kept per member |
-| Generation policies compared on a fixed mutant set | Proposed in 035 §6.5 | 035's experiment |
-| Coupling to real faults | None | The retrospective check (research note, §8.3) |
-| Rules written before the mutants are seen | The spike's rules were written from its mutants | The blind round the ADR-003 plan asks for (WI-4), and the drawn population |
-
-Three checks come before any public statement of novelty:
-
-- **A citation-index pass** on *Property-Based Mutation Testing*, on the hardware functional
-  qualification papers and on the unit-test tools. The review used semantic search only.
-- **The Antithesis skill's shell scripts and its hosted platform.** Its eight markdown files were
-  read in full; a seed-pinned replay could exist outside them.
-- **A full read of every source the review labels a lead.**
-
-## Timing
-
-Antithesis published eleven days before the review. Two small repositories that grade a Raft
-simulation harness against planted bugs appeared in the ten weeks before it, and Chronicle is a
-September 2026 preprint. The idea is arriving from several directions at once.
-
-## Where this belongs eventually
-
-Two candidates, not decided:
-
-- **The DST report.** `papers/motoko-dst-report/DRAFT-3.md` §9.2 lists a systematic mutation
-  study among what would strengthen it. A results section there would credit the classification
-  to hardware verification and the pairing with simulation to Antithesis, and report the
-  measurement.
-- **A short paper of its own**, on the differential as a classifier in a simulation harness, if
-  the confusion matrix is worth reporting.
-
-Nothing is edited into the report here.
-
 ## What this note does not claim
 
 - **Not that anything in "What is left" is new.** Each item is something the review looked for
@@ -169,9 +131,12 @@ Nothing is edited into the report here.
 - **Not that the loop exists.** Each measurement was taken by a spike script on a branch that
   never merges.
 - **Not a plan.** The research note's §8 has the proposals.
+- **Not a publication plan.** The evidence a paper owes, the name, the venue and the timing are in
+  the paper note.
 
 ## Related
 
+- [`NOTE-paper-considerations.md`][paper]: what a paper or a post on this would need.
 - [`RESEARCH-prior-art-dst-and-mutation-testing.md`][review]: the literature review, with the
   sources and how far each was read.
 - [`RESEARCH-systematic-mutation-testing.md`][research]: what is missing in Motoko's practice, the
@@ -180,6 +145,7 @@ Nothing is edited into the report here.
 - [`NOTE-dst-substrate-versus-oracle.md`][substrate] in 011: the earlier finding that the
   substrate was reusable and the oracle set was the gap.
 
+[paper]: NOTE-paper-considerations.md
 [review]: RESEARCH-prior-art-dst-and-mutation-testing.md
 [research]: RESEARCH-systematic-mutation-testing.md
 [spike]: ../011_improve_test_axises/NOTE-spike-findings-mutation-operator-feasibility.md
