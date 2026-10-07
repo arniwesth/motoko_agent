@@ -74,6 +74,22 @@ Learn more: [DST technical report](papers/motoko-dst-report/DRAFT-current.md) | 
 
 ---
 
+## Deterministic Simulation Testing
+
+Motoko's core reaches the model, tools, files, environment, clock and approvals only through ports. Each port takes an explicit `WorldState` and returns its successor. A test swaps the live ports for a simulated world and runs the same production driver:
+
+1. **Generate** - A seeded generator answers each request the driver makes and injects faults: provider errors, tools that fail, answer late or answer the wrong call, and denied approvals. Time is virtual
+2. **Record** - Recording ports capture every interaction as an execution program
+3. **Replay** - The driver runs again against that program. Replay checks that it makes the same requests and consumes every recorded interaction
+4. **Judge** - Each run's trace is checked against 13 invariant families, such as tool pairing, budget accounting and journal fold. Each family reports whether it ran and on how much input
+5. **Keep** - A failure the nightly corpus finds is promoted into the fixed corpus as an exact program, before or with its fix
+
+CI runs the fixed corpus on every pull request and a rotating corpus every night, whose seed window changes with the day. A result is scoped to a versioned execution profile, which names the installed extensions and what is excluded. `make dst` runs the full sweep of 53 targets.
+
+Learn more: [DST technical report](papers/motoko-dst-report/DRAFT-current.md) | [Ports](src/core/ports.ail) | [Invariants](src/core/dst_invariants.ail) | [CI corpora](.github/workflows/dst-corpora.yml)
+
+---
+
 ## Mutation Testing
 
 Motoko mutates its own source to test its tests: a check covers a rule only when breaking that rule makes that check fail. The procedure runs when a piece of work is handed in for acceptance:
