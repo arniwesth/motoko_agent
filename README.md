@@ -1,6 +1,6 @@
 # Motoko
 
-`Motoko` is a coding-agent harness that tests itself the way [FoundationDB](https://www.foundationdb.org/files/fdb-paper.pdf) tests a database. Its production session driver runs inside a seeded, deterministic world, where every model reply, tool result, fault and clock tick is generated, recorded and replayed.
+`Motoko` is a coding-agent harness with deterministic simulation testing inspired by [FoundationDB](https://www.foundationdb.org/files/fdb-paper.pdf). Under test, its production session driver runs inside a seeded world, where every model reply, tool result, fault and clock tick is generated, recorded and replayed.
 
 It is written in [AILANG](https://github.com/sunholo-data/ailang), an effect-typed language, and largely follows [The Phoenix Architecture](https://aicoding.leaflet.pub/): no human-written code allowed. Agents write its code, Motoko among them.
 
