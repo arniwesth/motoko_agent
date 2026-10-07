@@ -3,18 +3,19 @@ repo: arniwesth/motoko_agent
 pr: 227
 branch: docs/039-systematic-mutation-testing-research
 ticket: null
-title: "docs(039): systematic mutation testing — a research note, a literature review, and the thesis it narrowed"
+title: "docs(039): systematic mutation testing — a research note, a literature review, the thesis it narrowed, and a note on publishing"
 ---
 
 ## Summary
 
-Opens project 039 with three documents. The research note asks what *Property-Based Mutation
+Opens project 039 with four documents. The research note asks what *Property-Based Mutation
 Testing* (Bartocci et al., ICST 2023) adds to how Motoko mutates its own source, and what it
 would take to make that practice systematic. The thesis note recorded a claim that came out of
 it: a deterministic simulation harness and source mutation each supply what the other lacks. The
 literature review then tested that claim and found it published already, so the thesis note is
-rewritten here to say what is left. The operator asked for each step on 2026-10-06. Nothing is
-built and no mutant was run.
+rewritten here to say what is left. A fourth note holds everything about publishing it, so that
+the other three record what is known. The operator asked for each step on 2026-10-06 and
+2026-10-07. Nothing is built and no mutant was run.
 
 ## Changes
 
@@ -22,14 +23,16 @@ built and no mutant was run.
 - docs(039): thesis note — deterministic simulation and source mutation complete each other
 - docs(039): literature review — prior art for combining DST with mutation testing
 - docs(039): thesis note narrowed after the literature review
+- docs(039): publication considerations in their own note
 
-11 files changed.
+12 files changed.
 
 ## Governing docs
 
 - `.agent/projects/039_systematic_mutation_testing/RESEARCH-systematic-mutation-testing.md`
 - `.agent/projects/039_systematic_mutation_testing/RESEARCH-prior-art-dst-and-mutation-testing.md`
 - `.agent/projects/039_systematic_mutation_testing/NOTE-dst-and-mutation-testing-as-one-method.md`
+- `.agent/projects/039_systematic_mutation_testing/NOTE-paper-considerations.md`
 - `.agent/projects/039_systematic_mutation_testing/evidence/literature-review/README.md`, and the
   seven notes files it describes
 
@@ -100,6 +103,8 @@ with another meaning.
 - **How far to trust it.** About 160 searches through one search engine, no citation index. The
   engine's machine summaries were wrong repeatedly. Every "not found" is weak evidence, and a
   source read only as an abstract or a summary is labelled a lead.
+- **It is findings only.** Its section on what a paper must do differently, and the publication
+  advice in its conclusion, moved to the paper note in the last commit.
 
 ## What the thesis note says now
 
@@ -118,8 +123,25 @@ combination down. The last commit rewrites it, under the same filename.
 - **Threats the review adds.** The same seed may not be the same world once a mutant changes the
   driver's requests. A mutant can break determinism. Mutating the checks themselves is missing
   from both versions.
-- **Three checks before any public statement of novelty:** a citation-index pass, the Antithesis
-  skill's scripts and platform, and a full read of every source the review marks a lead.
+- **Publication material moved out.** The evidence table, the three checks before any public
+  statement, timing and the candidate homes are in the paper note.
+
+## What the paper note says
+
+`NOTE-paper-considerations.md` holds every consideration about turning the narrowed thesis into
+a paper or a post, so the other three documents record what is known.
+
+- **The claim a paper could make:** a transfer and a measurement, not a method.
+- **What to call it:** oracle qualification is recommended, with three alternatives and two names
+  to avoid: "oracle gap", which is published with another meaning, and "mutation testing"
+  unqualified near DST or fuzzing, where mutation means mutating inputs.
+- **Evidence owed:** eight rows, the first being the differential used blind with its confusion
+  matrix.
+- **What stays distinct, and what a paper must do differently:** the review's section, moved
+  verbatim.
+- **Objections to expect, where it could go, timing**, and three checks before any public
+  statement of novelty: a citation-index pass, the Antithesis skill's scripts and platform, and
+  a full read of every source the review marks a lead.
 
 ## Predicted outcome
 
@@ -156,8 +178,11 @@ combination down. The last commit rewrites it, under the same filename.
   the skill was read.
 - [x] **No search key is in the committed text.** A fixed-string search of the report and the
   notes for the key's value finds nothing.
-- [x] **Every relative link in the three documents and the evidence README resolves, and every
+- [x] **Every relative link in the four documents and the evidence README resolves, and every
   link label is defined.**
+- [x] **The review lost nothing but publication advice.** Its section "What stays distinct, and
+  what a paper must do differently" is in the paper note word for word, and the conclusion's
+  verdict paragraph stays.
 - [ ] No mutant was run. Every Motoko figure is inherited from the spike findings or the plan.
 - [ ] The six researchers' notes were not read by the committing session. It read each
   researcher's summary and the report written from the notes.
