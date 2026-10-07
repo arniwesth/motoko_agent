@@ -679,6 +679,9 @@ $(DST_LANE_TARGETS): export AILANG_CACHE_DIR = $(CURDIR)/.ailang/lane/$@
 # (eba309c, driver_plus_herdr/1 -> /2): ABI 7.4 transcribed, attribution re-recorded
 # to the live identity, :318 -> :389 pin. Both targets green from a delegate pane
 # and plain-shell re-runs; drop confirmed by the post-sweep verdict.
+# (The variable itself kept both names until 2026-10-07: d5edebf wrote this note
+# and left the line below unchanged, and every sweep since reported the pair as
+# listed but PASSED. Emptied after a sweep at bb47e33 with all targets passing.)
 # (Prior entry, kept for history: listed 2026-09-12 on the owner's ruling at
 # PLAN-003 P3G. One cause, two targets (they run the same script and read its two
 # halves): driver_plus_herdr/1 does not load clean, 2 rejections --
@@ -694,7 +697,7 @@ $(DST_LANE_TARGETS): export AILANG_CACHE_DIR = $(CURDIR)/.ailang/lane/$@
 # before any P3 part. Disposition pending the owner's D4 re-issue of the profile
 # against the corrected table. Drop both entries when the summary reports them
 # PASSED.)
-DST_KNOWN_RED := driver_plus_herdr herdr_graded
+DST_KNOWN_RED :=
 
 # bash for `pipefail` alone: the phases are piped through `tee` so the run is
 # both watchable and logged, and without pipefail the pipeline would report
