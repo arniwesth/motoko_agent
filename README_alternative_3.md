@@ -76,13 +76,17 @@ Learn more: [DST technical report](papers/motoko-dst-report/DRAFT-current.md) | 
 
 ## Mutation Testing
 
-A test that has never failed has not been shown to detect anything. Motoko mutates its own source, and counts a mutant as killed only when the check written for the broken rule fails.
+Motoko mutates its own source to test its tests: a check covers a rule only when breaking that rule makes that check fail. The procedure runs when a piece of work is handed in for acceptance:
 
-- **Finding gaps** - Of eleven single-edit mutants in the driver's recovery code, nine turned the sweep red and two survived. The survivors became two new invariant rules and the `corpus_judge` gate
-- **Accepting the fix** - Fourteen mutants, each with its failing rule predicted in advance, were all killed as predicted. Of a blind reviewer's eight more, six were killed and two survived on code no corpus run reached; each of those now has a control run
-- **Contracts** - `make verify_mutations` deletes a condition from a guard and requires Z3 to report a violation with the expected counterexample
+1. **One mutant per rule** - For each rule the design decision states, write a source edit that breaks that rule and nothing else
+2. **Predict** - Name the check that should fail for each mutant, before running anything
+3. **Run** - Apply one mutant at a time, run the checks, restore the source
+4. **Judge** - A kill is the named check failing. A different check failing, a compile error, a crash or a timeout is not a kill
+5. **Follow up** - A survivor is a finding. It gets a new check, or a sentence on why no input can tell the two versions apart
 
-Learn more: [Spike findings](.agent/projects/011_improve_test_axises/NOTE-spike-findings-mutation-operator-feasibility.md) | [Acceptance result](.agent/projects/011_improve_test_axises/evidence/judge-recoveries/acceptance-ce9cb247/README.md) | [The kill rule](.agent/meta-decisions/mutate-each-stated-rule-once-and-see-its-test-fail.md)
+The table of mutants and results is committed with the work as evidence. This is a review step and not a CI gate, since each mutant costs a rebuild and a test run. Two cheaper forms are built in: `make verify_mutations` mutates guards under Z3 contracts (in place, so run it alone), and the DST suites change one field of a valid input per row to test their validators.
+
+Learn more: [The rule](.agent/meta-decisions/mutate-each-stated-rule-once-and-see-its-test-fail.md) | [An acceptance run](.agent/projects/011_improve_test_axises/evidence/judge-recoveries/acceptance-ce9cb247/README.md) | [The spike that found two gaps](.agent/projects/011_improve_test_axises/NOTE-spike-findings-mutation-operator-feasibility.md)
 
 ---
 
