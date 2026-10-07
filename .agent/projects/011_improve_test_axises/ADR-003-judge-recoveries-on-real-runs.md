@@ -13,6 +13,9 @@ reference. The amended passages are marked with their ruling.
 All eight rule ids were accepted at `ce9cb247`, on the run recorded in
 `evidence/judge-recoveries/acceptance-ce9cb247/` and by ruling 17. What acceptance does not claim
 is D6's known-unseen list, which that ruling extends by two branches.
+**Ruling 18, the same day,** takes those two branches off that list again: D1's gate gains one
+control run for each, and each is red on its mutant by the rule that names it
+(`evidence/judge-recoveries/branch-controls-b0aaaca1/`).
 **Date:** 2026-10-06. Grounded at HEAD `259265b5`, AILANG v0.47.2 (`e939cba`).
 
 Reviewed, separately, by Codex (GPT-6-Astra) and Claude Fable 5.1:
@@ -219,7 +222,12 @@ dropped before its witness, which D9 cannot.
 the `driver_only` bank. That is the only place they were measured clean. A gate for another profile
 adopts one only after measuring it clean on that profile's unmutated runs. A hook that calls the
 model is a known way for a healthy run to be unbalanced (D5); tools handled by an extension were
-not examined.
+not examined. *(Ruling 18.)* D1's gate also holds the three on its own control runs. Those are not
+members and not another profile: each is the bank's rig, through a run helper the corpus script
+exports. Two run it unchanged, at a small budget. Two change one part of its runtime, the tool
+policy's answer or the verifier, and neither part is a hook that calls the model, so D5's three
+premises hold for all four. Each of the two was measured clean on its unmutated run before it was
+held to anything.
 
 **D6. Acceptance is by named mutants.** *(Ruled 2026-10-06, as revised in v0.2, with a
 tightening.)* A rule is accepted when its mutant has been seen red on that rule and the controls green.
@@ -271,14 +279,23 @@ Known, and not seen by any rule here. Acceptance does not claim them:
 - **Failure reasons that share `error`** are not told apart (D2).
 - **A step label offset by a constant**, and **a re-issued park that consumes no budget**
   (`session.ail:3535`): proposed by the reviewers, not run. The corpus never parks.
-- **A tool run without an approval loses its successor** (`tool_phase.ail:615`). *(Ruling 17.)* A
-  blind reviewer's mutant at acceptance: every rule is green. The bank's policy sends every tool
-  call to approval, so no member runs that arm of the fold. It is the handoff the spike's part 3
-  found the bank does not reach.
+
+Seen since acceptance. *(Ruling 18.)* Ruling 17 had put both on the list above, as blind
+reviewer's mutants under which every rule was green, each on a branch no member walks:
+
+- **A tool run without an approval loses its successor** (`tool_phase.ail:615`). The bank's policy
+  sends every tool call to approval. The gate's control `tool-run-without-approval` runs the rig
+  with the policy allowing, and under the mutant `tool-dispatches-unbalanced` is red on it: two
+  dispatch records in the trace, no tool interaction in the log.
 - **After a verifier rejection the model is called again under the same step**
-  (`session.ail:2985`). *(Ruling 17.)* A blind reviewer's mutant at acceptance: every rule is
-  green. The bank runs with verification disabled. D3's family rule would see it on a run that
-  takes that path; no gate evaluates the set on one.
+  (`session.ail:2985`). The bank runs with verification off. The gate's control
+  `verifier-rejection` runs the rig with a verifier that rejects, and under the mutant
+  `driver-step-repeated` and `steps-not-contiguous` are red on it. Unbounded, the same mutant does
+  not end: the step budget is never reached. The control's script ends with a provider error that
+  is not retried, so the defect ends as a red row.
+
+What the two controls do not show: a verifier that accepts after it rejected, a tool an extension
+handles, or either branch on a generated run.
 
 **D7. The corpus's existing identity keys are not pinned by this ADR.** *(Ruled 2026-10-06; v0.2
 narrows the wording to what was measured.)* Option 3. Existing pins, the depth canary's among them,
@@ -379,10 +396,10 @@ against its text, and corrected after both reviews:
    (`src/core/session.ail:4480`), where its sibling at `:4442` passes the post-init one. Found by a
    reviewer, confirmed by reading. Its only callers are in `scripts/dst/phase_c2_wiring_scenarios.ail`;
    whether it matters there was not established.
-10. **A run that reaches each of the two branches acceptance found unreached** *(ruling 17)*: a
-    tool run without an approval, and the step after a verifier rejection. One scripted control
-    run for each in D1's gate, with its mutant seen red, would move both out of D6's known-unseen
-    list. Its own small decision, and not a condition of acceptance.
+10. *(Decided by ruling 18; kept for its number.)* **A run that reaches each of the two branches
+    acceptance found unreached** *(ruling 17)*: a tool run without an approval, and the step after
+    a verifier rejection. One scripted control run for each in D1's gate, with its mutant seen
+    red, would move both out of D6's known-unseen list.
 
 ## What a plan would sequence
 
@@ -456,3 +473,12 @@ blind survivor each, and a recommendation had been given: "I will follow your re
 | # | Amends | Ruling |
 |---|---|---|
 | 17 | 10 | All eight rule ids are accepted at `ce9cb247`. `driver-step-repeated` and `tool-dispatches-unbalanced` are accepted with the other six: every row D6 and the plan name for them was a kill, and the two blind survivors are on branches no corpus member runs, which D1 already puts outside what the gate is sound for. The two branches join D6's known-unseen list. A scripted run that reaches each is a follow-up of its own (*Not decided*, item 10), not a condition of acceptance. |
+
+**On item 10, ruled by the operator on 2026-10-07**, in conversation. The recommendation was to
+add both control runs together and to settle the wording of D5's premises for them in the same
+pull request. The operator's reply: "yes, lets get this settled". The wording is that pull
+request's, in the scope paragraph after D10, and stands as merged.
+
+| # | Amends | Ruling |
+|---|---|---|
+| 18 | 17, 9 | Item 10 of *Not decided* is taken up. D1's gate gains two control runs, `tool-run-without-approval` and `verifier-rejection`. Each is the bank's rig with one part of its runtime changed: the tool policy answers `Allow`, or the verifier is on and rejects. D5's three premises hold for both, so the invariant set and all six checks are held against them as against a member. Each was clean unmutated and red on its mutant by the rule that names it, so the two branches leave D6's known-unseen list. The verifier is a real `bash -c 'exit 3'` in the working directory: no world answers for the verifier, and the gate already ran with the process capability. Neither control is a bank member, and `corpus_pr`'s output is unchanged. |

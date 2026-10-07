@@ -242,7 +242,7 @@ import src/core/dst_corpus (
   render_corpus, corpus_rules_version
 )
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
-  BudgetPlan, BudgetPatch, Delegate, PureCtx, AiCtx, ProviderCtx, InterceptCtx, ProcessCtx, ExtRuntime, FinalizeDecision, NoDecision, NoIntercept, PassThrough, Pending, DenyAfterTimeout,
+  BudgetPlan, BudgetPatch, Delegate, PureCtx, AiCtx, ProviderCtx, InterceptCtx, ProcessCtx, ExtRuntime, FinalizeDecision, NoDecision, NoIntercept, PassThrough, Pending, DenyAfterTimeout, Allow,
   PreStepDecision, PromptPatch, ResponseInterceptDecision, ToolHandleDecision,
   ToolPolicyDecision, ToolSchema
 )
@@ -334,8 +334,13 @@ func pending_policy(_ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPolicyDecisio
   Pending("generated: approval required", DenyAfterTimeout)
 }
 
-func approval_rt(id: string) -> ExtRuntime {
-  let v: VerificationConfig = { enabled: false, command: "" };
+func allow_policy(_ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { Allow }
+
+-- THE RIG'S RUNTIME, WRITTEN ONCE, with the two parts a caller may state: the
+-- tool-policy answer and the verifier. Every other hook is neutral and none of
+-- them calls the model, which is the premise `corpus_judge_dst`'s two balances
+-- rest on (011 ADR-003 D5).
+func rig_rt(id: string, policy: (PureCtx, ToolCallEnvelope) -> ToolPolicyDecision, v: VerificationConfig) -> ExtRuntime {
   let hooks = fixture_hooks(id, {
     config: jo([]),
     tools: [],
@@ -343,13 +348,18 @@ func approval_rt(id: string) -> ExtRuntime {
     prompt: no_prompt,
     budget: no_budget,
     compact: passthrough_pre_step,
-    policy: pending_policy,
+    policy: policy,
     provide: no_handle,
     intercept: no_intercept,
     judge: no_solver
   });
   { registry: { entries: [hooks] }, strict_mode: false, verification: v }
 }
+
+pure func no_verifier() -> VerificationConfig { { enabled: false, command: "" } }
+
+-- The bank's: every tool call pends for approval, and nothing is verified.
+func approval_rt(id: string) -> ExtRuntime { rig_rt(id, pending_policy, no_verifier()) }
 
 -- THE BANK'S STEP BUDGET, STATED ONCE (011 ADR-003 D4, ruling 13). Both run
 -- helpers below pass it to the driver, and `corpus_judge_dst` declares the same
@@ -378,6 +388,30 @@ export func run_recording_at(id: string, w: WorldState, step_budget: int) -> Tra
 func run_recording(id: string, w: WorldState) -> TracedSessionResult
   ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   run_recording_at(id, w, bank_step_budget())
+}
+
+-- THE RECORDING RIG WITH ONE PART CHANGED (011 ADR-003 ruling 18), for
+-- `corpus_judge_dst`'s two branch controls. No bank member is run through
+-- either: under `approval_rt` every tool takes the approval arm of the tool
+-- fold and no candidate answer is verified, so two branches of the driver have
+-- no member that walks them.
+--
+-- `allowing`: the policy answers `Allow`, so a tool is executed with no
+-- approval. `verified`: the verifier is on with the command the caller states.
+-- That command is a real `bash -c` in the working directory, not a world
+-- answer, so state one that reads and writes nothing.
+export func run_recording_allowing_at(id: string, w: WorldState, step_budget: int) -> TracedSessionResult
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  Session.run_v2_session_traced(
+    rig_rt(id, allow_policy, no_verifier()), "task", "", false, budget(), "phase-c-model", history(), ".",
+    step_budget, false, 0, zero_rates(), RecordingWorld(w))
+}
+
+export func run_recording_verified_at(id: string, w: WorldState, step_budget: int, command: string) -> TracedSessionResult
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  Session.run_v2_session_traced(
+    rig_rt(id, pending_policy, { enabled: true, command: command }), "task", "", false, budget(), "phase-c-model", history(), ".",
+    step_budget, false, 0, zero_rates(), RecordingWorld(w))
 }
 
 pure func run_manifest() -> ExecutionManifest {
