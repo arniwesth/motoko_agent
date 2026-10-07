@@ -351,18 +351,33 @@ func approval_rt(id: string) -> ExtRuntime {
   { registry: { entries: [hooks] }, strict_mode: false, verification: v }
 }
 
+-- THE BANK'S STEP BUDGET, STATED ONCE (011 ADR-003 D4, ruling 13). Both run
+-- helpers below pass it to the driver, and `corpus_judge_dst` declares the same
+-- value to its two budget rules. It was a literal at each call until that gate
+-- needed it: two literals that agree are a declared budget nothing ties to the
+-- run it is declared about.
+export pure func bank_step_budget() -> int { 12 }
+
 func run_generated(id: string, w: WorldState) -> TracedSessionResult
   ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2_session_traced(
     approval_rt(id), "task", "", false, budget(), "phase-c-model", history(), ".",
-    12, false, 0, zero_rates(), GeneratedWorld(w))
+    bank_step_budget(), false, 0, zero_rates(), GeneratedWorld(w))
+}
+
+-- The recording rig at a budget the caller states. The bank runs it at
+-- `bank_step_budget()` through `run_recording`; `corpus_judge_dst`'s two
+-- budget-edge controls run it at 2 and at 1.
+export func run_recording_at(id: string, w: WorldState, step_budget: int) -> TracedSessionResult
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  Session.run_v2_session_traced(
+    approval_rt(id), "task", "", false, budget(), "phase-c-model", history(), ".",
+    step_budget, false, 0, zero_rates(), RecordingWorld(w))
 }
 
 func run_recording(id: string, w: WorldState) -> TracedSessionResult
   ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
-  Session.run_v2_session_traced(
-    approval_rt(id), "task", "", false, budget(), "phase-c-model", history(), ".",
-    12, false, 0, zero_rates(), RecordingWorld(w))
+  run_recording_at(id, w, bank_step_budget())
 }
 
 pure func run_manifest() -> ExecutionManifest {
@@ -391,7 +406,7 @@ pure func program_of(w: WorldState, initial: WorldState) -> ExecutionProgram {
     interactions: w.log }
 }
 
-pure func store_root() -> string { ".ailang/dst-corpus" }
+export pure func store_root() -> string { ".ailang/dst-corpus" }
 
 -- ---------------------------------------------------------------------------
 -- THE CLASS OBSERVERS — three of them, each named at its site
@@ -570,7 +585,7 @@ export type BankEntry = { seed: int, kind: MemberKind }
 -- one seed, and loses it SILENTLY, because the remaining members still pass.
 -- WI-D3 is the item that WOULD have lost it, and did not only because the class
 -- it moved had two.
-pure func fixed_bank() -> [BankEntry] {
+export pure func fixed_bank() -> [BankEntry] {
   [{ seed: 1, kind: FixedSeed("first of two witnesses for ToolFailed AND for ToolCorrelationMismatch — the smallest seed of 260 reaching either") },
    { seed: 2, kind: FixedSeed("first of two witnesses for provider_protocol_inconsistent_result — the smallest seed of 260 reaching it") },
    { seed: 4, kind: FixedSeed("second witness for provider_protocol_inconsistent_result") },
@@ -661,13 +676,39 @@ func build(member_id: string, kind: MemberKind, p: ExecutionProgram, log: [Inter
     persisted: persisted, loaded_identity: loaded_identity }
 }
 
-func build_seed(e: BankEntry)
-  -> BuiltMember ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+-- A MEMBER'S RUN, AND THIS IS ITS ONLY HOME: the label, the world it starts
+-- from, the run and the program. `build_seed` and `build_constructed` call these
+-- two, and so does `corpus_judge_dst`, which evaluates the invariant set on the
+-- same sixteen runs. A gate that restated the id, the world or the choice of
+-- program would give the recipe a second home with nothing checking the two
+-- agree.
+export type MemberRun = {
+  label: string,
+  initial: WorldState,
+  run: TracedSessionResult,
+  program: ExecutionProgram
+}
+
+export func run_seed_member(e: BankEntry)
+  -> MemberRun ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let initial = generated_world(e.seed);
   let r = run_generated("corpus_${e.seed}", initial);
-  let p = program_of(r.world, initial);
-  let ok = match r.result { Ok(_) => true, Err(_) => false };
-  build("seed-${e.seed}", e.kind, p, r.world.log, ok)
+  { label: "seed-${e.seed}", initial: initial, run: r, program: program_of(r.world, initial) }
+}
+
+export func run_constructed_member()
+  -> MemberRun ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let initial = empty_terminal_world();
+  let r = run_recording("corpus_constructed", initial);
+  { label: "constructed-empty-terminal", initial: initial, run: r,
+    program: constructed_program(r.world, initial) }
+}
+
+func build_seed(e: BankEntry)
+  -> BuiltMember ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let m = run_seed_member(e);
+  let ok = match m.run.result { Ok(_) => true, Err(_) => false };
+  build(m.label, e.kind, m.program, m.run.world.log, ok)
 }
 
 func build_all(es: [BankEntry])
@@ -683,11 +724,9 @@ func build_all(es: [BankEntry])
 
 func build_constructed()
   -> BuiltMember ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
-  let initial = empty_terminal_world();
-  let r = run_recording("corpus_constructed", initial);
-  let p = constructed_program(r.world, initial);
-  let ok = match r.result { Ok(_) => true, Err(_) => false };
-  build("constructed-empty-terminal", constructed_kind(), p, r.world.log, ok)
+  let m = run_constructed_member();
+  let ok = match m.run.result { Ok(_) => true, Err(_) => false };
+  build(m.label, constructed_kind(), m.program, m.run.world.log, ok)
 }
 
 pure func members_of(bs: [BuiltMember]) -> [CorpusMember] {

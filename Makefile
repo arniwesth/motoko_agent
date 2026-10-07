@@ -505,7 +505,7 @@ DST_JOBS ?= $(shell nproc 2>/dev/null || echo 4)
 DST_LOG  ?= .ailang/dst-last.log
 
 DST_TARGETS := test_coverage declared_vs_performed terminal_trace smoke_parity \
-  profile_definition smoke_driver corpus_pr strict_replay world_state \
+  profile_definition smoke_driver corpus_pr corpus_judge strict_replay world_state \
   corpus_rotating driver_plus_compose driver_plus_herdr driver_only seeded_generator \
   event_vocabulary phase_c_l1 recorded_stream driver_plus_no_ops \
   ext_hook_scope_selftest ext_hook_scope invariants run_report discovery program_persistence \
@@ -1986,6 +1986,47 @@ corpus_pr:
 		exit 1; \
 	fi; \
 	echo "  ✓ measured CI cost, WHOLE TARGET: $$elapsed ms against a declared ceiling of $$ceiling ms"
+
+# 011 ADR-003 D1: THE INVARIANT SET ON EVERY CORPUS MEMBER'S REAL RUN.
+#
+# The same sixteen runs `corpus_pr` builds, started by `corpus_pr_dst`'s own
+# helpers, each bridged to `dst_invariants.evaluate` and held to six two-channel
+# checks the script states: the driver's step numbers, two rules against the
+# step budget, the provider and tool balances, and the request ordinals. The
+# script's header says what each reads and where it stops being sound.
+#
+# A SEPARATE TARGET, AND NOT A ROW IN corpus_pr (ADR-003 ruling 4). That target
+# gates on its own wall clock, and a red here should name a rule. So this one is
+# in DST_TARGETS and NOT in DST_TIMED_TARGETS: it runs in the fan-out, on its
+# own cache lane, and costs corpus_pr's measurement nothing.
+#
+# IT WRITES NOTHING UNDER .ailang/dst-corpus. corpus_pr deletes and rewrites
+# that store; a second writer would race with it whenever the two are run by
+# hand. On a red member the script names the artifact corpus_pr persisted for
+# it (ruling 16), and says so if it is absent.
+#
+# THE OUTPUT FILE IS KEPT WHEN THE TARGET IS RED, and its path printed. It holds
+# every member's wire, which is the trace 009 ADR-001 D8 asks a failure record
+# to locate. The source revision and the toolchain version are printed beside
+# it because the script cannot know either. Every non-wire line is printed on
+# red, not a tail: the row that names the rule is the point of the gate.
+#
+# The exit status is the script's own, taken before any pipeline.
+.PHONY: corpus_judge
+corpus_judge:
+	@set -eu; \
+	out=$$(mktemp); \
+	if ! ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+	     --ai-stub --entry main scripts/dst/corpus_judge_dst.ail < /dev/null > $$out 2>&1; then \
+		grep -v '^{' $$out || true; \
+		echo ""; \
+		echo "  source revision    $$(git rev-parse HEAD 2>/dev/null || echo unknown)$$(git diff --quiet HEAD 2>/dev/null || echo ' (with uncommitted changes)')"; \
+		echo "  toolchain version  $$(ailang --version 2>/dev/null | head -1)"; \
+		echo "  trace              $$out (kept: every member's wire, and every row above)"; \
+		exit 1; \
+	fi; \
+	grep -v '^{' $$out; \
+	rm -f $$out
 
 # D11's SCHEDULED ROTATING CORPUS (WI-A15 commit 2). Six checks.
 #
