@@ -52,7 +52,7 @@ These use simulated provider responses and need no API key. `make dst` runs the 
 
 ```bash
 make build
-make demo_dst   # Needs an API key: a live model drives the demo
+make demo_dst   # Live model (needs an API key); edits src/core/session.ail; run it alone
 ```
 
 Motoko plants a mutant in its own driver: a scripted one-line edit that makes the driver lose the record of one environment variable it read. It then runs its checks on the broken code:
@@ -66,7 +66,7 @@ Motoko plants a mutant in its own driver: a scripted one-line edit that makes th
 
 Replay passes because it compares the mutant with itself: the recording and the replay lose the same read. `make strict_replay` also holds the recording against a count that does not come from the recorder: the number of environment reads the driver's source says this scenario makes. That count is one and the recording has none, so the check fails and names the variable.
 
-Motoko then restores the file byte for byte. The [run note](docs/motoko-dst-demo-run-2026-10-04.md) records one such run.
+The demo then has Motoko restore the file. In the [recorded run](docs/motoko-dst-demo-run-2026-10-04.md), the restored file matched the original byte for byte.
 
 ---
 
@@ -76,9 +76,9 @@ Motoko then restores the file byte for byte. The [run note](docs/motoko-dst-demo
 - **Fault injection** - Modeled provider errors, tool failures, correlation mismatches, approval denials and deadlines
 - **Record and replay** - Recording ports turn a run into an execution program that replay serves again and checks
 - **Trace invariants** - 13 families, including tool pairing, budget accounting and journal fold; each reports whether it ran and on how much input
-- **Mutation testing** - Source mutants and negative controls show that each check can fail, and which defects no check sees
+- **Mutation testing** - Source mutants and negative controls show, for the rules tested, that a check can fail and which defects no check sees
 - **SMT contracts** - Z3-verified contracts on pure core functions, classified as substantive, tautology or spec-equals-body
-- **Effect-typed extensions** - A hook's signature states the effects it may perform, and a run can withhold a capability
+- **Effect-typed extensions** - A hook's signature declares the effects it may perform, and a run can withhold a capability
 - **Durable sessions** - A session journal, checked reconstruction on resume, and park/wake for external waits
 - **Agent-written** - Developed by coding agents, with delegation through [herdr](https://herdr.dev) and an [agent sandbox](.devcontainer/agent_sandbox/README.md)
 
@@ -103,13 +103,14 @@ Learn more: [DST technical report](papers/motoko-dst-report/DRAFT-current.md) | 
 
 ## Mutation Testing
 
-Motoko mutates its own source to test its tests: a check covers a rule only when breaking that rule makes that check fail. The procedure runs when a piece of work is handed in for acceptance:
+Motoko mutates its own source to test its tests: a check covers a rule only when breaking that rule makes that check fail. This is the discipline prescribed for a piece of work handed in for acceptance:
 
 1. **One mutant per rule** - For each rule the design decision states, write a source edit that breaks that rule and nothing else
 2. **Predict** - Name the check that should fail for each mutant, before running anything
-3. **Run** - Apply one mutant at a time, run the checks, restore the source
-4. **Judge** - A kill is the named check failing. A different check failing, a compile error, a crash or a timeout is not a kill
-5. **Follow up** - A survivor is a finding. It gets a new check, or a sentence on why no input can tell the two versions apart
+3. **Baseline** - The checks pass on the unmutated source first, and every check that rejects is paired with a valid case it must accept
+4. **Run** - Apply one mutant at a time, run the checks, restore the source
+5. **Judge** - A kill is the named check failing. A different check failing, a compile error, a crash or a timeout is not a kill
+6. **Follow up** - A survivor is a finding. It gets a new check, or a sentence on why no input can tell the two versions apart
 
 The table of mutants and results is committed with the work as evidence. This is a review step and not a CI gate, since each mutant costs a rebuild and a test run. Two cheaper forms are built in: `make verify_mutations` runs in CI and mutates guards under Z3 contracts (it edits files in place, so run it alone locally), and the DST suites change one field of a valid input per row to test their validators.
 
@@ -122,6 +123,7 @@ Learn more: [The rule](.agent/meta-decisions/mutate-each-stated-rule-once-and-se
 - **Simulation boundary** - The modeled environment excludes the TypeScript host, the operating system and external services; extension coverage is specific to a profile
 - **Ports** - Two paths in the session driver bypass the ports: the capture of a failed provider payload writes a file, and the finalization verifier runs a subprocess
 - **Recording** - File and directory reads are not logged, and replay compares a projection of each request, not its full content
+- **Effects** - A declared effect row is not a proven bound: the compiler does not check effects through function-valued record fields, so withheld capabilities and source inventories back it up
 - **Specifications** - Invariants address declared structural properties; contracts cover a small subset of pure functions
 - **Oracle sensitivity** - Mutants are chosen by hand and give local evidence; there is no drawn mutant population and no mutation score
 - **External validity** - Simulated runs say nothing about model quality or task success

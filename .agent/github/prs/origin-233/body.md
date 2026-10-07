@@ -20,7 +20,7 @@ setup, usage, configuration and extension reference moves to three files under `
 The branch holds about twenty commits, because three alternative READMEs were written on it and compared
 before one was chosen. The alternatives are deleted again. Net of that:
 
-- `README.md` rewritten, 366 lines to 175.
+- `README.md` rewritten, 366 lines to 177.
 - `docs/running.md`, `docs/configuration.md` and `docs/extensions.md` added.
 
 4 files changed, and this record.
@@ -105,10 +105,11 @@ the source and fixed them in the commit after `9c6f17c4`:
 | Recording captures "every interaction" and replay checks "the same requests": file reads are not logged, and requests are compared by a projection | Both steps reworded, and a Limits line added |
 | The install commands leave `ailang` and `bun` off `PATH` in the calling shell | A sentence in the README and in `docs/running.md`. The original README had the same gap |
 
-Open, for the operator: say that a hook's signature *declares* its effects, since the ABI records
-that a declared row does not bound effects through function-valued record fields; present the
-mutation procedure as the prescribed discipline and add its control and baseline rule; flag on the
-demo command that it calls a live model, edits `session.ail` and must run alone; and put the
+The operator took three of the four opinions on 2026-10-07, applied in the following commit: a
+hook's signature *declares* its effects, with a Limits line on why that is not a proven bound; the
+mutation section is introduced as the prescribed discipline and gains its baseline and control
+step; and the demo command says it calls a live model, edits `session.ail` and must run alone, with
+byte-for-byte restoration stated as what the recorded run observed. Declined: putting the
 simulation quick start before the agent quick start.
 
 The reviewer found the moved text in `docs/` unchanged in meaning, the counts and CI schedule
