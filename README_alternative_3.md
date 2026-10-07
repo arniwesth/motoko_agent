@@ -11,6 +11,8 @@
 
 Motoko is an experimental coding-agent harness written in [AILANG](https://github.com/sunholo-data/ailang). Its production session driver runs against a **deterministic test world**, so failures in state management and control flow can be reproduced, replayed and checked.
 
+Deterministic simulation testing is a bet on **recursive self-improvement** (RSI), the project's destination: a system that rewrites its own harness needs evidence that each change left it working, without a person reading the code. Motoko is also an experiment in modern, post-AI software development, where agents write the code and people work on ideas, decisions and evidence.
+
 **[Running Motoko](docs/running.md)** | **[Configuration](docs/configuration.md)** | **[Extensions](docs/extensions.md)** | **[DST Report](papers/motoko-dst-report/DRAFT-current.md)** | **[Design Archive](.agent/projects/)**
 
 ---
