@@ -20,7 +20,7 @@ setup, usage, configuration and extension reference moves to three files under `
 The branch holds about twenty commits, because three alternative READMEs were written on it and compared
 before one was chosen. The alternatives are deleted again. Net of that:
 
-- `README.md` rewritten, 366 lines to 157.
+- `README.md` rewritten, 366 lines to 167.
 - `docs/running.md`, `docs/configuration.md` and `docs/extensions.md` added.
 
 4 files changed, and this record.
@@ -42,7 +42,7 @@ authoring session on 2026-10-07:
 | Mutation testing | Its own section, describing the procedure and not past results |
 | DST | Its own section above it, in the same form |
 | "Things are going to break." | Removed: the point of the project is now that it does not break |
-| Credits | The Background section is dropped. The credits to Pi Coding Agent, Oh-My-Pi, context-mode and little-coder go with it |
+| Credits | A Credits section at the end names Pi Coding Agent, Oh-My-Pi and little-coder. The context-mode credit is removed |
 | Timing | Independent of the release in `033_release/ADR-001-release-scope.md` |
 
 Not ruled on: the Puppet Master line and the table of contents. Neither is in this version. The
@@ -58,7 +58,8 @@ operator had asked to keep both in an earlier draft on this branch.
 | Extensions table, adding a new extension | `README.md` | `docs/extensions.md` |
 | Development, Project structure | `README.md` | `README.md`, shortened |
 | Contributing | `README.md`, a section | `README.md`, a link in the guide list |
-| Highlights, table of contents, Reference | `README.md` | removed |
+| Reference | `README.md` | `README.md`, as Credits, without context-mode and with FoundationDB, Antithesis and The Phoenix Architecture moved to the opening |
+| Highlights, table of contents | `README.md` | removed |
 
 The text moved to `docs/` is unchanged apart from heading levels and relative links. It was not
 re-checked for currency. The extensions table gains `skills`, which is registered in `ailang.toml`

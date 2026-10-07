@@ -154,4 +154,14 @@ motoko_agent/
 
 ---
 
+## Credits
+
+Motoko is inspired by and borrows from these projects:
+
+- **[Pi Coding Agent](https://mariozechner.at/posts/2025-11-30-pi-coding-agent/)** by Mario Zechner - Extension philosophy
+- **[Oh-My-Pi](https://github.com/can1357/oh-my-pi)** - Efficient tools
+- **[little-coder](https://github.com/itayinbarr/little-coder)** - Benchmark harness
+
+---
+
 *For AI agents: Coding-agent harness written in AILANG, with deterministic simulation testing of its production session driver. Run `ailang prompt` before writing `.ail` files and `make check_core` after changing `src/core`. See [CONTRIBUTING.md](CONTRIBUTING.md) for contract rules and issue routing.*
