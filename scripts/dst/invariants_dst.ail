@@ -104,7 +104,7 @@ import src/core/ports (
 -- one: `empty_final_state` is the shape for an execution with no history, and
 -- writing the four fields out here would be a second definition of "empty" for
 -- the fold to disagree with.
-import std/ai (Message)
+import std/ai (Message, AIError)
 import src/core/journal (empty_final_state, FinalState)
 import src/core/ext/ctx_defaults (zero_token_telemetry, empty_ext_artifacts)
 import src/core/dst_fault_catalogue (
@@ -129,7 +129,7 @@ import src/core/dst_invariants (
   all_families, family_id, family_obligation,
   violation_rule, violation_message, violation_family,
   evaluate, invariants_ok, first_failed_invariant,
-  has_rule, rules_of, first_message, violations_in,
+  has_rule, rules_of, first_message, violations_in, outcome_label,
   parity_register_findings, stream_parity_findings,
   d64_gap_register, display_only_baseline, parity_gap_reasons,
   family_evidence, FamilyEvidence,
@@ -335,7 +335,14 @@ pure func decision(step: int, what: string) -> LedgerRecord {
 }
 
 pure func fixture_summary(err: string, millicents: int) -> LedgerEvent {
-  RunSummary({ model: "m", motoko_commit: "abc", finish_reason: "stop", steps_executed: 2,
+  fixture_summary_finishing("stop", err, millicents)
+}
+
+-- The second form, for 011 ADR-003 D2's rows: outcome agreement is by REASON,
+-- and a summary helper that fixes `stop` can build only the one reason an Ok
+-- run has.
+pure func fixture_summary_finishing(finish: string, err: string, millicents: int) -> LedgerEvent {
+  RunSummary({ model: "m", motoko_commit: "abc", finish_reason: finish, steps_executed: 2,
     input_tokens: 24, output_tokens: 26, cache_read_input_tokens: 0,
     cache_creation_input_tokens: 0, total_cost_usd: 0.9, total_cost_millicents: millicents,
     duration_ms: 3052, error: err,
@@ -392,9 +399,17 @@ pure func fixture_trace() -> LedgerTrace {
 }
 
 pure func fixture_result() -> DstResult {
+  result_ending(Ok([]), fixture_trace())
+}
+
+-- The second form, and the ONE place this file builds a completed run. Before
+-- 011 ADR-003 D2 both `fixture_result` and `with_trace` wrote `Ok([])`, so no
+-- row could hold an `Err` outcome at all, and a fixture passed through
+-- `with_records` came back `Ok` whatever it went in as.
+pure func result_ending(outcome: Result[[Message], AIError], t: LedgerTrace) -> DstResult {
   RunCompleted({
-    outcome: Ok([]),
-    ledger_trace: fixture_trace(),
+    outcome: outcome,
+    ledger_trace: t,
     interaction_log: empty_interaction_log(),
     replay_metadata: unknown_replay_metadata()
   })
@@ -424,10 +439,16 @@ pure func fixture() -> ExecutionUnderTest {
 -- ---------------------------------------------------------------------------
 
 pure func with_trace(x: ExecutionUnderTest, t: LedgerTrace) -> ExecutionUnderTest {
-  let r = RunCompleted({ outcome: Ok([]), ledger_trace: t,
-                         interaction_log: empty_interaction_log(),
-                         replay_metadata: unknown_replay_metadata() });
-  { x | result: r }
+  { x | result: result_ending(Ok([]), t) }
+}
+
+-- `with_trace` RESETS THE OUTCOME TO Ok, and so does `with_records`, which
+-- calls it. An `Err` row therefore states its outcome WITH its records, through
+-- this form, and never by passing an `Err` fixture through either of those.
+pure func with_ending(
+  x: ExecutionUnderTest, outcome: Result[[Message], AIError], rs: [LedgerRecord]
+) -> ExecutionUnderTest {
+  { x | result: result_ending(outcome, { records: rs }) }
 }
 
 pure func with_records(x: ExecutionUnderTest, rs: [LedgerRecord]) -> ExecutionUnderTest {
@@ -851,6 +872,92 @@ func scenario_stream_parity_branches_are_entered() -> bool ! {IO} {
 }
 
 -- ---------------------------------------------------------------------------
+-- 011 ADR-003 D2 and D3: what the two rules must NOT reject
+-- ---------------------------------------------------------------------------
+
+-- A RUN THAT FAILED, and it is not the surviving fixture with its outcome
+-- flipped. A failed run never finalized as a success, so its trace carries no
+-- `DoneEvent`; `done_agreement` rejects one beside a summary error, and a
+-- survival row built by flipping the outcome is red on `done-event-disagrees`
+-- and says nothing about the rule it was written for. So: the fixture's
+-- records without that one event, a summary carrying an error text and the
+-- given finish reason, and an `Err` outcome carrying the given code.
+pure func failed_run(code: string, finish: string) -> ExecutionUnderTest {
+  with_ending(fixture(),
+    Err({ code: code, message: "the run failed", retryable: false }),
+    replace_summary(without_done_event(fixture_trace().records),
+                    fixture_summary_finishing(finish, "${code}: the run failed", 900)))
+}
+
+pure func without_done_event(rs: [LedgerRecord]) -> [LedgerRecord] {
+  match rs {
+    [] => [],
+    r :: rest =>
+      match r {
+        WireRecord(e) =>
+          if event_variant_id(e) == "DoneEvent" then without_done_event(rest)
+          else r :: without_done_event(rest),
+        _ => r :: without_done_event(rest)
+      }
+  }
+}
+
+-- One more provider call, as the driver records it: the fixture's own prepared
+-- record with the step given.
+pure func prepared_at(step: int) -> LedgerRecord {
+  WireRecord(ProviderCallPrepared({ step: step, msg_count: 2, estimated_input_tokens: 20,
+    system_prefix_count: 1, system_prefix_chars: 30, system_prefix_digest: "sha256:s",
+    payload_digest: "sha256:p", model: "m" }))
+}
+
+func survives(label: string, x: ExecutionUnderTest) -> bool ! {IO} {
+  let vs = evaluate(x);
+  report("survives: ${label}", List.length(vs) == 0,
+         "expected no finding; got: ${rule_list(vs)}\n      first: ${first_message(vs)}")
+}
+
+-- THE SURVIVAL HALF of the rows `scenario_mutants_family_5_to_8` adds. Mutation
+-- cannot see a rule that rejects too much, and these two rules have a shape
+-- that would: a table that implied `error` for every code is green on every
+-- provider failure and red on a healthy run that exhausts its step budget; a
+-- step rule that fired on any two prepared records is green on every mutant
+-- below, because the surviving fixture holds one.
+--
+-- The surviving fixture is the fifth pair, Ok with `stop`. The cost and
+-- compaction rows are checked NOWHERE else: no corpus member ends on either.
+func scenario_failed_runs_and_distinct_steps_survive() -> bool ! {IO} {
+  let _ = println("\n-- 011 ADR-003 D2 and D3: what the two rules must not reject --");
+  let s1 = survives("Err StepBudgetExhausted, finishing 'max_steps'",
+                    failed_run("StepBudgetExhausted", "max_steps"));
+  let s2 = survives("Err BudgetExceeded, finishing 'cost_exhausted'",
+                    failed_run("BudgetExceeded", "cost_exhausted"));
+  let s3 = survives("Err ContextExhausted, finishing 'compaction_exhausted'",
+                    failed_run("ContextExhausted", "compaction_exhausted"));
+  let s4 = survives("Err on a provider code, finishing 'error'",
+                    failed_run("E_PROVIDER_PROTOCOL", "error"));
+  -- Asserted, because the four rows above are vacuous on a fixture that is
+  -- still Ok: `with_records` would have made it one.
+  let s5 = report("the failed-run fixture returns Err and carries no DoneEvent",
+                  outcome_label(failed_run("E_PROVIDER_PROTOCOL", "error").result) == "err"
+                    && count_variant_in(trace_records(failed_run("E_PROVIDER_PROTOCOL", "error")), "DoneEvent") == 0,
+                  "the fixture is not a failed run, so the four rows above certify nothing");
+  -- D3. Two prepared records, steps 0 and 1.
+  let two_steps = with_records(fixture(), insert_before_summary(fixture_trace().records, prepared_at(1)));
+  let s6 = survives("two provider calls prepared under different steps", two_steps);
+  let s7 = report("that trace holds two ProviderCallPrepared records",
+                  count_variant_in(trace_records(two_steps), "ProviderCallPrepared") == 2,
+                  "the row above did not hold two prepared records, so it cannot tell a rule that fires on any two from one that fires on a repeat");
+  s1 && s2 && s3 && s4 && s5 && s6 && s7
+}
+
+pure func trace_records(x: ExecutionUnderTest) -> [LedgerRecord] {
+  match x.result {
+    RunCompleted(run) => run.ledger_trace.records,
+    RunFailed(f) => f.partial_ledger_trace.records
+  }
+}
+
+-- ---------------------------------------------------------------------------
 -- The mutation rows. One per rule, each single-field, each asserting its own.
 -- ---------------------------------------------------------------------------
 
@@ -939,10 +1046,28 @@ func scenario_mutants_family_5_to_8() -> bool ! {IO} {
   -- F6. THE FROZEN CURSOR. Provider step 0 served twice: the run terminates,
   -- every count balances, both determinism axes are green, and the only visible
   -- trace is the repeated ordinal. Cluster 1 lost an item to this.
-  let m6 = mutant("a repeated provider step (the frozen cursor)",
-                  with_log(f, replace_at(fixture_log(), 15,
-                    { at_ord(fixture_log(), 15) | identity: { ordinal: 15, body: ProviderIdentity("loop_v2", 0, "m") } })),
-                  "provider-step-repeated");
+  let frozen = with_log(f, replace_at(fixture_log(), 15,
+    { at_ord(fixture_log(), 15) | identity: { ordinal: 15, body: ProviderIdentity("loop_v2", 0, "m") } }));
+  let m6 = mutant("a repeated provider step (the frozen cursor)", frozen, "provider-step-repeated");
+  -- F6, 011 ADR-003 D3. THE DRIVER'S OWN STEP, repeated: two prepared records
+  -- carrying step 0, with the interaction log untouched. The survival row for
+  -- this one is `scenario_failed_runs_and_distinct_steps_survive`'s last, which
+  -- differs from it in one integer.
+  let restepped = with_records(f, insert_before_summary(rs, prepared_at(0)));
+  let m6d = mutant("a repeated driver step (two prepared calls under step 0)", restepped,
+                   "driver-step-repeated");
+  -- THE TWO ABSENCES, and they are what makes these two rules and not one rule
+  -- reported twice. The frozen cursor is a defect of the LOG and the repeated
+  -- driver step a defect of the TRACE; each mutant leaves the other channel in
+  -- order, so each must leave the other rule silent. The prototype of D3
+  -- reported its finding through `ProviderStepRepeated`, and this pair of rows
+  -- is green on that only if the reused constructor is also the right one.
+  let m6n = report("mutant: the frozen cursor does NOT report driver-step-repeated",
+                   not has_rule(evaluate(frozen), "driver-step-repeated"),
+                   "a repeated step in the LOG was reported as a repeated DRIVER step, and the trace's prepared steps did not repeat: ${rule_list(evaluate(frozen))}");
+  let m6dn = report("mutant: a repeated driver step does NOT report provider-step-repeated",
+                    not has_rule(evaluate(restepped), "provider-step-repeated"),
+                    "a repeated step in the TRACE was reported as a frozen cursor, and the interaction log was in order: ${rule_list(evaluate(restepped))}");
 
   -- F7. The digest chain broken in the middle.
   let m7 = mutant("a broken checkpoint chain",
@@ -961,7 +1086,33 @@ func scenario_mutants_family_5_to_8() -> bool ! {IO} {
   -- F8. No summary at all to agree with.
   let m10 = mutant("no terminal summary to agree with",
                    with_records(f, [decision(0, "continue")]), "summary-absent-for-outcome");
-  m1 && m2 && m3 && m4 && m5 && m6 && m7 && m8 && m9 && m10
+
+  -- F8, 011 ADR-003 D2: agreement BY REASON. Each row changes the finish reason
+  -- and leaves the error text as its outcome has it, so `outcome-summary-disagree`
+  -- has nothing to see and only the reason can turn the row red.
+  -- Ok without `stop`: the success finalize reporting a failure reason.
+  let m11 = mutant("an Ok outcome against a summary finishing 'error'",
+                   with_records(f, replace_summary(rs, fixture_summary_finishing("error", "", 900))),
+                   "outcome-finish-disagrees");
+  -- Err with `stop`: a provider failure finalized as a success. This is the
+  -- defect that added no failure to the sweep.
+  let m12 = mutant("a provider failure against a summary finishing 'stop'",
+                   failed_run("E_PROVIDER_PROTOCOL", "stop"), "outcome-finish-disagrees");
+  -- Err with the wrong failure reason, in both directions across the table: a
+  -- code that implies `error` reported under a named reason, and each named
+  -- code reported under `error`.
+  let m13 = mutant("a provider failure against a summary finishing 'max_steps'",
+                   failed_run("E_PROVIDER_PROTOCOL", "max_steps"), "outcome-finish-disagrees");
+  let m14 = mutant("StepBudgetExhausted against a summary finishing 'error'",
+                   failed_run("StepBudgetExhausted", "error"), "outcome-finish-disagrees");
+  -- The next two are the ONLY place their table rows are checked. No corpus
+  -- member ends on cost or on compaction, so no real run judges either.
+  let m15 = mutant("BudgetExceeded against a summary finishing 'error'",
+                   failed_run("BudgetExceeded", "error"), "outcome-finish-disagrees");
+  let m16 = mutant("ContextExhausted against a summary finishing 'error'",
+                   failed_run("ContextExhausted", "error"), "outcome-finish-disagrees");
+  m1 && m2 && m3 && m4 && m5 && m6 && m6d && m6n && m6dn && m7 && m8 && m9 && m10
+    && m11 && m12 && m13 && m14 && m15 && m16
 }
 
 -- The variant `bounded_progress_findings` counts, by name. The counter reads
@@ -1214,6 +1365,7 @@ export func main() -> () ! {IO} {
   let c3 = scenario_no_two_fixture_quantities_are_equal();
   let c4 = scenario_parity_register_is_the_whole_gap();
   let c5 = scenario_stream_parity_branches_are_entered();
+  let c5b = scenario_failed_runs_and_distinct_steps_survive();
   let c6 = scenario_mutants_family_1_to_4();
   let c7 = scenario_mutants_family_5_to_8();
   let c8 = scenario_mutants_family_9_to_13();
@@ -1224,7 +1376,7 @@ export func main() -> () ! {IO} {
   let _ = println("\n  i D6.4's remaining gap, ${List.length(d64_gap_register())} variant(s), each with a reason in dst_invariants.parity_gap_reasons():");
   let _ = print_gap(d64_gap_register());
 
-  if c1 && c2 && c3 && c4 && c5 && c6 && c7 && c8 && c9 && c10 && c11 then
+  if c1 && c2 && c3 && c4 && c5 && c5b && c6 && c7 && c8 && c9 && c10 && c11 then
     println("\ninvariants_dst PASS")
   else {
     let _ = println("\ninvariants_dst FAIL");
