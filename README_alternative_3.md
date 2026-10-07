@@ -2,7 +2,7 @@
   <img src="assets/motoko.png" alt="Motoko" width="640">
 </p>
 
-# Motoko: Deterministic Simulation Testing for an Agent Harness
+# Motoko: Agent Harness with Native Deterministic Simulation Testing
 
 [![DST corpora](https://github.com/arniwesth/motoko_agent/actions/workflows/dst-corpora.yml/badge.svg)](https://github.com/arniwesth/motoko_agent/actions/workflows/dst-corpora.yml)
 [![verify-extensions](https://github.com/arniwesth/motoko_agent/actions/workflows/verify-extensions.yml/badge.svg)](https://github.com/arniwesth/motoko_agent/actions/workflows/verify-extensions.yml)
