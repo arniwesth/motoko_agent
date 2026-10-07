@@ -11,7 +11,9 @@
 
 Motoko is an experimental coding-agent harness written in [AILANG](https://github.com/sunholo-data/ailang). Its production session driver runs against a **deterministic test world**, so failures in state management and control flow can be reproduced, replayed and checked.
 
-Deterministic simulation testing is a bet on **recursive self-improvement** (RSI), the project's destination: a system that rewrites its own harness needs evidence that each change left it working, without a person reading the code. Motoko is also an experiment in modern, post-AI software development, where agents write the code and people work on ideas, decisions and evidence.
+Deterministic simulation testing is a bet on **recursive self-improvement** (RSI), the project's destination: a system that rewrites its own harness needs evidence that each change left it working, without a person reading the code.
+
+Motoko is also an experiment in modern, post-AI software development. It follows **[The Phoenix Architecture](https://aicoding.leaflet.pub/)** by Chad Fowler: no human-written code is allowed. Agents write the code, people work on ideas, decisions and evidence, and the rigor sits in the evaluations that judge each change.
 
 **[Running Motoko](docs/running.md)** | **[Configuration](docs/configuration.md)** | **[Extensions](docs/extensions.md)** | **[DST Report](papers/motoko-dst-report/DRAFT-current.md)** | **[Design Archive](.agent/projects/)**
 
@@ -152,7 +154,7 @@ motoko_agent/
 
 ## Background
 
-Motoko's simulation testing draws on [FoundationDB](https://www.foundationdb.org/files/fdb-paper.pdf) and [Antithesis](https://antithesis.com/docs/resources/deterministic_simulation_testing/). Its agent-written development model follows [The Phoenix Architecture](https://aicoding.leaflet.pub/). Other influences are [Pi Coding Agent](https://mariozechner.at/posts/2025-11-30-pi-coding-agent/), [Oh-My-Pi](https://github.com/can1357/oh-my-pi), [context-mode](https://github.com/mksglu/context-mode) and [little-coder](https://github.com/itayinbarr/little-coder).
+Motoko's development model follows [The Phoenix Architecture](https://aicoding.leaflet.pub/) by Chad Fowler. Its simulation testing draws on [FoundationDB](https://www.foundationdb.org/files/fdb-paper.pdf) and [Antithesis](https://antithesis.com/docs/resources/deterministic_simulation_testing/). Other influences are [Pi Coding Agent](https://mariozechner.at/posts/2025-11-30-pi-coding-agent/), [Oh-My-Pi](https://github.com/can1357/oh-my-pi) and [little-coder](https://github.com/itayinbarr/little-coder).
 
 ---
 
