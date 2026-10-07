@@ -36,6 +36,7 @@
 --
 -- They live in this script and not under `src/core` by ruling: they are sound on
 -- the `driver_only` bank, where they were measured clean, and nowhere else yet.
+-- This script's four controls run the bank's rig and are held to the same six.
 -- A park whose reply is dropped advances the step with no provider call, and a
 -- hook that calls the model logs a provider interaction with no prepared record,
 -- so the first and the fourth are wrong as rules about any run.
@@ -76,6 +77,12 @@
 --   4. THE BUDGET EDGE NEVER VISITED. The bank's retries are at steps 1 and 8 of
 --      12. Two scripted controls put a retryable provider error at the edge: at
 --      budget 2 it is retried and the run ends on `stop`; at budget 1 it is not.
+--   5. TWO BRANCHES NO MEMBER WALKS (ruling 18). Under the bank's runtime no
+--      tool runs without an approval and no answer is verified, and a mutant on
+--      each of those branches left the whole gate green. Two more controls run
+--      the rig with the policy allowing, and with a verifier that rejects. Each
+--      also states what only its branch leaves behind, so that it cannot be
+--      clean by never getting there.
 --
 -- ============================================================================
 -- WHAT THIS DOES NOT PROVE
@@ -85,8 +92,10 @@
 -- sixteen members do not walk; this is not 009 D11's rotating search. The replay
 -- family is not evaluated on any member: these are discovery runs and the
 -- obligation is `NoReplay`. No bank run ends on its cost cap or on compaction, so
--- those two rows of D2's table are judged on no real run here. ADR-003's
--- "known, and not seen" list and its "Not decided" list stand as written.
+-- those two rows of D2's table are judged on no real run here. The two branch
+-- controls judge one short run each: nothing about a verifier that accepts after
+-- it rejected, and nothing about a tool an extension handles. ADR-003's "known,
+-- and not seen" list and its "Not decided" list stand as written.
 
 module scripts/dst/corpus_judge_dst
 
@@ -97,11 +106,12 @@ import std/option (Option, None, Some)
 import std/result (Result, Ok, Err)
 import std/fs as FS (fileExists)
 import src/core/session (TracedSessionResult)
-import src/core/ports (ScriptedStep, WorldState)
-import src/core/test/stub_step (prose_step, scripted_world_state)
+import src/core/ports (ScriptedStep, ScriptedTool, WorldState)
+import src/core/test/stub_step (prose_step, tool_step, scripted_world_state)
 import src/core/phase_vocab (
   LedgerRecord, WireRecord, RunSummary,
   ProviderCallPrepared, StreamErrorRetry, WorldRequest, V2ToolDispatchStart,
+  Dp7VerifierRejected,
   run_summary_finish_reason
 )
 import src/core/dst_interaction (Interaction, interaction_kind)
@@ -119,7 +129,8 @@ import src/core/dst_driver_only (driver_only_version)
 import src/core/dst_event_vocabulary (event_vocabulary_version)
 import scripts/dst/corpus_pr_dst (
   BankEntry, MemberRun, fixed_bank, bank_step_budget,
-  run_seed_member, run_constructed_member, run_recording_at, store_root
+  run_seed_member, run_constructed_member, run_recording_at,
+  run_recording_allowing_at, run_recording_verified_at, store_root
 )
 
 -- ---------------------------------------------------------------------------
@@ -525,7 +536,7 @@ pure func finish_word(f: Option[string]) -> string {
 --
 -- The tag says what was judged, so that a count of one kind cannot include
 -- another: `JUDGE` is a bank member, and its sixteen `JUDGEROW`s can be laid
--- beside `corpus_pr`'s `CORPUSROW`s; `CONTROL` is a budget-edge control;
+-- beside `corpus_pr`'s `CORPUSROW`s; `CONTROL` is a budget-edge or branch control;
 -- `SELFCHECK` is a constructed input.
 pure func tag_member() -> string { "JUDGE" }
 pure func tag_control() -> string { "CONTROL" }
@@ -860,6 +871,124 @@ func scenario_budget_edge_controls()
 }
 
 -- ---------------------------------------------------------------------------
+-- THE TWO BRANCH CONTROLS (ADR-003 ruling 18)
+-- ---------------------------------------------------------------------------
+--
+-- Acceptance left two blind mutants alive, and neither was a rule missing a
+-- defect on a run it judged. Each sits on a branch no bank member walks. The
+-- bank's policy hook answers `Pending` for every tool call, so no tool runs
+-- from the allowed arm of `dispatch_tool_entries_with_builtin` (`tool_phase.ail`).
+-- The bank runs with the verifier off, so no candidate answer is rejected and
+-- the loop never resumes from `c2_dp7_rejected_state` (`session.ail`).
+--
+-- These two runs walk them. Each is the recording rig with ONE part changed,
+-- through a helper `corpus_pr_dst` exports for this: the policy answers `Allow`,
+-- or the verifier is on. The recording adapter, the neutral hooks and the delta
+-- over the starting log are the bank's, so D5's three premises hold and all six
+-- checks apply as they do to a member.
+--
+-- NOT BANK MEMBERS. `corpus_pr` runs neither, and its rows do not change.
+--
+-- A CONTROL THAT DID NOT REACH ITS BRANCH IS GREEN AND WORTHLESS. So each states,
+-- beside its clean row, what only that branch leaves behind: two tools
+-- dispatched with no approval asked and the world's tool queue drained; two
+-- `dp7_verifier_rejected` records, each followed by a call at the next step.
+--
+-- THE VERIFIER IS A REAL PROCESS. `run_dp7_verifier` runs `bash -c` in the
+-- working directory, and no world answers for it. `exit 3` reads nothing, writes
+-- nothing, prints nothing and rejects every candidate, so that run ends on its
+-- step budget. No answer is accepted in it, and the row is not about one.
+--
+-- A DEFECT HERE MUST END AS A RED ROW, NOT AS A HANG. If the step did not
+-- advance after a rejection the run could never reach its step budget, and an
+-- exhausted script serves a terminal answer for ever, each one rejected in its
+-- turn. Measured: with `step_idx + 1` replaced by `step_idx` this gate ran until
+-- it was killed. So the script ends with a provider error that is not retried.
+-- The unmutated run never asks for it, and the row holds it to that: the entry
+-- is still in the world the run handed back.
+
+pure func two_tool_step() -> ScriptedStep {
+  { tool_step("T", "{}", "c1") |
+    tool_calls: [{ id: "c1", name: "T", arguments: "{}" }, { id: "c2", name: "T", arguments: "{}" }] }
+}
+
+pure func tool_answer(content: string) -> ScriptedTool {
+  { tool_call_id: "", duration_ms: 1, code: "", message: "", content: content, exit_code: 0 - 1 }
+}
+
+pure func rejected_steps(rs: [LedgerRecord]) -> [int] {
+  match rs {
+    [] => [],
+    r :: rest =>
+      match r {
+        WireRecord(e) => match e { Dp7VerifierRejected(i) => i.step :: rejected_steps(rest), _ => rejected_steps(rest) },
+        _ => rejected_steps(rest)
+      }
+  }
+}
+
+pure func rejecting_verifier() -> string { "exit 3" }
+
+pure func third_call_step() -> ScriptedStep {
+  { prose_step("") | error_code: "E_PROVIDER_PROTOCOL",
+                     error_message: "constructed: the model was called a third time on a step budget of two" }
+}
+
+func judged_control(label: string, initial: WorldState, run: TracedSessionResult, step_budget: int)
+  -> ControlRun ! {IO} {
+  let j = judge(label, initial, run, budgets_for(step_budget));
+  let _ = print_judged(tag_control(), j);
+  { judged: j, run: run }
+}
+
+func scenario_branch_controls()
+  -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("\n-- the two branch controls: the bank's rig with one part changed, not bank members --");
+
+  -- A TOOL RUN WITHOUT AN APPROVAL. One turn asks for two tools and the world
+  -- holds one answer for each. The fold must hand the second call the world the
+  -- first one left, and hand the turn the world the second one left.
+  let t_initial: WorldState = { scripted_world_state([two_tool_step(), prose_step("done")]) |
+                                tools: [tool_answer("OK-ALPHA"), tool_answer("OK-BRAVO")] };
+  let t = judged_control("tool-run-without-approval", t_initial,
+                         run_recording_allowing_at("corpus_judge_tool-run-without-approval", t_initial, 2), 2);
+  let t_starts = dispatch_starts(t.judged.obs.records);
+  let t_approvals = count_kind(t.run.world.log, "expect_approval") - count_kind(t_initial.log, "expect_approval");
+  let t_left = List.length(t.run.world.tools);
+  let t1 = report("tool run without approval: the run ends Ok on stop, with prepared steps 0 and 1",
+                  t.judged.ended == "Ok" && finish_word(t.judged.finish) == "stop"
+                    && ints_equal(prepared_steps(t.judged.obs.records), [0, 1]),
+                  "ended=${t.judged.ended} finish=${finish_word(t.judged.finish)} prepared steps ${ints(prepared_steps(t.judged.obs.records))}");
+  let t2 = report("tool run without approval: the branch was walked — two tools dispatched, two tool interactions logged, no approval asked, the tool queue drained",
+                  t_starts == 2 && t.judged.obs.tools_logged == 2 && t_approvals == 0 && t_left == 0,
+                  "${t_starts} dispatch record(s), ${t.judged.obs.tools_logged} tool interaction(s) logged, ${t_approvals} approval interaction(s), ${t_left} answer(s) left in the world's tool queue");
+  let t3 = report("tool run without approval: no finding from the set, none from the six checks",
+                  is_clean(t.judged),
+                  "set: [${join_with(set_rules(t.judged.set), ",")}]; red: [${join_with(red_rules(t.judged.rows), ",")}]; not evaluated: [${join_with(unevaluated_rules(t.judged.rows), ",")}]");
+
+  -- A VERIFIER REJECTION, TWICE. Each turn answers, the verifier rejects the
+  -- answer, and the loop must call the model again at the NEXT step.
+  let v_initial = scripted_world_state([prose_step("first answer"), prose_step("second answer"), third_call_step()]);
+  let v = judged_control("verifier-rejection", v_initial,
+                         run_recording_verified_at("corpus_judge_verifier-rejection", v_initial, 2, rejecting_verifier()), 2);
+  let v_steps = prepared_steps(v.judged.obs.records);
+  let v_rejected = rejected_steps(v.judged.obs.records);
+  let v_unasked = List.length(v.run.world.script);
+  let v1 = report("verifier rejection: the run ends Err on max_steps",
+                  v.judged.ended == "Err" && finish_word(v.judged.finish) == "max_steps",
+                  "ended=${v.judged.ended} code='${error_code_of(v.run)}' finish=${finish_word(v.judged.finish)}");
+  let v2 = report("verifier rejection: the branch was walked — rejected at steps 0 and 1, prepared steps 0 and 1, two provider interactions logged, the third scripted entry never asked for",
+                  ints_equal(v_rejected, [0, 1]) && ints_equal(v_steps, [0, 1]) && v.judged.obs.providers_logged == 2
+                    && v_unasked == 1,
+                  "rejected at ${ints(v_rejected)}, prepared steps ${ints(v_steps)}, ${v.judged.obs.providers_logged} provider interaction(s) logged, ${v_unasked} scripted entr(ies) left of 3");
+  let v3 = report("verifier rejection: no finding from the set, none from the six checks",
+                  is_clean(v.judged),
+                  "set: [${join_with(set_rules(v.judged.set), ",")}]; red: [${join_with(red_rules(v.judged.rows), ",")}]; not evaluated: [${join_with(unevaluated_rules(v.judged.rows), ",")}]");
+
+  t1 && t2 && t3 && v1 && v2 && v3
+}
+
+-- ---------------------------------------------------------------------------
 -- THE FAILURE RECORD (ruling 16): what 009 ADR-001 D8 lists
 -- ---------------------------------------------------------------------------
 --
@@ -954,6 +1083,7 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   let bank = seeded ++ [constructed_member];
 
   let controls_ok = scenario_budget_edge_controls();
+  let branches_ok = scenario_branch_controls();
 
   -- THE VERDICT, after every rule row above.
   let _ = println("\n-- the verdict on the bank --");
@@ -990,8 +1120,8 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
 
   let _ = print_failure_records(bank, budgets);
 
-  if checks_ok && controls_ok && a && b && c && d && e && f then
-    println("\n✓ corpus_judge: ${members} members, the invariant set and six checks, two budget-edge controls")
+  if checks_ok && controls_ok && branches_ok && a && b && c && d && e && f then
+    println("\n✓ corpus_judge: ${members} members, the invariant set and six checks, two budget-edge controls, two branch controls")
   else {
     let _ = println("\n✗ corpus_judge FAILED");
     exit(1)
