@@ -84,7 +84,7 @@ Motoko mutates its own source to test its tests: a check covers a rule only when
 4. **Judge** - A kill is the named check failing. A different check failing, a compile error, a crash or a timeout is not a kill
 5. **Follow up** - A survivor is a finding. It gets a new check, or a sentence on why no input can tell the two versions apart
 
-The table of mutants and results is committed with the work as evidence. This is a review step and not a CI gate, since each mutant costs a rebuild and a test run. Two cheaper forms are built in: `make verify_mutations` mutates guards under Z3 contracts (in place, so run it alone), and the DST suites change one field of a valid input per row to test their validators.
+The table of mutants and results is committed with the work as evidence. This is a review step and not a CI gate, since each mutant costs a rebuild and a test run. Two cheaper forms are built in: `make verify_mutations` runs in CI and mutates guards under Z3 contracts (it edits files in place, so run it alone locally), and the DST suites change one field of a valid input per row to test their validators.
 
 Learn more: [The rule](.agent/meta-decisions/mutate-each-stated-rule-once-and-see-its-test-fail.md) | [An acceptance run](.agent/projects/011_improve_test_axises/evidence/judge-recoveries/acceptance-ce9cb247/README.md) | [The spike that found two gaps](.agent/projects/011_improve_test_axises/NOTE-spike-findings-mutation-operator-feasibility.md)
 
