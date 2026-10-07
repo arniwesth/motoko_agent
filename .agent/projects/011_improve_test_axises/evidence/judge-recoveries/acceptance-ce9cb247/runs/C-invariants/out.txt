@@ -1,0 +1,140 @@
+→ Type checking...
+→ Effect checking...
+✓ Running scripts/dst/invariants_dst.ail
+Warning: dependency sunholo/motoko_ext_herdr content changed (locked: sha256:e1e96240660e9c037..., current: sha256:6928b495ef76aff83...)
+Run 'ailang lock' to update
+=== invariants_dst (D7, invariant-set/2) ===
+  i 13 families (D7's twelve, plus ADR-003 D4's journal fold):
+      terminal-summary: exactly one final RunSummary for every SystemRun, and none synthesized for a harness failure
+      emission-parity: parity between all logical ledger emissions and returned trace records
+      phase-transitions: legal phase/state transitions
+      tool-pairing: valid tool-call/tool-result pairing, including denial and failure paths
+      budget-accounting: monotonically valid budget/cost accounting
+      bounded-progress: bounded retry and progress behavior under the modeled fault catalogue
+      checkpoint-history: checkpoint/compaction history invariants already owned by the framework
+      outcome-agreement: agreement between returned outcome and terminal summary
+      replay-consistency: strict-replay request equality, safe regression-replay compatibility, and complete interaction consumption
+      world-transitions: valid logical-world transitions, including declared commit/no-commit behavior under faults
+      virtual-time: monotonic virtual time and deadline derivation
+      harness-hygiene: zero discovery-generator failures, matcher mismatches, forbidden effects, and ambient RNG reads
+      journal-fold: a fold of the run's journal-class records reproduces the state the run ended holding, field by field
+
+-- the surviving fixture --
+  ✓ the fixture satisfies all 13 families
+  ✓ invariants_ok agrees
+  ✓ first_failed_invariant is None on a clean run
+
+-- S7: the surviving fixture carries every shape the specification protects --
+  ✓ all 11 D2 interaction classes appear
+  ✓ all three outcome statuses appear (ok=17 fault=3 missing=1)
+  ✓ all three tool fault classes appear
+  ✓ chunks appear on one provider interaction and not the other
+  ✓ both deadline sentinels appear (-1 on a deadline-free class, 0 and a positive on deadline-bearing ones)
+  ✓ the approval channel carries a denial and an end-of-input, and neither call is dispatched
+  ✓ the returned trace carries all three LedgerRecord constructors
+
+-- S7: no two of the surviving fixture's quantities are equal --
+  ✓ 11 named quantities, pairwise distinct
+
+-- D6.4: the parity register, and the reclassification it forbids --
+  ✓ the register agrees with the vocabulary in both directions
+  ✓ the D6.4 gap is 2 (was 15 at WI-A8; DoneEvent closed by WI-A14, StreamDelta by WI-C3, eleven more by WI-D2; ADR-003 D1's five declared at PLAN-003 P3 Part 1, four emitted at P3 Part 3, SessionResumed appended at P3 Part 5)
+  ✓ every registered gap carries a reason
+  ✓ the display-only set is the pinned six
+  ✓ DoneEvent left the gap by being APPENDED, not by being reclassified
+  ✓ StreamDelta left the gap by being APPENDED, not by being reclassified
+  ✓ WI-D2's eleven left the gap by being APPENDED, not by being reclassified
+
+-- D6.4's named exception: stream parity, constructed --
+  ✓ matching projection and trace produce no finding
+  ✓ an OMISSION is stream-parity-count
+  ✓ a DUPLICATE is stream-parity-count
+  ✓ a REORDERING is stream-parity-order and NOT stream-parity-count
+
+-- 011 ADR-003 D2 and D3: what the two rules must not reject --
+  ✓ survives: Err StepBudgetExhausted, finishing 'max_steps'
+  ✓ survives: Err BudgetExceeded, finishing 'cost_exhausted'
+  ✓ survives: Err ContextExhausted, finishing 'compaction_exhausted'
+  ✓ survives: Err on a provider code, finishing 'error'
+  ✓ the failed-run fixture returns Err and carries no DoneEvent
+  ✓ survives: two provider calls prepared under different steps
+  ✓ that trace holds two ProviderCallPrepared records
+
+-- mutants: families 1-4 --
+  ✓ mutant: a second RunSummary → summary-not-final
+  ✓ mutant: a record after the RunSummary → record-after-terminal
+  ✓ mutant: a RunSummary on a harness failure → summary-on-harness-failure
+  ✓ mutant: a DisplayOnly event in the returned trace → display-only-in-trace
+  ✓ mutant: a decision step that goes backwards → step-regression
+  ✓ mutant: a tool interaction recording OutcomeMissing → tool-call-unpaired
+  ✓ mutant: an uncorrelated answer recorded as a success → tool-result-uncorrelated
+  ✓ mutant: a denied call dispatched anyway → denied-call-dispatched
+
+-- mutants: families 5-8 --
+  ✓ mutant: total cost decreasing → cost-regression
+  ✓ mutant: a negative cost → negative-cost
+  ✓ mutant: token totals decreasing → token-regression
+  ✓ mutant: more decisions than the declared budget → decision-budget-exceeded
+  ✓ mutant: more retries than the declared bound → retry-bound-exceeded
+  ✓ mutant: a repeated provider step (the frozen cursor) → provider-step-repeated
+  ✓ mutant: a repeated driver step (two prepared calls under step 0) → driver-step-repeated
+  ✓ mutant: the frozen cursor does NOT report driver-step-repeated
+  ✓ mutant: a repeated driver step does NOT report provider-step-repeated
+  ✓ mutant: a broken checkpoint chain → checkpoint-chain-broken
+  ✓ mutant: a compaction stage after CompactionExhausted → compaction-after-exhausted
+  ✓ mutant: an Ok outcome against a summary reporting an error → outcome-summary-disagree
+  ✓ mutant: no terminal summary to agree with → summary-absent-for-outcome
+  ✓ mutant: an Ok outcome against a summary finishing 'error' → outcome-finish-disagrees
+  ✓ mutant: a provider failure against a summary finishing 'stop' → outcome-finish-disagrees
+  ✓ mutant: a provider failure against a summary finishing 'max_steps' → outcome-finish-disagrees
+  ✓ mutant: StepBudgetExhausted against a summary finishing 'error' → outcome-finish-disagrees
+  ✓ mutant: BudgetExceeded against a summary finishing 'error' → outcome-finish-disagrees
+  ✓ mutant: ContextExhausted against a summary finishing 'error' → outcome-finish-disagrees
+
+-- mutants: families 9-13 --
+  ✓ mutant: a program the run did not consume → interactions-unconsumed
+  ✓ mutant: a replayed outcome that differs → replay-rule-violated
+  ✓ mutant: a fault carrying no class id → fault-without-class
+  ✓ mutant: a fault class the catalogue does not declare → fault-class-unknown
+  ✓ mutant: a completed payload under a fault status → commit-under-fault
+  ✓ mutant: a negative clock advance → negative-advance
+  ✓ mutant: a chunk offset going backwards → chunk-offset-regression
+  ✓ mutant: a deadline-bearing class recording -1 → deadline-derivation
+  ✓ mutant: a world clock the log cannot account for → clock-balance
+  ✓ mutant: a harness failure → harness-failure-observed
+  ✓ mutant: an ambient RNG read → ambient-rng-read
+  ✓ mutant: a forbidden effect site reached → forbidden-effect-site
+  ✓ mutant: a final state the journal does not account for → journal-fold-disagrees
+
+-- coverage: every D7 family is reached by a mutant --
+  ✓ all 13 families reached
+
+-- D7's discovery contract: an invariant over a PAIR of runs --
+  ✓ the same execution twice is deterministic
+  ✓ a different SERVED outcome at one position is caught
+  ✓ a shorter log is caught
+  ✓ a differing returned trace is caught
+
+-- family evidence: evaluated is not the same as exercised --
+      eval  terminal-summary (inputs: 18)
+      eval  emission-parity (inputs: 18)
+      eval  phase-transitions (inputs: 18)
+      eval  tool-pairing (inputs: 21)
+      eval  budget-accounting (inputs: 18)
+      eval  bounded-progress (inputs: 21)
+      eval  checkpoint-history (inputs: 18)
+      eval  outcome-agreement (inputs: 18)
+      eval  replay-consistency (inputs: 21)
+      eval  world-transitions (inputs: 21)
+      eval  virtual-time (inputs: 21)
+      eval  harness-hygiene (inputs: 21)
+      eval  journal-fold (inputs: 18)
+  ✓ every family reports evidence
+
+  i D6.4's remaining gap, 2 variant(s), each with a reason in dst_invariants.parity_gap_reasons():
+      - ScratchpadResult
+      - SessionSuspend
+
+invariants_dst PASS
+  ✓ 13 InvariantFamily variants == 13 in all_families(); all 42 Violation constructors sampled by name
+  ✓ src/core/dst_invariants.ail

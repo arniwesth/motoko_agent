@@ -1,0 +1,54 @@
+Warning: dependency sunholo/motoko_ext_herdr content changed (locked: sha256:e1e96240660e9c037..., current: sha256:6928b495ef76aff83...)
+Run 'ailang lock' to update
+CACHE_WRITE_FAILED module=src/core/session stage=encoding path=/workspaces/motoko_agent-011-accept-scratch/.ailang/lane/stream_parity/compile/modules/src__core__session/coretypeinfo.gob: ARTIFACT_TOO_LARGE: /workspaces/motoko_agent-011-accept-scratch/.ailang/lane/stream_parity/compile/modules/src__core__session/coretypeinfo.gob: artifact exceeds blob byte limit; using fresh compilation
+Warning: --caps AI requires --ai <model> flag.
+  No AI model configured. Programs using AI.call will fail.
+  Fix: ailang run --caps AI --ai gemini-2-5-flash ...
+  Or for testing: ailang run --caps AI --ai-stub ...
+→ Type checking...
+→ Effect checking...
+✓ Running scripts/dst/stream_parity_dst.ail
+=== stream_parity_dst (D6.4) ===
+  ✓ fixture: the script streams more than two chunks
+  ✓ fixture: step one carries an adjacent repeat, so de-duplication is visible
+  ✓ fixture: the two steps carry different chunk counts
+  [scripted] witness=7 trace_stream_records=7 expected=7
+  ✓ scripted: the run produced a NON-EMPTY emission witness
+  ✓ scripted: the returned trace holds StreamDelta records
+  ✓ scripted: the witness spans both steps
+  ✓ scripted: D6.4 stream parity holds on a real run
+  ✓ scripted: the EmissionParity family is clean over the whole run
+  ✓ scripted: omitting one real emission is caught
+  ✓ scripted: duplicating one real emission is caught
+  ✓ scripted: reordering two real emissions is caught, with the count UNCHANGED
+  ✓ scripted: the reordering mutant does NOT trip the count rule
+  ✓ scripted: the non-recording adapter logs no chunks, as expected
+STREAM_TRACE scripted s1-alpha|rep|rep|s1-omega|s2-alpha|s2-beta|s2-omega|
+  ✓ scripted: the JournalFold family is clean over the real run
+  [scripted] the whole invariant set over the real run: 1 finding(s) — clock-balance
+  ✓ scripted: the whole invariant set reports exactly its expected rules
+  [recording] witness=7 trace_stream_records=7 expected=7
+  ✓ recording: the run produced a NON-EMPTY emission witness
+  ✓ recording: the returned trace holds StreamDelta records
+  ✓ recording: the witness spans both steps
+  ✓ recording: D6.4 stream parity holds on a real run
+  ✓ recording: the EmissionParity family is clean over the whole run
+  ✓ recording: omitting one real emission is caught
+  ✓ recording: duplicating one real emission is caught
+  ✓ recording: reordering two real emissions is caught, with the count UNCHANGED
+  ✓ recording: the reordering mutant does NOT trip the count rule
+  ✓ recording: the world's recorded chunk log agrees with the witness, TEXT FOR TEXT
+STREAM_TRACE recording s1-alpha|rep|rep|s1-omega|s2-alpha|s2-beta|s2-omega|
+  ✓ recording: the JournalFold family is clean over the real run
+  [recording] the whole invariant set over the real run: 0 finding(s)
+  ✓ recording: the whole invariant set reports exactly its expected rules
+stream_parity_dst PASS
+=== stream_parity wire-vs-trace (D6.4) ===
+  wire_deltas=14 trace_deltas=14 subjects=2
+  ✓ the run projected at least one delta to the wire
+  ✓ the run appended at least one delta to the returned trace
+  ✓ both subjects reported a trace side
+  ✓ COUNT: the wire projected exactly as many deltas as the trace holds
+  ✓ ORDER AND CONTENT: the projected sequence equals the returned sequence
+  ✓ the compared sequence carries an adjacent repeat, so de-duplication is visible
+stream_parity wire gate PASS

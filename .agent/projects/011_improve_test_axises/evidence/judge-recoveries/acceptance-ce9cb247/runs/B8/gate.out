@@ -1,0 +1,378 @@
+→ Type checking...
+→ Effect checking...
+✓ Running scripts/dst/corpus_judge_dst.ail
+Warning: dependency sunholo/motoko_ext_herdr content changed (locked: sha256:e1e96240660e9c037..., current: sha256:6928b495ef76aff83...)
+Run 'ailang lock' to update
+CACHE_WRITE_FAILED module=src/core/session stage=encoding path=/workspaces/motoko_agent-011-accept-scratch/.ailang/lane/corpus_judge/compile/modules/src__core__session/coretypeinfo.gob: ARTIFACT_TOO_LARGE: /workspaces/motoko_agent-011-accept-scratch/.ailang/lane/corpus_judge/compile/modules/src__core__session/coretypeinfo.gob: artifact exceeds blob byte limit; using fresh compilation
+011 ADR-003 D1 — the invariant set and six two-channel checks on every corpus member's real run (invariant-set/2)
+
+-- each check can fire, and can stay silent --
+  ✓ each run gets one row for each of the six rule ids, in a fixed order
+  ✓ all six are silent on the good input: 4 calls on a budget of 4, a retry at step 2, both counts balanced, ordinals 1 to 5
+  ✓ steps-not-contiguous fires on steps 0, 1, 3, 4 (a gap), and no other check does
+  ✓ steps-not-contiguous fires on steps 1, 2, 3, 4 (not from zero), and no other check does
+  ✓ provider-calls-exceed-budget fires on 5 calls on a budget of 4, and no other check does
+  ✓ retry-at-budget-edge fires on a retry at step 3 of 4, and no other check does
+  ✓ provider-calls-unbalanced fires on 4 prepared records and 3 logged, as 'log below trace', and no other check does
+  ✓ provider-calls-unbalanced fires on 4 prepared records and 5 logged, as 'log above trace', and no other check does
+  ✓ tool-dispatches-unbalanced fires on 1 dispatch start and 0 logged, as 'log below trace', and no other check does
+  ✓ tool-dispatches-unbalanced fires on 1 dispatch start and 2 logged, as 'log above trace', and no other check does
+  ✓ request-ordinals-not-contiguous fires on ordinals 1, 2, 4, 5 (a gap), and no other check does
+  ✓ request-ordinals-not-contiguous fires on ordinals 1 to 5 and a returned world at 4 (a successor dropped after its witness), and no other check does
+  ✓ request-ordinals-not-contiguous fires on ordinals 2 to 5 from a world at 0 (the first request is missing), and no other check does
+SELFCHECK undeclared-budget steps-not-contiguous clean prepared steps 0..3 (4)
+SELFCHECK undeclared-budget provider-calls-exceed-budget not-evaluated the step budget is undeclared, so 4 provider call(s) were held against nothing
+SELFCHECK undeclared-budget retry-at-budget-edge not-evaluated the step budget is undeclared, so the retries at [2] were held against nothing
+SELFCHECK undeclared-budget provider-calls-unbalanced clean trace=4 log=4
+SELFCHECK undeclared-budget tool-dispatches-unbalanced clean trace=1 log=1
+SELFCHECK undeclared-budget request-ordinals-not-contiguous clean ordinals 1..5 (5) from a world at 0 to a world at 5
+  ✓ a run started with a budget of 0 declares none: the two budget rules are NOT EVALUATED and the other four are clean
+  ✓ and not evaluated is not clean, which is what makes it red on a bank member
+  ✓ an empty trace is clean on all six checks, and the guard names it: no prepared call, no request ordinal
+  ✓ the guard is silent on the good input
+  ✓ a bank with no retry and no dispatch is clean on all six checks, and the bank guard names both
+  ✓ the bank guard is silent once a member holds a retry and a dispatch
+
+-- the bank: every member's run, bridged and judged --
+budgets, declared once: step 12 (bank_step_budget(), the value each member's run is started with), retry 11, decision undeclared
+JUDGEROW seed-1 n=23 ended=Ok finish=stop set=[] checks=[tool-dispatches-unbalanced] not_evaluated=[]
+JUDGE seed-1 invariant-set clean no finding; unevaluated=replay-consistency
+JUDGE seed-1 steps-not-contiguous clean prepared steps 0..4 (5)
+JUDGE seed-1 provider-calls-exceed-budget clean 5 call(s) on a budget of 12
+JUDGE seed-1 retry-at-budget-edge clean retries at [] on a budget of 12
+JUDGE seed-1 provider-calls-unbalanced clean trace=5 log=5
+JUDGE seed-1 tool-dispatches-unbalanced RED log below trace: the trace holds 1 v2_tool_dispatch_start record(s) and the run added 0 expect_tool interaction(s) to the log
+JUDGE seed-1 request-ordinals-not-contiguous clean ordinals 1..26 (26) from a world at 0 to a world at 26
+JUDGEROW seed-2 n=25 ended=Ok finish=stop set=[] checks=[] not_evaluated=[]
+JUDGE seed-2 invariant-set clean no finding; unevaluated=replay-consistency
+JUDGE seed-2 steps-not-contiguous clean prepared steps 0..5 (6)
+JUDGE seed-2 provider-calls-exceed-budget clean 6 call(s) on a budget of 12
+JUDGE seed-2 retry-at-budget-edge clean retries at [] on a budget of 12
+JUDGE seed-2 provider-calls-unbalanced clean trace=6 log=6
+JUDGE seed-2 tool-dispatches-unbalanced clean trace=0 log=0
+JUDGE seed-2 request-ordinals-not-contiguous clean ordinals 1..28 (28) from a world at 0 to a world at 28
+JUDGEROW seed-4 n=25 ended=Err finish=error set=[] checks=[tool-dispatches-unbalanced] not_evaluated=[]
+JUDGE seed-4 invariant-set clean no finding; unevaluated=replay-consistency
+JUDGE seed-4 steps-not-contiguous clean prepared steps 0..5 (6)
+JUDGE seed-4 provider-calls-exceed-budget clean 6 call(s) on a budget of 12
+JUDGE seed-4 retry-at-budget-edge clean retries at [] on a budget of 12
+JUDGE seed-4 provider-calls-unbalanced clean trace=6 log=6
+JUDGE seed-4 tool-dispatches-unbalanced RED log below trace: the trace holds 2 v2_tool_dispatch_start record(s) and the run added 0 expect_tool interaction(s) to the log
+JUDGE seed-4 request-ordinals-not-contiguous clean ordinals 1..28 (28) from a world at 0 to a world at 28
+JUDGEROW seed-5 n=15 ended=Err finish=error set=[] checks=[] not_evaluated=[]
+JUDGE seed-5 invariant-set clean no finding; unevaluated=replay-consistency
+JUDGE seed-5 steps-not-contiguous clean prepared steps 0 (1)
+JUDGE seed-5 provider-calls-exceed-budget clean 1 call(s) on a budget of 12
+JUDGE seed-5 retry-at-budget-edge clean retries at [] on a budget of 12
+JUDGE seed-5 provider-calls-unbalanced clean trace=1 log=1
+JUDGE seed-5 tool-dispatches-unbalanced clean trace=0 log=0
+JUDGE seed-5 request-ordinals-not-contiguous clean ordinals 1..18 (18) from a world at 0 to a world at 18
+JUDGEROW seed-7 n=17 ended=Err finish=error set=[] checks=[] not_evaluated=[]
+JUDGE seed-7 invariant-set clean no finding; unevaluated=replay-consistency
+JUDGE seed-7 steps-not-contiguous clean prepared steps 0..1 (2)
+JUDGE seed-7 provider-calls-exceed-budget clean 2 call(s) on a budget of 12
+JUDGE seed-7 retry-at-budget-edge clean retries at [] on a budget of 12
+JUDGE seed-7 provider-calls-unbalanced clean trace=2 log=2
+JUDGE seed-7 tool-dispatches-unbalanced clean trace=0 log=0
+JUDGE seed-7 request-ordinals-not-contiguous clean ordinals 1..20 (20) from a world at 0 to a world at 20
+JUDGEROW seed-9 n=18 ended=Ok finish=stop set=[] checks=[] not_evaluated=[]
+JUDGE seed-9 invariant-set clean no finding; unevaluated=replay-consistency
+JUDGE seed-9 steps-not-contiguous clean prepared steps 0..2 (3)
+JUDGE seed-9 provider-calls-exceed-budget clean 3 call(s) on a budget of 12
+JUDGE seed-9 retry-at-budget-edge clean retries at [1] on a budget of 12
+JUDGE seed-9 provider-calls-unbalanced clean trace=3 log=3
+JUDGE seed-9 tool-dispatches-unbalanced clean trace=0 log=0
+JUDGE seed-9 request-ordinals-not-contiguous clean ordinals 1..21 (21) from a world at 0 to a world at 21
+JUDGEROW seed-10 n=21 ended=Err finish=error set=[] checks=[tool-dispatches-unbalanced] not_evaluated=[]
+JUDGE seed-10 invariant-set clean no finding; unevaluated=replay-consistency
+JUDGE seed-10 steps-not-contiguous clean prepared steps 0..3 (4)
+JUDGE seed-10 provider-calls-exceed-budget clean 4 call(s) on a budget of 12
+JUDGE seed-10 retry-at-budget-edge clean retries at [] on a budget of 12
+JUDGE seed-10 provider-calls-unbalanced clean trace=4 log=4
+JUDGE seed-10 tool-dispatches-unbalanced RED log below trace: the trace holds 2 v2_tool_dispatch_start record(s) and the run added 0 expect_tool interaction(s) to the log
+JUDGE seed-10 request-ordinals-not-contiguous clean ordinals 1..24 (24) from a world at 0 to a world at 24
+JUDGEROW seed-12 n=23 ended=Ok finish=stop set=[] checks=[tool-dispatches-unbalanced] not_evaluated=[]
+JUDGE seed-12 invariant-set clean no finding; unevaluated=replay-consistency
+JUDGE seed-12 steps-not-contiguous clean prepared steps 0..4 (5)
+JUDGE seed-12 provider-calls-exceed-budget clean 5 call(s) on a budget of 12
+JUDGE seed-12 retry-at-budget-edge clean retries at [] on a budget of 12
+JUDGE seed-12 provider-calls-unbalanced clean trace=5 log=5
+JUDGE seed-12 tool-dispatches-unbalanced RED log below trace: the trace holds 3 v2_tool_dispatch_start record(s) and the run added 0 expect_tool interaction(s) to the log
+JUDGE seed-12 request-ordinals-not-contiguous clean ordinals 1..26 (26) from a world at 0 to a world at 26
+JUDGEROW seed-15 n=25 ended=Ok finish=stop set=[] checks=[tool-dispatches-unbalanced] not_evaluated=[]
+JUDGE seed-15 invariant-set clean no finding; unevaluated=replay-consistency
+JUDGE seed-15 steps-not-contiguous clean prepared steps 0..5 (6)
+JUDGE seed-15 provider-calls-exceed-budget clean 6 call(s) on a budget of 12
+JUDGE seed-15 retry-at-budget-edge clean retries at [] on a budget of 12
+JUDGE seed-15 provider-calls-unbalanced clean trace=6 log=6
+JUDGE seed-15 tool-dispatches-unbalanced RED log below trace: the trace holds 1 v2_tool_dispatch_start record(s) and the run added 0 expect_tool interaction(s) to the log
+JUDGE seed-15 request-ordinals-not-contiguous clean ordinals 1..28 (28) from a world at 0 to a world at 28
+JUDGEROW seed-19 n=18 ended=Err finish=error set=[] checks=[tool-dispatches-unbalanced] not_evaluated=[]
+JUDGE seed-19 invariant-set clean no finding; unevaluated=replay-consistency
+JUDGE seed-19 steps-not-contiguous clean prepared steps 0..2 (3)
+JUDGE seed-19 provider-calls-exceed-budget clean 3 call(s) on a budget of 12
+JUDGE seed-19 retry-at-budget-edge clean retries at [1] on a budget of 12
+JUDGE seed-19 provider-calls-unbalanced clean trace=3 log=3
+JUDGE seed-19 tool-dispatches-unbalanced RED log below trace: the trace holds 1 v2_tool_dispatch_start record(s) and the run added 0 expect_tool interaction(s) to the log
+JUDGE seed-19 request-ordinals-not-contiguous clean ordinals 1..21 (21) from a world at 0 to a world at 21
+JUDGEROW seed-30 n=15 ended=Err finish=error set=[] checks=[] not_evaluated=[]
+JUDGE seed-30 invariant-set clean no finding; unevaluated=replay-consistency
+JUDGE seed-30 steps-not-contiguous clean prepared steps 0 (1)
+JUDGE seed-30 provider-calls-exceed-budget clean 1 call(s) on a budget of 12
+JUDGE seed-30 retry-at-budget-edge clean retries at [] on a budget of 12
+JUDGE seed-30 provider-calls-unbalanced clean trace=1 log=1
+JUDGE seed-30 tool-dispatches-unbalanced clean trace=0 log=0
+JUDGE seed-30 request-ordinals-not-contiguous clean ordinals 1..18 (18) from a world at 0 to a world at 18
+JUDGEROW seed-32 n=37 ended=Err finish=max_steps set=[] checks=[tool-dispatches-unbalanced] not_evaluated=[]
+JUDGE seed-32 invariant-set clean no finding; unevaluated=replay-consistency
+JUDGE seed-32 steps-not-contiguous clean prepared steps 0..11 (12)
+JUDGE seed-32 provider-calls-exceed-budget clean 12 call(s) on a budget of 12
+JUDGE seed-32 retry-at-budget-edge clean retries at [] on a budget of 12
+JUDGE seed-32 provider-calls-unbalanced clean trace=12 log=12
+JUDGE seed-32 tool-dispatches-unbalanced RED log below trace: the trace holds 1 v2_tool_dispatch_start record(s) and the run added 0 expect_tool interaction(s) to the log
+JUDGE seed-32 request-ordinals-not-contiguous clean ordinals 1..40 (40) from a world at 0 to a world at 40
+JUDGEROW seed-62 n=19 ended=Err finish=error set=[] checks=[tool-dispatches-unbalanced] not_evaluated=[]
+JUDGE seed-62 invariant-set clean no finding; unevaluated=replay-consistency
+JUDGE seed-62 steps-not-contiguous clean prepared steps 0..2 (3)
+JUDGE seed-62 provider-calls-exceed-budget clean 3 call(s) on a budget of 12
+JUDGE seed-62 retry-at-budget-edge clean retries at [] on a budget of 12
+JUDGE seed-62 provider-calls-unbalanced clean trace=3 log=3
+JUDGE seed-62 tool-dispatches-unbalanced RED log below trace: the trace holds 1 v2_tool_dispatch_start record(s) and the run added 0 expect_tool interaction(s) to the log
+JUDGE seed-62 request-ordinals-not-contiguous clean ordinals 1..22 (22) from a world at 0 to a world at 22
+JUDGEROW seed-141 n=20 ended=Ok finish=stop set=[] checks=[tool-dispatches-unbalanced] not_evaluated=[]
+JUDGE seed-141 invariant-set clean no finding; unevaluated=replay-consistency
+JUDGE seed-141 steps-not-contiguous clean prepared steps 0..3 (4)
+JUDGE seed-141 provider-calls-exceed-budget clean 4 call(s) on a budget of 12
+JUDGE seed-141 retry-at-budget-edge clean retries at [2] on a budget of 12
+JUDGE seed-141 provider-calls-unbalanced clean trace=4 log=4
+JUDGE seed-141 tool-dispatches-unbalanced RED log below trace: the trace holds 2 v2_tool_dispatch_start record(s) and the run added 0 expect_tool interaction(s) to the log
+JUDGE seed-141 request-ordinals-not-contiguous clean ordinals 1..23 (23) from a world at 0 to a world at 23
+JUDGEROW seed-244 n=19 ended=Err finish=error set=[] checks=[tool-dispatches-unbalanced] not_evaluated=[]
+JUDGE seed-244 invariant-set clean no finding; unevaluated=replay-consistency
+JUDGE seed-244 steps-not-contiguous clean prepared steps 0..2 (3)
+JUDGE seed-244 provider-calls-exceed-budget clean 3 call(s) on a budget of 12
+JUDGE seed-244 retry-at-budget-edge clean retries at [] on a budget of 12
+JUDGE seed-244 provider-calls-unbalanced clean trace=3 log=3
+JUDGE seed-244 tool-dispatches-unbalanced RED log below trace: the trace holds 2 v2_tool_dispatch_start record(s) and the run added 0 expect_tool interaction(s) to the log
+JUDGE seed-244 request-ordinals-not-contiguous clean ordinals 1..22 (22) from a world at 0 to a world at 22
+JUDGEROW constructed-empty-terminal n=15 ended=Ok finish=stop set=[] checks=[] not_evaluated=[]
+JUDGE constructed-empty-terminal invariant-set clean no finding; unevaluated=replay-consistency
+JUDGE constructed-empty-terminal steps-not-contiguous clean prepared steps 0 (1)
+JUDGE constructed-empty-terminal provider-calls-exceed-budget clean 1 call(s) on a budget of 12
+JUDGE constructed-empty-terminal retry-at-budget-edge clean retries at [] on a budget of 12
+JUDGE constructed-empty-terminal provider-calls-unbalanced clean trace=1 log=1
+JUDGE constructed-empty-terminal tool-dispatches-unbalanced clean trace=0 log=0
+JUDGE constructed-empty-terminal request-ordinals-not-contiguous clean ordinals 1..18 (18) from a world at 0 to a world at 18
+
+-- the two budget-edge controls: scripted worlds under the bank's rig, not bank members --
+CONTROLROW retry-with-two-steps-left n=16 ended=Ok finish=stop set=[] checks=[] not_evaluated=[]
+CONTROL retry-with-two-steps-left invariant-set clean no finding; unevaluated=replay-consistency
+CONTROL retry-with-two-steps-left steps-not-contiguous clean prepared steps 0..1 (2)
+CONTROL retry-with-two-steps-left provider-calls-exceed-budget clean 2 call(s) on a budget of 2
+CONTROL retry-with-two-steps-left retry-at-budget-edge clean retries at [0] on a budget of 2
+CONTROL retry-with-two-steps-left provider-calls-unbalanced clean trace=2 log=2
+CONTROL retry-with-two-steps-left tool-dispatches-unbalanced clean trace=0 log=0
+CONTROL retry-with-two-steps-left request-ordinals-not-contiguous clean ordinals 1..19 (19) from a world at 0 to a world at 19
+  ✓ retry with two steps left: the run ends Ok on stop
+  ✓ retry with two steps left: prepared steps 0 and 1, one retry at step 0, two provider interactions logged
+  ✓ retry with two steps left: no finding from the set, none from the six checks
+CONTROLROW no-retry-with-one-step-left n=14 ended=Err finish=error set=[] checks=[] not_evaluated=[]
+CONTROL no-retry-with-one-step-left invariant-set clean no finding; unevaluated=replay-consistency
+CONTROL no-retry-with-one-step-left steps-not-contiguous clean prepared steps 0 (1)
+CONTROL no-retry-with-one-step-left provider-calls-exceed-budget clean 1 call(s) on a budget of 1
+CONTROL no-retry-with-one-step-left retry-at-budget-edge clean retries at [] on a budget of 1
+CONTROL no-retry-with-one-step-left provider-calls-unbalanced clean trace=1 log=1
+CONTROL no-retry-with-one-step-left tool-dispatches-unbalanced clean trace=0 log=0
+CONTROL no-retry-with-one-step-left request-ordinals-not-contiguous clean ordinals 1..17 (17) from a world at 0 to a world at 17
+  ✓ no retry with one step left: the run ends Err with E_PROVIDER_TIMEOUT on error
+  ✓ no retry with one step left: one prepared step, no retry record
+  ✓ no retry with one step left: no finding from the set, none from the six checks
+
+-- the verdict on the bank --
+  ✓ all 16 members carry a terminal summary and were bridged
+  ✗ all 16 members are clean: no finding from the invariant set, none from the six checks, none not evaluated
+      not clean, 10 of 16: seed-1, seed-4, seed-10, seed-12, seed-15, seed-19, seed-32, seed-62, seed-141, seed-244. The JUDGE rows above name each rule, and a failure record for each member follows.
+  families the set did not evaluate, over all 16 members: replay-consistency (the obligation is NoReplay: a discovery run owes its program nothing)
+  ✓ no family other than replay-consistency went unevaluated on a member
+
+-- the gate saw something to judge --
+  ✓ every member's trace holds a prepared call and a request ordinal
+  ✓ a member recorded a retry (3 of 16: seed-9, seed-19, seed-141)
+  ✓ a member dispatched a tool (10 of 16)
+
+FAILURE RECORD seed-1 — what 009 ADR-001 D8 lists for a generated failure
+  program schema version   execution-program/4
+  generator id             motoko_driver_only
+  generator version        1
+  seed                     1
+  serialized program       ABSENT at .ailang/dst-corpus/motoko_driver_only/1/seed-1.artifact. `make corpus_pr` writes it; run that first. This gate persists no program.
+  source revision          printed by the recipe, beneath these records
+  toolchain version        printed by the recipe, beneath these records
+  profile                  driver_only/1, issued as driver_only version 34
+  execution manifest       profile_id=driver_only profile_version=34 source_revision=HEAD toolchain='ailang 0.33.0' abi_version=8.0 event_vocabulary_version=event-vocabulary/1 normalized_configuration={} extension_packages=0 classifier_2_set=[ai_step,env_get,tool_handle] unrouted_fields=[clock_now] scan_roots=[src,packages] scan_root_commit=HEAD profile_rules=profile-rules/3 coverage_rules=coverage-rules/1 attribution_rules=attribution-rules/1 fault_catalogue=fault-catalogue/2
+  event vocabulary         event-vocabulary/1
+  run configuration        step budget 12, retry budget 11, decision budget undeclared; bridged with the starting world's clock (0 ms), NoReplay, 0 ambient RNG reads and no forbidden effect site, both supplied; the rig's other arguments are those of this member's run helper in scripts/dst/corpus_pr_dst.ail at the source revision
+  first failed invariant   gate check tool-dispatches-unbalanced
+  terminal outcome         ended=Ok finish_reason=stop error=''
+  trace                    the recipe's output file, kept when the target is red; its path is printed beneath these records
+  quick reproduction       make corpus_judge (it regenerates from the seed; the replay is the serialized program above)
+
+FAILURE RECORD seed-4 — what 009 ADR-001 D8 lists for a generated failure
+  program schema version   execution-program/4
+  generator id             motoko_driver_only
+  generator version        1
+  seed                     4
+  serialized program       ABSENT at .ailang/dst-corpus/motoko_driver_only/1/seed-4.artifact. `make corpus_pr` writes it; run that first. This gate persists no program.
+  source revision          printed by the recipe, beneath these records
+  toolchain version        printed by the recipe, beneath these records
+  profile                  driver_only/1, issued as driver_only version 34
+  execution manifest       profile_id=driver_only profile_version=34 source_revision=HEAD toolchain='ailang 0.33.0' abi_version=8.0 event_vocabulary_version=event-vocabulary/1 normalized_configuration={} extension_packages=0 classifier_2_set=[ai_step,env_get,tool_handle] unrouted_fields=[clock_now] scan_roots=[src,packages] scan_root_commit=HEAD profile_rules=profile-rules/3 coverage_rules=coverage-rules/1 attribution_rules=attribution-rules/1 fault_catalogue=fault-catalogue/2
+  event vocabulary         event-vocabulary/1
+  run configuration        step budget 12, retry budget 11, decision budget undeclared; bridged with the starting world's clock (0 ms), NoReplay, 0 ambient RNG reads and no forbidden effect site, both supplied; the rig's other arguments are those of this member's run helper in scripts/dst/corpus_pr_dst.ail at the source revision
+  first failed invariant   gate check tool-dispatches-unbalanced
+  terminal outcome         ended=Err finish_reason=error error='generated E_PROVIDER_PROTOCOL'
+  trace                    the recipe's output file, kept when the target is red; its path is printed beneath these records
+  quick reproduction       make corpus_judge (it regenerates from the seed; the replay is the serialized program above)
+
+FAILURE RECORD seed-10 — what 009 ADR-001 D8 lists for a generated failure
+  program schema version   execution-program/4
+  generator id             motoko_driver_only
+  generator version        1
+  seed                     10
+  serialized program       ABSENT at .ailang/dst-corpus/motoko_driver_only/1/seed-10.artifact. `make corpus_pr` writes it; run that first. This gate persists no program.
+  source revision          printed by the recipe, beneath these records
+  toolchain version        printed by the recipe, beneath these records
+  profile                  driver_only/1, issued as driver_only version 34
+  execution manifest       profile_id=driver_only profile_version=34 source_revision=HEAD toolchain='ailang 0.33.0' abi_version=8.0 event_vocabulary_version=event-vocabulary/1 normalized_configuration={} extension_packages=0 classifier_2_set=[ai_step,env_get,tool_handle] unrouted_fields=[clock_now] scan_roots=[src,packages] scan_root_commit=HEAD profile_rules=profile-rules/3 coverage_rules=coverage-rules/1 attribution_rules=attribution-rules/1 fault_catalogue=fault-catalogue/2
+  event vocabulary         event-vocabulary/1
+  run configuration        step budget 12, retry budget 11, decision budget undeclared; bridged with the starting world's clock (0 ms), NoReplay, 0 ambient RNG reads and no forbidden effect site, both supplied; the rig's other arguments are those of this member's run helper in scripts/dst/corpus_pr_dst.ail at the source revision
+  first failed invariant   gate check tool-dispatches-unbalanced
+  terminal outcome         ended=Err finish_reason=error error='generated E_PROVIDER_PROTOCOL'
+  trace                    the recipe's output file, kept when the target is red; its path is printed beneath these records
+  quick reproduction       make corpus_judge (it regenerates from the seed; the replay is the serialized program above)
+
+FAILURE RECORD seed-12 — what 009 ADR-001 D8 lists for a generated failure
+  program schema version   execution-program/4
+  generator id             motoko_driver_only
+  generator version        1
+  seed                     12
+  serialized program       ABSENT at .ailang/dst-corpus/motoko_driver_only/1/seed-12.artifact. `make corpus_pr` writes it; run that first. This gate persists no program.
+  source revision          printed by the recipe, beneath these records
+  toolchain version        printed by the recipe, beneath these records
+  profile                  driver_only/1, issued as driver_only version 34
+  execution manifest       profile_id=driver_only profile_version=34 source_revision=HEAD toolchain='ailang 0.33.0' abi_version=8.0 event_vocabulary_version=event-vocabulary/1 normalized_configuration={} extension_packages=0 classifier_2_set=[ai_step,env_get,tool_handle] unrouted_fields=[clock_now] scan_roots=[src,packages] scan_root_commit=HEAD profile_rules=profile-rules/3 coverage_rules=coverage-rules/1 attribution_rules=attribution-rules/1 fault_catalogue=fault-catalogue/2
+  event vocabulary         event-vocabulary/1
+  run configuration        step budget 12, retry budget 11, decision budget undeclared; bridged with the starting world's clock (0 ms), NoReplay, 0 ambient RNG reads and no forbidden effect site, both supplied; the rig's other arguments are those of this member's run helper in scripts/dst/corpus_pr_dst.ail at the source revision
+  first failed invariant   gate check tool-dispatches-unbalanced
+  terminal outcome         ended=Ok finish_reason=stop error=''
+  trace                    the recipe's output file, kept when the target is red; its path is printed beneath these records
+  quick reproduction       make corpus_judge (it regenerates from the seed; the replay is the serialized program above)
+
+FAILURE RECORD seed-15 — what 009 ADR-001 D8 lists for a generated failure
+  program schema version   execution-program/4
+  generator id             motoko_driver_only
+  generator version        1
+  seed                     15
+  serialized program       ABSENT at .ailang/dst-corpus/motoko_driver_only/1/seed-15.artifact. `make corpus_pr` writes it; run that first. This gate persists no program.
+  source revision          printed by the recipe, beneath these records
+  toolchain version        printed by the recipe, beneath these records
+  profile                  driver_only/1, issued as driver_only version 34
+  execution manifest       profile_id=driver_only profile_version=34 source_revision=HEAD toolchain='ailang 0.33.0' abi_version=8.0 event_vocabulary_version=event-vocabulary/1 normalized_configuration={} extension_packages=0 classifier_2_set=[ai_step,env_get,tool_handle] unrouted_fields=[clock_now] scan_roots=[src,packages] scan_root_commit=HEAD profile_rules=profile-rules/3 coverage_rules=coverage-rules/1 attribution_rules=attribution-rules/1 fault_catalogue=fault-catalogue/2
+  event vocabulary         event-vocabulary/1
+  run configuration        step budget 12, retry budget 11, decision budget undeclared; bridged with the starting world's clock (0 ms), NoReplay, 0 ambient RNG reads and no forbidden effect site, both supplied; the rig's other arguments are those of this member's run helper in scripts/dst/corpus_pr_dst.ail at the source revision
+  first failed invariant   gate check tool-dispatches-unbalanced
+  terminal outcome         ended=Ok finish_reason=stop error=''
+  trace                    the recipe's output file, kept when the target is red; its path is printed beneath these records
+  quick reproduction       make corpus_judge (it regenerates from the seed; the replay is the serialized program above)
+
+FAILURE RECORD seed-19 — what 009 ADR-001 D8 lists for a generated failure
+  program schema version   execution-program/4
+  generator id             motoko_driver_only
+  generator version        1
+  seed                     19
+  serialized program       ABSENT at .ailang/dst-corpus/motoko_driver_only/1/seed-19.artifact. `make corpus_pr` writes it; run that first. This gate persists no program.
+  source revision          printed by the recipe, beneath these records
+  toolchain version        printed by the recipe, beneath these records
+  profile                  driver_only/1, issued as driver_only version 34
+  execution manifest       profile_id=driver_only profile_version=34 source_revision=HEAD toolchain='ailang 0.33.0' abi_version=8.0 event_vocabulary_version=event-vocabulary/1 normalized_configuration={} extension_packages=0 classifier_2_set=[ai_step,env_get,tool_handle] unrouted_fields=[clock_now] scan_roots=[src,packages] scan_root_commit=HEAD profile_rules=profile-rules/3 coverage_rules=coverage-rules/1 attribution_rules=attribution-rules/1 fault_catalogue=fault-catalogue/2
+  event vocabulary         event-vocabulary/1
+  run configuration        step budget 12, retry budget 11, decision budget undeclared; bridged with the starting world's clock (0 ms), NoReplay, 0 ambient RNG reads and no forbidden effect site, both supplied; the rig's other arguments are those of this member's run helper in scripts/dst/corpus_pr_dst.ail at the source revision
+  first failed invariant   gate check tool-dispatches-unbalanced
+  terminal outcome         ended=Err finish_reason=error error='generated E_PROVIDER_PROTOCOL'
+  trace                    the recipe's output file, kept when the target is red; its path is printed beneath these records
+  quick reproduction       make corpus_judge (it regenerates from the seed; the replay is the serialized program above)
+
+FAILURE RECORD seed-32 — what 009 ADR-001 D8 lists for a generated failure
+  program schema version   execution-program/4
+  generator id             motoko_driver_only
+  generator version        1
+  seed                     32
+  serialized program       ABSENT at .ailang/dst-corpus/motoko_driver_only/1/seed-32.artifact. `make corpus_pr` writes it; run that first. This gate persists no program.
+  source revision          printed by the recipe, beneath these records
+  toolchain version        printed by the recipe, beneath these records
+  profile                  driver_only/1, issued as driver_only version 34
+  execution manifest       profile_id=driver_only profile_version=34 source_revision=HEAD toolchain='ailang 0.33.0' abi_version=8.0 event_vocabulary_version=event-vocabulary/1 normalized_configuration={} extension_packages=0 classifier_2_set=[ai_step,env_get,tool_handle] unrouted_fields=[clock_now] scan_roots=[src,packages] scan_root_commit=HEAD profile_rules=profile-rules/3 coverage_rules=coverage-rules/1 attribution_rules=attribution-rules/1 fault_catalogue=fault-catalogue/2
+  event vocabulary         event-vocabulary/1
+  run configuration        step budget 12, retry budget 11, decision budget undeclared; bridged with the starting world's clock (0 ms), NoReplay, 0 ambient RNG reads and no forbidden effect site, both supplied; the rig's other arguments are those of this member's run helper in scripts/dst/corpus_pr_dst.ail at the source revision
+  first failed invariant   gate check tool-dispatches-unbalanced
+  terminal outcome         ended=Err finish_reason=max_steps error='step budget exhausted'
+  trace                    the recipe's output file, kept when the target is red; its path is printed beneath these records
+  quick reproduction       make corpus_judge (it regenerates from the seed; the replay is the serialized program above)
+
+FAILURE RECORD seed-62 — what 009 ADR-001 D8 lists for a generated failure
+  program schema version   execution-program/4
+  generator id             motoko_driver_only
+  generator version        1
+  seed                     62
+  serialized program       ABSENT at .ailang/dst-corpus/motoko_driver_only/1/seed-62.artifact. `make corpus_pr` writes it; run that first. This gate persists no program.
+  source revision          printed by the recipe, beneath these records
+  toolchain version        printed by the recipe, beneath these records
+  profile                  driver_only/1, issued as driver_only version 34
+  execution manifest       profile_id=driver_only profile_version=34 source_revision=HEAD toolchain='ailang 0.33.0' abi_version=8.0 event_vocabulary_version=event-vocabulary/1 normalized_configuration={} extension_packages=0 classifier_2_set=[ai_step,env_get,tool_handle] unrouted_fields=[clock_now] scan_roots=[src,packages] scan_root_commit=HEAD profile_rules=profile-rules/3 coverage_rules=coverage-rules/1 attribution_rules=attribution-rules/1 fault_catalogue=fault-catalogue/2
+  event vocabulary         event-vocabulary/1
+  run configuration        step budget 12, retry budget 11, decision budget undeclared; bridged with the starting world's clock (0 ms), NoReplay, 0 ambient RNG reads and no forbidden effect site, both supplied; the rig's other arguments are those of this member's run helper in scripts/dst/corpus_pr_dst.ail at the source revision
+  first failed invariant   gate check tool-dispatches-unbalanced
+  terminal outcome         ended=Err finish_reason=error error='generated E_PROVIDER_PROTOCOL'
+  trace                    the recipe's output file, kept when the target is red; its path is printed beneath these records
+  quick reproduction       make corpus_judge (it regenerates from the seed; the replay is the serialized program above)
+
+FAILURE RECORD seed-141 — what 009 ADR-001 D8 lists for a generated failure
+  program schema version   execution-program/4
+  generator id             motoko_driver_only
+  generator version        1
+  seed                     141
+  serialized program       ABSENT at .ailang/dst-corpus/motoko_driver_only/1/seed-141.artifact. `make corpus_pr` writes it; run that first. This gate persists no program.
+  source revision          printed by the recipe, beneath these records
+  toolchain version        printed by the recipe, beneath these records
+  profile                  driver_only/1, issued as driver_only version 34
+  execution manifest       profile_id=driver_only profile_version=34 source_revision=HEAD toolchain='ailang 0.33.0' abi_version=8.0 event_vocabulary_version=event-vocabulary/1 normalized_configuration={} extension_packages=0 classifier_2_set=[ai_step,env_get,tool_handle] unrouted_fields=[clock_now] scan_roots=[src,packages] scan_root_commit=HEAD profile_rules=profile-rules/3 coverage_rules=coverage-rules/1 attribution_rules=attribution-rules/1 fault_catalogue=fault-catalogue/2
+  event vocabulary         event-vocabulary/1
+  run configuration        step budget 12, retry budget 11, decision budget undeclared; bridged with the starting world's clock (0 ms), NoReplay, 0 ambient RNG reads and no forbidden effect site, both supplied; the rig's other arguments are those of this member's run helper in scripts/dst/corpus_pr_dst.ail at the source revision
+  first failed invariant   gate check tool-dispatches-unbalanced
+  terminal outcome         ended=Ok finish_reason=stop error=''
+  trace                    the recipe's output file, kept when the target is red; its path is printed beneath these records
+  quick reproduction       make corpus_judge (it regenerates from the seed; the replay is the serialized program above)
+
+FAILURE RECORD seed-244 — what 009 ADR-001 D8 lists for a generated failure
+  program schema version   execution-program/4
+  generator id             motoko_driver_only
+  generator version        1
+  seed                     244
+  serialized program       ABSENT at .ailang/dst-corpus/motoko_driver_only/1/seed-244.artifact. `make corpus_pr` writes it; run that first. This gate persists no program.
+  source revision          printed by the recipe, beneath these records
+  toolchain version        printed by the recipe, beneath these records
+  profile                  driver_only/1, issued as driver_only version 34
+  execution manifest       profile_id=driver_only profile_version=34 source_revision=HEAD toolchain='ailang 0.33.0' abi_version=8.0 event_vocabulary_version=event-vocabulary/1 normalized_configuration={} extension_packages=0 classifier_2_set=[ai_step,env_get,tool_handle] unrouted_fields=[clock_now] scan_roots=[src,packages] scan_root_commit=HEAD profile_rules=profile-rules/3 coverage_rules=coverage-rules/1 attribution_rules=attribution-rules/1 fault_catalogue=fault-catalogue/2
+  event vocabulary         event-vocabulary/1
+  run configuration        step budget 12, retry budget 11, decision budget undeclared; bridged with the starting world's clock (0 ms), NoReplay, 0 ambient RNG reads and no forbidden effect site, both supplied; the rig's other arguments are those of this member's run helper in scripts/dst/corpus_pr_dst.ail at the source revision
+  first failed invariant   gate check tool-dispatches-unbalanced
+  terminal outcome         ended=Err finish_reason=error error='generated E_PROVIDER_PROTOCOL'
+  trace                    the recipe's output file, kept when the target is red; its path is printed beneath these records
+  quick reproduction       make corpus_judge (it regenerates from the seed; the replay is the serialized program above)
+
+✗ corpus_judge FAILED
+
+  source revision    ce9cb247ce4c240679bc46453a146c99bfcb8971 (with uncommitted changes)
+  toolchain version  AILANG v0.47.2
+  trace              /tmp/tmp.BkfsZR5XfN (kept: every member's wire, and every row above)
+make: *** [Makefile:2017: corpus_judge] Error 1

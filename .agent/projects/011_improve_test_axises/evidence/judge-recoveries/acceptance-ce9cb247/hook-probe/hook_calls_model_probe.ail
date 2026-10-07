@@ -1,0 +1,248 @@
+-- scripts/dst/hook_calls_model_probe.ail
+--
+-- 011 ADR-003 D6, PRECONDITION 4: A PROFILE WHOSE HOOK CALLS THE MODEL.
+--
+-- A ONE-OFF PROBE. It is kept in the acceptance evidence
+-- (`.agent/projects/011_improve_test_axises/evidence/judge-recoveries/acceptance-ce9cb247/hook-probe/`)
+-- and is NOT a gate, not in `DST_TARGETS` and not in the tree: it is copied to
+-- `scripts/dst/` of a scratch worktree, run once and removed.
+--
+-- WHAT IT SHOWS. D5 says the count of `ProviderCallPrepared` in a run's returned
+-- trace equals the count of provider interactions the run added to the world's
+-- log, under three premises. The second is that no hook calls the model:
+-- `ext_ai_step` (`src/core/session.ail:1094`) logs a provider interaction and
+-- writes no prepared record. This probe runs the bank's own rig twice, on a
+-- recording world, and counts the two channels itself:
+--
+--   passthrough-hook    the bank's pre-step hook, which returns the world it was
+--                       given. The two counts are equal.
+--   hook-calls-model    the same rig with a pre-step hook that calls `ai_step`
+--                       once, the shape of `consuming_pre_step_2`
+--                       (`scripts/dst/world_state_probe.ail:237`). The run is
+--                       healthy and the log holds MORE provider interactions
+--                       than the trace holds prepared records.
+--
+-- So `provider-calls-unbalanced` would be red, as `log above trace`, on a healthy
+-- run of such a profile. That is why D5 is fenced to the `driver_only` bank.
+--
+-- "HEALTHY" HERE means: the run ends `Ok` with a terminal summary on `stop`, its
+-- prepared steps are 0, 1, 2, … and its request ordinals run +1 from the
+-- starting world to the returned one. The invariant set's verdict on the run is
+-- printed as information and decides nothing: no gate bridges such a run, and
+-- whether the set is sound on it is not this probe's question.
+--
+-- NOT COPIED FROM THE GATE'S BANK: `corpus_pr_dst` exports `run_recording_at`
+-- with its own runtime, whose hook cannot be replaced from outside. The runtime
+-- below is that one (`approval_rt`, `corpus_pr_dst.ail:336`) with the `compact`
+-- slot as a parameter, and the run call is `run_recording_at`'s, argument for
+-- argument.
+
+module scripts/dst/hook_calls_model_probe
+
+import std/io (println, exit)
+import std/list as List (length)
+import std/ai (Message, ToolCall)
+import std/json (Json, jo)
+import std/option (Option, None, Some)
+import std/result (Result, Ok, Err)
+import src/core/config (CostRates, VerificationConfig)
+import src/core/session as Session
+import src/core/session (TracedSessionResult)
+import src/core/test/stub_step (RecordingWorld, prose_step, scripted_world_state)
+import src/core/ports (ScriptedStep, WorldState)
+import src/core/types (Msg)
+import src/core/tool_contract (ToolCallEnvelope)
+import src/core/phase_vocab (
+  LedgerRecord, WireRecord, ProviderCallPrepared, WorldRequest, run_summary_finish_reason
+)
+import src/core/dst_interaction (Interaction, count_kind)
+import src/core/dst_execution (execution_of)
+import src/core/dst_result (unknown_replay_metadata)
+import src/core/dst_invariants (
+  NoReplay, Violation, evaluate, violation_family, violation_rule, family_id
+)
+import src/core/dst_discovery (DiscoveryFinding, UnderRecorded, OverRecorded, class_balance)
+import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome,
+  AiPorts, ExtWorld,
+  BudgetPlan, BudgetPatch, Delegate, PureCtx, AiCtx, ProviderCtx, InterceptCtx, ProcessCtx, ExtRuntime, FinalizeDecision, NoDecision, NoIntercept, PassThrough, Pending, DenyAfterTimeout,
+  PreStepDecision, PromptPatch, ResponseInterceptDecision, ToolHandleDecision,
+  ToolPolicyDecision, ToolSchema
+)
+import src/core/test/ext_fixture (fixture_hooks)
+
+-- ---------------------------------------------------------------------------
+-- The bank's rig, with the pre-step hook as a parameter
+-- ---------------------------------------------------------------------------
+
+func msg(role: string, content: string) -> Message {
+  { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
+}
+func history() -> [Message] { [msg("system", "s"), msg("user", "u")] }
+func budget() -> BudgetPlan { { total: 10, solver: 6, verifier: 4 } }
+func zero_rates() -> CostRates { { input_per_1m_millicents: 0, output_per_1m_millicents: 0 } }
+
+func no_describe(_config: Json) -> [ToolSchema] { [] }
+func no_prompt(_ctx: PureCtx) -> PromptPatch { { prepend: [], append: [] } }
+func no_budget(_ctx: PureCtx, _plan: BudgetPlan) -> BudgetPatch {
+  { requested_total: None, requested_solver: None, requested_verifier: None }
+}
+func no_handle(ctx: ProviderCtx, _call: ToolCallEnvelope)
+  -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace}  { { decision: { Delegate }, next_state: ctx.world } }
+func no_intercept(ctx: InterceptCtx, _text: string)
+  -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: { NoIntercept }, next_state: ctx.world } }
+func no_solver(ctx: ProcessCtx, _text: string)
+  -> FinalizeOutcome ! {Process}  { { decision: { NoDecision }, next_state: ctx.world } }
+func pending_policy(_ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
+  Pending("generated: approval required", DenyAfterTimeout)
+}
+
+-- The bank's hook: it returns the world it was given.
+func passthrough_pre_step(ctx: AiCtx, _msgs: [Msg])
+  -> PreStepOutcome ! {AI, IO, Trace}  { { decision: { PassThrough }, next_state: ctx.world } }
+
+-- THE HOOK THAT CALLS THE MODEL. `consume_steps` and the binding are
+-- `world_state_probe.ail`'s (`:226`, `:237`), with a count of one: each pre-step
+-- makes one provider call of its own through `ExtPorts.ai_step` and hands back
+-- that call's successor world.
+func consume_steps(n: int, w: ExtWorld, p: AiPorts) -> ExtWorld ! {AI, IO, Trace} {
+  if n <= 0 then w
+  else consume_steps(n - 1, p.ai_step(w, "phase-c-model", []).next_state, p)
+}
+
+func model_calling_pre_step(ctx: AiCtx, _msgs: [Msg])
+  -> PreStepOutcome ! {AI, IO, Trace}  { { decision: { PassThrough }, next_state: consume_steps(1, ctx.world, ctx.ports) } }
+
+func rt_with(id: string, pre: (AiCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace}) -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  let hooks = fixture_hooks(id, {
+    config: jo([]),
+    tools: [],
+    describe: no_describe,
+    prompt: no_prompt,
+    budget: no_budget,
+    compact: pre,
+    policy: pending_policy,
+    provide: no_handle,
+    intercept: no_intercept,
+    judge: no_solver
+  });
+  { registry: { entries: [hooks] }, strict_mode: false, verification: v }
+}
+
+func run_at(rt: ExtRuntime, w: WorldState, step_budget: int) -> TracedSessionResult
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  Session.run_v2_session_traced(
+    rt, "task", "", false, budget(), "phase-c-model", history(), ".",
+    step_budget, false, 0, zero_rates(), RecordingWorld(w))
+}
+
+-- ---------------------------------------------------------------------------
+-- Counting the two channels
+-- ---------------------------------------------------------------------------
+
+pure func prepared_steps(rs: [LedgerRecord]) -> [int] {
+  match rs {
+    [] => [],
+    r :: rest =>
+      match r {
+        WireRecord(e) => match e { ProviderCallPrepared(i) => i.step :: prepared_steps(rest), _ => prepared_steps(rest) },
+        _ => prepared_steps(rest)
+      }
+  }
+}
+
+pure func request_ordinals(rs: [LedgerRecord]) -> [int] {
+  match rs {
+    [] => [],
+    r :: rest =>
+      match r {
+        WireRecord(e) => match e { WorldRequest(i) => i.ordinal :: request_ordinals(rest), _ => request_ordinals(rest) },
+        _ => request_ordinals(rest)
+      }
+  }
+}
+
+pure func contiguous_from(xs: [int], want: int) -> bool {
+  match xs { [] => true, x :: rest => if x == want then contiguous_from(rest, want + 1) else false }
+}
+
+pure func last_or(xs: [int], d: int) -> int {
+  match xs { [] => d, x :: rest => last_or(rest, x) }
+}
+
+pure func join_with(xs: [string], sep: string) -> string {
+  match xs { [] => "", x :: [] => x, x :: rest => "${x}${sep}${join_with(rest, sep)}" }
+}
+
+pure func set_rules(vs: [Violation]) -> [string] {
+  match vs {
+    [] => [],
+    v :: rest => "${family_id(violation_family(v))}/${violation_rule(v)}" :: set_rules(rest)
+  }
+}
+
+-- The gate's own comparison (`dst_discovery.class_balance`), so the word printed
+-- here is the word `provider-calls-unbalanced` would print.
+pure func balance_word(prepared: int, logged: int) -> string {
+  match class_balance("expect_provider", prepared, logged) {
+    [] => "balanced",
+    f :: _ => match f {
+      UnderRecorded(_, _, _) => "log below trace",
+      OverRecorded(_, _, _) => "log above trace",
+      _ => "unbalanced"
+    }
+  }
+}
+
+type Counted = { prepared: int, logged: int, healthy: bool }
+
+func probe(label: string, rt: ExtRuntime, script: [ScriptedStep], step_budget: int) -> Counted
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let initial = scripted_world_state(script);
+  let run = run_at(rt, initial, step_budget);
+  let steps = prepared_steps(run.trace.records);
+  let ords = request_ordinals(run.trace.records);
+  let prepared = List.length(steps);
+  let logged = count_kind(run.world.log, "expect_provider") - count_kind(initial.log, "expect_provider");
+  let ended = match run.result { Ok(_) => "Ok", Err(_) => "Err" };
+  let finish = match run_summary_finish_reason(run.trace) { Some(r) => r, None => "none" };
+  let steps_ok = contiguous_from(steps, 0);
+  let ords_ok = contiguous_from(ords, initial.ordinal + 1) && last_or(ords, initial.ordinal) == run.world.ordinal;
+  let healthy = ended == "Ok" && finish == "stop" && steps_ok && ords_ok;
+  -- Information only: the bridge call is the gate's (`corpus_judge_dst.ail`, `judge`).
+  let set = if finish == "none" then ["not-bridged"]
+            else set_rules(evaluate(execution_of(run, initial.clock_ms, NoReplay, 0 - 1, step_budget - 1, 0, [], unknown_replay_metadata())));
+  let _ = println("HOOKPROBE ${label} ended=${ended} finish=${finish} step_budget=${step_budget} script_steps=${List.length(script)} script_left=${List.length(run.world.script)} prepared=${prepared} providers_logged=${logged} balance=${balance_word(prepared, logged)} steps_contiguous=${steps_ok} ordinals_contiguous=${ords_ok} healthy=${healthy} set_information_only=[${join_with(set, ",")}]");
+  { prepared: prepared, logged: logged, healthy: healthy }
+}
+
+func report(label: string, ok: bool, detail: string) -> bool ! {IO} {
+  let _ = if ok then println("  ✓ ${label}")
+          else println("  ✗ ${label}\n      ${detail}");
+  ok
+}
+
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("011 ADR-003 D6, precondition 4 — a recording run whose pre-step hook calls the model");
+  -- The control: one scripted stop, the bank's hook.
+  let a = probe("passthrough-hook", rt_with("hook_probe_passthrough", passthrough_pre_step),
+                [prose_step("done")], 4);
+  -- The same rig with the model-calling hook. The hook takes the first scripted
+  -- step, the driver's own call takes the second and stops.
+  let b = probe("hook-calls-model", rt_with("hook_probe_calls_model", model_calling_pre_step),
+                [prose_step("the hook's own reply"), prose_step("done")], 4);
+  let a1 = report("passthrough hook: the run is healthy and the two counts are equal",
+                  a.healthy && a.prepared == a.logged && a.prepared > 0,
+                  "healthy=${a.healthy} prepared=${a.prepared} providers_logged=${a.logged}");
+  let b1 = report("hook that calls the model: the run is healthy",
+                  b.healthy, "healthy=${b.healthy}");
+  let b2 = report("hook that calls the model: more provider interactions logged than prepared records (${b.logged} against ${b.prepared})",
+                  b.logged > b.prepared && b.prepared > 0,
+                  "prepared=${b.prepared} providers_logged=${b.logged}");
+  if a1 && b1 && b2 then
+    println("\n✓ hook probe: provider-calls-unbalanced would be red, log above trace, on a healthy run whose hook calls the model")
+  else {
+    let _ = println("\n✗ hook probe: NOT as expected");
+    exit(1)
+  }
+}

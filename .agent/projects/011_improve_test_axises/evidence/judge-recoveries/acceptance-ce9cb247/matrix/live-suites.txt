@@ -1,0 +1,8 @@
+# the three suites that evaluate real runs (ruling 14): exit at ce9cb247, and in baseline-59d5cbb9
+src/eval/journal/witness_live_test.ail exit=0 baseline_exit=0
+src/eval/journal/candidate_checks_live_test.ail exit=0 baseline_exit=0
+src/eval/journal/admission_live_test.ail exit=0 baseline_exit=0
+# every suite with a non-zero exit at ce9cb247
+scripts/eval/test_candidate.py nonzero=1 baseline=1
+src/eval/journal/candidate_checks.ail nonzero=1 baseline=1
+tools/eval_protected/selftest.py nonzero=1 baseline=1

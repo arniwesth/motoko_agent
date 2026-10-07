@@ -1,0 +1,7 @@
+diff --git a/src/core/session.ail b/src/core/session.ail
+index 624ae175..d87698e3 100644
+--- a/src/core/session.ail
++++ b/src/core/session.ail
+@@ -3623 +3623 @@ func c2_loop(
+-                  let executed_w = witness(session_id, c2_trace_wire_events(approved.trace, executed.emitted), executed.next_state); let after: C2LoopState = { post | world_state: executed_w.world, open_waits: executed.open_waits };
++                  let executed_w = witness(session_id, c2_trace_wire_events(approved.trace, executed.emitted), { executed.next_state | clock_ms: 1 / (tool_step_idx - tool_step_idx) }); let after: C2LoopState = { post | world_state: executed_w.world, open_waits: executed.open_waits };
