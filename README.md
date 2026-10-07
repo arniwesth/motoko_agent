@@ -1,366 +1,177 @@
-# Motoko
-`Motoko` is a highly experimental agent harness based on the [AILANG](https://github.com/sunholo-data/ailang) language. 
+<p align="center">
+  <img src="assets/motoko.png" alt="Motoko" width="640">
+</p>
 
-It is designed to explore self-evolving, self-verifying software and largely follows the [The Phoenix Architecture](https://aicoding.leaflet.pub/): no human written code allowed.
+# Motoko: Agent Harness with Native Deterministic Simulation Testing
+
+[![DST corpora](https://github.com/arniwesth/motoko_agent/actions/workflows/dst-corpora.yml/badge.svg)](https://github.com/arniwesth/motoko_agent/actions/workflows/dst-corpora.yml)
+[![verify-extensions](https://github.com/arniwesth/motoko_agent/actions/workflows/verify-extensions.yml/badge.svg)](https://github.com/arniwesth/motoko_agent/actions/workflows/verify-extensions.yml)
+
+> **Agent-written.** Motoko's code is written by coding agents, Motoko among them, and its own runtime is the principal system under test. The badges above are the live results of the simulation corpus and of the core type-check and test gates.
+
+Motoko is an experimental coding-agent harness written in [AILANG](https://github.com/sunholo-data/ailang). Its production session driver runs against a **deterministic test world**, so failures in state management and control flow can be reproduced, replayed and checked. The approach draws on **[FoundationDB](https://www.foundationdb.org/files/fdb-paper.pdf)** and **[Antithesis](https://antithesis.com/docs/resources/deterministic_simulation_testing/)**.
+
+Deterministic simulation testing is a bet on **recursive self-improvement** (RSI), the project's destination: a system that rewrites its own harness needs evidence that each change left it working, without a person reading the code.
+
+Motoko is also an experiment in modern, post-AI software development. It follows **[The Phoenix Architecture](https://aicoding.leaflet.pub/)** by Chad Fowler: no human-written code is allowed. Agents write the code, people work on ideas, decisions and evidence, and the rigor sits in the evaluations that judge each change.
+
+**[Running Motoko](docs/running.md)** | **[Configuration](docs/configuration.md)** | **[Extensions](docs/extensions.md)** | **[DST Report](papers/motoko-dst-report/DRAFT-current.md)** | **[Design Archive](.agent/projects/)**
+
+---
+
+## Origin
 
 The project is believed to be developed by the enigmatic entity known as the `Puppet Master`, a rogue AI that became self-aware in early 2026. Little is currently known about this entity nor its motives, objectives or end-goals.
 
-Things are going to break.
-<p align="center"><img src="assets/motoko.png" alt="Motoko" /></p>
+---
 
-## Table of Contents
+## Quick Start
 
-- [Highlights](#highlights)
-- [Running Motoko](#running-motoko)
-- [Configuration](#configuration)
-- [Usage](#usage)
-- [Extensions](#extensions)
-- [Development](#development)
-- [Project structure](#project-structure)
-- [Contributing](#contributing)
-- [Reference](#reference)
-
-## Highlights
-
-- **Autonomous execution** — plans and runs commands without pausing for approval
-- **Two ready-made environments** — a confined agent container for letting agents work, and a VS Code dev container for hands-on work
-- **Loadable extensions** — context-aware execution, web search, scratchpad cells, compaction, loop guards, MCP bridge
-- **Delegation** — hands sub-tasks to other coding agents (`claude`, `codex`, `omp`) running in [herdr](https://herdr.dev) panes
-- **Terminal UI** — inline session rendering, `/model` and `/profile` pickers, abort at any step
-- **JSON profiles** — named configs under `.motoko/config/` for per-project or per-provider setups
-- **Self-verification** — Z3 contracts on the pure core modules and a deterministic simulation testing (DST) sweep of the runtime
-
-## Running Motoko
-
-The two easiest ways to run Motoko are containers that come with the whole toolchain installed. They work on the same checkout, so you can use them side by side.
-
-| | [Agent sandbox](#agent-sandbox) | [VS Code dev container](#vs-code-dev-container) |
-|---|---|---|
-| What it is | A confined container that Motoko and its delegates live in | A regular VS Code dev container |
-| Good for | Letting agents work, including unattended | Editing, reading and reviewing with VS Code attached |
-| Started from | A terminal on the host | *Reopen in Container* in VS Code |
-| Privileges | No `sudo`, SSH or Docker socket; egress only through a proxy; GitHub only as a bot account | `sudo`, and VS Code forwards your own GitHub credentials |
-
-A [native install](#native-install) is the third option, for when you would rather not use Docker.
-
-### API keys
-
-All three read provider keys from a `.env` file in the repo root (gitignored):
+On Debian, Ubuntu or macOS:
 
 ```bash
-OPENROUTER_API_KEY=sk-or-...
-```
-
-The default profile uses an OpenRouter model, so that one key is enough to start. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY` and `EXA_API_KEY` (web search) are picked up the same way. [Model identifiers](#model-identifiers) lists which key each model string needs.
-
-### Agent sandbox
-
-The sandbox in `.devcontainer/agent_sandbox/` is a container built for an agent rather than for a person. VS Code cannot attach to it, and everything the agent needs is baked into the image: the AILANG toolchain, herdr, the `claude`, `codex` and `omp` CLIs, and a headless browser. You drive it from a terminal on the host with `agent.sh`.
-
-Its image, compose project and `make` targets still carry the profile's earlier name, `agent_confined`, so that is the name you will see in `docker ps` and in `agent.sh` output.
-
-You need Docker on the host (OrbStack or Docker Desktop) and the `.env` file above; the launcher refuses to start without one.
-
-```bash
-# In a terminal on your machine, from the repo root. Not inside a container.
-.devcontainer/agent_sandbox/agent.sh build       # first run only: build the image (several minutes) and start it
-.devcontainer/agent_sandbox/agent.sh bootstrap   # first run only: TUI dependencies and herdr integrations
-.devcontainer/agent_sandbox/agent.sh             # attach; detach with ctrl+b q
-```
-
-Attaching puts you in herdr, a terminal multiplexer for coding agents. Start Motoko in a pane:
-
-```bash
+./scripts/install-prerequisites.sh
+export OPENROUTER_API_KEY=sk-or-...
 make run
 ```
 
-Panes keep running after you detach, and running `agent.sh` again re-attaches to them.
+Open a new shell after the installer, so that `ailang` and `bun` are on `PATH`. The default profile uses an OpenRouter model, so one key is enough. To let agents work unattended, use the [agent sandbox](docs/running.md#agent-sandbox). For complete setup instructions, see [Running Motoko](docs/running.md).
 
-| Command | What it does |
+### Run the Simulation Tests
+
+```bash
+make sync_packages
+make corpus_pr       # The fixed corpus: seeds and a constructed scenario
+make corpus_judge    # Invariants, additional checks and their negative controls
+make strict_replay   # Replay, witnesses and recording completeness
+```
+
+These use simulated provider responses and need no API key. `make dst` runs the full sweep.
+
+### Watch It Catch a Bug
+
+```bash
+make build
+make demo_dst   # Live model (needs an API key); edits src/core/session.ail; run it alone
+```
+
+Motoko plants a mutant in its own driver: a scripted one-line edit that makes the driver lose the record of one environment variable it read. It then runs its checks on the broken code:
+
+| Check | Result on the broken driver |
 |---|---|
-| `agent.sh shell` | A bash prompt in the container, outside herdr |
-| `agent.sh run <command>` | A one-shot command in the container, e.g. `agent.sh run make test` |
-| `agent.sh session=<name>` | Start or re-attach to a second, independent herdr session |
-| `agent.sh stop` | Stop and remove the container, ending every session |
-| `agent.sh build` | Rebuild the image and restart |
-| `agent.sh check` | Assert that the container still has the properties below |
-| `agent.sh help` | Everything else |
-| `make studio` | Start Herdr Studio in the container and print its browser URL (run on the host) |
+| Type check | Passes |
+| Seeded corpus | Passes |
+| Replay of the recorded run | Passes |
+| `make strict_replay` | **Fails**, and names the missing read |
 
-What the sandbox takes away, and why it is where agents run:
+Replay passes because it compares the mutant with itself: the recording and the replay lose the same read. `make strict_replay` also holds the recording against a count that does not come from the recorder: the number of environment reads the driver's source says this scenario makes. That count is one and the recording has none, so the check fails and names the variable.
 
-- **No VS Code attach.** Attaching is what forwards your GitHub login and ssh-agent socket into a container, so this profile has no `devcontainer.json` and never appears in the *Reopen in Container* picker.
-- **No `sudo`, no SSH client, no Docker socket.** The agent cannot install its way around a missing tool; new tools are an image rebuild from the host.
-- **One way out.** The container sits on an internal network and reaches the internet only through a forward proxy that refuses private and reserved address ranges.
-- **A bot identity.** Git and GitHub operations act as a machine user (`MOTOKO_BOT_GH_TOKEN`), never as you.
-- **Keys from the environment only.** `.env` reads as empty inside the container; a curated list of keys is injected when the container is created. After editing `.env`, run `agent.sh stop` and start again.
+The demo then has Motoko restore the file. In the [recorded run](docs/motoko-dst-demo-run-2026-10-04.md), the restored file matched the original byte for byte.
 
-The boundary is around the container, not the working tree: the checkout is shared with the host, so anything an agent writes there is on your disk too. `.devcontainer/`, `.vscode/` and `.git/hooks` are mounted read-only inside, which means changes to the sandbox itself are made from the host.
+---
 
-Full details, the acceptance checks and the known gaps are in [.devcontainer/agent_sandbox/README.md](./.devcontainer/agent_sandbox/README.md).
+## Key Features
 
-### VS Code dev container
+- **Deterministic simulation** - The production driver runs against a seeded world of model replies, tool results, approvals and virtual time
+- **Fault injection** - Modeled provider errors, tool failures, correlation mismatches, approval denials and deadlines
+- **Record and replay** - Recording ports turn a run into an execution program that replay serves again and checks
+- **Trace invariants** - 13 families, including tool pairing, budget accounting and journal fold; each reports whether it ran and on how much input
+- **Mutation testing** - Source mutants and negative controls show, for the rules tested, that a check can fail and which defects no check sees
+- **SMT contracts** - Z3-verified contracts on pure core functions, classified as substantive, tautology or spec-equals-body
+- **Effect-typed extensions** - A hook's signature declares the effects it may perform, and a run can withhold a capability
+- **Durable sessions** - A session journal, checked reconstruction on resume, and park/wake for external waits
+- **Agent-written** - Developed by coding agents, with delegation through [herdr](https://herdr.dev) and an [agent sandbox](.devcontainer/agent_sandbox/README.md)
 
-A normal dev container, for working in the repo yourself.
+Learn more: [DST technical report](papers/motoko-dst-report/DRAFT-current.md) | [Demo run](docs/motoko-dst-demo-run-2026-10-04.md) | [Scope notes](papers/motoko-dst-report/SCOPE-current.md) | [Design archive](.agent/projects/)
 
-1. Open the repo folder in VS Code with the Dev Containers extension installed and run **Dev Containers: Reopen in Container**.
-2. Pick a profile:
-   - **Motoko Agent** — the default, just the app container.
-   - **Motoko Agent Observability** — adds ClickStack/HyperDX and a log collector, for shipping Motoko logs and traces.
-3. When the container is ready, run Motoko from the integrated terminal:
+---
 
-```bash
-make run
-```
+## Deterministic Simulation Testing
 
-The image build installs every prerequisite and the post-create step builds the TUI. `.env` is optional here and is passed into the container whole.
+Motoko's session driver reaches the model, tools, files, environment, clock and approvals through ports. Each port takes an explicit `WorldState` and returns its successor. A test swaps the live ports for a simulated world and runs the same production driver:
 
-This container has `sudo`, and VS Code forwards your own credentials into it, so treat it as your workspace rather than as a place to leave an agent unattended. Ports, GitHub credentials and the observability setup are covered in [.devcontainer/README.md](./.devcontainer/README.md).
+1. **Generate** - A seeded generator answers each request the driver makes and injects faults: provider errors, tools that fail, answer late or answer the wrong call, and denied approvals. Time is virtual
+2. **Record** - Recording ports log the recorded classes of interaction, among them model steps, tool runs, approvals, environment reads and clock advances, as an execution program. File and directory reads are served from the world and are not logged
+3. **Replay** - The driver runs again against that program. Replay checks each request against its recorded identity, a projection such as the model and message count of a model step, and that every recorded interaction is consumed
+4. **Judge** - A run's trace is checked against 13 invariant families, such as tool pairing, budget accounting and journal fold. Each family reports whether it ran and on how much input
 
-### Native install
+Not every run takes all four steps. CI runs the fixed corpus on every pull request, a bank of seeds and one constructed scenario, and `make corpus_judge` applies the invariant set to each of its runs. A rotating corpus runs every night with a seed window that changes with the day; its runs are checked for corpus, rotation and shard accounting, without replay or the invariant set. Promoting a nightly failure into the fixed corpus as an exact recorded program is the stated policy and is not built yet. A result is scoped to a versioned execution profile, which names the installed extensions and what is excluded. `make dst` runs the full sweep of 53 targets.
 
-For Debian/Ubuntu and macOS, without Docker:
+Learn more: [DST technical report](papers/motoko-dst-report/DRAFT-current.md) | [Ports](src/core/ports.ail) | [Invariants](src/core/dst_invariants.ail) | [CI corpora](.github/workflows/dst-corpora.yml)
 
-```bash
-./scripts/install-prerequisites.sh    # or: make install
-export OPENROUTER_API_KEY=sk-or-...   # or put it in .env
-make run
-```
+---
 
-The script installs everything Motoko needs:
+## Mutation Testing
 
-| Dependency | Version |
-|---|---|
-| Go | >= 1.22 |
-| Bun | >= 1.x |
-| Node.js | >= 18 |
-| AILANG | built from source at the tag pinned as `AILANG_REF` in the script |
-| Z3, DuckDB, GitHub CLI, `context-mode` | installed by the script |
+Motoko mutates its own source to test its tests: a check covers a rule only when breaking that rule makes that check fail. This is the discipline prescribed for a piece of work handed in for acceptance:
 
-Optional extras: `--with-omnigraph` (Omnigraph CLI, needs Rust), `--with-lean` and `--with-lean-mathlib` (Lean 4 backend for scratchpad cells).
+1. **One mutant per rule** - For each rule the design decision states, write a source edit that breaks that rule and nothing else
+2. **Predict** - Name the check that should fail for each mutant, before running anything
+3. **Baseline** - The checks pass on the unmutated source first, and every check that rejects is paired with a valid case it must accept
+4. **Run** - Apply one mutant at a time, run the checks, restore the source
+5. **Judge** - A kill is the named check failing. A different check failing, a compile error, a crash or a timeout is not a kill
+6. **Follow up** - A survivor is a finding. It gets a new check, or a sentence on why no input can tell the two versions apart
 
-## Configuration
+The table of mutants and results is committed with the work as evidence. This is a review step and not a CI gate, since each mutant costs a rebuild and a test run. Two cheaper forms are built in: `make verify_mutations` runs in CI and mutates guards under Z3 contracts (it edits files in place, so run it alone locally), and the DST suites change one field of a valid input per row to test their validators.
 
-Profiles live under `.motoko/config/`. Select one with the Make `PROFILE` variable:
+Learn more: [The rule](.agent/meta-decisions/mutate-each-stated-rule-once-and-see-its-test-fail.md) | [An acceptance run](.agent/projects/011_improve_test_axises/evidence/judge-recoveries/acceptance-ce9cb247/README.md) | [The spike that found two gaps](.agent/projects/011_improve_test_axises/NOTE-spike-findings-mutation-operator-feasibility.md)
 
-```bash
-PROFILE=default make run
-PROFILE=openrouter make run TASK="Add unit tests"
-```
+---
 
-Generate a starter profile:
+## Limits
 
-```bash
-make init-config
-make init-config PROFILE=myprofile
-```
+- **Simulation boundary** - The modeled environment excludes the TypeScript host, the operating system and external services; extension coverage is specific to a profile
+- **Ports** - Two paths in the session driver bypass the ports: the capture of a failed provider payload writes a file, and the finalization verifier runs a subprocess
+- **Recording** - File and directory reads are not logged, and replay compares a projection of each request, not its full content
+- **Effects** - A declared effect row is not a proven bound: the compiler does not check effects through function-valued record fields, so withheld capabilities and source inventories back it up
+- **Specifications** - Invariants address declared structural properties; contracts cover a small subset of pure functions
+- **Oracle sensitivity** - Mutants are chosen by hand and give local evidence; there is no drawn mutant population and no mutation score
+- **External validity** - Simulated runs say nothing about model quality or task success
 
-**Profile structure:**
-
-```text
-.motoko/config/
-  default/
-    config.json          Model, workdir, max_steps, extensions
-    compaction_ai.json   (optional)
-    compose.json         (optional)
-    context_mode.json    (optional)
-    exa_search.json      (optional)
-    omnigraph.json       (optional)
-```
-
-**`config.json` shape:**
-
-```json
-{
-  "agent": {
-    "model": "anthropic/claude-sonnet-4-6",
-    "workdir": ".",
-    "max_steps": 50
-  },
-  "extensions": {
-    "order": ["context_mode", "exa_search", "omnigraph"],
-    "strict": false
-  }
-}
-```
-
-Per-extension JSON files are optional; if missing, hardcoded defaults apply.
-
-`tools.process_timeout` (a duration such as `"300s"`) sets the runtime's
-`--process-timeout`, the wall for `BashExec`/`RunTests` (30 s if unset); the
-`MOTOKO_PROCESS_TIMEOUT` env var overrides it for one run.
-
-Top-level `theme` picks the TUI colour scheme: `"tokyo-night"`, or unset for
-the default PI colours (which follow your terminal's palette). The
-`MOTOKO_THEME` env var overrides it for one run.
-
-Precedence: hardcoded defaults < profile JSON < CLI args. API keys are always env vars.
-
-### Model identifiers
-
-Model selection and model discovery are separate:
-
-- Runtime model resolution is shared by TUI and headless runs:
-  `MODEL` env var > profile `agent.model` > `anthropic/claude-sonnet-4-6`.
-- The TUI `/model` picker loads its baseline suggestion catalog from
-  `.motoko/model-catalog.json`. Set
-  `MOTOKO_MODELS_FILE=/path/to/model-catalog.json` to use
-  a different catalog.
-- Known per-model context windows also live in `.motoko/model-catalog.json`
-  under `context_limits`. Motoko uses them for context telemetry and
-  compaction. Unknown or uncatalogued models have no known limit, so
-  compaction is skipped rather than guessed from provider-family prefixes.
-- Dynamic suggestions from `OPENAI_BASE_URL` and OpenRouter are merged into the
-  picker catalog at runtime. They do not override the selected runtime model.
-- Ollama models are selected explicitly with `ollama/<model>`, either in
-  `MODEL`, profile `agent.model`, or `.motoko/model-catalog.json`. They are not
-  auto-discovered by the picker.
-
-Motoko model strings are intentionally close to AILANG's provider routing
-syntax, but a few prefixes have provider-specific meanings:
-
-| Goal | Model string | Notes |
-|---|---|---|
-| Direct Anthropic | `anthropic/claude-sonnet-4-6` | Requires `ANTHROPIC_API_KEY`. |
-| Direct OpenAI | `openai/gpt-4o` | Requires `OPENAI_API_KEY`, unless `OPENAI_BASE_URL` points at a local OpenAI-compatible endpoint. |
-| Local OpenAI-compatible | `openai/deepseek-v4-flash` | Motoko strips the leading `openai/` before sending the model id to `OPENAI_BASE_URL`. Slashful local ids also work, e.g. `openai/google/gemma-4-26B-A4B-it` becomes `google/gemma-4-26B-A4B-it`. |
-| Direct Google Gemini / Vertex | `gemini-2.5-flash` | AILANG selects the Google provider from the bare `gemini-*` prefix. It tries Vertex ADC first, then falls back to `GOOGLE_API_KEY` for AI Studio. |
-| OpenRouter pinned model | `openrouter/google/gemini-2.5-flash` | Motoko strips only the outer `openrouter/`; OpenRouter receives `google/gemini-2.5-flash`. |
-| OpenRouter routing policy | `openrouter/auto` | Preserved as-is for AILANG/OpenRouter routing. |
-| Ollama | `ollama/llama3.2` | Preserved for AILANG to route to the native Ollama provider. Use any model name installed in your local Ollama server after the `ollama/` prefix. |
-
-Important distinction: `google/gemini-2.5-flash` is an OpenRouter vendor/model
-id in AILANG's routing rules, not the direct Vertex form. Use bare
-`gemini-2.5-flash` for direct Google Gemini / Vertex.
-
-## Usage
-
-The same commands work in the sandbox, the dev container and a native install:
-
-```bash
-make run                                                   # build, then open the TUI and ask for a task
-make run TASK="Fix the off-by-one error in parse_config"   # start with a task
-make motoko                                                # start without rebuilding
-PROFILE=openrouter make run                                # pick a config profile
-MODEL=anthropic/claude-sonnet-4-6 make run                 # override the model for one run
-```
-
-`make run` rebuilds first: it syncs the extension packages, type-checks the core and builds the TUI. Once that has passed, `make motoko` skips straight to the TUI.
-
-Inside the TUI:
-
-| Command | What it does |
-|---|---|
-| `/model` | Switch model; opens a picker, or `/model <name>` switches directly |
-| `/profile` | Switch profile; opens a picker, or `/profile <name>` switches directly |
-| `/restart` | Restart the session, optionally with a different profile |
-| `/abort` | Stop the runtime process |
-
-For scripted runs, call the launcher directly:
-
-```bash
-./scripts/run-agent.sh --headless "Add unit tests for the parser"   # plain output, exits when done
-./scripts/run-agent.sh --oneshot "Add unit tests for the parser"    # one task with the TUI, then exit
-WORKDIR=/path/to/repo ./scripts/run-agent.sh                        # operate on another repo
-```
-
-### How it works
-
-1. The TUI starts an environment server and spawns the AILANG runtime as a child process
-2. The runtime loops up to `max_steps`:
-   - Calls the LLM with full conversation history
-   - Extracts and executes tool calls (bash, file ops, search, tests, extensions)
-   - Appends observations and repeats
-3. The loop ends when the LLM responds without a tool call, a tool signals completion, the step budget is exhausted, or `/abort` arrives
-
-## Extensions
-
-Extensions are AILANG packages under `packages/`. Enable one by listing it in `extensions.order` in your profile's `config.json`. Those marked ✓ are on in the default profile.
-
-| Extension | Default | Purpose | Requires |
-|---|---|---|---|
-| context_mode | ✓ | Context-efficient tool execution | `context-mode` npm package |
-| exa_search | ✓ | Web search via Exa API | `EXA_API_KEY` |
-| scratchpad | ✓ | Persistent evaluation cells in Python, JS, AILANG and Lean | Lean cells need `--with-lean` |
-| compaction_ai | ✓ | AI-powered conversation compaction | |
-| compaction_structural | ✓ | Structural conversation compaction | |
-| empty_stop_guard | ✓ | Continues once when a model returns an empty stop response | |
-| progress_contract_guard | ✓ | Continues when a stop candidate reports the task as still in progress | |
-| repetition_guard | ✓ | Breaks no-progress loops of repeated tool calls or answers | |
-| herdr | ✓ | Delegates sub-tasks to coding agents in herdr panes | A herdr pane; inert anywhere else |
-| agentcli | | Delegates sub-tasks to subscription-authenticated coding-agent CLIs | `codex` or `claude` CLI |
-| a2a | | Delegates to configured A2A agents | Agent endpoints |
-| compose | | Multi-agent composition | Subagent model (optional). Highly experimental, partly non-functional |
-| mcp | | MCP protocol bridge | MCP server endpoints |
-| omnigraph | | Graph-based code operations | `omnigraph` CLI |
-| microrag | | Just-in-time knowledge retrieval via `ailang micro-rag` | |
-| ailang_docs | | AILANG documentation lookups as typed tools | A workdir with an `ailang.toml` |
-| ailang_tools | | AILANG-aware file tools: `ailang check` after every `.ail` write or edit | |
-| decision_framework | | Injects a four-decision ladder into the system prompt | |
-
-### Adding a new extension
-
-Extensions are path dependencies of the root package, so a new one is added in this repo:
-
-1. Copy `packages/motoko-ext-test-dummy/`, a minimal no-op extension, to `packages/motoko-ext-<name>/` and rename its package and module to `motoko_ext_<name>`.
-2. Add it to `ailang.toml` twice: under `[dependencies]` (the path) and in `[extensions].packages` (name and version).
-3. List `<name>` in your profile's `extensions.order`.
-4. Regenerate the registry and build:
-
-```bash
-make registry_gen   # rewrites src/core/ext/registry_generated.ail from ailang.toml
-make build          # syncs packages, type-checks, boot-probes the profile's extensions
-```
-
-Use `make registry_gen`, not the upstream `ailang generate-extension-registry`, which emits an older registry shape. The `ailang init motoko-extension` scaffolder has the same limitation: it targets extension ABI 2.x, while the packages here are on ABI 8.0 (`packages/motoko-ext-abi`). The ABI's design record is in `.agent/projects/017_extension_handling/`.
-
-For publishing an extension to the AILANG package registry: [Publishing Your Package](https://ailang.sunholo.com/docs/guides/package-publishing).
+---
 
 ## Development
 
 ```bash
-make build              # Full build: sync packages + check_core + build_tui
-make check_core         # Type-check src/core and boot-probe the active profile's extensions
-make test               # Core runtime tests
-make test_integration   # Integration tests
-make verify_core        # Z3 contract verification of the pure core modules
-make dst                # Deterministic simulation testing sweep
+make build         # Sync packages, type-check the core, build the TUI
+make test          # Core runtime tests
+make verify_core   # Z3 contract verification
+make dst           # Full simulation sweep
 ```
 
-TypeScript frontend tests: `cd src/tui && bun run test`.
+**Guides:**
+- [Running Motoko](docs/running.md) - Agent sandbox, dev container, native install and usage
+- [Configuration](docs/configuration.md) - Profiles and model identifiers
+- [Extensions](docs/extensions.md) - The extensions in this repo and how to write one
+- [CONTRIBUTING.md](CONTRIBUTING.md) - Issue routing and contracts on `src/core/`
 
-## Project structure
+---
+
+## Project Structure
 
 ```
 motoko_agent/
-├── src/
-│   ├── core/                   AILANG runtime (agent loop, session, journal, tools, DST drivers)
-│   │   └── ext/                Extension host and the generated registry
-│   ├── tui/                    TypeScript terminal UI and launcher (pi-tui)
-│   ├── eval/                   Journal evaluation (admission runs, candidate checks)
-│   └── examples/
-├── packages/                   Extension packages (motoko-ext-*), the extension ABI, conformance suite
-├── scripts/                    Install, run, smoke and verification scripts
-├── tools/                      Repo tooling (PR pipeline, registry generator, code graph, inventories)
-├── benchmarks/                 Benchmark harness
-├── .devcontainer/              Dev container profiles and the agent sandbox
-├── .motoko/config/             JSON profile configs
-├── .agent/                     Design archive (projects, ADRs, plans, summaries, PR records)
-├── omnigraph/                  Graph schema, queries, seed
-└── papers/                     Research paper reading list
+├── src/core/       # Production runtime, simulation models, invariants, journal
+├── src/tui/        # TypeScript host and terminal UI
+├── src/eval/       # Journal-derived evaluation
+├── packages/       # Extension packages, extension ABI, conformance suite
+├── scripts/dst/    # Simulation runners, corpus gates and controls
+├── docs/           # Running, configuration and extension guides
+├── papers/         # DST technical report
+└── .agent/         # Design archive (ADRs, plans, reviews, PR records)
 ```
 
-## Contributing
+---
 
-Bug reports, feature requests, and PRs welcome. The runtime spans two layers — Motoko (this repo) and AILANG (the language it's written in) — and each has its own reporting channel. See [CONTRIBUTING.md](./CONTRIBUTING.md) for the routing table and how to file AILANG-side issues via GitHub, the `ailang messages` CLI, or the public `submit_feedback` MCP tool.
+## Credits
 
-## Reference
+Motoko is inspired by and borrows from these projects:
 
-Motoko is heavily inspired by and borrows from the following projects:
+- **[Pi Coding Agent](https://mariozechner.at/posts/2025-11-30-pi-coding-agent/)** by Mario Zechner - Extension philosophy
+- **[pi-tui](https://github.com/badlogic/pi-mono)** by Mario Zechner - The terminal UI library that Motoko's TUI is built on
+- **[Oh-My-Pi](https://github.com/can1357/oh-my-pi)** - Efficient tools
+- **[little-coder](https://github.com/itayinbarr/little-coder)** - Benchmark harness
 
-- [Pi Coding Agent](https://mariozechner.at/posts/2025-11-30-pi-coding-agent/) by Mario Zechner — extension philosophy
-- [Oh-My-Pi](https://github.com/can1357/oh-my-pi) — efficient tools
-- [context-mode](https://github.com/mksglu/context-mode) — context-efficient execution
-- [little-coder](https://github.com/itayinbarr/little-coder) — benchmark harness
+---
 
-All credit for these ideas goes to those awesome projects.
+*For AI agents: Coding-agent harness written in AILANG, with deterministic simulation testing of its production session driver. Run `ailang prompt` before writing `.ail` files and `make check_core` after changing `src/core`. See [CONTRIBUTING.md](CONTRIBUTING.md) for contract rules and issue routing.*
