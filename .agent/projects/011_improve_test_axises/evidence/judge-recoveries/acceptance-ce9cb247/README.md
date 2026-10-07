@@ -6,6 +6,12 @@ Commit handed in: `ce9cb247` (`origin/main`, the merge of #229). AILANG v0.47.2 
 8 cores. No rule, gate or source was changed; every source edit was made in a scratch worktree,
 one at a time, and restored.
 
+> **Ruled afterwards, 2026-10-07 (ADR-003 ruling 17).** The operator accepted the two rules this
+> note holds, `driver-step-repeated` and `tool-dispatches-unbalanced`, with the other six. The two
+> branches the blind survivors are on are recorded in ADR-003 D6 as known and not seen, and a run
+> that reaches each is *Not decided* item 10. This paragraph was added by the delegating session.
+> Everything below is the acceptance session's text, unchanged, and still reads "held".
+
 ## The result
 
 - **Every row of the table is a kill.** D6's twelve rows, the plan's row 13 and precondition

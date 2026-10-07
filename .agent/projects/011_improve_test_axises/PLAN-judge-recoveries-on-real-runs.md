@@ -1,7 +1,8 @@
 # Plan: one gate that judges every corpus member's real run
 
-Status: **written; reviewed once and revised; all four of its questions ruled 2026-10-06; not
-started.** Date: 2026-10-06. Grounded against `59d5cbb9`
+Status: **carried out.** WI-1 and WI-3 merged as #228 and WI-2 as #229 on 2026-10-07; WI-4, the
+acceptance at `ce9cb247`, is #230, and all eight rule ids are accepted (ADR-003 ruling 17). The
+text below is the plan as it stood when the builds started. Date: 2026-10-06. Grounded against `59d5cbb9`
 (`main`, equal to `origin/main`), AILANG v0.47.2 (`e939cba`).
 Commissioned by `HANDOFF-write-judge-recoveries-plan.md`; decided by
 `ADR-003-judge-recoveries-on-real-runs.md` v0.2 (Accepted 2026-10-06; rulings 4, 6 and 7 to 16).

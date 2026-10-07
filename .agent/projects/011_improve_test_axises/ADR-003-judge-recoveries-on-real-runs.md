@@ -3,12 +3,16 @@
 **Status:** **Accepted 2026-10-06, as v0.2.** The operator accepted v0.1's six rulings. Two
 independent reviews then found that four of them rested on things that do not hold, and the
 operator accepted the v0.2 amendment with three tightenings the same day (*Rulings*). v0.2 revises
-D2, D3, D4, D5, D6 and D8, narrows D7's wording, and adds D9 and D10. Nothing is implemented on
-`main`. **Amended the same day by rulings 13 to 16**, on findings of
+D2, D3, D4, D5, D6 and D8, narrows D7's wording, and adds D9 and D10. **Amended the same day by
+rulings 13 to 16**, on findings of
 `PLAN-judge-recoveries-on-real-runs.md` and of its review: D4's budget is held by the gate and not
 on the execution record; D6's journal precondition is the whole matrix read row for row; the gate
 is also named in a CI workflow; a red row reports what 009 D8 lists, with the program by
 reference. The amended passages are marked with their ruling.
+**Implemented and accepted on 2026-10-07.** The gate and the two rules are on `main` (#228, #229).
+All eight rule ids were accepted at `ce9cb247`, on the run recorded in
+`evidence/judge-recoveries/acceptance-ce9cb247/` and by ruling 17. What acceptance does not claim
+is D6's known-unseen list, which that ruling extends by two branches.
 **Date:** 2026-10-06. Grounded at HEAD `259265b5`, AILANG v0.47.2 (`e939cba`).
 
 Reviewed, separately, by Codex (GPT-6-Astra) and Claude Fable 5.1:
@@ -267,6 +271,14 @@ Known, and not seen by any rule here. Acceptance does not claim them:
 - **Failure reasons that share `error`** are not told apart (D2).
 - **A step label offset by a constant**, and **a re-issued park that consumes no budget**
   (`session.ail:3535`): proposed by the reviewers, not run. The corpus never parks.
+- **A tool run without an approval loses its successor** (`tool_phase.ail:615`). *(Ruling 17.)* A
+  blind reviewer's mutant at acceptance: every rule is green. The bank's policy sends every tool
+  call to approval, so no member runs that arm of the fold. It is the handoff the spike's part 3
+  found the bank does not reach.
+- **After a verifier rejection the model is called again under the same step**
+  (`session.ail:2985`). *(Ruling 17.)* A blind reviewer's mutant at acceptance: every rule is
+  green. The bank runs with verification disabled. D3's family rule would see it on a run that
+  takes that path; no gate evaluates the set on one.
 
 **D7. The corpus's existing identity keys are not pinned by this ADR.** *(Ruled 2026-10-06; v0.2
 narrows the wording to what was measured.)* Option 3. Existing pins, the depth canary's among them,
@@ -367,6 +379,10 @@ against its text, and corrected after both reviews:
    (`src/core/session.ail:4480`), where its sibling at `:4442` passes the post-init one. Found by a
    reviewer, confirmed by reading. Its only callers are in `scripts/dst/phase_c2_wiring_scenarios.ail`;
    whether it matters there was not established.
+10. **A run that reaches each of the two branches acceptance found unreached** *(ruling 17)*: a
+    tool run without an approval, and the step after a verifier rejection. One scripted control
+    run for each in D1's gate, with its mutant seen red, would move both out of D6's known-unseen
+    list. Its own small decision, and not a condition of acceptance.
 
 ## What a plan would sequence
 
@@ -432,3 +448,11 @@ recommendation".
 | # | Amends | Ruling |
 |---|---|---|
 | 16 | — | A red row of D1's gate reports the twelve items of 009 ADR-001 D8. The serialized program is given by reference to the artifact `corpus_pr` persisted for that member; the gate persists none. This does not reopen 009: D8's "copy-pasteable local replay command or artifact reference" is met by the reference. |
+
+**On the acceptance run, ruled by the operator on 2026-10-07**, in conversation, after the run in
+`evidence/judge-recoveries/acceptance-ce9cb247/` had accepted six rule ids and held two on one
+blind survivor each, and a recommendation had been given: "I will follow your recommendations".
+
+| # | Amends | Ruling |
+|---|---|---|
+| 17 | 10 | All eight rule ids are accepted at `ce9cb247`. `driver-step-repeated` and `tool-dispatches-unbalanced` are accepted with the other six: every row D6 and the plan name for them was a kill, and the two blind survivors are on branches no corpus member runs, which D1 already puts outside what the gate is sound for. The two branches join D6's known-unseen list. A scripted run that reaches each is a follow-up of its own (*Not decided*, item 10), not a condition of acceptance. |

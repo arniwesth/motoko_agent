@@ -16,14 +16,19 @@ All four preconditions held and every control is green. All fourteen rows of the
 on the rule each names. The blind reviewer's eight rows gave six kills and two survivors, both on
 lines no corpus member runs. Six rule ids are accepted; two are held for the operator.
 
-**Draft on purpose.** ADR-003's status is not touched here: whether it changes is the operator's.
+**Ruled since, and recorded here.** On 2026-10-07 the operator accepted the two held rules with
+the other six: "I will follow your recommendations". A third commit, by the delegating session,
+adds that as ADR-003 ruling 17, lists the two unreached branches in D6's known-unseen list and in
+*Not decided* (item 10), updates the ADR's and the plan's status lines, and puts a note above the
+result note's text. The acceptance session's own text and evidence are unchanged.
 
 ## Changes
 
 - docs(011): WI-4 — acceptance of ADR-003's rules at ce9cb247, fourteen rows killed and two blind survivors
+- docs(011): ADR-003 ruling 17 — all eight rule ids accepted; two unreached branches recorded as not claimed
 
-159 files changed, all under `.agent/projects/011_improve_test_axises/`: the handoff, and
-`evidence/judge-recoveries/acceptance-ce9cb247/`.
+161 files changed, all under `.agent/projects/011_improve_test_axises/`: the handoff,
+`evidence/judge-recoveries/acceptance-ce9cb247/`, and with the ruling ADR-003 and the plan.
 
 ## Governing docs
 
