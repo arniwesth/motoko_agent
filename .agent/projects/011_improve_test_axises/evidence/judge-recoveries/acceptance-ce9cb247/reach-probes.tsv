@@ -1,0 +1,6 @@
+# Reach probes for the blind reviewer's two survivors. Diagnostic only: not rows of D6's table, not mutants of a rule, and no verdict rests on them.
+# Each makes one line panic (integer division by zero) if it is ever evaluated. Stated in sequence.log before they ran.
+id	site	the line is	expected	seen	reading
+X-reach-ctl	src/core/session.ail:3623	row 12's and B8's, the approved call's handoff	crash: ten members reach it	exit 2; `panic: division by zero`; 0 of 16 members judged	the poison fires on a reached line
+X-reach-B2	src/core/tool_phase.ail:615	B2's, the fold's recursion after a tool run without an approval	green if never evaluated	exit 0; 16 of 16 members clean, both controls clean	no member and neither control evaluates the line
+X-reach-B3	src/core/session.ail:2985	B3's, the state after a verifier rejection	green if never evaluated	exit 0; 16 of 16 members clean, both controls clean	no member and neither control evaluates the line

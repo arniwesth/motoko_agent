@@ -1,0 +1,57 @@
+# Acceptance of ADR-003's rules (011 WI-4) at ce9cb247: predictions, written before any run.
+# Source: HANDOFF-accept-judge-recoveries.md, "The rows", and PLAN-judge-recoveries-on-real-runs.md WI-4.
+# This file is hashed (predictions.tsv.sha256) and the hash is the first line of sequence.log.
+# It is not edited after that. A prediction that turns out wrong is a prediction miss in mutants.tsv.
+#
+# Members (16), as `JUDGE` labels: seed-1 seed-2 seed-4 seed-5 seed-7 seed-9 seed-10 seed-12 seed-15
+#   seed-19 seed-30 seed-32 seed-62 seed-141 seed-244 constructed-empty-terminal
+# OK10      = seed-1 seed-2 seed-4 seed-9 seed-10 seed-12 seed-15 seed-62 seed-141 constructed-empty-terminal
+# PROVFAIL5 = seed-5 seed-7 seed-19 seed-30 seed-32
+# RETRY4    = seed-9 seed-19 seed-32 seed-141
+# DISPATCH10= seed-1 seed-4 seed-10 seed-12 seed-15 seed-19 seed-32 seed-62 seed-141 seed-244
+# ALL16     = every member
+#
+# Scoring rules, fixed here:
+#  S1. A row is a KILL when the gate's output holds `JUDGE <member> <rule id> RED` for the rule id
+#      in `expect_red`, on at least one bank member. `CONTROL` and `SELFCHECK` rows do not count.
+#  S2. Where `direction` is not `-`, that text must open the row's detail (`RED <direction>:`).
+#      The rule red in the other direction only is NOT a kill of the case the row names.
+#      Row r09's direction is this file's own reading, not the handoff's: there a different
+#      direction is a prediction miss and not a lost kill.
+#  S3. A row naming two rule ids (r09) is a kill when both are red; each id is also scored alone.
+#  S4. A compile or type error, a timeout, a non-zero exit with no row for the named rule, or
+#      another rule red alone is NOT a kill and is recorded as what it is. Exit status is not read
+#      as a verdict.
+#  S5. `members` is the predicted set of members with the named rule red. A different set with
+#      the rule red is a kill and a prediction miss. `count:12` predicts a count and no names.
+#  S6. `also` is what else is predicted to go red. It does not decide the kill. `none` predicts
+#      that no other rule id is red on any member; anything else red is a prediction miss.
+#      `-` predicts nothing either way.
+#  S7. A control row passes on its `expect` text; a control that does not is a stop-and-report.
+#
+# kind	id	decision	edit	expect_red	direction	members	also	basis
+mutant	r01	D2	session.ail:3920, the failure finalize reports TermSuccess	outcome-finish-disagrees	-	PROVFAIL5	-	spike M3 on a prototype; handoff row 1
+mutant	r02	D2	session.ail:3402, the success finalize reports a failure reason	outcome-finish-disagrees	-	OK10	-	spike M3m; handoff row 2
+mutant	r03	D2	session.ail:3920, the failure finalize reports TermMaxSteps	outcome-finish-disagrees	-	PROVFAIL5	-	spike R1; handoff row 3
+mutant	r04	D2	session.ail:2789, the suspension reports TermInternalFailure	outcome-finish-disagrees	-	seed-244	-	spike R2; handoff row 4
+mutant	r05	D3 family	session.ail:3887, the retry keeps step_idx	driver-step-repeated	-	RETRY4	steps-not-contiguous on RETRY4; provider-calls-exceed-budget on seed-19	spike M1; handoff row 5; member names by the handoff's reading
+mutant	r06	D3 gate	session.ail:3887, the retry adds two	steps-not-contiguous	-	RETRY4	-	spike R3; handoff row 6; member names by the handoff's reading
+mutant	r07	D4 calls	step_machine.ail:103, >= becomes >	provider-calls-exceed-budget	-	seed-244	none	spike R5; handoff row 7: 13 calls on 12, and no other rule
+mutant	r08	D4 edge	recovery.ail:28, remaining_step_budget > 1 is dropped	retry-at-budget-edge	-	seed-19	-	spike M9; handoff row 8: a retry at step 11 of 12
+mutant	r09	D5 and D9	session.ail:3892, the retry keeps the pre-call world	provider-calls-unbalanced+request-ordinals-not-contiguous	log below trace	RETRY4	-	spike M2; handoff row 9; direction by this file's reading (S2)
+mutant	r10	D9	session.ail:3613, the denied-approval arm continues from st	request-ordinals-not-contiguous	-	count:12	-	spike M6: 12 members, not named
+mutant	r11	D9	session.ail:3920, capt.world becomes stepped.world	request-ordinals-not-contiguous	-	seed-5 seed-7 seed-30 seed-32	-	spike R4: 4 members; names by the handoff's reading
+mutant	r12	D10	session.ail:3623, the approved call's successor is dropped	tool-dispatches-unbalanced	log below trace	DISPATCH10	-	spike T3: 10 members; handoff row 12
+mutant	r13	D10	tool_phase.ail:505, start_event is left out of emitted	tool-dispatches-unbalanced	log above trace	DISPATCH10	-	by reading; plan WI-4 row 13; handoff row 13
+mutant	P3	D5	session.ail:3861, the ProviderCallPrepared append is dropped	provider-calls-unbalanced	log above trace	ALL16	the gate's guard "every member's trace holds a prepared call" red on ALL16	by reading; D6 precondition 3; handoff row P3
+# Controls. `expect` is in the `expect_red` column; the other columns are `-`.
+control	C-gate	D1	none: make corpus_judge at ce9cb247	exit 0; 16 JUDGEROW with set=[] checks=[] not_evaluated=[]; no JUDGE row RED; both CONTROL runs clean	-	-	-	handoff step 2
+control	C-invariants	D6	none: make invariants	passes	-	-	-	handoff step 2
+control	C-stream-parity	D6, D7	none: make stream_parity	passes, with the pinned rule sets ["clock-balance"] and [] unchanged	-	-	-	handoff step 2
+control	C-inline-tests	D6	none: ailang test src/core/dst_invariants.ail	passes	-	-	-	handoff step 2
+control	K0	D6	session.ail:3880, a comment-only edit in the retry branch	exit 0; its JUDGEROW, JUDGE, CONTROLROW and CONTROL rows equal C-gate's line for line	-	-	-	spike K0; handoff step 2
+control	MX	D6 precondition 1	none: make eval_matrix at ce9cb247 against baseline-59d5cbb9	compare_matrix.py prints VERDICT: IDENTICAL; witness_live_test, candidate_checks_live_test and admission_live_test exit 0	-	-	-	ruling 14; handoff step 3
+control	KB-D2	D6 precondition 1	dst_invariants.ail:1812, StepBudgetExhausted implies error	witness_live_test red on its suspended run with A8:outcome-finish-disagrees@aggregate:invariants:outcome-agreement	-	-	-	spike part 6 on a prototype; handoff step 3
+control	KB-D3	D6 precondition 1	dst_invariants.ail:1625, n > 1 becomes n > 0	witness_live_test red with A8:driver-step-repeated@aggregate:invariants:bounded-progress	-	-	-	by reading; handoff step 3
+control	P2	D6 precondition 2	none: the two CONTROL runs of C-gate	retry-with-two-steps-left and no-retry-with-one-step-left both clean, every report row of the two a tick	-	-	-	handoff step 4
+control	P4	D6 precondition 4	none: a recording run whose pre-step hook calls ai_step	a healthy run with more provider interactions added to the log than ProviderCallPrepared records in the trace	-	-	-	by reading; handoff step 6
