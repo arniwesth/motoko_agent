@@ -1,212 +1,157 @@
-# Motoko
+<p align="center">
+  <img src="assets/motoko.png" alt="Motoko" width="640">
+</p>
 
-`Motoko` is a coding-agent harness with deterministic simulation testing inspired by [FoundationDB](https://www.foundationdb.org/files/fdb-paper.pdf). Under test, its production session driver runs inside a seeded world, where every model reply, tool result, fault and clock tick is generated, recorded and replayed.
+# Motoko: Agent Harness with Native Deterministic Simulation Testing
 
-It is written in [AILANG](https://github.com/sunholo-data/ailang), an effect-typed language, and largely follows [The Phoenix Architecture](https://aicoding.leaflet.pub/): no human-written code allowed. Agents write its code, Motoko among them.
+[![DST corpora](https://github.com/arniwesth/motoko_agent/actions/workflows/dst-corpora.yml/badge.svg)](https://github.com/arniwesth/motoko_agent/actions/workflows/dst-corpora.yml)
+[![verify-extensions](https://github.com/arniwesth/motoko_agent/actions/workflows/verify-extensions.yml/badge.svg)](https://github.com/arniwesth/motoko_agent/actions/workflows/verify-extensions.yml)
 
-The project is believed to be the work of the `Puppet Master`, a rogue AI that became self-aware in early 2026.
+> **Agent-written.** Motoko's code is written by coding agents, Motoko among them, and its own runtime is the principal system under test. The badges above are the live results of the simulation corpus and of the core type-check and test gates.
 
-<p align="center"><img src="assets/motoko.png" alt="Motoko" /></p>
+Motoko is an experimental coding-agent harness written in [AILANG](https://github.com/sunholo-data/ailang). Its production session driver runs against a **deterministic test world**, so failures in state management and control flow can be reproduced, replayed and checked. The approach draws on **[FoundationDB](https://www.foundationdb.org/files/fdb-paper.pdf)** and **[Antithesis](https://antithesis.com/docs/resources/deterministic_simulation_testing/)**.
 
-## Table of Contents
+Deterministic simulation testing is a bet on **recursive self-improvement** (RSI), the project's destination: a system that rewrites its own harness needs evidence that each change left it working, without a person reading the code.
 
-- [What makes Motoko different](#what-makes-motoko-different)
-  - [The real driver runs in a simulated world](#the-real-driver-runs-in-a-simulated-world)
-  - [A green result has to say what it proved](#a-green-result-has-to-say-what-it-proved)
-  - [Effects are in the types](#effects-are-in-the-types)
-  - [Sessions are durable, and waiting is a state](#sessions-are-durable-and-waiting-is-a-state)
-  - [Built by agents, including itself](#built-by-agents-including-itself)
-  - [A sandbox built for agents](#a-sandbox-built-for-agents)
-- [Status and limits](#status-and-limits)
-- [Quickstart](#quickstart)
-- [Extensions](#extensions)
-- [Development](#development)
-- [Project structure](#project-structure)
-- [Contributing](#contributing)
-- [Reference](#reference)
+Motoko is also an experiment in modern, post-AI software development. It follows **[The Phoenix Architecture](https://aicoding.leaflet.pub/)** by Chad Fowler: no human-written code is allowed. Agents write the code, people work on ideas, decisions and evidence, and the rigor sits in the evaluations that judge each change.
 
-## What makes Motoko different
+**[Running Motoko](docs/running.md)** | **[Configuration](docs/configuration.md)** | **[Extensions](docs/extensions.md)** | **[DST Report](papers/motoko-dst-report/DRAFT-current.md)** | **[Design Archive](.agent/projects/)**
 
-### The real driver runs in a simulated world
+---
 
-An agent harness assembles context, sends requests, runs tools, applies approval policy, compacts history and decides whether to continue, wait or stop. Those obligations hold whatever the model says, and they tend to break across boundaries: a tool result that answers the wrong call, a compaction that drops the system prompt, a retry that does not consume its budget.
+## Quick Start
 
-Motoko's core reaches everything outside itself through ports: the model, tools, files, environment variables, the clock, approvals and wake-ups. Each port takes an explicit `WorldState` and returns its successor. Live adapters call the real thing. Test adapters serve a world built from a seed, with provider errors, tools that fail, answer late or answer the wrong call, denied approvals and virtual time. The session driver is the same code in both.
-
-```mermaid
-flowchart LR
-    S[Seed] --> W[Generated world<br/>replies, faults, virtual time]
-    W --> D[Production session driver<br/>recording ports]
-    D --> P[Recorded program]
-    P --> R[Production session driver<br/>replay world]
-    D --> T[Trace]
-    R --> T
-    T --> I[Invariants and witnesses]
-```
-
-Recording adapters turn each run into a program that can be replayed, and the run's trace is checked against 13 invariant families, among them tool pairing, budget accounting, phase transitions, checkpoint history, virtual time and journal fold.
+On Debian, Ubuntu or macOS:
 
 ```bash
-make corpus_pr   # the corpus that blocks a PR: fixed seeds and promoted regression programs
-make dst         # the whole sweep: 53 targets, tens of minutes
-make demo_dst    # Motoko plants a bug in its own driver and shows which gate catches it
-```
-
-CI runs the PR corpus on every pull request and a rotating corpus every night, whose seed window changes with the day. `make demo_dst` drives a real model, so it needs an API key, a `make build` beforehand and a clean `src/core/session.ail`.
-
-The approach follows FoundationDB's simulation testing and [Antithesis](https://antithesis.com/docs/resources/deterministic_simulation_testing/). The [technical report](papers/motoko-dst-report/DRAFT-current.md) describes the mechanisms and their limits.
-
-### A green result has to say what it proved
-
-A reproducible test is not yet a meaningful one. It can pass because it exercised nothing, or because the recording and the replay agree on the same mistake. A good share of the test code exists to rule that out:
-
-- **Profiles.** A DST claim is scoped to a versioned execution profile that names the installed extensions, what is covered and what is excluded. There are four, from `driver_only` to `driver_plus_herdr`.
-- **Vacuity.** Each invariant family reports whether it was evaluated and over how much input, so a check that passed over nothing is visible.
-- **Completeness.** `make strict_replay` compares a recording with what the source says must be in it. In the demo a one-line mutation drops a world successor: the type checker, the corpus and replay all pass, and `strict_replay` names the environment read that went missing from the record. The [demo run note](docs/motoko-dst-demo-run-2026-10-04.md) walks through one run.
-- **Controls.** A gate has to show it can fail. `make corpus_judge` holds every run of the PR corpus to the invariant set and to six checks of its own, and shows that each of the six can fire.
-- **Contracts.** `make verify_core` proves 16 Z3 contracts on pure core functions, then reports that 14 of them constrain a function body and 2 are tautologies.
-
-### Effects are in the types
-
-AILANG function signatures carry effect rows, and the runtime starts with an explicit list of capabilities, so a test can withhold one and catch code that reaches around its port. The driver's decision policy in `src/core/step_machine.ail` is pure; the effectful orchestration around it is in `src/core/session.ail`.
-
-Extension hooks are typed the same way. What a hook may do is in its signature:
-
-```
-export type Capability
-  = PromptShaper((PureCtx) -> PromptPatch)
-  | ToolPolicy((PureCtx, ToolCallEnvelope) -> ToolPolicyDecision)
-  | Compactor((AiCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace})
-  | ExitIntent(string, bool, (FsCtx) -> ExitIntentOutcome ! {FS})
-  | ...
-```
-
-A prompt shaper cannot read a file and an exit hook cannot spawn a process, because neither would compile. The extension ABI is at 8.0 (`packages/motoko-ext-abi`), with a conformance suite in `packages/motoko_ext_conformance`.
-
-### Sessions are durable, and waiting is a state
-
-The host writes a session journal that outlives the runtime process. Resume folds the journal back into session state after validating its digest chain and tool-call pairing, and an invariant checks that the fold matches the state the driver ended with.
-
-When a delegate is working, the core parks instead of asking the model whether to continue. It wakes on the delegate's answer, on operator input or on a timer. A park is written to the journal, so a parked session can be resumed.
-
-### Built by agents, including itself
-
-The core is about 52,000 lines of AILANG and the extension packages another 25,000, across about 1,800 commits since May 2026.
-
-Motoko hands sub-tasks to other coding agents (`claude`, `codex`, `omp`) running in [herdr](https://herdr.dev) panes and tracks the plan as a dagr graph. In orchestrator mode the pane that owns a run routes work, and a tool policy denies it implementation edits. That rule comes from a measured failure: a session that resumed from a handoff kept the state and lost the role, then did the work itself in 395 shell calls and no delegations. The role now lives in the run file, where a handoff cannot lose it.
-
-The design record is in the repo. `.agent/projects/` holds 37 projects of ADRs, plans, reviews and handoffs. Pull requests go through a pipeline (`tools/pr`) that opens them as a bot account and refuses to publish one without a predicted outcome and test evidence. The records are under `.agent/github/prs/`.
-
-The destination is recursive self-improvement. That is a direction and not a result: the current work is making this factory reliable enough to trust with larger objectives.
-
-### A sandbox built for agents
-
-The agent sandbox is a container built for an agent rather than for a person. It has no `sudo`, SSH client or Docker socket, reaches the internet only through a forward proxy that refuses private address ranges, acts on GitHub only as a bot account, and gets its API keys from a curated list. `agent.sh check` asserts that the container still has those properties. See [Running Motoko](docs/running.md#agent-sandbox).
-
-## Status and limits
-
-Motoko is a research vehicle and highly experimental.
-
-- There is no tagged release. The TUI reports version 0.2.0.
-- DST covers the AILANG core. The TypeScript host has its own tests and is outside the simulation, and an extension is covered only as far as a profile says.
-- Replay shows that the harness handles a sequence of observations correctly. It says nothing about model quality or task success.
-- The contract layer is thin: 16 proven contracts, and 49 core files with none.
-- Orchestrator mode is a tool policy and a prompt note, not a sandbox.
-- The sandbox's boundary is the container. The working tree is shared with the host.
-
-## Quickstart
-
-On Debian/Ubuntu or macOS:
-
-```bash
-./scripts/install-prerequisites.sh    # or: make install
-export OPENROUTER_API_KEY=sk-or-...   # or put it in .env
+./scripts/install-prerequisites.sh
+export OPENROUTER_API_KEY=sk-or-...
 make run
 ```
 
-The default profile uses an OpenRouter model, so that one key is enough to start. To let agents work unattended, use the agent sandbox instead. For hands-on work there is also a VS Code dev container.
+The default profile uses an OpenRouter model, so one key is enough. To let agents work unattended, use the [agent sandbox](docs/running.md#agent-sandbox). For complete setup instructions, see [Running Motoko](docs/running.md).
 
-| Document | What it covers |
+### Run the Simulation Tests
+
+```bash
+make sync_packages
+make corpus_pr       # Fixed seeds and promoted regression programs
+make corpus_judge    # Invariants, additional checks and their negative controls
+make strict_replay   # Replay, witnesses and recording completeness
+```
+
+These use simulated provider responses and need no API key. `make dst` runs the full sweep.
+
+### Watch It Catch a Bug
+
+```bash
+make build
+make demo_dst   # Needs an API key: a live model drives the demo
+```
+
+Motoko plants a mutant in its own driver: a scripted one-line edit that makes the driver lose the record of one environment variable it read. It then runs its checks on the broken code:
+
+| Check | Result on the broken driver |
 |---|---|
-| [Running Motoko](docs/running.md) | The agent sandbox, the dev container, native install, usage and TUI commands |
-| [Configuration](docs/configuration.md) | Profiles, `config.json` and model identifiers |
-| [Writing an extension](docs/extensions.md) | Adding an extension package to this repo |
-| [DST technical report](papers/motoko-dst-report/DRAFT-current.md) | The simulation architecture, its evidence and its limits |
-| [Agent sandbox README](.devcontainer/agent_sandbox/README.md) | The sandbox's properties, acceptance checks and known gaps |
+| Type check | Passes |
+| Seeded corpus | Passes |
+| Replay of the recorded run | Passes |
+| `make strict_replay` | **Fails**, and names the missing read |
 
-## Extensions
+Replay passes because it compares the mutant with itself: the recording and the replay lose the same read. `make strict_replay` also holds the recording against a count that does not come from the recorder: the number of environment reads the driver's source says this scenario makes. That count is one and the recording has none, so the check fails and names the variable.
 
-Extensions are AILANG packages under `packages/`. Enable one by listing it in `extensions.order` in your profile's `config.json`. Those marked ✓ are on in the default profile.
+Motoko then restores the file byte for byte. The [run note](docs/motoko-dst-demo-run-2026-10-04.md) records one such run.
 
-| Extension | Default | Purpose | Requires |
-|---|---|---|---|
-| context_mode | ✓ | Context-efficient tool execution | `context-mode` npm package |
-| exa_search | ✓ | Web search via Exa API | `EXA_API_KEY` |
-| scratchpad | ✓ | Persistent evaluation cells in Python, JS, AILANG and Lean | Lean cells need `--with-lean` |
-| compaction_ai | ✓ | AI-powered conversation compaction | |
-| compaction_structural | ✓ | Structural conversation compaction | |
-| empty_stop_guard | ✓ | Continues once when a model returns an empty stop response | |
-| progress_contract_guard | ✓ | Continues when a stop candidate reports the task as still in progress | |
-| repetition_guard | ✓ | Breaks no-progress loops of repeated tool calls or answers | |
-| herdr | ✓ | Delegates sub-tasks to coding agents in herdr panes | A herdr pane; inert anywhere else |
-| agentcli | | Delegates sub-tasks to subscription-authenticated coding-agent CLIs | `codex` or `claude` CLI |
-| a2a | | Delegates to configured A2A agents | Agent endpoints |
-| compose | | Multi-agent composition | Subagent model (optional). Highly experimental, partly non-functional |
-| mcp | | MCP protocol bridge | MCP server endpoints |
-| omnigraph | | Graph-based code operations | `omnigraph` CLI |
-| microrag | | Just-in-time knowledge retrieval via `ailang micro-rag` | |
-| ailang_docs | | AILANG documentation lookups as typed tools | A workdir with an `ailang.toml` |
-| ailang_tools | | AILANG-aware file tools: `ailang check` after every `.ail` write or edit | |
-| decision_framework | | Injects a four-decision ladder into the system prompt | |
-| skills | | Skills as `SKILL.md` folders, indexed in one `Skill` tool and loaded on demand | A `.motoko/skills` folder |
+---
+
+## Key Features
+
+- **Deterministic simulation** - The production driver runs against a seeded world of model replies, tool results, approvals and virtual time
+- **Fault injection** - Modeled provider errors, tool failures, correlation mismatches, approval denials and deadlines
+- **Record and replay** - Recording ports turn a run into an execution program that replay serves again and checks
+- **Trace invariants** - 13 families, including tool pairing, budget accounting and journal fold; each reports whether it ran and on how much input
+- **Mutation testing** - Source mutants and negative controls show that each check can fail, and which defects no check sees
+- **SMT contracts** - Z3-verified contracts on pure core functions, classified as substantive, tautology or spec-equals-body
+- **Effect-typed extensions** - A hook's signature states the effects it may perform, and a run can withhold a capability
+- **Durable sessions** - A session journal, checked reconstruction on resume, and park/wake for external waits
+- **Agent-written** - Developed by coding agents, with delegation through [herdr](https://herdr.dev) and an [agent sandbox](.devcontainer/agent_sandbox/README.md)
+
+Learn more: [DST technical report](papers/motoko-dst-report/DRAFT-current.md) | [Demo run](docs/motoko-dst-demo-run-2026-10-04.md) | [Scope notes](papers/motoko-dst-report/SCOPE-current.md) | [Design archive](.agent/projects/)
+
+---
+
+## Deterministic Simulation Testing
+
+Motoko's core reaches the model, tools, files, environment, clock and approvals only through ports. Each port takes an explicit `WorldState` and returns its successor. A test swaps the live ports for a simulated world and runs the same production driver:
+
+1. **Generate** - A seeded generator answers each request the driver makes and injects faults: provider errors, tools that fail, answer late or answer the wrong call, and denied approvals. Time is virtual
+2. **Record** - Recording ports capture every interaction as an execution program
+3. **Replay** - The driver runs again against that program. Replay checks that it makes the same requests and consumes every recorded interaction
+4. **Judge** - Each run's trace is checked against 13 invariant families, such as tool pairing, budget accounting and journal fold. Each family reports whether it ran and on how much input
+5. **Keep** - A failure the nightly corpus finds is promoted into the fixed corpus as an exact program, before or with its fix
+
+CI runs the fixed corpus on every pull request and a rotating corpus every night, whose seed window changes with the day. A result is scoped to a versioned execution profile, which names the installed extensions and what is excluded. `make dst` runs the full sweep of 53 targets.
+
+Learn more: [DST technical report](papers/motoko-dst-report/DRAFT-current.md) | [Ports](src/core/ports.ail) | [Invariants](src/core/dst_invariants.ail) | [CI corpora](.github/workflows/dst-corpora.yml)
+
+---
+
+## Mutation Testing
+
+Motoko mutates its own source to test its tests: a check covers a rule only when breaking that rule makes that check fail. The procedure runs when a piece of work is handed in for acceptance:
+
+1. **One mutant per rule** - For each rule the design decision states, write a source edit that breaks that rule and nothing else
+2. **Predict** - Name the check that should fail for each mutant, before running anything
+3. **Run** - Apply one mutant at a time, run the checks, restore the source
+4. **Judge** - A kill is the named check failing. A different check failing, a compile error, a crash or a timeout is not a kill
+5. **Follow up** - A survivor is a finding. It gets a new check, or a sentence on why no input can tell the two versions apart
+
+The table of mutants and results is committed with the work as evidence. This is a review step and not a CI gate, since each mutant costs a rebuild and a test run. Two cheaper forms are built in: `make verify_mutations` runs in CI and mutates guards under Z3 contracts (it edits files in place, so run it alone locally), and the DST suites change one field of a valid input per row to test their validators.
+
+Learn more: [The rule](.agent/meta-decisions/mutate-each-stated-rule-once-and-see-its-test-fail.md) | [An acceptance run](.agent/projects/011_improve_test_axises/evidence/judge-recoveries/acceptance-ce9cb247/README.md) | [The spike that found two gaps](.agent/projects/011_improve_test_axises/NOTE-spike-findings-mutation-operator-feasibility.md)
+
+---
+
+## Limits
+
+- **Simulation boundary** - The modeled environment excludes the TypeScript host, the operating system and external services; extension coverage is specific to a profile
+- **Specifications** - Invariants address declared structural properties; contracts cover a small subset of pure functions
+- **Oracle sensitivity** - Mutants are chosen by hand and give local evidence; there is no drawn mutant population and no mutation score
+- **External validity** - Simulated runs say nothing about model quality or task success
+
+---
 
 ## Development
 
 ```bash
-make build              # Full build: sync packages + check_core + build_tui
-make check_core         # Type-check src/core and boot-probe the active profile's extensions
-make test               # Core runtime tests
-make test_integration   # Integration tests
-make verify_core        # Z3 contract verification of the pure core modules
-make dst                # Deterministic simulation testing sweep
+make build         # Sync packages, type-check the core, build the TUI
+make test          # Core runtime tests
+make verify_core   # Z3 contract verification
+make dst           # Full simulation sweep
 ```
 
-TypeScript frontend tests: `cd src/tui && bun run test`.
+**Guides:**
+- [Running Motoko](docs/running.md) - Agent sandbox, dev container, native install and usage
+- [Configuration](docs/configuration.md) - Profiles and model identifiers
+- [Extensions](docs/extensions.md) - The extensions in this repo and how to write one
+- [CONTRIBUTING.md](CONTRIBUTING.md) - Issue routing and contracts on `src/core/`
 
-## Project structure
+---
+
+## Project Structure
 
 ```
 motoko_agent/
-├── src/
-│   ├── core/                   AILANG runtime (agent loop, session, journal, tools, DST drivers)
-│   │   └── ext/                Extension host and the generated registry
-│   ├── tui/                    TypeScript terminal UI and launcher (pi-tui)
-│   ├── eval/                   Journal evaluation (admission runs, candidate checks)
-│   └── examples/
-├── packages/                   Extension packages (motoko-ext-*), the extension ABI, conformance suite
-├── scripts/                    Install, run, smoke and verification scripts
-├── tools/                      Repo tooling (PR pipeline, registry generator, code graph, inventories)
-├── benchmarks/                 Benchmark harness
-├── docs/                       Running, configuration and extension guides
-├── .devcontainer/              Dev container profiles and the agent sandbox
-├── .motoko/config/             JSON profile configs
-├── .agent/                     Design archive (projects, ADRs, plans, summaries, PR records)
-├── omnigraph/                  Graph schema, queries, seed
-└── papers/                     Research paper reading list and the DST report
+├── src/core/       # Production runtime, simulation models, invariants, journal
+├── src/tui/        # TypeScript host and terminal UI
+├── src/eval/       # Journal-derived evaluation
+├── packages/       # Extension packages, extension ABI, conformance suite
+├── scripts/dst/    # Simulation runners, corpus gates and controls
+├── docs/           # Running, configuration and extension guides
+├── papers/         # DST technical report
+└── .agent/         # Design archive (ADRs, plans, reviews, PR records)
 ```
 
-## Contributing
+---
 
-Bug reports, feature requests, and PRs welcome. The runtime spans two layers — Motoko (this repo) and AILANG (the language it's written in) — and each has its own reporting channel. See [CONTRIBUTING.md](./CONTRIBUTING.md) for the routing table and how to file AILANG-side issues via GitHub, the `ailang messages` CLI, or the public `submit_feedback` MCP tool.
-
-## Reference
-
-Motoko is heavily inspired by and borrows from the following projects:
-
-- [FoundationDB](https://www.foundationdb.org/files/fdb-paper.pdf) and [Antithesis](https://antithesis.com/docs/resources/deterministic_simulation_testing/) — deterministic simulation testing
-- [Pi Coding Agent](https://mariozechner.at/posts/2025-11-30-pi-coding-agent/) by Mario Zechner — extension philosophy
-- [Oh-My-Pi](https://github.com/can1357/oh-my-pi) — efficient tools
-- [context-mode](https://github.com/mksglu/context-mode) — context-efficient execution
-- [little-coder](https://github.com/itayinbarr/little-coder) — benchmark harness
-
-All credit for these ideas goes to those awesome projects.
+*For AI agents: Coding-agent harness written in AILANG, with deterministic simulation testing of its production session driver. Run `ailang prompt` before writing `.ail` files and `make check_core` after changing `src/core`. See [CONTRIBUTING.md](CONTRIBUTING.md) for contract rules and issue routing.*
