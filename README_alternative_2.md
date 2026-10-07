@@ -6,7 +6,7 @@ Motoko is an experimental coding-agent harness implemented in [AILANG](https://g
 
 Motoko's own runtime is the principal system under test. Development follows an agent-written-code model, with contributions from Motoko itself and other coding agents. The repository therefore provides a concrete setting for studying the verification of AI-generated software, including the adequacy of its tests and the sensitivity of its test oracles: the mechanisms that determine whether an execution is correct.
 
-The intended audience includes agent-system developers, software-testing practitioners and researchers working on program verification, reproducibility and AI-assisted software engineering.
+<p align="center"><img src="assets/motoko.png" alt="Motoko" /></p>
 
 ## Contents
 
