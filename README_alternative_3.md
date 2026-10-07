@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/motoko.png" alt="Motoko" width="320">
+  <img src="assets/motoko.png" alt="Motoko" width="640">
 </p>
 
 # Motoko: Deterministic Simulation Testing for an Agent Harness
