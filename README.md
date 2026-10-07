@@ -159,6 +159,7 @@ motoko_agent/
 Motoko is inspired by and borrows from these projects:
 
 - **[Pi Coding Agent](https://mariozechner.at/posts/2025-11-30-pi-coding-agent/)** by Mario Zechner - Extension philosophy
+- **[pi-tui](https://github.com/badlogic/pi-mono)** by Mario Zechner - The terminal UI library that Motoko's TUI is built on
 - **[Oh-My-Pi](https://github.com/can1357/oh-my-pi)** - Efficient tools
 - **[little-coder](https://github.com/itayinbarr/little-coder)** - Benchmark harness
 
