@@ -2664,16 +2664,20 @@ verify_herdr_owner_tag:
 # extensions.strict (`.motoko/config/<profile>/config.json`): a profile that
 # names an extension which is not installed, or one that registers no
 # capability, must refuse to start rather than run with less than it declares.
-# Three arms on throwaway profiles: strict + an uninstalled name exits 2 with the
-# JSON error line; lax + the same name builds an empty registry; strict + an
-# extension that registers nothing (test_dummy, EXT_DUMMY_REGISTER_NOTHING=1)
-# exits 2. AILANG_FS_SANDBOX is cleared: inside a Motoko session the TUI pins it
-# to the workdir, which would make the mktemp profile unreadable.
+# Four arms on throwaway profiles: strict + an uninstalled name exits 2 with the
+# JSON error line; lax + the same name builds an empty registry; strict + a
+# registration with no capability atom exits 2; lax + the same registration
+# omits it with a warning. No installable extension registers nothing, and one
+# that did so on a condition would fail the registration-shape gate
+# (make ext_hook_scope), so the script builds the empty registration and hands
+# it to the registry's own boundary, `admit_registration`. AILANG_FS_SANDBOX is
+# cleared: inside a Motoko session the TUI pins it to the workdir, which would
+# make the mktemp profile unreadable.
 .PHONY: verify_strict_extensions
 verify_strict_extensions:
 	@d=$$(mktemp -d); trap 'rm -rf "$$d"' EXIT; mkdir -p "$$d/.motoko/config/probe"; \
-	run() { env -u AILANG_FS_SANDBOX AILANG_RELAX_MODULES=1 "$$@" ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry main \
-	    scripts/verify_strict_extensions.ail -- "$$d" 2>/dev/null; }; \
+	run() { env -u AILANG_FS_SANDBOX AILANG_RELAX_MODULES=1 ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry main \
+	    scripts/verify_strict_extensions.ail -- "$$d" "$$@" 2>/dev/null; }; \
 	printf '{"agent":{"model":"stub"},"extensions":{"order":["no_such_ext"],"strict":true}}\n' > "$$d/.motoko/config/probe/config.json"; \
 	out=$$(run); rc=$$?; \
 	if [ $$rc -eq 2 ] && echo "$$out" | grep -q 'extensions.strict.*no_such_ext.*refusing to start'; then echo "OK strict: an uninstalled extension refused to start (exit 2)"; \
@@ -2682,10 +2686,14 @@ verify_strict_extensions:
 	out=$$(run); rc=$$?; \
 	if [ $$rc -eq 0 ] && echo "$$out" | grep -q 'OK registry built with 0 entries' && echo "$$out" | grep -q 'not installed; skipped'; then echo "OK lax: skipped with a warning"; \
 	else echo "FAIL lax: rc=$$rc"; echo "$$out" | tail -3; echo "verify_strict_extensions: the non-strict path changed"; exit 1; fi; \
-	printf '{"agent":{"model":"stub"},"extensions":{"order":["test_dummy"],"strict":true}}\n' > "$$d/.motoko/config/probe/config.json"; \
-	out=$$(run EXT_DUMMY_REGISTER_NOTHING=1); rc=$$?; \
+	printf '{"agent":{"model":"stub"},"extensions":{"order":[],"strict":true}}\n' > "$$d/.motoko/config/probe/config.json"; \
+	out=$$(run empty); rc=$$?; \
 	if [ $$rc -eq 2 ] && echo "$$out" | grep -q 'extensions.strict.*registers no capability atom'; then echo "OK strict: an empty registration refused to start (exit 2)"; \
-	else echo "FAIL strict/empty: rc=$$rc"; echo "$$out" | tail -3; echo "verify_strict_extensions: a strict profile started without an extension that registered nothing"; exit 1; fi
+	else echo "FAIL strict/empty: rc=$$rc"; echo "$$out" | tail -3; echo "verify_strict_extensions: a strict profile started without an extension that registered nothing"; exit 1; fi; \
+	printf '{"agent":{"model":"stub"},"extensions":{"order":[],"strict":false}}\n' > "$$d/.motoko/config/probe/config.json"; \
+	out=$$(run empty); rc=$$?; \
+	if [ $$rc -eq 0 ] && echo "$$out" | grep -q 'OK empty registration omitted (strict=false)' && echo "$$out" | grep -q 'registers no capability atom; omitted from the registry'; then echo "OK lax: an empty registration omitted with a warning"; \
+	else echo "FAIL lax/empty: rc=$$rc"; echo "$$out" | tail -3; echo "verify_strict_extensions: the non-strict path for an empty registration changed"; exit 1; fi
 
 # 037 ADR-001 A3, A1 and A2: a broken skill tree refuses startup. One fixture
 # workdir per rule of D1 (R1 three ways, V1-V8 with V4's four cases, one with

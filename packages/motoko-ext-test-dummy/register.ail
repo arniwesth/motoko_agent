@@ -111,11 +111,6 @@ func dummy_finalize(ctx: ProcessCtx, candidate: string) -> FinalizeOutcome ! {Pr
 -- host-config-agnostic. The caller (generated registry) passes RuntimeConfig
 -- which unifies with the type variable at call site.
 export func register_with_config(_cfg: a) -> ExtRegistration ! {Env} {
-  -- EXT_DUMMY_REGISTER_NOTHING=1 (test-only): register no capability atom, so
-  -- the extensions.strict "registers no capability" arm has an extension that
-  -- reaches it (make verify_strict_extensions). No shipped extension does.
-  if getEnvOr("EXT_DUMMY_REGISTER_NOTHING", "") == "1" then { config: dummy_config_json(load_dummy_config()), caps: [] }
-  else
   -- Item 4 (6.0 trimming): only the atoms this extension binds with a real body.
   {
     config: dummy_config_json(load_dummy_config()),

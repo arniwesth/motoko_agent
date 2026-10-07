@@ -3,25 +3,51 @@
 --
 -- Usage (driven by `make verify_strict_extensions`, which writes the profile):
 --   ailang run ... scripts/verify_strict_extensions.ail -- <workdir>
+--   ailang run ... scripts/verify_strict_extensions.ail -- <workdir> empty
 -- The profile `probe` under <workdir>/.motoko/config/ names one extension that
 -- is not installed. With extensions.strict = true the registry build must exit
 -- 2 with a JSON error line before any session starts; with strict = false it
 -- must skip the name (with a warning) and build an empty registry.
+--
+-- `empty` asks the other question: an extension that registers no capability
+-- atom. No installable extension does, and the registration rule (031 ADR-001
+-- D2 (a)) rejects one that would do so on a condition, so the empty
+-- registration is built here and handed to the registry's own boundary,
+-- `admit_registration`, with the configuration the profile loaded. Strict must
+-- exit 2 with a JSON error line; lax must omit it with a warning.
 module scripts/verify_strict_extensions
 
 import std/io (println)
 import std/env (getArgs)
+import std/json (jo)
+import std/option (Some, None)
 import std/list as List (length)
-import src/core/config (load_config_from_cli)
+import src/core/config (RuntimeConfig, load_config_from_cli)
 import src/core/ext/runtime (init_runtime_with_config)
+import src/core/ext/registry_generated (admit_registration)
+import pkg/sunholo/motoko_ext_abi/types (ExtRegistration)
+
+func probe_config(workdir: string) -> RuntimeConfig ! {Env, FS, IO} {
+  load_config_from_cli(["--workdir", workdir, "--profile", "probe"])
+}
 
 export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
   match getArgs() {
     [workdir] => {
-      let cfg = load_config_from_cli(["--workdir", workdir, "--profile", "probe"]);
+      let cfg = probe_config(workdir);
       let rt = init_runtime_with_config(cfg);
       println("OK registry built with ${show(List.length(rt.registry.entries))} entries (strict=${show(cfg.extensions.strict)})")
     },
-    _ => println("FAIL usage: verify_strict_extensions.ail -- <workdir>")
+    [workdir, mode] =>
+      if mode != "empty" then println("FAIL usage: verify_strict_extensions.ail -- <workdir> [empty]")
+      else {
+        let cfg = probe_config(workdir);
+        let nothing: ExtRegistration = { config: jo([]), caps: [] };
+        match admit_registration("probe_empty#0", nothing, cfg) {
+          Some(_) => println("FAIL an empty registration was admitted (strict=${show(cfg.extensions.strict)})"),
+          None => println("OK empty registration omitted (strict=${show(cfg.extensions.strict)})")
+        }
+      },
+    _ => println("FAIL usage: verify_strict_extensions.ail -- <workdir> [empty]")
   }
 }
