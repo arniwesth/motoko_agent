@@ -24,6 +24,7 @@ the other three record what is known. The operator asked for each step on 2026-1
 - docs(039): literature review — prior art for combining DST with mutation testing
 - docs(039): thesis note narrowed after the literature review
 - docs(039): publication considerations in their own note
+- docs(039): research note — a mutator for AILANG, shaped like Stryker
 
 12 files changed.
 
@@ -82,9 +83,14 @@ The DST report draft's citation of the paper is #226.
   needs no new gate; and, if drawn mutants pay, a few mutants on the changed lines of each core
   change.
 
-It gets three small edits in the last commit: a pointer to the review, credit to hardware
+It gets three small edits in a later commit: a pointer to the review, credit to hardware
 verification for the stages in its §4.2, and "oracle gap" replaced, since that term is published
-with another meaning.
+with another meaning. The last commit adds §4.6, a mutator for AILANG shaped like Stryker: what
+transfers (operators filtered by the type checker, per-member reach, incremental mode, the state
+vocabulary), one mutator serving three judges (`ailang test`, `ailang verify`, the corpus gate),
+and why mutation switching does not transfer, so that a build per mutant stays unless AILANG gains
+incremental compilation or a schemata mode. It records what AILANG v0.47.2 offers today, checked
+on 2026-10-07, and two asks for upstream.
 
 ## What the literature review says
 
@@ -180,6 +186,11 @@ a paper or a post, so the other three documents record what is known.
   notes for the key's value finds nothing.
 - [x] **Every relative link in the four documents and the evidence README resolves, and every
   link label is defined.**
+- [x] **AILANG v0.47.2's commands were checked**, not quoted: `ailang dev ast-edit` replaces one
+  declaration by its parsed span; `ailang dev debug ast` prints the Core AST in ANF, with no
+  source positions in a 17-line dump of `recovery.ail`.
+- [ ] Stryker's mutation switching is described from general knowledge; its documentation on it
+  was not read for the note. Its mutant-state definitions were.
 - [x] **The review lost nothing but publication advice.** Its section "What stays distinct, and
   what a paper must do differently" is in the paper note word for word, and the conclusion's
   verdict paragraph stays.
