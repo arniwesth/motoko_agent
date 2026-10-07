@@ -138,6 +138,9 @@ import src/core/phase_vocab (
   LedgerRecord, WireRecord, CompactionStageRecord, DecisionRecord,
   LedgerEvent, RunSummary, TotalsUpdated, CostExhausted, DoneEvent, CheckpointTaken,
   StreamDelta,
+  -- 011 ADR-003 D3: the record that carries the DRIVER's own step number, read
+  -- by `prepared_steps` in family 6.
+  ProviderCallPrepared,
   -- ADR-003 D1's journal class, read by the payload-equality rows below.
   HistorySeeded, HistoryAppended, HistoryReplaced, StateDelta, ParkEntered, WakeReceived, ParkEnteredInfo, OperatorWait, wait_id,
   CheckpointInfo,
@@ -219,7 +222,10 @@ import src/core/ports (
 -- D8's compatibility rule applies to this artifact exactly as it does to the
 -- fault catalogue and the event vocabulary: a change to a family, a rule id or
 -- a pinned baseline is a version change.
-export pure func invariant_set_version() -> string { "invariant-set/1" }
+--
+-- `/2` at 011 ADR-003: two rule ids added, `outcome-finish-disagrees` (D2) and
+-- `driver-step-repeated` (D3). No id was renamed or removed.
+export pure func invariant_set_version() -> string { "invariant-set/2" }
 
 -- ============================================================================
 -- PART 1 — the thirteen families, and D7's own words for its twelve
@@ -341,11 +347,13 @@ export type Violation
   | DecisionBudgetExceeded(int, int)
   | RetryBoundExceeded(int, int)
   | ProviderStepRepeated(int, int)
+  | DriverStepRepeated(int, int)
   -- F7 checkpoint / compaction history
   | CheckpointChainBroken(string)
   | CompactionAfterExhausted(int)
   -- F8 outcome / summary agreement
   | OutcomeSummaryDisagree(string, string)
+  | OutcomeFinishDisagrees(string, string, string)
   | DoneEventDisagrees(string, string)
   | SummaryAbsentForOutcome(string)
   -- F9 replay consistency
@@ -399,9 +407,11 @@ export pure func violation_family(v: Violation) -> InvariantFamily {
     DecisionBudgetExceeded(_, _) => BoundedProgress,
     RetryBoundExceeded(_, _) => BoundedProgress,
     ProviderStepRepeated(_, _) => BoundedProgress,
+    DriverStepRepeated(_, _) => BoundedProgress,
     CheckpointChainBroken(_) => CheckpointHistory,
     CompactionAfterExhausted(_) => CheckpointHistory,
     OutcomeSummaryDisagree(_, _) => OutcomeAgreement,
+    OutcomeFinishDisagrees(_, _, _) => OutcomeAgreement,
     DoneEventDisagrees(_, _) => OutcomeAgreement,
     SummaryAbsentForOutcome(_) => OutcomeAgreement,
     ReplayRuleViolated(_, _) => ReplayConsistency,
@@ -444,9 +454,11 @@ export pure func violation_rule(v: Violation) -> string {
     DecisionBudgetExceeded(_, _) => "decision-budget-exceeded",
     RetryBoundExceeded(_, _) => "retry-bound-exceeded",
     ProviderStepRepeated(_, _) => "provider-step-repeated",
+    DriverStepRepeated(_, _) => "driver-step-repeated",
     CheckpointChainBroken(_) => "checkpoint-chain-broken",
     CompactionAfterExhausted(_) => "compaction-after-exhausted",
     OutcomeSummaryDisagree(_, _) => "outcome-summary-disagree",
+    OutcomeFinishDisagrees(_, _, _) => "outcome-finish-disagrees",
     DoneEventDisagrees(_, _) => "done-event-disagrees",
     SummaryAbsentForOutcome(_) => "summary-absent-for-outcome",
     ReplayRuleViolated(_, _) => "replay-rule-violated",
@@ -508,12 +520,16 @@ export pure func violation_message(v: Violation) -> string {
       "[retry-bound-exceeded] the run recorded ${seen} provider retries against a declared bound of ${budget}; D3's provider_error_retryable transition consumes step budget on every retry, so an unbounded retry loop is the shape D7's bounded-retry family exists to catch",
     ProviderStepRepeated(step, times) =>
       "[provider-step-repeated] provider step ${step} appears ${times} times in the interaction log; the cursor did not advance, which is cluster 1's frozen-cursor defect and F6's pinned index — a failure that crashes nothing and fires no other invariant",
+    DriverStepRepeated(step, times) =>
+      "[driver-step-repeated] ${times} ProviderCallPrepared records in the returned trace carry step ${step}; that number is the DRIVER's own step counter, and every continuation out of the provider-call arm adds one to it (011 ADR-003 D3), so two calls under one number mean the counter did not advance between them or went back — the shape of a retry that consumes no step budget. The interaction log is not read here and may be in order: the cursor it carries is `provider-step-repeated`'s",
     CheckpointChainBroken(detail) =>
       "[checkpoint-chain-broken] the checkpoint digest chain in the returned trace does not validate: ${detail}; the chain is what makes a resumed history the same history, and D7 keeps this family because the framework already owns it",
     CompactionAfterExhausted(pos) =>
       "[compaction-after-exhausted] a compaction stage record appears at position ${pos} after CompactionExhausted, which is a TERMINAL cause and not a stage outcome; compacting after exhaustion is a transition out of a terminal state",
     OutcomeSummaryDisagree(outcome, summary) =>
       "[outcome-summary-disagree] the returned outcome is '${outcome}' and the terminal RunSummary reports '${summary}'; D6.3 requires them to AGREE, and a run that returns Ok while its summary records an error is two answers to one question",
+    OutcomeFinishDisagrees(outcome, expected, seen) =>
+      "[outcome-finish-disagrees] the returned outcome is '${outcome}', which finishes '${expected}', and the terminal RunSummary reports finish_reason '${seen}'; 011 ADR-003 D2 makes the agreement BY REASON — Ok if and only if 'stop', and an Err with the one reason its error code implies — and `outcome-summary-disagree` cannot see this, because it reads the summary's error text and never its finish reason",
     DoneEventDisagrees(done, summary) =>
       "[done-event-disagrees] the DoneEvent reports '${done}' and the terminal state reports '${summary}'; D6.3 makes the DoneEvent's content an invariant-bearing quantity — which is exactly why it is Logical rather than DisplayOnly — so the two may not drift",
     SummaryAbsentForOutcome(outcome) =>
@@ -1567,16 +1583,63 @@ pure func contains_int(xs: [int], t: int) -> bool {
   }
 }
 
+-- 011 ADR-003 D3, the half that is sound for any single run: the DRIVER's own
+-- step numbers do not repeat. `provider_steps` above reads the step the
+-- recorder logs, which is the world's count of provider calls
+-- (`test/stub_step.ail`) and advances whether or not the driver's `step_idx`
+-- does — so a retry that consumes no step budget leaves that list in order and
+-- `provider-step-repeated` green. This reads the other channel: the `step` the
+-- driver itself writes on each `ProviderCallPrepared` in the returned trace.
+--
+-- NO REPEAT, and not "0, 1, 2, …". A park whose reply is dropped advances the
+-- step with no provider call, so a gap is legal on a run that parks; the no-gap
+-- statement is a check of the corpus gate, not a rule of this family.
+-- contracts: BLOCKED — RECURSIVE; the property worth stating quantifies over
+-- the list.
+pure func prepared_steps(rs: [LedgerRecord]) -> [int] {
+  match rs {
+    [] => [],
+    r :: rest =>
+      match r {
+        WireRecord(e) =>
+          match e {
+            ProviderCallPrepared(i) => i.step :: prepared_steps(rest),
+            _ => prepared_steps(rest)
+          },
+        _ => prepared_steps(rest)
+      }
+  }
+}
+
+-- `repeated_steps` with its own constructor, and deliberately not that function
+-- taking a constructor argument. The two rules read different channels and a
+-- finding has to say which one: the prototype of this rule reported a repeated
+-- driver step as `ProviderStepRepeated`, whose message says the cursor "did not
+-- advance" in an interaction log that was in order.
+-- contracts: BLOCKED — RECURSIVE; see `prepared_steps`.
+pure func repeated_driver_steps(all: [int], xs: [int], seen: [int]) -> [Violation] {
+  match xs {
+    [] => [],
+    s :: rest => {
+      let n = count_int(all, s);
+      let here = if n > 1 && not contains_int(seen, s) then [DriverStepRepeated(s, n)] else [];
+      here ++ repeated_driver_steps(all, rest, s :: seen)
+    }
+  }
+}
+
 export pure func bounded_progress_findings(x: ExecutionUnderTest) -> [Violation] {
   let trace = trace_of(x.result);
   let decisions = count_decisions(trace.records);
   let retries = count_variant(trace.records, "StreamErrorRetry");
   let steps = provider_steps(x.world.log);
+  let driver_steps = prepared_steps(trace.records);
   let d = if x.decision_budget >= 0 && decisions > x.decision_budget
           then [DecisionBudgetExceeded(x.decision_budget, decisions)] else [];
   let r = if x.retry_budget >= 0 && retries > x.retry_budget
           then [RetryBoundExceeded(x.retry_budget, retries)] else [];
   d ++ r ++ repeated_steps(steps, steps, [])
+    ++ repeated_driver_steps(driver_steps, driver_steps, [])
 }
 
 -- ============================================================================
@@ -1684,6 +1747,13 @@ export pure func outcome_label(r: DstResult) -> string {
 -- one" are the two disagreements, and both are readable off the returned trace
 -- alone — which is what D6.4's authoritativeness clause requires of an
 -- invariant.
+--
+-- 011 ADR-003 D2 ADDS THE REASON, because the error text is not enough. A
+-- provider failure finalized as a success keeps its error text and reports
+-- `stop`, and that run satisfied everything above. So: Ok if and only if the
+-- summary finished `stop`, and an Err finishes with the one reason its code
+-- implies. `OutcomeSummaryDisagree` keeps its meaning, the error text, and a
+-- result with no terminal summary is still `SummaryAbsentForOutcome`.
 export pure func outcome_agreement_findings(x: ExecutionUnderTest) -> [Violation] {
   match x.result {
     RunFailed(_) => [],
@@ -1698,11 +1768,51 @@ export pure func outcome_agreement_findings(x: ExecutionUnderTest) -> [Violation
             Ok(_) => if err == "" then [] else [OutcomeSummaryDisagree("ok", "error='${err}'")],
             Err(_) => if err == "" then [OutcomeSummaryDisagree("err", "error=''")] else []
           };
-          agree ++ done_agreement(rs, fin, err)
+          let reason = match run.outcome {
+            Ok(_) => if fin == "stop" then [] else [OutcomeFinishDisagrees("ok", "stop", fin)],
+            Err(e) => {
+              let implied = finish_reason_implied_by(e.code);
+              if fin == implied then []
+              else [OutcomeFinishDisagrees("err code=${e.code}", implied, fin)]
+            }
+          };
+          agree ++ reason ++ done_agreement(rs, fin, err)
         }
       }
     }
   }
+}
+
+-- D2's TABLE: the finish reason an Err outcome's code implies. Stated HERE and
+-- not imported from the driver. `session.decision_fail_reason` makes the same
+-- mapping when it finalizes, and an oracle that asked it would agree with the
+-- driver by construction — including on the day the driver's mapping is the
+-- defect.
+--
+-- KEYED ON STRINGS, so it fails toward red. The outcome carries the code as a
+-- string and the summary carries the reason as one, so a new code is not a
+-- compile error here: it falls to `error`, and a healthy run that finalizes it
+-- under a new reason is red until this table is edited on purpose. The same
+-- holds for a provider error that arrives carrying one of the three named
+-- codes. Four of the driver's failure reasons share the wire string `error`,
+-- and this cannot tell those four apart.
+--
+-- The contract is the half of "Ok if and only if `stop`" that this function
+-- owns: no failure code implies the success reason, whatever the code is.
+pure func finish_reason_implied_by(code: string) -> string
+  ensures { result != "stop" }
+  tests [
+    ("StepBudgetExhausted", "max_steps"),
+    ("BudgetExceeded", "cost_exhausted"),
+    ("ContextExhausted", "compaction_exhausted"),
+    ("E_PROVIDER_PROTOCOL", "error"),
+    ("a code this table does not name", "error")
+  ]
+{
+  if code == "StepBudgetExhausted" then "max_steps"
+  else if code == "BudgetExceeded" then "cost_exhausted"
+  else if code == "ContextExhausted" then "compaction_exhausted"
+  else "error"
 }
 
 pure func summary_error(e: LedgerEvent) -> string {
@@ -2287,7 +2397,7 @@ pure func test_rules_are_distinct_across_families() -> bool
   tests [((), true)]
   {
     let vs = sample_violations();
-    List.length(vs) == 40 && rules_distinct(vs, [])
+    List.length(vs) == 42 && rules_distinct(vs, [])
   }
 
 pure func rules_distinct(vs: [Violation], seen: [string]) -> bool {
@@ -2311,8 +2421,10 @@ pure func sample_violations() -> [Violation] {
    ToolCallUnpaired(0, "c"), ToolResultUncorrelated(0, "d"), DeniedCallDispatched("c"),
    TokenRegression("f", 1, 0), CostRegression(1, 0), NegativeCost(-1),
    DecisionBudgetExceeded(1, 2), RetryBoundExceeded(1, 2), ProviderStepRepeated(0, 2),
+   DriverStepRepeated(0, 2),
    CheckpointChainBroken("d"), CompactionAfterExhausted(0),
-   OutcomeSummaryDisagree("a", "b"), DoneEventDisagrees("a", "b"), SummaryAbsentForOutcome("a"),
+   OutcomeSummaryDisagree("a", "b"), OutcomeFinishDisagrees("a", "b", "c"),
+   DoneEventDisagrees("a", "b"), SummaryAbsentForOutcome("a"),
    ReplayRuleViolated("r", "d"), InteractionsUnconsumed(2, 1),
    FaultWithoutClass(0, "k"), FaultClassUnknown(0, "c"), CommitUnderFault(0, "c"),
    NegativeAdvance(0, -1), ChunkOffsetRegression(0, 1, 0), DeadlineDerivation(0, "d"),
@@ -2360,6 +2472,35 @@ pure func messages_name_their_rule(vs: [Violation]) -> bool {
 pure func starts_with_bracketed(msg: string, rule: string) -> bool {
   Str.startsWith(msg, "[${rule}] ")
 }
+
+-- 011 ADR-003 D3 over the trace alone, both directions. The rows that evaluate
+-- the whole set on a fixture are in scripts/dst/invariants_dst.ail, and no
+-- workflow runs `make invariants`; this row and the table's own are what CI
+-- runs of the two rules. A GAP is silent and a REPEAT is named once per step,
+-- with the step and how many records carry it.
+pure func d3_prepared(step: int) -> LedgerRecord {
+  WireRecord(ProviderCallPrepared({ step: step, msg_count: 1, estimated_input_tokens: 0,
+    system_prefix_count: 0, system_prefix_chars: 0, system_prefix_digest: "",
+    payload_digest: "", model: "m" }))
+}
+
+pure func test_driver_steps_may_skip_and_may_not_repeat() -> bool
+  tests [((), true)]
+  {
+    let found = \rs. repeated_driver_steps(prepared_steps(rs), prepared_steps(rs), []);
+    let thrice = found([d3_prepared(0), d3_prepared(4), w4_park("s.r0.0.p0", ["h1"]),
+                        d3_prepared(4), d3_prepared(4)]);
+    List.length(found([])) == 0
+      && List.length(found([d3_prepared(0)])) == 0
+      && List.length(found([d3_prepared(0), w4_park("s.r0.0.p0", ["h1"]), d3_prepared(2)])) == 0
+      && List.length(found([w4_park("s.r0.0.p0", ["h1"]), w4_park("s.r0.0.p0", ["h1"])])) == 0
+      && has_rule(found([d3_prepared(0), d3_prepared(1), d3_prepared(1)]), "driver-step-repeated")
+      && List.length(found([d3_prepared(1), d3_prepared(0), d3_prepared(1), d3_prepared(0)])) == 2
+      && (match thrice {
+            v :: [] => (match v { DriverStepRepeated(s, n) => s == 4 && n == 3, _ => false }),
+            _ => false
+          })
+  }
 
 -- PLAN-002 W4 Part 3: the park rows bite. A well-formed park and its wake are
 -- silent; each malformed field is named.
