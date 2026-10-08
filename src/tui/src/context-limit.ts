@@ -77,15 +77,21 @@ function joinNames(names: string[]): string {
  * The warning for a `context_limit_resolved` whose arm is `unknown`, or null for any other event
  * and any other arm. `disabled` is silent on purpose: it is declared in the profile, never
  * inferred, so whoever runs that profile already chose to have no window.
+ *
+ * `runModel` is the model the run's `session_start` named. The record names the model itself only
+ * for `model_not_in_catalogue` (`context_limit.ail`'s `limit_missing_model`); with a catalogue
+ * that is absent or does not decode its `model` is "", and the run's is the only name there is.
  */
 export function unknownContextLimitWarning(
   event: unknown,
   loadedExtensions: readonly string[] = [],
+  runModel = "",
 ): string | null {
   const source = sourceOf(event);
   if (source === null || source.arm !== "unknown") return null;
 
-  const subject = source.model !== "" ? ` for ${source.model}` : "";
+  const model = source.model !== "" ? source.model : runModel;
+  const subject = model !== "" ? ` for ${model}` : "";
   const why = [
     CATALOGUE_MISS[source.catalogue_miss] ?? source.catalogue_miss,
     PROFILE_MISS[source.profile_miss] ?? source.profile_miss,
@@ -106,19 +112,28 @@ export function unknownContextLimitWarning(
  *
  * The core emits `context_limit_resolved` at the shared per-run entry, and a TTY runtime serves
  * every follow-up turn as a new run, so an unfiltered warning would repeat under each prompt. The
- * key is the source itself: a `/model` switch to another uncatalogued model warns again, and a
- * resolution that became `bounded` (the profile or the catalogue was fixed) clears the key, so
- * going back to an unknown one warns again too.
+ * key is the model and the two misses: a `/model` switch to another model with no window warns
+ * again, and a resolution that became `bounded` (the profile or the catalogue was fixed) clears
+ * the key, so going back to an unknown one warns again too.
+ *
+ * The model is the run's, from `session_start`, which every run emits before its record (the
+ * startup banner and each turn's own both carry `model`). The record's own `model` cannot be the
+ * key: it is "" unless the miss is `model_not_in_catalogue`, so with no catalogue two different
+ * models would share one key and the second would never be warned about.
  */
 export class UnknownLimitWatch {
   private loadedExtensions: string[] = [];
+  private runModel = "";
   private warnedKey: string | null = null;
 
   observe(event: unknown): string | null {
     if (!event || typeof event !== "object") return null;
     const rec = event as Record<string, unknown>;
-    if (rec.type === "session_start" && Array.isArray(rec.loaded_extensions)) {
-      this.loadedExtensions = rec.loaded_extensions.filter((n): n is string => typeof n === "string");
+    if (rec.type === "session_start") {
+      if (typeof rec.model === "string" && rec.model !== "") this.runModel = rec.model;
+      if (Array.isArray(rec.loaded_extensions)) {
+        this.loadedExtensions = rec.loaded_extensions.filter((n): n is string => typeof n === "string");
+      }
       return null;
     }
     const source = sourceOf(event);
@@ -127,9 +142,10 @@ export class UnknownLimitWatch {
       this.warnedKey = null;
       return null;
     }
-    const key = `${source.model}|${source.profile_miss}|${source.catalogue_miss}`;
+    const model = source.model !== "" ? source.model : this.runModel;
+    const key = `${model}|${source.profile_miss}|${source.catalogue_miss}`;
     if (key === this.warnedKey) return null;
     this.warnedKey = key;
-    return unknownContextLimitWarning(event, this.loadedExtensions);
+    return unknownContextLimitWarning(event, this.loadedExtensions, this.runModel);
   }
 }
