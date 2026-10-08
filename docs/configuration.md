@@ -45,6 +45,18 @@ make init-config PROFILE=myprofile
 
 Per-extension JSON files are optional; if missing, hardcoded defaults apply.
 
+`extensions.strict` (default `false`) makes the runtime refuse to start, with
+an `error` naming the reason and exit code 2, when the profile would run with
+less than it declares:
+
+- an entry in `extensions.order` is not an installed extension,
+- an extension registers no capability, or
+- a compactor is loaded and the model's context limit is unknown, so the
+  compactor could never run (see [Model identifiers](#model-identifiers)).
+
+Without it the first two are skipped with a warning and the third starts with
+a warning.
+
 `tools.process_timeout` (a duration such as `"300s"`) sets the runtime's
 `--process-timeout`, the wall for `BashExec`/`RunTests` (30 s if unset); the
 `MOTOKO_PROCESS_TIMEOUT` env var overrides it for one run.
@@ -69,6 +81,15 @@ Model selection and model discovery are separate:
   under `context_limits`. Motoko uses them for context telemetry and
   compaction. Unknown or uncatalogued models have no known limit, so
   compaction is skipped rather than guessed from provider-family prefixes.
+  Motoko warns about this once when the session starts, naming the model, why
+  no limit was found and which loaded compactors cannot run; under
+  `extensions.strict` a profile that loads a compactor refuses to start
+  instead. To give such a model a window, add it under `context_limits`, or
+  set `agent.context_limit` (a positive token count) in the profile's
+  `config.json`. The profile value wins over the catalogue, because the window
+  is a property of the endpoint serving the model. `agent.context_limit:
+  "disabled"` declares that the profile runs without a window; it is neither
+  warned about nor refused.
 - Dynamic suggestions from `OPENAI_BASE_URL` and OpenRouter are merged into the
   picker catalog at runtime. They do not override the selected runtime model.
 - Ollama models are selected explicitly with `ollama/<model>`, either in
