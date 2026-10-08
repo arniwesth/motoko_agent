@@ -12,8 +12,8 @@ A follow-up to #233, asked for by the operator on 2026-10-08. The README did not
 property-based testing, and it did not say that the simulation covers logical faults only. It now
 says both: the simulated faults are the ones at the agent's own boundary, hardware and network
 faults are not simulated, and contracts also run as property tests on generated inputs. The
-operator then asked for AILANG to be featured more: it is now the first Key Features bullet, and a
-"Why AILANG" section sits before the DST section.
+operator then asked for AILANG to be featured more: it has a Key Features bullet and a "Why
+AILANG" section. After review, both sit after the DST material, so DST stays first.
 
 ## Changes
 
@@ -40,8 +40,8 @@ operator then asked for AILANG to be featured more: it is now the first Key Feat
 | Key Features | "Fault injection" becomes "Logical fault injection" and says no hardware or network faults. The contracts bullet adds that `ailang test` runs a contract as a property test on generated inputs, where it can build the arguments |
 | Deterministic Simulation Testing | One paragraph: this is single-actor, logical-fault DST; physical faults and several actors are out of scope; the invariant families are properties in the property-based-testing sense, and what is generated is an execution of the production driver in a controlled environment. A link to 007 ADR-001 |
 | Limits | The simulation-boundary line names physical faults and several actors. A new line says a failing run is not minimized |
-| Key Features | A first bullet, "Written in AILANG", linking the new section |
-| Why AILANG, new, before the DST section | Five reasons the language suits verified software written by models: effects in the type, granted capabilities, deterministic semantics, proved contracts, and a toolchain an agent can drive. One real contract from `src/core/recovery.ail` with its `ailang verify` result. A paragraph on AILANG's limits: young, a pinned release, proofs over unbounded integers, bounded proofs for recursion, and builtins Z3 cannot encode |
+| Key Features | A bullet, "Written in AILANG", after the DST and mutation bullets, linking the new section |
+| Why AILANG, new, after the DST and mutation sections | Two reasons the language suits verified software written by models: declared effects with granted capabilities, and deterministic semantics. One real contract from `src/core/recovery.ail` with its `ailang verify` result. A paragraph on AILANG's limits: young, a pinned release, proofs over unbounded integers, bounded proofs for recursion, and builtins Z3 cannot encode |
 
 ## The name
 
@@ -70,10 +70,12 @@ Also taken, from an opinion with a factual part: the skipped property test in
 `context_limit.ail` is skipped because the generated input did not meet its `requires`, so "where
 it can build the arguments" was replaced.
 
-Open, for the operator: say that durable resume activates the fault catalogue's triggers for
-reconsidering the physical-fault exclusion, so "out of scope by decision" is not read as settled;
-and shorten "Why AILANG" to two reasons plus the example and move it after the DST section. The
-position before the DST section and the first Key Features bullet were the operator's request.
+The operator agreed with both remaining opinions on 2026-10-08, applied in the following commit.
+The DST section and the Limits line now say that durable resume is a trigger the fault catalogue
+names for reconsidering the physical-fault exclusion, and that crash-point and storage-durability
+coverage remains open. "Why AILANG" is cut to two reasons, the contract example with `requires`,
+`ensures` and `result` defined, and one paragraph of limits; it moves after the two testing
+sections, and its Key Features bullet moves below the DST and mutation bullets, so DST stays first.
 
 The reviewer found the scoped name consistent with 007 D1 and no naming violation, noting that
 009's ADR and its D5 and D28 notes carry the name. It found the retry sample, the release pin, the
