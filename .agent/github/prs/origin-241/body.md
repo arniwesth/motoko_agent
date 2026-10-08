@@ -161,8 +161,8 @@ two merged, and said to keep this in draft. Each finding was reproduced before i
 - **Fixed: the host's existence check did not match the sandboxed loader's.** A per-profile
   `config.json` that is a symlink made the host export the per-profile directory while the loader
   took the flat config. Commit `f753e904`, and the three launches above.
-- **Not fixed, and older than this PR: with `WORKDIR` beneath the repository the loader loads no
-  profile at all.** The host passes a relative `--workdir` for a workdir under its own cwd, and
+- **Not fixed, older than this PR, filed as #242: with `WORKDIR` beneath the repository the loader
+  loads no profile at all.** The host passes a relative `--workdir` for a workdir under its own cwd, and
   under the sandbox the runtime resolves that against the workdir. Reproduced in both layouts,
   with and without this change: `config_dir` is a path that does not exist and no extension is
   loaded. The limit is still read through the absolute `MOTOKO_PROFILE_DIR`. Before this PR that
@@ -179,8 +179,8 @@ two merged, and said to keep this in draft. Each finding was reproduced before i
 
 ## Not done here
 
-- **`WORKDIR` beneath the repository loads no profile.** See "Review". It wants its own issue and
-  a fix in how the workdir reaches the runtime, which several extensions also read.
+- **`WORKDIR` beneath the repository loads no profile.** #242. The fix is in how the workdir
+  reaches the runtime, which several extensions also read.
 - **No gate compares the host's directory with the core's.** See "Review".
 - **The host's own profile lookup does not know the flat layout either.** Read, not run:
   `profiles.ts`'s `resolveProfileConfigPath` looks in the per-profile directory and in
