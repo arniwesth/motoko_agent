@@ -1,0 +1,12 @@
+# The ambient inventory's builtin rule (`builtin_effects` in tools/ext_ambient_inventory/derive.py) -- mutgate spec
+# (013 GATE-mutation-red-submission-precondition.md). Added with the order change on PR #243, 2026-10-08.
+# fix_id <TAB> target_file <TAB> sed_expr <TAB> test_cmd ; run in a checkout nobody else is using:
+#   bash .agent/projects/013_core_architecture_for_dst/mutgate.sh --spec tools/ext_ambient_inventory/fixtures/mutgate.tsv --repo <checkout>
+# Each row breaks one side of the order and must turn the self-test's `builtin rule` line red:
+#   order          the order as it was before: an effect-variable caller outweighs a closed-row caller
+#   variable_only  a builtin reached only from effect-variable exports reads PURE
+#   labels         a labelled caller no longer decides when a closed-row caller is beside it
+# No `| grep -q` (pipefail + SIGPIPE scores the baseline red): the output goes to a log and the log is grepped.
+ai_builtin_rule_order	tools/ext_ambient_inventory/derive.py	s/        elif "PURE" in kinds:/        elif "PURE" in kinds and "effect-variable" not in kinds:/	python3 tools/ext_ambient_inventory/derive.py --self-test > /tmp/ai_builtin_rule_order.log 2>&1; grep -qF "ok  builtin rule" /tmp/ai_builtin_rule_order.log
+ai_builtin_rule_variable_only	tools/ext_ambient_inventory/derive.py	s/            out\[b\] = "effect-variable"/            out[b] = "PURE"/	python3 tools/ext_ambient_inventory/derive.py --self-test > /tmp/ai_builtin_rule_variable_only.log 2>&1; grep -qF "ok  builtin rule" /tmp/ai_builtin_rule_variable_only.log
+ai_builtin_rule_labels	tools/ext_ambient_inventory/derive.py	s/        if eff:/        if eff and "PURE" not in kinds:/	python3 tools/ext_ambient_inventory/derive.py --self-test > /tmp/ai_builtin_rule_labels.log 2>&1; grep -qF "ok  builtin rule" /tmp/ai_builtin_rule_labels.log
