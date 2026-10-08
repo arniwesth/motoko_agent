@@ -331,5 +331,15 @@ gates that CI, which has both at v0.52.5, showed red. The later sweeps set the v
   The workflow file parses, with six jobs and none `continue-on-error`.
 - **`make dst` on the coverage change** (`2412f3d4`), compiler and stdlib both at v0.52.5: exit 0,
   all 54 targets passed, 371 s on filled caches.
+- **After merging `main`** (`bf23ae73`). #239 and #241 landed on `main` after the coverage change
+  was pushed, both touching the workflow file and the Makefile, so this pull request stopped being
+  mergeable and CI did not start on `cc60b8d8`. One conflict, in the workflow: #241 added three
+  steps to the end of the `core` job on the lines above a comment this branch rewrote; both are
+  kept. The merge brings in `src/core/context_limit.ail`, `src/core/rpc.ail` and two verification
+  scripts that had only run on v0.47.2. On the merged tree, compiler and stdlib both at v0.52.5:
+  `ailang lock --check` says the lock is current; the shadow scan finds the same six candidates
+  in 496 files; `make check_core` 60 of 60; `make verify_profile_dir_agreement` agrees on all 14
+  layouts; `make verify_strict_context_limit`, `verify_core`, `verify_classify_check` and
+  `new_contract_policy` exit 0; `make dst` exits 0, all 54 targets passed, 344 s.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
