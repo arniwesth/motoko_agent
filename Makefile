@@ -3098,10 +3098,6 @@ deepseekv4_flash_compaction_heavy_headless: build
 install:
 	./scripts/install-prerequisites.sh	
 
-.PHONY: dst_l2
-dst_l2:
-	cd src/tui && bun test src/harness-dst.test.ts
-
 # MOTOKO_PROFILE_DIR names the directory the runtime's config loader reads.
 #
 # The host tells the runtime where the profile is twice: `--workdir`/`--profile`
@@ -3125,6 +3121,10 @@ dst_l2:
 .PHONY: verify_profile_dir_agreement
 verify_profile_dir_agreement:
 	@bun src/tui/scripts/verify-profile-dir-agreement.ts
+
+.PHONY: dst_l2
+dst_l2:
+	cd src/tui && bun test src/harness-dst.test.ts
 
 # Run all core runtime module tests
 test_core:
