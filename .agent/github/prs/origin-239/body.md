@@ -296,7 +296,9 @@ JSONL run, and the warning on plain stderr and in the transcript.
 - **Two of the three calls have no gate arm.** The first-task call was checked by hand (above).
   The resume call was not exercised at all.
 - **CI runs the 14 new TUI tests and no other TUI test file besides `harness-dst.test.ts`.** No
-  job runs the TUI's jest suite as a whole.
+  job runs the TUI's jest suite as a whole. The new step was green on its first CI run.
+- **Merging with #241.** A trial merge of the two heads is clean, and on the merged tree
+  `make dst_l2`, `make tui_context_limit` and #241's `make verify_profile_dir_agreement` pass.
 - **The TUI status-bar context counter is not touched, and is dead.** It reads a `context_usage`
   event the runtime has not emitted since `6350b7ad`. ADR-001 D1 names "rendering unmeasured in
   the TUI counter" as a follow-up; there is no live counter to render it in.
