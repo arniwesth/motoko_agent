@@ -182,7 +182,7 @@ that call it. `builtin_effects` ranked an effect-variable caller above a closed-
 v0.52.5's `std/list`, `mapE`, `filterE`, `foldlE` and `flatMapE` are effect-polymorphic and call
 `_list_length` directly, so the builtin had both a closed-row caller (`length`, `nth`, `last`)
 and row-variable callers, and read as unprovable. Two extensions call it directly and failed
-closed: `compaction_structural` (one call, in a test function) and `compose` (eighteen calls in
+closed: `compaction_structural` (one call, in a test function) and `compose` (nineteen calls in
 seven files).
 
 **The tool said two things that no longer agreed.** Its header comment said no export calling the
@@ -192,7 +192,7 @@ control names `_list_length` and says it "must NOT be a rejection". No stdlib be
 builtin with both kinds of caller, so the two had never met.
 
 **The operator's choice.** Two ways to close it were put to the operator on 2026-10-08: edit the
-nineteen call sites to use `std/list.length` and move the control to another builtin, or change
+twenty call sites to use `std/list.length` and move the control to another builtin, or change
 the order so that a closed-row caller is sufficient proof. The operator chose the second.
 
 **What changed.** The two branches in `builtin_effects` are swapped: a closed-row caller proves
@@ -219,6 +219,33 @@ self-test gains a `builtin rule` line that asserts the order on a synthetic stdl
 caller proves; a builtin reached only from an effect-variable export, only from a private helper,
 or from a labelled caller is still rejected. Three mutations, one per side, each turn that line
 red (`tools/ext_ambient_inventory/fixtures/mutgate.tsv`).
+
+## Review
+
+An independent review by Codex (`gpt-6.1-sol`) on 2026-10-08, of head `d9d1cf9f`, in its own
+detached worktree with a v0.52.5 it built itself from the tag. It was told to read the diff before
+this body and was given none of the author's conclusions. Its verdict: **merge after the listed
+fix.** It found no correctness defect in either changed gate.
+
+| # | Finding | Reproduced by the author | Disposition |
+|---|---|---|---|
+| 1 | **Three files are still outside blocking test coverage, for a reason that no longer holds.** `Makefile:3613` (`TEST_COVERAGE_SLOW`) excludes `src/core/session.ail`, `src/core/ext/runtime.ail` and `src/core/test/scripted_ports.ail` from `test_coverage`, and so from `make dst`. Their CI job, `coverage_slow`, has `continue-on-error: true` (`.github/workflows/verify-extensions.yml:215`), so a failure there cannot block a merge. Both places say to delete the exception once AILANG issue 1328 is fixed. | Yes. On v0.52.5, `python3 tools/test_coverage/derive.py --jobs 1 --timeout 600 --only` each of the three: 88 of 88 tests pass (41, 37, 10), the slowest file at 39 s against the 600 s cap on filled caches. The reviewer measured 78, 30 and 6 s. The upstream fixes are in v0.52.2 and later. | **Open, for the operator.** The exception predates this pull request and this pull request does not change it. Removing it touches the Makefile and a workflow, which is wider than what the bump needed to go green. |
+| 2 | **A count in this body was wrong.** `compose` calls `_list_length` nineteen times, not eighteen: `validator.ail:252` has two calls on one line, and the author counted lines. | Yes: 19 calls on 18 lines in 7 files, so 20 direct calls with `compaction_structural`'s one. | **Corrected above.** The commit message of `a8b3ab03` still says 18 and 19; it is pushed and is left as it is. |
+
+The reviewer's one opinion, not a defect: the depth canary's notes (`Makefile:394-402`) explain
+the instrument by saying AILANG has no tail-call elimination, and v0.52.0 added tail calls. The
+canary passes on v0.52.5. Whether its pinned depths still measure what the notes say was not
+looked into here.
+
+Claims the reviewer re-measured, each matching this body: the headless start times (2.28 s and
+2.25 s warm, 57.7 s cold, 36.6 s on v0.47.2 with the warning), the 29.3 MB artifact,
+`make check_core`, `make declared_vs_performed` (137 passed, group 3 at 13 of 13), the 29 gate
+fixtures with `--ailang-check`, the one builtin of 327 reclassified and none of 318 on v0.47.2,
+the inventory's verdicts, both mutation gates, the four name-resolution probes on both compilers,
+the shadow scan's figures, and that all 24 committed lockfiles pass `ailang lock --check`.
+
+Not re-run by the reviewer: the full 54-target sweep, `corpus_pr`, `eval_matrix`, CI, and the
+whole suite on v0.47.2.
 
 ## Test evidence
 
