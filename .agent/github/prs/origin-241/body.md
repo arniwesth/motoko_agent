@@ -16,9 +16,13 @@ the loader will actually load.
 
 It is finding 1 of the review of #239, taken apart from that PR.
 
-**It does not make the two agree in every launch.** It covers the layouts found so far, each
-checked on a real launch. Nothing compares the host's answer with the core's automatically, and
-one launch is known to still differ. See "Review" and "Not done here".
+**It does not make the two agree by construction.** The host restates the loader's rules. A new
+gate, `make verify_profile_dir_agreement`, compares the host's answer with the real loader's over
+nine layouts, and one launch outside those is known to still differ (#242). See "The gate" and
+"Not done here".
+
+**A workflow file changes:** `.github/workflows/verify-extensions.yml` gains a job,
+`profile_dir_agreement`. It is the first job with both bun and AILANG.
 
 **What changes for a flat-layout profile:**
 
@@ -32,19 +36,24 @@ one launch is known to still differ. See "Review" and "Not done here".
 - **`agentcli`'s lock file moves** to `.motoko/agentcli-exec.lock`, for the same reason.
 
 **What does not change:** a profile in the per-profile layout, which is every shipped one. No
-`.ail` file changes.
+`.ail` file under `src/` changes; one new script under `scripts/` is the gate's runtime half.
 
 ## Changes
 
 - fix(tui): MOTOKO_PROFILE_DIR names the directory the config loader reads, flat layout included
 - fix(tui): a profile config reached through a symlink does not count, as it does not for the sandboxed loader
+- ci: a gate that the host's MOTOKO_PROFILE_DIR is the directory the runtime's loader reads
 
-2 files changed.
+6 files changed, and the record of #242.
 
 | file | what |
 |---|---|
 | `src/tui/src/runtime-process.ts` | `loaderProfileDir(workdir, profile)`; `buildChildEnv` uses it; the `RuntimeProcess` constructor asks again after the mirrors, always |
 | `src/tui/src/harness-dst.test.ts` | one block, ten tests, which `make dst_l2` runs in CI |
+| `src/tui/scripts/verify-profile-dir-agreement.ts` | new: the gate's driver, nine layouts |
+| `scripts/verify_profile_dir_agreement.ail` | new: the gate's runtime half, the real loader |
+| `Makefile` | `verify_profile_dir_agreement` |
+| `.github/workflows/verify-extensions.yml` | a new job, `profile_dir_agreement`, with both toolchains |
 
 ## Governing docs
 
@@ -78,6 +87,37 @@ mirrors: a mirror can have just created the per-profile directory, and the loade
 over a flat config. Before this, the constructor overrode the variable only when an absolute
 profile had been mirrored under its basename.
 
+## The gate
+
+`make verify_profile_dir_agreement` asks both sides for real, for each of nine layouts:
+
+- **host:** the `MOTOKO_PROFILE_DIR` in the environment `buildChildEnv` builds;
+- **runtime:** the directory `config.load_config_from_cli` settles on, run under that same
+  environment with the `--workdir` the host would pass. That value is what a real start reports
+  as `config_dir`.
+
+It fails unless they are the same directory and the one the layout should give. The runtime half
+imports only `config`, so the whole gate takes about a second. It is not a whole session start:
+the constructor's "ask again after the mirrors" step is held by `dst_l2`, and this holds that the
+rule itself matches the loader.
+
+```
+OK a per-profile config: .motoko/config/p
+OK a flat config: .motoko
+OK both: .motoko/config/p
+OK neither: .motoko/config/p
+OK a flat config, and a per-profile config.json that is a symlink to a file outside the workdir: .motoko
+OK a flat config, and a per-profile config.json that is a symlink to a file inside the workdir: .motoko
+OK a flat config, and a per-profile directory that is a symlink: .motoko
+OK a per-profile config.json that is a symlink, and no flat config: .motoko/config/p
+OK a flat config, in a workdir that is itself a symlink: .motoko
+verify_profile_dir_agreement: host and runtime agree on all 9 layouts
+```
+
+It needs bun and AILANG, which no other target does, so it has its own CI job and is in neither
+`check_core` nor `DST_TARGETS`. If AILANG changes what its sandbox lets the loader see, this goes
+red and says which side reads what.
+
 ## Predicted outcome
 
 1. A flat config with `agent.context_limit: 200000` on an uncatalogued model resolves `bounded`,
@@ -98,9 +138,13 @@ profile had been mirrored under its basename.
    path, which is also the fallback, so it passed with the rule broken. It now asks about the flat
    config and fails alone.
 
+6. Each of four mutants of the gate's two subjects fails the layouts named for it. **Held**,
+   four of four, one of them on the runtime's side.
+
 After this lands, a flat-layout run with a profile override shows `context_limit_resolved` as
-`bounded`, and a change that takes the variable back to the per-profile path unconditionally
-turns the `dst_l2` job red.
+`bounded`; a change that takes the variable back to the per-profile path unconditionally turns
+the `dst_l2` job red; and a change to either side's rule that the other does not follow turns
+`profile_dir_agreement` red.
 
 ## Test evidence
 
@@ -111,6 +155,7 @@ On `883c6ccf` plus the commit, in a worktree, AILANG v0.47.2.
 | `make dst_l2` (`bun test src/harness-dst.test.ts`) | 19 pass, 0 fail; 10 of them new |
 | TUI jest (`src/.*\.test\.ts`) | 440 tests pass in 43 suites. 5 suites fail to load, as on `main` |
 | TUI `tsc --noEmit` | exit 0 |
+| `make verify_profile_dir_agreement` | nine OK lines, exit 0, under a second |
 | `make check_core`, `make dst` | not run: no `.ail` file changes. CI runs its jobs |
 
 Against the real runtime, headless, JSONL, through `scripts/run-agent.sh`, with a model id the
@@ -153,6 +198,17 @@ first commit and again after the second:
 | a config counts when its real path starts with the workdir's | the two shapes whose link stays inside |
 | the real path is compared with the unresolved path | the symlinked workdir, alone, on the second run (see prediction 5) |
 
+Four mutants for the gate, the failing layouts named before each run:
+
+| mutant | layouts that failed | what the gate said |
+|---|---|---|
+| host: a config counts when `fs.existsSync` says so | the three with a flat config and a symlinked per-profile one | host exports `.motoko/config/p`, loader reads `.motoko` |
+| host: the flat rule removed | the five that should give the flat directory | the same |
+| host: flat beats per-profile | "both" | host exports `.motoko`, loader reads `.motoko/config/p` |
+| runtime: `resolve_profile_dir` skips the flat config | the same five | host exports `.motoko`, loader reads `.motoko/config/p` |
+
+The CI job has not run yet when this was written; this pull request's own run is its first.
+
 ## Review
 
 Codex Sol (`gpt-6.1-sol`) reviewed head `9dd9116f` on 2026-10-08, with #239's head and with the
@@ -169,11 +225,10 @@ two merged, and said to keep this in draft. Each finding was reproduced before i
   already gave such a run the per-profile config's `agent.context_limit`; this PR extends the
   same to a flat config. So there a run can get a window from a config whose other settings were
   not loaded.
-- **The tests cannot show agreement with the core.** They assert the variable's value, and the
-  spawned "runtime" is a shell script. Agreement was shown by real launches, by hand, for the
-  layouts in the table. The reviewer suggests a gate that compares the exported directory with
-  the `config_dir` the real runtime reports. Not added: it needs a CI job with both bun and
-  AILANG, which no job has today.
+- **Taken: the host tests cannot show agreement with the core.** They assert the variable's
+  value, and the spawned "runtime" is a shell script. The reviewer suggested a gate that compares
+  the exported directory with the one the real runtime reports. That is
+  `make verify_profile_dir_agreement`, above, with its own CI job.
 - **Confirmed by its own runs:** the 15 tests then present, `tsc`, the flat override resolving
   `bounded`, and `compaction_ai` registering 42 and 3 where it registered 75 and 6.
 
@@ -181,7 +236,8 @@ two merged, and said to keep this in draft. Each finding was reproduced before i
 
 - **`WORKDIR` beneath the repository loads no profile.** #242. The fix is in how the workdir
   reaches the runtime, which several extensions also read.
-- **No gate compares the host's directory with the core's.** See "Review".
+- **The gate runs the loader, not a whole launch.** A real start through `scripts/run-agent.sh`
+  was done by hand for the launches in the table and is in no gate.
 - **The host's own profile lookup does not know the flat layout either.** Read, not run:
   `profiles.ts`'s `resolveProfileConfigPath` looks in the per-profile directory and in
   `MOTOKO_REPO`. So with a flat config and no `MODEL` in the environment, the host finds no
