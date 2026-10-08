@@ -3108,16 +3108,26 @@ install:
 # loader see. dst_l2 holds that restatement against a shell script standing in
 # for the runtime, which cannot tell whether the two agree.
 #
-# This asks both for real, over nine layouts (per-profile, the legacy flat
-# config, both, neither, three shapes of symlinked per-profile config, a
-# symlinked workdir): the variable in the environment `buildChildEnv` builds,
-# and the directory the loader settles on when run under that environment. It
-# fails unless they are the same directory and the one the layout should give.
-# The runtime half imports only `config`, so the whole gate is about a second.
+# This asks both for real, and through the spawn itself. For each of fourteen
+# layouts it constructs a real RuntimeProcess, so the mirrors run and the
+# environment and arguments are a launch's own; the "ailang" it spawns is a
+# wrapper that runs the runtime's loader with the `--workdir` and `--profile` it
+# was handed, in the environment it was handed. A layout passes when the loader
+# exited 0, its directory is the MOTOKO_PROFILE_DIR the child was given, and
+# that is the directory the layout should give. The layouts: per-profile, the
+# legacy flat config, both, neither, symlinked configs in either place, a
+# symlinked workdir, a profile directory named with leading dots, and
+# MOTOKO_REPO outside and inside the workdir.
 #
-# It needs bun AND ailang, which no other target does, so it has a CI job of its
-# own and is not in check_core or DST_TARGETS. Not covered: a workdir beneath
-# the host's cwd, where the loader finds no profile at all (#242).
+# A control runs first: with MOTOKO_PROFILE_DIR pointing nowhere the loader must
+# still name the real directory, which a stand-in that echoes the variable back
+# does not. The runtime half imports only `config`, so the whole gate is about
+# a second.
+#
+# It needs bun AND ailang, which no other target does. CI runs it as a step of
+# the core job, which is given bun for it; it is not in check_core or
+# DST_TARGETS. Not covered: a workdir beneath the host's cwd, where the loader
+# finds no profile at all (#242).
 .PHONY: verify_profile_dir_agreement
 verify_profile_dir_agreement:
 	@bun src/tui/scripts/verify-profile-dir-agreement.ts

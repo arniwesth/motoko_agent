@@ -11,16 +11,24 @@
 // host, including what the runtime's FS sandbox will let the loader see. A
 // restatement can drift, on either side and when AILANG changes its sandbox.
 // The host tests assert the variable's value against a shell script standing in
-// for the runtime, so they cannot notice. This asks both sides for real:
+// for the runtime, so they cannot notice. This asks both sides for real, and it
+// asks them through the spawn itself:
 //
-//   host     the MOTOKO_PROFILE_DIR in the environment `buildChildEnv` builds
-//   runtime  the directory the loader settles on, from
-//            scripts/verify_profile_dir_agreement.ail, run under that same
-//            environment with the `--workdir` the host would pass
+//   A real `RuntimeProcess` is constructed for each layout below, so the
+//   mirrors run and the environment and arguments are the ones a launch gets.
+//   Its "ailang" is a wrapper that takes the `--workdir` and `--profile` it was
+//   handed and runs the runtime's own loader with them, under the environment
+//   it was handed (scripts/verify_profile_dir_agreement.ail, which imports only
+//   `config`). The wrapper reports the loader's directory, its own
+//   MOTOKO_PROFILE_DIR, and the loader's exit status.
 //
-// for each layout below, and fails unless they are the same directory and the
-// one the layout says it should be. The runtime half imports only `config`, so
-// a run takes well under a second.
+// A layout passes when the loader exited 0, the two directories are the same,
+// and that directory is the one the layout says it should be.
+//
+// One control runs first. The loader does not read MOTOKO_PROFILE_DIR, so run
+// with that variable pointing nowhere it must still name the real directory. A
+// stand-in that only echoes the variable back would make every layout "agree";
+// the control is what tells it from the runtime.
 //
 // Not covered: a workdir beneath the host's cwd, where the loader finds no
 // profile at all (#242). That layout belongs here once it is fixed; today it
@@ -30,18 +38,15 @@ import { spawnSync } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { buildChildEnv, supervisorWorkdirArg } from "../src/runtime-process.js";
+import { RuntimeProcess, type AgentEvent } from "../src/runtime-process.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..", "..");
-const PROFILE = "p";
 const PROBE = "scripts/verify_profile_dir_agreement.ail";
 
-type Want = "per-profile" | "flat";
 type Layout = {
   name: string;
-  want: Want;
-  /** Build the layout under `real`; return the path the host is given as WORKDIR. */
-  build: (real: string, scratch: string) => string;
+  /** Build the layout under `real` and say what the host is launched with and what it should give. */
+  build: (real: string, scratch: string) => { workdir: string; profile?: string; repo?: string; want: string };
 };
 
 const writeConfig = (dir: string): string => {
@@ -50,114 +55,239 @@ const writeConfig = (dir: string): string => {
   fs.writeFileSync(file, "{}\n", "utf8");
   return file;
 };
-const perProfile = (workdir: string) => path.join(workdir, ".motoko", "config", PROFILE);
+const perProfile = (workdir: string, profile = "p") => path.join(workdir, ".motoko", "config", profile);
 const flat = (workdir: string) => path.join(workdir, ".motoko");
+const linkedConfig = (dir: string, target: string) => {
+  fs.mkdirSync(dir, { recursive: true });
+  fs.symlinkSync(target, path.join(dir, "config.json"));
+};
 
 const layouts: Layout[] = [
-  { name: "a per-profile config", want: "per-profile",
-    build: (w) => { writeConfig(perProfile(w)); return w; } },
-  { name: "a flat config", want: "flat",
-    build: (w) => { writeConfig(flat(w)); return w; } },
-  { name: "both", want: "per-profile",
-    build: (w) => { writeConfig(perProfile(w)); writeConfig(flat(w)); return w; } },
-  { name: "neither", want: "per-profile",
-    build: (w) => w },
-  { name: "a flat config, and a per-profile config.json that is a symlink to a file outside the workdir", want: "flat",
+  { name: "a per-profile config",
+    build: (w) => { writeConfig(perProfile(w)); return { workdir: w, want: perProfile(w) }; } },
+  { name: "a flat config",
+    build: (w) => { writeConfig(flat(w)); return { workdir: w, want: flat(w) }; } },
+  { name: "both",
+    build: (w) => { writeConfig(perProfile(w)); writeConfig(flat(w)); return { workdir: w, want: perProfile(w) }; } },
+  { name: "neither",
+    build: (w) => ({ workdir: w, want: perProfile(w) }) },
+  { name: "a flat config, and a per-profile config.json that is a symlink to a file outside the workdir",
     build: (w, scratch) => {
       writeConfig(flat(w));
-      fs.mkdirSync(perProfile(w), { recursive: true });
-      fs.symlinkSync(writeConfig(path.join(scratch, "outside")), path.join(perProfile(w), "config.json"));
-      return w;
+      linkedConfig(perProfile(w), writeConfig(path.join(scratch, "outside")));
+      return { workdir: w, want: flat(w) };
     } },
-  { name: "a flat config, and a per-profile config.json that is a symlink to a file inside the workdir", want: "flat",
+  { name: "a flat config, and a per-profile config.json that is a symlink to a file inside the workdir",
     build: (w) => {
       writeConfig(flat(w));
-      fs.mkdirSync(perProfile(w), { recursive: true });
-      fs.symlinkSync(writeConfig(path.join(w, "elsewhere")), path.join(perProfile(w), "config.json"));
-      return w;
+      linkedConfig(perProfile(w), writeConfig(path.join(w, "elsewhere")));
+      return { workdir: w, want: flat(w) };
     } },
-  { name: "a flat config, and a per-profile directory that is a symlink", want: "flat",
+  { name: "a flat config, and a per-profile directory that is a symlink",
     build: (w) => {
       writeConfig(flat(w));
       writeConfig(path.join(w, "elsewhere"));
       fs.mkdirSync(path.dirname(perProfile(w)), { recursive: true });
       fs.symlinkSync(path.join(w, "elsewhere"), perProfile(w));
-      return w;
+      return { workdir: w, want: flat(w) };
     } },
-  { name: "a per-profile config.json that is a symlink, and no flat config", want: "per-profile",
+  { name: "a per-profile config.json that is a symlink, and no flat config",
     build: (w) => {
-      fs.mkdirSync(perProfile(w), { recursive: true });
-      fs.symlinkSync(writeConfig(path.join(w, "elsewhere")), path.join(perProfile(w), "config.json"));
-      return w;
+      linkedConfig(perProfile(w), writeConfig(path.join(w, "elsewhere")));
+      return { workdir: w, want: perProfile(w) };
     } },
-  { name: "a flat config, in a workdir that is itself a symlink", want: "flat",
+  { name: "a flat config.json that is a symlink, and nothing else",
+    build: (w) => {
+      linkedConfig(flat(w), writeConfig(path.join(w, "elsewhere")));
+      return { workdir: w, want: perProfile(w) };
+    } },
+  { name: "a flat config, in a workdir that is itself a symlink",
     build: (w, scratch) => {
       writeConfig(flat(w));
       const link = path.join(scratch, "workdir-link");
       fs.symlinkSync(w, link);
-      return link;
+      return { workdir: link, want: flat(link) };
+    } },
+  { name: "a flat config, and a profile directory whose name starts with two dots",
+    build: (w) => {
+      writeConfig(flat(w));
+      writeConfig(path.join(w, "..personal"));
+      return { workdir: w, profile: "../../..personal", want: path.join(w, "..personal") };
+    } },
+  { name: "MOTOKO_REPO outside the workdir holds the profile (the spawn mirrors it)",
+    build: (w, scratch) => {
+      const repo = path.join(scratch, "repo");
+      writeConfig(perProfile(repo));
+      return { workdir: w, repo, want: perProfile(w) };
+    } },
+  { name: "MOTOKO_REPO inside the workdir holds the profile (the spawn mirrors it)",
+    build: (w) => {
+      const repo = path.join(w, "repo");
+      writeConfig(perProfile(repo));
+      return { workdir: w, repo, want: perProfile(w) };
+    } },
+  { name: "MOTOKO_REPO inside the workdir, and a local per-profile config.json that is a symlink",
+    build: (w) => {
+      const repo = path.join(w, "repo");
+      writeConfig(perProfile(repo));
+      linkedConfig(perProfile(w), writeConfig(path.join(w, "elsewhere")));
+      return { workdir: w, repo, want: perProfile(repo) };
     } },
 ];
 
-/** The directory the runtime's loader settles on, as an absolute path, or an error line. */
-function runtimeProfileDir(workdir: string, env: NodeJS.ProcessEnv): { dir: string } | { error: string } {
-  const bin = (process.env.AILANG_BIN ?? "").trim() || "ailang";
-  const run = spawnSync(
-    bin,
-    ["run", "--caps", "IO,Env,FS", "--entry", "main", PROBE, "--", supervisorWorkdirArg(workdir), PROFILE],
-    { cwd: repoRoot, env: { ...env, AILANG_RELAX_MODULES: "1" }, encoding: "utf8", timeout: 120_000 },
-  );
-  if (run.error) return { error: `could not run ${bin}: ${run.error.message}` };
-  const line = (run.stdout ?? "").split("\n").find((l) => l.startsWith("PROFILE_DIR "));
-  if (line === undefined) {
-    const tail = `${run.stdout ?? ""}${run.stderr ?? ""}`.trim().split("\n").slice(-3).join(" / ");
-    return { error: `the runtime printed no PROFILE_DIR line (exit ${run.status}): ${tail}` };
-  }
-  // Under AILANG_FS_SANDBOX a relative path is relative to the sandbox, which is the workdir.
-  return { dir: path.resolve(workdir, line.slice("PROFILE_DIR ".length).trim()) };
+function realAilang(): string | null {
+  const named = (process.env.AILANG_BIN ?? "").trim();
+  if (named !== "") return named;
+  const found = spawnSync("sh", ["-c", "command -v ailang"], { encoding: "utf8" });
+  const where = (found.stdout ?? "").trim();
+  return found.status === 0 && where !== "" ? where : null;
 }
 
-function main(): number {
-  // The host runs from the repo root (scripts/run-agent.sh), and `supervisorWorkdirArg` is
-  // relative to the cwd. MOTOKO_REPO is the loader's third place; these layouts are about the
-  // first two, so an ambient one is taken out.
-  process.chdir(repoRoot);
-  delete process.env.MOTOKO_REPO;
+/**
+ * The stand-in "ailang" the spawn runs. It is handed `run ... supervisor.ail -- <supervisor args>`;
+ * it takes `--workdir` and `--profile` from those, runs the real loader with them in the
+ * environment it was given, and says what came back on the wire the host reads.
+ */
+function writeWrapper(file: string, ailang: string): void {
+  const script = [
+    "#!/bin/sh",
+    'workdir=""; profile=""; past=0',
+    "while [ $# -gt 0 ]; do",
+    '  if [ "$past" = 0 ]; then [ "$1" = "--" ] && past=1; shift; continue; fi',
+    '  case "$1" in',
+    '    --workdir) workdir="$2"; shift 2 ;;',
+    '    --profile) profile="$2"; shift 2 ;;',
+    "    *) shift ;;",
+    "  esac",
+    "done",
+    `out=$(AILANG_RELAX_MODULES=1 '${ailang}' run --caps IO,Env,FS --entry main ${PROBE} -- "$workdir" "$profile" 2>/dev/null)`,
+    "status=$?",
+    "loaded=$(printf '%s\\n' \"$out\" | sed -n 's/^PROFILE_DIR //p' | head -n 1)",
+    `printf '{"type":"warning","message":"AGREEMENT|%s|%s|%s"}\\n' "$status" "$MOTOKO_PROFILE_DIR" "$loaded"`,
+  ].join("\n");
+  fs.writeFileSync(file, `${script}\n`, { mode: 0o755 });
+}
 
+/**
+ * The control: asked directly, with MOTOKO_PROFILE_DIR set to a directory that does not exist, the
+ * loader names the per-profile directory of a workdir that holds a per-profile config. Null when
+ * it does. The per-profile place and not the flat one, so that the control depends on the
+ * loader's first rule only and a change to any later rule is reported by the layouts, by name.
+ */
+function controlFailure(ailang: string): string | null {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "profile-dir-agreement-"));
+  try {
+    const workdir = path.join(scratch, "workdir");
+    writeConfig(perProfile(workdir));
+    const decoy = path.join(scratch, "not-a-profile-dir");
+    const run = spawnSync(
+      ailang,
+      ["run", "--caps", "IO,Env,FS", "--entry", "main", PROBE, "--", workdir, "p"],
+      {
+        cwd: repoRoot,
+        encoding: "utf8",
+        timeout: 120_000,
+        env: { ...process.env, AILANG_RELAX_MODULES: "1", AILANG_FS_SANDBOX: workdir, MOTOKO_PROFILE_DIR: decoy, MOTOKO_REPO: "" },
+      },
+    );
+    const line = (run.stdout ?? "").split("\n").find((l) => l.startsWith("PROFILE_DIR "));
+    const loaded = line === undefined ? "" : path.resolve(workdir, line.slice("PROFILE_DIR ".length).trim());
+    if (run.status !== 0 || loaded === "") return `the loader did not run to the end (exit ${run.status})`;
+    if (loaded === path.resolve(decoy)) return "the \"loader\" answered with MOTOKO_PROFILE_DIR itself, so it is not the runtime's loader";
+    if (loaded !== path.resolve(perProfile(workdir))) return `the loader names ${loaded} for a workdir holding only a per-profile config`;
+    return null;
+  } finally {
+    fs.rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+type Answer = { status: string; exported: string; loaded: string };
+
+function launch(workdir: string, profile: string): Promise<Answer | null> {
+  const events: AgentEvent[] = [];
+  return new Promise((resolve) => {
+    new RuntimeProcess(
+      "task", "http://127.0.0.1:1", "gate-model", workdir, profile, 1, "", "", "",
+      (e) => events.push(e),
+      () => {
+        const said = events
+          .map((e) => (e.type === "warning" ? e.message : ""))
+          .find((m) => m.startsWith("AGREEMENT|"));
+        if (said === undefined) return resolve(null);
+        const [, status, exported, loaded] = said.split("|");
+        resolve({ status, exported, loaded });
+      },
+    );
+  });
+}
+
+async function main(): Promise<number> {
+  // The host runs from the repo root (scripts/run-agent.sh): the child inherits that cwd and the
+  // `--workdir` it is given is relative to it.
+  process.chdir(repoRoot);
+  const ailang = realAilang();
+  if (ailang === null) {
+    console.log("FAIL no ailang: set AILANG_BIN or put ailang on PATH; this gate runs the runtime's own loader");
+    return 1;
+  }
+  const control = controlFailure(ailang);
+  if (control !== null) {
+    console.log(`FAIL control: ${control}`);
+    console.log("verify_profile_dir_agreement: the control failed, so no layout was asked");
+    return 1;
+  }
+  console.log("OK control: the loader's answer does not come from MOTOKO_PROFILE_DIR");
+  const savedRepo = process.env.MOTOKO_REPO;
   let failed = 0;
   for (const layout of layouts) {
     const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "profile-dir-agreement-"));
     try {
       const real = path.join(scratch, "workdir");
       fs.mkdirSync(real);
-      const workdir = layout.build(real, scratch);
-      const wanted = path.resolve(layout.want === "flat" ? flat(workdir) : perProfile(workdir));
-      const env = buildChildEnv(workdir, PROFILE, "", "");
-      const host = path.resolve(env.MOTOKO_PROFILE_DIR ?? "");
-      const runtime = runtimeProfileDir(workdir, env);
+      const built = layout.build(real, scratch);
+      const workdir = built.workdir;
+      const wrapper = path.join(scratch, "ailang-loader.sh");
+      writeWrapper(wrapper, ailang);
+      process.env.AILANG_BIN = wrapper;
+      if (built.repo === undefined) delete process.env.MOTOKO_REPO;
+      else process.env.MOTOKO_REPO = built.repo;
+
+      const answer = await launch(workdir, built.profile ?? "p");
       const shown = (dir: string) => path.relative(workdir, dir) || ".";
-      if ("error" in runtime) {
+      const fail = (why: string) => {
         failed += 1;
-        console.log(`FAIL ${layout.name}: ${runtime.error}`);
-      } else if (host !== runtime.dir) {
-        failed += 1;
-        console.log(`FAIL ${layout.name}: the host exports ${shown(host)}, the runtime's loader reads ${shown(runtime.dir)}`);
-      } else if (host !== wanted) {
-        failed += 1;
-        console.log(`FAIL ${layout.name}: host and runtime agree on ${shown(host)}, and this layout should give ${shown(wanted)}`);
+        console.log(`FAIL ${layout.name}: ${why}`);
+      };
+      if (answer === null) {
+        fail("the spawned child said nothing");
+      } else if (answer.status !== "0" || answer.loaded === "") {
+        fail(`the runtime's loader did not run to the end (exit ${answer.status}, directory '${answer.loaded}')`);
       } else {
-        console.log(`OK ${layout.name}: ${shown(host)}`);
+        // Under AILANG_FS_SANDBOX a relative path is relative to the sandbox, which is the workdir.
+        const loaded = path.resolve(workdir, answer.loaded);
+        const exported = path.resolve(answer.exported);
+        const wanted = path.resolve(built.want);
+        if (exported !== loaded) {
+          fail(`the host exports ${shown(exported)}, the runtime's loader reads ${shown(loaded)}`);
+        } else if (exported !== wanted) {
+          fail(`host and runtime agree on ${shown(exported)}, and this layout should give ${shown(wanted)}`);
+        } else {
+          console.log(`OK ${layout.name}: ${shown(exported)}`);
+        }
       }
     } finally {
       fs.rmSync(scratch, { recursive: true, force: true });
     }
   }
+  if (savedRepo === undefined) delete process.env.MOTOKO_REPO;
+  else process.env.MOTOKO_REPO = savedRepo;
+
   if (failed > 0) {
-    console.log(`verify_profile_dir_agreement: ${failed} of ${layouts.length} layouts disagree; MOTOKO_PROFILE_DIR would name a directory the loader does not read`);
+    console.log(`verify_profile_dir_agreement: ${failed} of ${layouts.length} layouts fail; MOTOKO_PROFILE_DIR would name a directory the loader does not read`);
     return 1;
   }
   console.log(`verify_profile_dir_agreement: host and runtime agree on all ${layouts.length} layouts`);
   return 0;
 }
 
-process.exit(main());
+main().then((code) => process.exit(code));
