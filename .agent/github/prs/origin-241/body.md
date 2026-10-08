@@ -180,7 +180,7 @@ loader see, this goes red and says which side reads what.
 After this lands, a flat-layout run with a profile override shows `context_limit_resolved` as
 `bounded`; a change that takes the variable back to the per-profile path unconditionally turns
 the `dst_l2` job red; and a change to either side's rule that the other does not follow turns
-`profile_dir_agreement` red.
+the gate's step in the `core` job red.
 
 ## Test evidence
 
@@ -285,7 +285,7 @@ two merged, and said to keep this in draft. Each finding was reproduced before i
 - **Taken: the host tests cannot show agreement with the core.** They assert the variable's
   value, and the spawned "runtime" is a shell script. The reviewer suggested a gate that compares
   the exported directory with the one the real runtime reports. That is
-  `make verify_profile_dir_agreement`, above, with its own CI job.
+  `make verify_profile_dir_agreement`, above, which CI runs in the `core` job.
 - **Confirmed by its own runs:** the 15 tests then present, `tsc`, the flat override resolving
   `bounded`, and `compaction_ai` registering 42 and 3 where it registered 75 and 6.
 
