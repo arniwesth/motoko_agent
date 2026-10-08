@@ -19,7 +19,9 @@ Running the gates on the new version found two things the bump changes besides t
 both are fixed here at the operator's instruction. A row of `declared_vs_performed` pinned a
 name-resolution order the compiler has reversed. And seven gates failed on the v0.52.5 stdlib
 because the ambient inventory could no longer prove one builtin pure. Each has its own section
-below. With all three commits, `make dst` passes all 54 targets on v0.52.5.
+below. An independent review then asked for one more thing, also done here: the test-coverage
+exception the old pin needed is removed, so three core files are in blocking coverage again.
+With all four commits, `make dst` passes all 54 targets on v0.52.5.
 
 ```
 Warning: CACHE_WRITE_FAILED module=src/core/session stage=encoding
@@ -32,6 +34,7 @@ Warning: CACHE_WRITE_FAILED module=src/core/session stage=encoding
 - chore: AILANG v0.47.2 -> v0.52.5
 - fix(dst): on AILANG v0.52 the import shadow is an escape — LIMITATION 18 moves to group 3 (031 ADR-001 Amendment 6)
 - fix(ext_ambient_inventory): a closed-row caller proves a builtin pure, whatever an effect-variable caller beside it carries
+- ci: session.ail, ext/runtime.ail and test/scripted_ports.ail are in blocking test coverage again
 
 The bump is 26 files:
 
@@ -62,6 +65,17 @@ The second fix is 2 files:
   rule as its header states it, and a `builtin rule` line in the self-test.
 - `tools/ext_ambient_inventory/fixtures/mutgate.tsv`: three mutations of that order.
 
+The coverage change is 3 files, each removing what its own comment said to delete once AILANG
+issue 1328 was fixed:
+
+- `Makefile`: `TEST_COVERAGE_SLOW`, its timeout and the `test_coverage_slow` target are gone;
+  `test_coverage` walks every file, and `terminal_trace` runs `session.ail`'s tests again.
+- `.github/workflows/verify-extensions.yml`: the `coverage_slow` job is gone, so no job is
+  `continue-on-error`. The limits of `dst_gates_heavy` and `coverage` go back to 25 minutes from
+  45 and 60.
+- `tools/test_coverage/derive.py`: `--exclude`, `--only` and the partial-walk case are gone, by
+  reversing the change `9e79056e` made to the file.
+
 No file under `src/` or `packages/` changes, apart from the lockfiles.
 
 ## Governing docs
@@ -80,9 +94,12 @@ No file under `src/` or `packages/` changes, apart from the lockfiles.
 No project document governs the toolchain bump itself. Where the repository already records the
 cache defect:
 
-- `.github/workflows/verify-extensions.yml`: the `dst_gates_heavy` and `coverage` jobs carry
+- `.github/workflows/verify-extensions.yml`: the `dst_gates_heavy` and `coverage` jobs carried
   timeouts of 45 and 60 minutes "since AILANG v0.47", each with a note to re-measure and lower
-  them once this is fixed upstream. This pull request does not change them; see Predicted outcome.
+  them once this is fixed upstream. The last commit lowers both to 25, the limit from before.
+- `Makefile` (`TEST_COVERAGE_SLOW`), the workflow's `coverage_slow` job and
+  `tools/test_coverage/derive.py` each carried a note to delete the coverage exception once
+  AILANG issue 1328 was fixed. The last commit deletes it.
 - `.agent/projects/011_improve_test_axises/NOTE-spike-findings-mutation-operator-feasibility.md`:
   what the defect costs a sweep (fifty fresh compilations of session in one `make dst` log).
 - sunholo-data/ailang#1328, closed upstream on 2026-10-06.
@@ -101,9 +118,15 @@ cache defect:
   this tree prints `WARNING VER001 (toolchain-skew)` and still works; v0.52.5 on a branch still
   locked by v0.47.2 prints the same warning. Both directions checked with
   `ailang check src/core/types.ail`, exit 0.
-- **This pull request's CI run is the first run of the gates on v0.52.5 in CI.** Its job
-  durations are what the two raised timeouts should be re-measured from. Lowering them is left
-  for a follow-up.
+- **The 88 tests of `session.ail`, `ext/runtime.ail` and `test/scripted_ports.ail` can block a
+  merge again.** They run in `test_coverage`, inside the `test_coverage + smoke_parity` job; the
+  `test_coverage_slow` check no longer exists. Checked by this pull request's next CI run: that
+  job walks 624 tests and the check list has no non-blocking entry.
+- **Two CI limits are 25 minutes again.** On three earlier runs of this pull request
+  `DST gates (heavy)` took 4.5 to 6.5 minutes and `test_coverage + smoke_parity` 5.5 to 7, the
+  second without the three files, which add under 2 minutes locally. If the removed check was
+  listed as required in the branch's protection rules, that entry has to be removed there; the
+  author cannot see those rules.
 - **`DST gates (rest)` goes green.** It was the one red job on the bump and on the first fix,
   failing on `profile_definition`, `driver_only` and `ext_hook_scope_selftest`; every other job
   passed both times. The second fix is what those three need. Checked by this pull request's
@@ -229,7 +252,7 @@ fix.** It found no correctness defect in either changed gate.
 
 | # | Finding | Reproduced by the author | Disposition |
 |---|---|---|---|
-| 1 | **Three files are still outside blocking test coverage, for a reason that no longer holds.** `Makefile:3613` (`TEST_COVERAGE_SLOW`) excludes `src/core/session.ail`, `src/core/ext/runtime.ail` and `src/core/test/scripted_ports.ail` from `test_coverage`, and so from `make dst`. Their CI job, `coverage_slow`, has `continue-on-error: true` (`.github/workflows/verify-extensions.yml:215`), so a failure there cannot block a merge. Both places say to delete the exception once AILANG issue 1328 is fixed. | Yes. On v0.52.5, `python3 tools/test_coverage/derive.py --jobs 1 --timeout 600 --only` each of the three: 88 of 88 tests pass (41, 37, 10), the slowest file at 39 s against the 600 s cap on filled caches. The reviewer measured 78, 30 and 6 s. The upstream fixes are in v0.52.2 and later. | **Open, for the operator.** The exception predates this pull request and this pull request does not change it. Removing it touches the Makefile and a workflow, which is wider than what the bump needed to go green. |
+| 1 | **Three files are still outside blocking test coverage, for a reason that no longer holds.** `Makefile:3613` (`TEST_COVERAGE_SLOW`) excludes `src/core/session.ail`, `src/core/ext/runtime.ail` and `src/core/test/scripted_ports.ail` from `test_coverage`, and so from `make dst`. Their CI job, `coverage_slow`, has `continue-on-error: true` (`.github/workflows/verify-extensions.yml:215`), so a failure there cannot block a merge. Both places say to delete the exception once AILANG issue 1328 is fixed. | Yes. On v0.52.5, `python3 tools/test_coverage/derive.py --jobs 1 --timeout 600 --only` each of the three: 88 of 88 tests pass (41, 37, 10), the slowest file at 39 s against the 600 s cap on filled caches. The reviewer measured 78, 30 and 6 s. The upstream fixes are in v0.52.2 and later. | **Fixed here**, at the operator's instruction, in `2412f3d4`: the list, the target, the CI job and the tool's split are removed. `make test_coverage` on v0.52.5 walks 624 tests, 619 passed and 5 skipped against a record, with the three files at 37 of 37, 41 of 41 and 10 of 10. |
 | 2 | **A count in this body was wrong.** `compose` calls `_list_length` nineteen times, not eighteen: `validator.ail:252` has two calls on one line, and the author counted lines. | Yes: 19 calls on 18 lines in 7 files, so 20 direct calls with `compaction_structural`'s one. | **Corrected above.** The commit message of `a8b3ab03` still says 18 and 19; it is pushed and is left as it is. |
 
 The reviewer's one opinion, not a defect: the depth canary's notes (`Makefile:394-402`) explain
@@ -300,5 +323,13 @@ gates that CI, which has both at v0.52.5, showed red. The later sweeps set the v
   restored green, bytes the same.
 - **`make dst` on the second fix** (`a8b3ab03`), compiler and stdlib both at v0.52.5: exit 0,
   all 54 targets passed, 307 s on filled caches, no `CACHE_WRITE_FAILED` line.
+- **CI on the second fix** (`d9d1cf9f`): every job passed, `DST gates (rest)` in 9 m 14 s.
+- **The coverage change**, compiler and stdlib both at v0.52.5: `make test_coverage_selftest`
+  0 failures; `make test_coverage` reports 73 files discovered, 50 carrying tests, 624 tests,
+  619 passed, 5 skipped against a record, in 1 m 23 s. The slowest file is `session.ail` at 53 s,
+  9% of the 600 s per-file cap. `make terminal_trace` passes with `session.ail`'s tests in it.
+  The workflow file parses, with six jobs and none `continue-on-error`.
+- **`make dst` on the coverage change** (`2412f3d4`), compiler and stdlib both at v0.52.5: exit 0,
+  all 54 targets passed, 371 s on filled caches.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
