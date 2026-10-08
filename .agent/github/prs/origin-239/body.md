@@ -65,7 +65,7 @@ describes #241.
 | `Makefile` | `verify_strict_context_limit`, six arms over three runs, added to `check_core` |
 | `docs/configuration.md` | what `extensions.strict` refuses; the warning; how to give a model a window; `"disabled"` |
 | `.agent/projects/013_core_architecture_for_dst/ADR-001-…-caps.md` | two dated amendments, the original text kept |
-| `src/core/context_limit.ail` | one comment: its line citation of the ADR's type sketch moves from 284-302 to 320-338 |
+| `src/core/context_limit.ail` | one comment: its line citation of the ADR's type sketch moves from 284-302 to 326-344 |
 
 ## Governing docs
 
