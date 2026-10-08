@@ -15,11 +15,11 @@ again: about 35 s on every Motoko start in this container. v0.52.2 raised the li
 artifact and 128 MiB per module (sunholo-data/ailang `07e1a89bc`, the fix for
 sunholo-data/ailang#1328). The operator reported the warning on 2026-10-08 and asked for the fix.
 
-Running the gates on the new version found two things the bump changes besides the cache. One is
-fixed here, at the operator's instruction: a row of `declared_vs_performed` pinned a name-resolution
-order the compiler has reversed. The other is **open and keeps CI red**: seven gates fail on the
-v0.52.5 stdlib because the ambient inventory can no longer prove one builtin pure. Each has its own
-section below.
+Running the gates on the new version found two things the bump changes besides the cache, and
+both are fixed here at the operator's instruction. A row of `declared_vs_performed` pinned a
+name-resolution order the compiler has reversed. And seven gates failed on the v0.52.5 stdlib
+because the ambient inventory could no longer prove one builtin pure. Each has its own section
+below. With all three commits, `make dst` passes all 54 targets on v0.52.5.
 
 ```
 Warning: CACHE_WRITE_FAILED module=src/core/session stage=encoding
@@ -31,6 +31,7 @@ Warning: CACHE_WRITE_FAILED module=src/core/session stage=encoding
 
 - chore: AILANG v0.47.2 -> v0.52.5
 - fix(dst): on AILANG v0.52 the import shadow is an escape — LIMITATION 18 moves to group 3 (031 ADR-001 Amendment 6)
+- fix(ext_ambient_inventory): a closed-row caller proves a builtin pure, whatever an effect-variable caller beside it carries
 
 The bump is 26 files:
 
@@ -42,7 +43,7 @@ The bump is 26 files:
   (`motoko_ext_herdr`, `motoko_ext_test_dummy`), and the package locks take the current
   `motoko_ext_abi` hash. No dependency version moved.
 
-The fix is 14 files, eight of them the amendment's artifact:
+The first fix is 14 files, eight of them the amendment's artifact:
 
 - `scripts/dst/run_declared_vs_performed.sh`: LIMITATION 18 is a group-3 row; the fourth group,
   its checker and its score line are removed.
@@ -55,6 +56,12 @@ The fix is 14 files, eight of them the amendment's artifact:
 - `.agent/projects/031_system_one_decisions/ADR-001-extension-owned-structured-decisions.md`:
   Amendment 6, and `evidence/amendment-6/`.
 
+The second fix is 2 files:
+
+- `tools/ext_ambient_inventory/derive.py`: the order of two branches in `builtin_effects`, the
+  rule as its header states it, and a `builtin rule` line in the self-test.
+- `tools/ext_ambient_inventory/fixtures/mutgate.tsv`: three mutations of that order.
+
 No file under `src/` or `packages/` changes, apart from the lockfiles.
 
 ## Governing docs
@@ -63,6 +70,12 @@ No file under `src/` or `packages/` changes, apart from the lockfiles.
   the registration boundary. **Amendment 6**, added here, records the reversed name-resolution
   order under the ADR's own rule that a change is a numbered amendment with an artifact attached
   (`evidence/amendment-6/ARTIFACT.txt`).
+
+- `.agent/projects/009_motoko_dst_execution/NOTE-d12-build-classifier-3.md` (WI-D12): the
+  ambient inventory and its builtin rule. It states the rule as the second fix now implements
+  it: a builtin is proven effect-free when some `std/*` export whose body calls it carries a
+  closed empty cached row, and what is rejected is a builtin reached *only* from private helpers,
+  effect-variable exports or a module with no cached interface. No document is amended for it.
 
 No project document governs the toolchain bump itself. Where the repository already records the
 cache defect:
@@ -91,10 +104,11 @@ cache defect:
 - **This pull request's CI run is the first run of the gates on v0.52.5 in CI.** Its job
   durations are what the two raised timeouts should be re-measured from. Lowering them is left
   for a follow-up.
-- **CI stays red on `DST gates (rest)` until the open finding below is decided.** On the bump
-  alone that job failed on `profile_definition`, `driver_only` and `ext_hook_scope_selftest`;
-  every other job passed. No workflow runs `make dst` or `declared_vs_performed`, so CI never
-  showed the row that is fixed here.
+- **`DST gates (rest)` goes green.** It was the one red job on the bump and on the first fix,
+  failing on `profile_definition`, `driver_only` and `ext_hook_scope_selftest`; every other job
+  passed both times. The second fix is what those three need. Checked by this pull request's
+  next CI run. No workflow runs `make dst` or `declared_vs_performed`, so CI never showed the row
+  the first fix addresses.
 - **Headroom is about 2.3x, not unlimited.** At 29.3 MB against a 64 MiB limit, the same warning
   returns if session's type info more than doubles.
 
@@ -109,7 +123,7 @@ do. Two were looked for before the sweep, the sweep found the third and CI found
 - A local binder now shadows an import of the same name (v0.52.0). One row of
   `declared_vs_performed` pinned the old order. Fixed here; first section below.
 - `std/list` gained effect-polymorphic functions that call the builtin `_list_length`. The
-  ambient inventory stops proving that builtin pure. Open; second section below.
+  ambient inventory stopped proving that builtin pure. Fixed here; second section below.
 
 ## Fixed here: a name-resolution order the suite pinned has reversed
 
@@ -149,12 +163,12 @@ binder that shares a name with an import outside the three boundary fixtures wri
 case. The scan is a regular-expression heuristic, not a parser; its method and limits are in the
 artifact.
 
-## Open: seven gates are red on the v0.52.5 stdlib, for one cause
+## Fixed here: seven gates were red on the v0.52.5 stdlib, for one cause
 
-With the compiler and the stdlib both at v0.52.5, `make dst` fails seven targets:
+With the compiler and the stdlib both at v0.52.5, `make dst` failed seven targets:
 `ext_ambient_inventory`, `ext_ambient_inventory_selftest`, `ext_hook_scope_selftest`,
 `profile_definition`, `driver_only`, `driver_plus_compose` and `driver_plus_no_ops`. CI runs three
-of them and is red on those three. All seven fail on one line of the ambient inventory:
+of them and was red on those three. All seven failed on one line of the ambient inventory:
 
 ```
 UNRESOLVED -- fail closed, triage required:
@@ -164,32 +178,47 @@ UNRESOLVED -- fail closed, triage required:
 ```
 
 **Cause.** `tools/ext_ambient_inventory/derive.py` proves a builtin pure from the stdlib exports
-that call it. Its stated rule (`:140-144`): some export calling the builtin carries a closed empty
-row, and no export calling it carries labels or a row variable. In v0.52.5's `std/list`, `mapE`,
-`filterE`, `foldlE` and `flatMapE` are effect-polymorphic and call `_list_length` directly, so the
-builtin now has both a closed-row caller (`length`, `nth`, `last`) and row-variable callers, and
-is classed unprovable. Two extensions call it directly and fail closed: `compaction_structural`
-(one call, in a test function) and `compose` (eighteen calls in seven files).
+that call it. `builtin_effects` ranked an effect-variable caller above a closed-row caller. In
+v0.52.5's `std/list`, `mapE`, `filterE`, `foldlE` and `flatMapE` are effect-polymorphic and call
+`_list_length` directly, so the builtin had both a closed-row caller (`length`, `nth`, `last`)
+and row-variable callers, and read as unprovable. Two extensions call it directly and failed
+closed: `compaction_structural` (one call, in a test function) and `compose` (eighteen calls in
+seven files).
 
-**Scope, measured.** On v0.52.5, `_list_length` is the only builtin with this mixed evidence, of
-327 the tool sees. On v0.47.2 no builtin has it. The compiler's own registry gives
-`_list_length: list[a] -> int` on both versions.
+**The tool said two things that no longer agreed.** Its header comment said no export calling the
+builtin may carry a row variable. The WI-D12 note, `builtin_effects`' own docstring and the
+self-test's control, `control_pure_builtin.ail`, said a closed-row caller is the proof; the
+control names `_list_length` and says it "must NOT be a rejection". No stdlib before v0.52 had a
+builtin with both kinds of caller, so the two had never met.
 
-**The tool states two things that no longer agree.** Its header gives the rule above. Its
-self-test's control, `tools/ext_ambient_inventory/fixtures/control_pure_builtin.ail`, says
-`_list_length` "is provably effect-free on compiler-derived evidence -- `std/list.length`'s body
-calls it and carries a closed empty cached row -- so it must NOT be a rejection". On v0.47.2 both
-held. On v0.52.5 the rule rejects what the control says must pass.
+**The operator's choice.** Two ways to close it were put to the operator on 2026-10-08: edit the
+nineteen call sites to use `std/list.length` and move the control to another builtin, or change
+the order so that a closed-row caller is sufficient proof. The operator chose the second.
 
-**Not decided here.** Two ways to close it, and the choice is the operator's:
+**What changed.** The two branches in `builtin_effects` are swapped: a closed-row caller proves
+the builtin pure, and an effect-variable caller beside it takes nothing away, because the variable
+is its callback's and not the builtin's. A caller that carries labels still decides the other way,
+as before. The header comment states the rule as the code now has it.
 
-1. Keep the rule, change the callers: the two extensions call `std/list.length`, and the control
-   moves to another builtin. The gate's rule is untouched; nineteen call sites in two packages
-   and the tool's own control change.
-2. Change the rule: a closed-row caller proves the builtin pure whatever other exports call it.
-   One line in `builtin_effects`, a no-op on v0.47.2, and the control holds as written. It gives
-   up the protection the stricter rule would offer if a builtin ever took an effectful callback,
-   which v0.52.5's `std/list` says a builtin cannot do "yet".
+**Scope, measured.**
+
+- `_list_length` is the only builtin the swap reclassifies on v0.52.5, of 327 the tool sees. On
+  v0.47.2 it reclassifies none, because no builtin there has both kinds of caller.
+- On v0.52.5 the derivation is `PORT-MEDIATED (4 of 20)`, `AMBIENT (16)`, `UNRESOLVED (0)`,
+  line for line what it was before the stdlib moved. No extension's verdict differs from `main`.
+- The compiler's own registry gives `_list_length: list[a] -> int` on both versions.
+
+**What it gives up.** A builtin that took an effectful callback would be pure in a pure caller and
+effectful in a polymorphic one, and would now read as pure. v0.52.5's `std/list` says, beside
+`mapE`, that a builtin cannot take an effectful callback "yet". The docstring names this as the
+first thing to re-read if that changes.
+
+**The rule is tested on both sides.** No installed stdlib has every case (v0.47.2 has no builtin
+with both kinds of caller, v0.52.5 has none with an effect-variable caller alone), so the
+self-test gains a `builtin rule` line that asserts the order on a synthetic stdlib: a closed-row
+caller proves; a builtin reached only from an effect-variable export, only from a private helper,
+or from a labelled caller is still rejected. Three mutations, one per side, each turn that line
+red (`tools/ext_ambient_inventory/fixtures/mutgate.tsv`).
 
 ## Test evidence
 
@@ -201,7 +230,7 @@ beside it.
 `tools/ext_ambient_inventory/derive.py` reads stdlib sources from `AILANG_STDLIB_PATH` or else
 `~/.local/share/ailang/std`, which in this container is v0.47.2's. So the first sweep paired the
 v0.52.5 compiler with v0.47.2 stdlib sources for the gates built on that tool, and was green on
-gates that CI, which has both at v0.52.5, showed red. The later sweep sets the variable.
+gates that CI, which has both at v0.52.5, showed red. The later sweeps set the variable.
 
 - **The defect, on `origin/main` (`36ce3973`) with v0.47.2.**
   `MOTOKO_HEADLESS=1 MOTOKO_JSONL_OUTPUT=1 AILANG_FS_SANDBOX=workdir MOTOKO_CONFIG=default MODEL=anthropic/claude-nonexistent-probe ./scripts/run-agent.sh "say hi"`,
@@ -221,17 +250,28 @@ gates that CI, which has both at v0.52.5, showed red. The later sweep sets the v
   the inventory tool, as corrected above): exit 2 after 1,228 s from cold caches. 53 targets
   pass; `declared_vs_performed` reports 136 passed, 1 failed, LIMITATION 18. The log has no
   `CACHE_WRITE_FAILED` line.
-- **The fix for LIMITATION 18**, on v0.52.5: `make declared_vs_performed` 137 passed, 0 failed,
+- **The first fix**, for LIMITATION 18, on v0.52.5: `make declared_vs_performed` 137 passed, 0 failed,
   group 3 at 13 of 13. `hook_scope.py --gate-fixtures --ailang-check`: 29 ok, 0 failures. The
   mutation gate for the row's new mutation: baseline green, mutated red, restored green. On
   v0.47.2 the same suite is red on that row alone, with its escape evidence absent.
-- **`make dst` on the fix** (`3a8afa6b`), compiler and stdlib both at v0.52.5: exit 2 after 359 s
+- **`make dst` on the first fix** (`3a8afa6b`), compiler and stdlib both at v0.52.5: exit 2 after 359 s
   on filled caches. 47 targets pass, `declared_vs_performed` among them. The seven named above
   fail, each on the `_list_length` line.
-- **CI on the bump** (`023857d7`): `DST gates (rest)` failed on `profile_definition`,
-  `driver_only` and `ext_hook_scope_selftest`. Passed: `DST gates (heavy)` in 6 m 34 s,
-  `test_coverage + smoke_parity` in 5 m 43 s, `check_core + verify_extensions +
+- **CI on the bump** (`023857d7`) **and on the first fix** (`a66722c5`): `DST gates (rest)`
+  failed both times, on `profile_definition`, `driver_only` and `ext_hook_scope_selftest`.
+  Passed both times: `DST gates (heavy)` in 6 m 34 s and 4 m 28 s, `test_coverage +
+  smoke_parity` in 5 m 43 s and 6 m 39 s, `check_core + verify_extensions +
   smoke_no_delegated_storm`, `verify_core + mutations + classify + contract policy`, `pr-corpus`
   and `dst_l2`.
+- **The second fix**, compiler and stdlib both at v0.52.5: `make ext_ambient_inventory_selftest`
+  0 failures, with `control_pure_builtin.ail` resolved clean, the `builtin rule` line ok and the
+  yield 4 of 20. The same self-test against v0.47.2 stdlib sources: 0 failures. `derive.py`
+  exits 0 with `RESULT: PASS -- 20/20 extensions resolved, 19/19 std modules resolved, 0
+  unresolved symbols`; its output differs from the derivation taken before the rule change, with
+  v0.47.2 stdlib sources, in the source-revision line only.
+- **The mutation gate for the rule:** 3 of 3 discriminate, each baseline green, mutated red,
+  restored green, bytes the same.
+- **`make dst` on the second fix** (`a8b3ab03`), compiler and stdlib both at v0.52.5: exit 0,
+  all 54 targets passed, 307 s on filled caches, no `CACHE_WRITE_FAILED` line.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
