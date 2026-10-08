@@ -109,6 +109,24 @@ jobs:
       - name: smoke_no_delegated_storm (ohmy_pi=false across shipped profiles)
         run: make smoke_no_delegated_storm
 
+      # The one check that needs bun as well as ailang: whether the host's rule
+      # for MOTOKO_PROFILE_DIR and the runtime's config loader name the same
+      # directory is a question about two implementations (see the target's
+      # comment in the Makefile). It is a step here and not a job of its own:
+      # the gate is about a second of work, and a job would re-pay dst-setup's
+      # ~2.5 min for it. Bun and the TUI's dependencies cost this job what the
+      # whole dst_l2 job takes, about ten seconds.
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.14'
+
+      - name: Install TUI dependencies
+        run: cd src/tui && bun install --frozen-lockfile
+
+      - name: verify_profile_dir_agreement (MOTOKO_PROFILE_DIR is the directory the loader reads)
+        run: make verify_profile_dir_agreement
+
   # The three heaviest DST gates: terminal_trace, smoke_driver, world_state. They
   # are one job so the other twelve are not held behind them.
   # 4.5 to 6.5 min on AILANG v0.52.5 (three runs of PR #243, the whole job). It
@@ -328,3 +346,6 @@ jobs:
 
       - name: Layer-2 DST
         run: make dst_l2
+
+      - name: Unknown-context-limit warning (host tests, issue 237)
+        run: make tui_context_limit

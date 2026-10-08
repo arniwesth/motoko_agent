@@ -253,6 +253,48 @@ ABI — the next major. 4. Refuse under `Unknown` — 028's rule applied literal
 model for a full session); loud, not blocking. 5. An additive reason field beside the `int` —
 two homes for one fact; rejected on `ports.ail`'s own `file_remove` argument.
 
+**Amendment, 2026-10-08 (PR #239), to option 4. One refusal under `Unknown` now exists, and it is
+not option 4.** When the profile sets `extensions.strict`, at least one registered extension
+carries a `Compactor` atom, and the run's limit resolves `Unknown`, the launcher emits one `error`
+(`error_code: strict_context_limit_unknown`, naming the model, both misses and the compactors)
+and exits 2. It differs from option 4 in three ways. The first removes the ground on which option
+4 was rejected, the second changes which rule is being applied, and the third is a limit of scope.
+
+- **It is opt-in.** Option 4 was rejected because it would have stopped runs that work today.
+  `extensions.strict` is `false` in 16 of 16 shipped profiles, so no shipped profile is stopped.
+  A profile of someone's own that is already strict, registers a compactor and runs a model with
+  no window does start today and is stopped by this; that is the refusal doing what it is for.
+  Re-measured the same day: 2 of 16 profiles set an override and the catalogue has 29 rows.
+- **It is conditional on a compactor.** It is not 028's rule about measurement. It is the existing
+  meaning of `extensions.strict`, "a profile may not run with less than it declares"
+  (`registry_generated.ail`: an uninstalled name, an empty registration), applied to a compactor
+  that is installed and registered and can never trigger, because both shipped compactors take a
+  percentage of the window and `Unknown` hands them 0.
+- **It is a refusal to start.** It is asked where the run's model becomes known: at boot, at the
+  first task if a `model_change` arrived before it, and on a resume. A `model_change` after the
+  start is not refused; whether it should be is listed under Not decided.
+
+`Disabled` is not refused: it is declared in the profile (rule 3), so the profile already says
+what it runs with. For every profile that is not strict, D1 stands as written: `Unknown` is loud
+and not blocking.
+
+The operator decided this on 2026-10-08, in the session that produced #239, and accepted the three
+limits with this amendment; they were proposed by the implementing session. The gate is `make
+verify_strict_context_limit`, in `check_core`: six arms over three runs, each of seven mutants
+turning the arm named for its rule red. Two of the three call sites, the first-task one and the
+resume one, have no arm.
+
+One limitation is recorded with it. The refusal is decided on the limit the session will use,
+which the resolver reads from `$MOTOKO_PROFILE_DIR/config.json`, and not on the configuration the
+loader loaded. PR #241 makes the host export the directory the loader reads in the layouts found
+so far: the legacy flat `.motoko/config.json`, and a per-profile config reached through a symlink,
+which the sandboxed loader refuses. It does not make the two agree by construction, and no gate
+compares them. A hand-run `supervisor.ail` with no `MOTOKO_PROFILE_DIR` still makes them differ:
+there the decision is right, because the run would not compact, and the stated reason can be
+wrong. A launch with `WORKDIR` beneath the repository is a different failure, older than both
+PRs: the loader loads no profile at all, so neither `extensions.strict` nor a compactor is in
+effect and this refusal does not arise.
+
 **For the ordinal (D2).** 1. The count inside the world — vacuous (C1). 2. A same-record
 high-water mark — rejected (kF1). 3. **The successor's ordinal witnessed onto the stdout
 wire at each helped request, checked per framed run — chosen.** 4. Wait for D4's interpreter —
@@ -337,6 +379,17 @@ Rules the PLAN must keep:
    (`:2994`), which the initial live turn, every follow-up turn and every traced entry pass
    through; `SessionStart` is untouched and remains a display-only banner. The event gets a
    vocabulary row, projection, golden and version bump under `make event_vocabulary`.
+
+   **Amendment, 2026-10-08 (PR #239). The TypeScript follow-up named above is done in a different
+   place, and the place named cannot carry it.** The TUI's context counter reads a `context_usage`
+   event that the runtime has not emitted since `6350b7ad`, so there is no live counter to render
+   "unmeasured" in. What reaches the operator instead is a `warning` raised by the host from the
+   `unknown` arm of `ContextLimitResolved`, once per distinct model and pair of misses: in the TUI
+   history, on the JSONL wire, in the transcript, and on plain headless stderr. Until #239 nothing
+   in the host read that record, so "visible … once per run" held on the wire and for no person.
+   This changes no decision. Whether to revive the counter, which would need the runtime to emit
+   `context_usage` again, or to delete its code is a separate question and is not decided here.
+   Open issue #32 asks for a related thing, a report in the TUI each time a compaction happens.
 3. **`Disabled` is declared, never inferred.** An absent or non-positive profile key is a
    `ProfileMiss` and falls through to the catalogue as today (`context_usage.ail:137–141`,
    `:166`); `Disabled` requires an explicit profile key the PLAN names. No shipped profile is
@@ -637,7 +690,14 @@ script that traces a run gains two marker lines per invocation. The ABI comment 
 
 - **Behaviour under `Unknown`** beyond loudness, and whether the measurement boundary should
   ever be blocking in 028 ADR-001's sense. Needs an owner's number.
+  **Amendment, 2026-10-08 (PR #239).** Decided for strict profiles with a registered compactor:
+  see the amendment to option 4. Still open for every other case: whether a run may assume a
+  window when none resolves (issue #237's suggestion 2, not taken, because
+  `docs/configuration.md` says the limit is not guessed), whether a `model_change` to a model with
+  no window should be refused once a run has started, and the 028 question above.
 - **TUI rendering of unmeasured percentages.** A TypeScript follow-up.
+  **Amendment, 2026-10-08 (PR #239).** Done as a host warning and not in the counter, which is
+  dead: see the amendment to D1 rule 2.
 - **World-threading the multi-turn loop** (`:3265`) and framing the live-loop publish calls
   (`:3294`, `:3479`). Named, not scheduled.
 - **§2.A's vocabulary and corpus migration.** The spike.

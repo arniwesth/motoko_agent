@@ -1,0 +1,69 @@
+-- verify_strict_context_limit — extensions.strict refuses to start a profile
+-- whose compactor could never run (#237).
+--
+-- Usage (driven by `make verify_strict_context_limit`, which writes the profiles):
+--   ailang run ... scripts/verify_strict_context_limit.ail -- <workdir> <profile> <model> [<profile> <model> ...]
+-- For each pair, in order, it loads the profile under <workdir>/.motoko/config/,
+-- builds its runtime and hands both to `rpc`'s own boundary,
+-- `reject_if_strict_and_limit_unknown`, which `run_with_config` calls once the
+-- model is known. A pair that is admitted prints an OK line; a pair that is
+-- refused prints the JSON error line and exits 2, so the refused pair goes last.
+--
+-- The question is a profile that registers a compactor and runs a model whose
+-- context limit resolves `Unknown`: the compactor is installed and registered,
+-- which is all `verify_strict_extensions` asks, and it passes through on every
+-- step. Strict must refuse, naming both misses and the compactor. A bounded
+-- limit, a declared `disabled` one, a profile with no compactor and a non-strict
+-- profile must all start.
+--
+-- The limit is resolved the way a live run resolves it: the profile's
+-- `agent.context_limit` through MOTOKO_PROFILE_DIR and the catalogue through
+-- MOTOKO_MODELS_FILE, both set by the Makefile. That is one profile directory
+-- per process, which is why the declared-`disabled` arm is a run of its own.
+--
+-- It is not a mode of `verify_strict_extensions.ail` because importing `rpc`
+-- brings the session modules with it, and that script's four arms do not need
+-- them.
+module scripts/verify_strict_context_limit
+
+import std/io (println)
+import std/env (getArgs)
+import std/list as List (length)
+import src/core/config (load_config_from_cli)
+import src/core/ext/runtime (init_runtime_with_config, loaded_extension_names)
+import src/core/rpc (reject_if_strict_and_limit_unknown)
+
+func join(xs: [string]) -> string {
+  match xs {
+    [] => "",
+    x :: [] => x,
+    x :: rest => "${x},${join(rest)}"
+  }
+}
+
+func admit(workdir: string, profile: string, model: string) -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  let cfg = load_config_from_cli(["--workdir", workdir, "--profile", profile]);
+  let rt = init_runtime_with_config(cfg);
+  let _ = reject_if_strict_and_limit_unknown(cfg, rt, model);
+  println("OK started profile=${profile} model=${model} strict=${show(cfg.extensions.strict)} loaded=[${join(loaded_extension_names(rt))}]")
+}
+
+func admit_pairs(workdir: string, pairs: [string]) -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  match pairs {
+    [] => (),
+    profile :: model :: rest => {
+      let _ = admit(workdir, profile, model);
+      admit_pairs(workdir, rest)
+    },
+    _ => println("FAIL usage: a profile without a model")
+  }
+}
+
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMem, Stream, Trace} {
+  match getArgs() {
+    workdir :: pairs =>
+      if List.length(pairs) == 0 then println("FAIL usage: verify_strict_context_limit.ail -- <workdir> <profile> <model> [<profile> <model> ...]")
+      else admit_pairs(workdir, pairs),
+    _ => println("FAIL usage: verify_strict_context_limit.ail -- <workdir> <profile> <model> [<profile> <model> ...]")
+  }
+}

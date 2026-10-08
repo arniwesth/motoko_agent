@@ -6,6 +6,7 @@ import { createOhMyPiSession } from "./ohMyPi/session-adapter.js";
 import { dispatchOhMyPiTool } from "./ohMyPi/dispatcher.js";
 import { sessionStartMs, sessionIdentity, sessionResumeCount } from "./session-identity.js";
 import { exitManifestPath, rememberExitManifestPath } from "./exit-actions.js";
+import { ContextLimitSource, UnknownLimitWatch } from "./context-limit.js";
 import {
   defaultWakeWaiterFactory,
   type WaitDescriptor,
@@ -126,6 +127,10 @@ export type AgentEvent =
   // journal, immediately before it exits 3.
   | { type: "session_resume_view"; resume_count: number; from_id: string; boundary: string; boundary_detail: string; suspended: boolean; profile_from: string; profile_to: string; head_replaced: boolean; forced: boolean; dangling: string[]; ext_artifacts_digest: string; ext_artifacts_empty: boolean; messages: number; provider_calls_started: number; provider_calls_completed: number }
   | { type: "session_resume_refused"; journal: string; refusal: string; message: string }
+  // 013 ADR-001 D1's once-per-run record of how the context limit was resolved. `context_limit` is
+  // 0 on the `disabled` and `unknown` arms; `context-limit.ts` turns the `unknown` one into a
+  // `warning` (#237).
+  | { type: "context_limit_resolved"; run_id: string; context_limit: number; context_limit_source: ContextLimitSource }
   | { type: "error"; message: string }
   | { type: "warning"; message: string }
   | { type: "tool_calls"; request_id: string; tool_calls: DelegatedCall[] }
@@ -324,7 +329,7 @@ export function resolveDelegatedSpawn(exec: DelegatedExecReq): { cmd: string; ar
   return { cmd: exec.cmd, args: exec.args ?? [] };
 }
 
-function supervisorWorkdirArg(workdir: string): string {
+export function supervisorWorkdirArg(workdir: string): string {
   const absWorkdir = path.resolve(workdir);
   const rel = path.relative(process.cwd(), absWorkdir);
   if (rel === "") return ".";
@@ -382,6 +387,70 @@ export function mirrorModelCatalogFromRepo(workdir: string, repoPath: string): v
   if (!fs.existsSync(src)) return;
   fs.mkdirSync(path.dirname(dst), { recursive: true });
   fs.copyFileSync(src, dst);
+}
+
+// The directory the core's config loader will read this profile from, which is
+// what MOTOKO_PROFILE_DIR has to name.
+//
+// `config.ail`'s `resolve_profile_dir` looks in three places, in this order:
+// <workdir>/.motoko/config/<profile>/, then the legacy flat <workdir>/.motoko/,
+// then <MOTOKO_REPO>/.motoko/config/<profile>/. The same three are asked here.
+// The third is usually outside the workdir, where AILANG_FS_SANDBOX stops the
+// child reading it, and `mirrorProfileFromRepo` copies it into the first before
+// the spawn; so the caller asks again after the mirrors have run. But a
+// MOTOKO_REPO inside the workdir is readable, and the mirror does not run when
+// the workdir's own per-profile config "exists" as a symlink the child cannot
+// follow. The loader then takes the repo's profile, and so must this (found in
+// the third review, on a real launch).
+//
+// The variable used to be the per-profile path unconditionally. With the flat
+// layout that directory does not exist, and everything in the child that reads
+// the profile through the variable instead of through the loaded config looked
+// at nothing: `context_usage.ail` for `agent.context_limit`, and the extensions
+// that read `${MOTOKO_PROFILE_DIR}/<ext>.json` (compaction_ai, mcp, a2a,
+// compose, agentcli, ailang_tools). A flat config's `agent.context_limit` was
+// loaded and never took effect: the run's limit resolved `unknown` with
+// `profile_config_absent` (found in the review of #239).
+//
+// "Holds a config.json" means one the child can read. AILANG_FS_SANDBOX pins
+// the child's reads to the workdir, and AILANG v0.47.2 refuses a path that goes
+// through ANY symlink below that directory, wherever the link points: its
+// sandbox log says "escapes sandbox" for a config.json that is a link to a file
+// outside the workdir, for one that is a link to a file inside it, and for a
+// regular config.json in a per-profile directory that is itself a link. In all
+// three the loader then takes the flat config, while `fs.existsSync` follows
+// the link and says the per-profile one exists (found in the second review of
+// #239, on a real launch). Symlinks above the workdir are not the sandbox's
+// business, so the workdir's own real path is the base.
+export function loaderProfileDir(
+  workdir: string,
+  profile: string,
+  repoPath: string = process.env.MOTOKO_REPO ?? "",
+): string {
+  const perProfile = path.resolve(workdir, ".motoko", "config", profile);
+  if (readableInWorkdir(workdir, path.join(perProfile, "config.json"))) return perProfile;
+  const flat = path.resolve(workdir, ".motoko");
+  if (readableInWorkdir(workdir, path.join(flat, "config.json"))) return flat;
+  const repo = repoPath.trim();
+  if (repo !== "") {
+    // Under the sandbox a relative path is relative to the workdir, so that is the base here.
+    const fromRepo = path.resolve(workdir, repo, ".motoko", "config", profile);
+    if (readableInWorkdir(workdir, path.join(fromRepo, "config.json"))) return fromRepo;
+  }
+  return perProfile;
+}
+
+function readableInWorkdir(workdir: string, file: string): boolean {
+  const below = path.relative(path.resolve(workdir), path.resolve(file));
+  // Outside the workdir is a first component of exactly "..": a directory NAMED "..personal" is
+  // inside it, and a profile given as "../../..personal" lands in one.
+  const outside = below === ".." || below.startsWith(`..${path.sep}`) || path.isAbsolute(below);
+  if (below === "" || outside) return false;
+  try {
+    return fs.realpathSync(file) === path.join(fs.realpathSync(workdir), below);
+  } catch {
+    return false;
+  }
 }
 
 // 2026-05-14: if MOTOKO_CONFIG points to an absolute path OUTSIDE the workdir
@@ -481,7 +550,7 @@ export function buildChildEnv(
     MOTOKO_PERSIST_RETRIES: process.env.MOTOKO_PERSIST_RETRIES ?? "",
     MOTOKO_REPO: process.env.MOTOKO_REPO ?? "",
     MOTOKO_CAPTURE_FAILED_PAYLOAD: process.env.MOTOKO_CAPTURE_FAILED_PAYLOAD ?? "",
-    MOTOKO_PROFILE_DIR: path.resolve(workdir, ".motoko", "config", profile),
+    MOTOKO_PROFILE_DIR: loaderProfileDir(workdir, profile),
     // THE RUN IDENTITY FOR F-5 OWNERSHIP, minted here and nowhere else.
     //
     // `motoko-ext-herdr` tags every delegate pane it spawns with `<pane>:<session ms>` so that an
@@ -886,6 +955,7 @@ export class RuntimeProcess {
   private dead = false;
   private readonly workdir: string;
   private readonly onEvent: (e: AgentEvent) => void;
+  private readonly unknownLimit = new UnknownLimitWatch();
 
   constructor(
     task: string,
@@ -929,17 +999,12 @@ export class RuntimeProcess {
     // basename so the AILANG runtime can read it through FS_SANDBOX.
     // Returns the original profile unchanged when not applicable.
     const resolvedProfile = mirrorAbsoluteProfile(workdir, profile);
-    // Update MOTOKO_PROFILE_DIR to the mirrored location too, so
+    // Ask for MOTOKO_PROFILE_DIR again now that the mirrors have run, so
     // standalone extension packages reading ${MOTOKO_PROFILE_DIR}/<ext>.json
-    // find the right files.
-    if (resolvedProfile !== profile) {
-      childEnv.MOTOKO_PROFILE_DIR = path.resolve(
-        workdir,
-        ".motoko",
-        "config",
-        resolvedProfile,
-      );
-    }
+    // and the core's limit resolver find the files the loader will load:
+    // either mirror can have just created the per-profile directory, and
+    // `resolvedProfile` is the name the supervisor is given.
+    childEnv.MOTOKO_PROFILE_DIR = loaderProfileDir(workdir, resolvedProfile, childEnv.MOTOKO_REPO ?? "");
 
     const supervisorArgs = buildSupervisorArgs(resolvedProfile, model, workdir, port, systemPrompt, task, resume);
 
@@ -1012,6 +1077,9 @@ export class RuntimeProcess {
         (PARK_ENDING_EVENTS.has(event.type) && this.parkRequestId !== null);
       if (resolved) this.resolvePark();
       this.onEvent(event);
+      // #237: an `unknown` context limit is said to the operator, after the record it comes from.
+      const limitWarning = this.unknownLimit.observe(event);
+      if (limitWarning !== null) this.onEvent({ type: "warning", message: limitWarning });
       if (resolved) this.flushDeferredModel();
       if (event.type === "tool_calls") {
         setImmediate(() => {
