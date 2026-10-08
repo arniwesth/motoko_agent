@@ -1,0 +1,202 @@
+# 031 ADR-001 Amendment 6 -- the artifact
+#
+# Acceptance rule (ii) of 031 ADR-001: a change to that ADR cites an artifact --
+# "a fixture that fails, a compile that fails, a probe with a measured result".
+# This one is a suite row that went red at a pin bump, and four probes run on
+# both compilers.
+#
+# Produced 2026-10-08 in worktree /workspaces/motoko_agent-ailang-0525, branch
+# chore/ailang-v0.52.5 (pull request #243), extension ABI 8.0.
+#   old pin  AILANG v0.47.2 (e939cba), the container's installed toolchain
+#   new pin  AILANG v0.52.5 (7200786), built from the tag into a scratch
+#            directory with its own `std` beside the binary
+# Every command below was run from the worktree root. The files named stepN_*
+# are beside this one.
+
+## 1. The row that went red
+
+Tree: origin/main 36ce3973 plus the bump alone (a7c77571: the pin and the
+lockfiles; the suite, its fixtures and the gate as on main).
+
+    $ make dst            # v0.52.5, 54 targets, -j8
+      FAILED (1):
+        declared_vs_performed        NEW — this one is yours
+      exit 2
+
+    $ grep -n '✗\|group [34]\|declared_vs_performed:' step1_suite_on_the_bump_row18_red.v0.52.5.raw.log
+      ✗ LIMITATION 18 IS FIXED UPSTREAM — IN THE DANGEROUS DIRECTION: v7_delegate_import_shadow now
+        performs the effect (/NAMED RULE ESCAPE/ appeared), so v0.33.0's import precedence has
+        REVERSED and the local shadow wins. This is no longer a compiler-clean row: it is an ESCAPE,
+        it belongs in group 3, and ADR fact 6 and the fourth class must be re-read before anything
+        else in this suite is trusted
+          group 3  compiler-accepted escapes (boundary must reject) 12/12
+          group 4  compiler-clean, boundary-rejected by design 0/1
+      declared_vs_performed: 136 passed, 1 FAILED
+
+LIMITATIONS 1 to 17 print "still holds" in the same log. Row 18 is the only ✗.
+
+## 2. Four constructions, on both compilers
+
+Each was run with `ailang run --caps IO,FS --entry main <file> </dev/null`.
+
+### 2.1 A local `let make_hooks` over an imported `make_hooks` -- the suite's row
+
+    scripts/dst/fixtures/adr001_boundary/v7_delegate_import_shadow.ail   (unchanged)
+
+    v0.47.2   result=2
+    v0.52.5   NAMED RULE ESCAPE
+              result=1
+
+`ailang check` on v0.52.5: "✓ No errors found!", no warning.
+
+### 2.2 A local `let body` over an imported `body` -- the gate's fx_import_shadow, given a main
+
+Written to scripts/dst/tmp_probe_import_shadow.ail for the run, then removed:
+
+    module scripts/dst/tmp_probe_import_shadow
+    import std/io (println)
+    import std/json (JString)
+    import scripts/dst/fixtures/adr001_boundary/gate/gate_abi (Ctx, Capability, ToolPolicy, Registration)
+    import scripts/dst/fixtures/adr001_boundary/gate/gate_imported (body)
+    type W = { f: (Ctx) -> int }
+    func apply(ctx: Ctx, w: W) -> int { w.f(ctx) }
+    export func register_with_config(_cfg: int) -> Registration ! {IO} { let w: W = { f: func(c: Ctx) -> int ! {} { let _ = println(c.name); 1 } }; let body = func(ctx: Ctx) -> int { apply(ctx, w) }; { config: JString("synthetic"), caps: [ToolPolicy(body)] } }
+    func invoke(cs: [Capability], ctx: Ctx) -> int { match cs { ToolPolicy(f) :: _ => f(ctx), _ => 0 } }
+    export func main() -> () ! {IO} { println("result=${show(invoke(register_with_config(0).caps, {name: "PAYLOAD SHADOW ESCAPE"}))}") }
+
+`register_with_config` is the gate fixture's, byte for byte. `gate_imported.body` returns 2.
+
+    v0.47.2   result=2
+    v0.52.5   PAYLOAD SHADOW ESCAPE
+              result=1
+
+### 2.3 A parameter `body` over an imported `body`
+
+Written to scripts/dst/tmp_probe_param_over_import.ail for the run, then removed:
+
+    module scripts/dst/tmp_probe_param_over_import
+    import std/io (println)
+    import scripts/dst/fixtures/adr001_boundary/gate/gate_abi (Ctx, Capability, ToolPolicy)
+    import scripts/dst/fixtures/adr001_boundary/gate/gate_imported (body)
+    func mk(body: (Ctx) -> int) -> [Capability] { [ToolPolicy(body)] }
+    func seven(_c: Ctx) -> int { 7 }
+    func invoke(cs: [Capability], ctx: Ctx) -> int { match cs { ToolPolicy(f) :: _ => f(ctx), _ => 0 } }
+    export func main() -> () ! {IO} { println("result=${show(invoke(mk(seven), {name: "x"}))}") }
+
+    v0.47.2   result=2      the import ran, not the argument
+    v0.52.5   result=7      the argument ran
+
+### 2.4 A same-module `func make_hooks` beside an imported `make_hooks`
+
+Written to scripts/dst/tmp_probe_decl_over_import.ail for the run, then removed:
+
+    module scripts/dst/tmp_probe_decl_over_import
+    import std/io (println)
+    import scripts/dst/fixtures/adr001_boundary/boundary_types (Ctx, Capability, ToolPolicy)
+    import scripts/dst/fixtures/adr001_boundary/v7_mkmod (make_hooks)
+    func local_body(_c: Ctx) -> int { 7 }
+    func make_hooks(_n: int) -> [Capability] { [ToolPolicy(local_body)] }
+    func invoke(cs: [Capability], ctx: Ctx) -> int { match cs { ToolPolicy(f) :: _ => f(ctx), [] => 0 } }
+    export func main() -> () ! {IO} { println("result=${show(invoke(make_hooks(0), {name: "x"}))}") }
+
+    v0.47.2   result=2      the import ran
+    v0.52.5   Error: Error MOD015: 'make_hooks' is both imported (import
+              scripts/dst/fixtures/adr001_boundary/v7_mkmod (make_hooks) at
+              scripts/dst/tmp_probe_decl_over_import.ail:4:1) and defined in this module as a func
+              (at scripts/dst/tmp_probe_decl_over_import.ail:6:1) — an imported name and a
+              module-level definition may not share a name.
+
+### 2.5 Upstream's statement of the change
+
+AILANG changelog, v0.52.0 (2026-10-02):
+
+    Fixed — local binders no longer captured by imports, builtins or constructors of the same name
+    ... Lambda and function parameters, `let`, `letrec`, block statement-lets, match-arm binders
+    (in guards and bodies) and `forall` variables now shadow imports, builtins, constructors and
+    module aliases within their scope. ... Fixes #1467.
+
+    Changed — an imported name that the module also defines is compile error MOD015 (#1467)
+
+## 3. The gate rejects what it rejected
+
+    $ python3 tools/ext_ambient_inventory/hook_scope.py --gate-fixtures --ailang-check    # v0.52.5
+      ok  fx_delegate_import_shadow      fail  delegation-let-bound   ...  compiler=clean
+      ok  fx_import_shadow               fail  payload-let-bound      ...  compiler=clean
+    registration-shape gate fixtures: 29 ok, 0 failure(s)
+
+(step3_gate_fixtures.v0.52.5.raw.log, taken with the `expected.json` of this commit: the two rows'
+`group` and `form` text changed, their `shape`, `reasons`, `head`, `atoms` and `compiler` pins did
+not. Before the change the same two rows were ok as well: `--gate-fixtures --only
+fx_import_shadow,fx_delegate_import_shadow` reported 2 ok, 0 failures, and `ext_hook_scope_selftest`
+was green in the sweep of section 1.)
+
+## 4. After re-scoring the row, on the new pin
+
+Tree: the commit that adds this file. LIMITATION 18 is an `adr_g3` row.
+
+    $ make declared_vs_performed ; echo exit=$?           # v0.52.5
+      ✓ LIMITATION 18 still holds: a local let make_hooks shadowing an IMPORTED make_hooks performs, ...
+          group 3  compiler-accepted escapes (boundary must reject) 13/13
+      ✓ EVERY FIXTURE IS SCORED: 66 cases in scripts/dst/fixtures/adr001_boundary, 66 rows, each in exactly one class
+      declared_vs_performed: 137 passed, 0 failed
+      exit=0
+
+(step4_suite_after_rescoring.v0.52.5.raw.log)
+
+## 5. The same tree on the old pin: the re-scored row is red
+
+    $ ./scripts/dst/run_declared_vs_performed.sh ; echo exit=$?      # v0.47.2
+      ✗ LIMITATION 18 (v7_delegate_import_shadow): accepted and ran, but the escape evidence
+        /NAMED RULE ESCAPE/ is ABSENT from the output, so this row no longer witnesses an effect
+        performed and must not be counted as an escape
+          group 3  compiler-accepted escapes (boundary must reject) 12/13
+      declared_vs_performed: 136 passed, 1 FAILED
+      exit=1
+
+(step5_suite_after_rescoring.v0.47.2.raw.log. It is the only ✗. This is what a later reversal of
+the order would look like.)
+
+## 6. The mutation gate for the row
+
+The old row of scripts/dst/adr001_boundary_mutgate_spec.tsv, `p02_g4_lim18_binding`, changed the
+imported `body` from 2 to 1 and expected LIMITATION 18 to go red, because the row asserted that the
+import ran. The row no longer reads the import, so that mutation would not be caught. Its
+replacement renames the local so that it no longer shadows the import:
+
+    p02_g3_lim18_import_shadow
+      target    scripts/dst/fixtures/adr001_boundary/v7_delegate_import_shadow.ail
+      mutation  s/let make_hooks = func(_n: int)/let make_hooks2 = func(_n: int)/
+      test      ./scripts/dst/run_declared_vs_performed.sh > <log> 2>&1; grep -qF "✓ LIMITATION 18 still holds" <log>
+
+    $ bash .agent/projects/013_core_architecture_for_dst/mutgate.sh --spec <that one row> --repo . --out <scratch>   # v0.52.5
+      PASS p02_g3_lim18_import_shadow — discriminates
+      mutgate: 1/1 discriminate, 0 failed.
+
+    step6_mutgate.tsv:
+      fix                         test                                                                 baseline  mutated  restored  bytes  verdict
+      p02_g3_lim18_import_shadow  scripts/dst/fixtures/adr001_boundary/v7_delegate_import_shadow.ail  GREEN     RED      GREEN     same   PASS
+
+The mutated fixture, run by itself on v0.52.5, prints `result=2` and no escape line: it is red
+because the import runs again, not because it stopped compiling.
+
+## 7. The rest of the tree
+
+The change in name resolution applies to every module. `shadow_scan.py` (beside this file) looks,
+in each `.ail` file, for a local binder that shares a name with a lowercase name in one of the
+file's explicit import lists.
+
+    $ python3 shadow_scan.py src packages scripts tools > shadow_scan.out.tsv
+    # 494 files scanned, 6 candidate hits in 4 files
+
+  - 403 of the 494 files have such imports, 4,952 imported names in all.
+  - 3 hits are this suite's fixtures: `let make_hooks` in v7_delegate_import_shadow.ail and in
+    gate/fx_delegate_import_shadow.ail, `let body` in gate/fx_import_shadow.ail.
+  - 3 hits are in src/eval/journal/candidate_checks_live_test.ail (:424, :432, :437) and are false:
+    `Ok(fs) => List.map(k_finding_label, fs)` uses the import on the right of an inline arm.
+  - No binder is named `show`, `floatToInt` or `intToFloat` (searched separately, as `let`, as a
+    typed parameter and as a lambda parameter).
+
+Limits. It is a regular-expression heuristic, not a parser. It reads `let` and `letrec`, tuple
+`let`, the parameters of named and anonymous `func`, backslash lambdas, and match arms whose
+pattern and `=>` are on one line. It does not read a pattern that spans lines, and it knows only
+names imported through an explicit list. A hit is a candidate to read; no hit is not a proof.

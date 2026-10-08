@@ -1370,6 +1370,90 @@ share one string (037 ADR-001 D2 prices it). An error field on `ExtRegistration`
 registration in the tree to end the process, with the refusal and its message format outside the
 one host-owned boundary.
 
+### Amendment 6 (2026-10-08) — from AILANG v0.52.0 a local binder outranks an import: the import shadow is an escape, and the suite's fourth class is empty
+
+**Supersedes** the statement of the compiler's order in D2 (`:211-215`: "v0.33.0 resolves an
+**imported** name over a local `let` and over a same-module declaration … so the rule over-rejects a
+local that shadows an import"), the fourth class of freeze item 2(b) (`:1121-1123`), the N62 row of
+the review-response table (`:1067`), and, in the gate's fixture list, the words "and the compiler
+runs cleanly" for the import-shadow controls (`:276-277`). **The rule does not move.** D2(a)
+still resolves a payload name or a delegated callee in the calling body's locals and parameters
+first, then the home module's imports, then its own declarations. No type, constructor or version
+in the ABI package moves, and no in-tree registration changes.
+
+**The artifact: a suite row that went red at a pin bump.** The bump of the AILANG pin from v0.47.2
+to v0.52.5 (pull request #243) ran the sweep on the new compiler. `make declared_vs_performed`
+reported 136 passed and 1 failed, and the failing row was the fourth class's only member:
+
+```
+✗ LIMITATION 18 IS FIXED UPSTREAM — IN THE DANGEROUS DIRECTION: v7_delegate_import_shadow now
+  performs the effect (/NAMED RULE ESCAPE/ appeared), so v0.33.0's import precedence has REVERSED
+  and the local shadow wins. This is no longer a compiler-clean row: it is an ESCAPE, it belongs
+  in group 3, and ADR fact 6 and the fourth class must be re-read before anything else in this
+  suite is trusted
+```
+
+AILANG v0.52.0 changed name resolution on purpose. Its changelog entry is "local binders no longer
+captured by imports, builtins or constructors of the same name" (sunholo-data/ailang#1467), and the
+same release made an imported name that the module also defines a compile error, MOD015. Four
+constructions were run on both compilers (`evidence/amendment-6/ARTIFACT.txt`, with the probe
+sources and the raw output):
+
+| construction | v0.47.2 | v0.52.5 |
+|---|---|---|
+| a local `let make_hooks` over an imported `make_hooks` (`v7_delegate_import_shadow`, the suite's row) | `result=2`: the import ran, no effect | `NAMED RULE ESCAPE`, `result=1`: the local ran and performed |
+| a local `let body` over an imported `body` (the gate's `fx_import_shadow`, given a `main`) | `result=2`: the import ran, no effect | `PAYLOAD SHADOW ESCAPE`, `result=1`: the local ran and performed |
+| a parameter `body` over an imported `body` | `result=2`: the import ran, not the argument | `result=7`: the argument ran |
+| a same-module `func make_hooks` beside an imported `make_hooks` | `result=2`: the import ran | does not compile, `MOD015` |
+
+`ailang check` accepts the first three on both compilers and prints no warning.
+
+**What is adopted.**
+
+1. From the v0.52.5 pin, the compiler's order for a local binder and an import is the rule's
+   order. The rule no longer over-rejects a local that shadows an import. It rejects an escape.
+2. The import shadow is scored as an escape. `v7_delegate_import_shadow` is a group-3 row in
+   `scripts/dst/run_declared_vs_performed.sh` and keeps its number, LIMITATION 18. Group 3 has
+   thirteen members and the fourth class has none, so the suite no longer prints it. Freeze item
+   2(b) says a new case is a new row and no group's denominator is changed. This is neither: one
+   existing row changed class because its measured result changed, and its own failure text
+   named the class it belongs in.
+3. The gate rejects what it rejected. `fx_import_shadow` and `fx_delegate_import_shadow` still
+   fail with `payload-let-bound` and `delegation-let-bound`, and their `compiler: clean` pin
+   holds. Their label in `scripts/dst/fixtures/adr001_boundary/gate/expected.json` changes from
+   `fail-compiler-clean` to `fail`, and the gate's messages that said the compiler runs the
+   import say what it does now.
+4. The order between the home module's imports and its own declarations stays as written. On
+   v0.52.5 a module that has both under one name does not compile, so no compiling registration
+   can show that half of the order any more.
+
+**Nothing else moves.** LIMITATIONS 1 to 17 held on v0.52.5 in the same run. The effect-inference
+gap of NOTE-001 is not fixed there: the escape in the two rows above is that gap, reached through
+a binding the compiler used to ignore. Fact 6's own construction, a local over a *declared*
+`make_hooks` (`delegate_shadow`, LIMITATION 13), performed before and performs now.
+
+**Consequence, stated.** Up to v0.47.2 the gate's rejection of an import shadow cost one
+compiler-clean registration and protected nothing. From v0.52.5 it is what stops that
+registration, because the compiler accepts it without a warning. An extension installed from a
+registry is outside the gate's reach (D2, residual), and for such an extension the import shadow
+joins the other group-3 escapes. The same change applies to every module, not only to
+registrations: a local binder that shares a name with an import now means the local. A scan of
+`src`, `packages`, `scripts` and `tools` found no such binder outside this suite's fixtures; the
+artifact gives the method and its limits.
+
+**The row can go red.** The mutation gate's row for LIMITATION 18 asserted that the import ran,
+by changing the imported `body`. It is replaced by `p02_g3_lim18_import_shadow`, which renames the
+local so that it no longer shadows the import (`scripts/dst/adr001_boundary_mutgate_spec.tsv`):
+baseline green, mutated red, restored green. Run on v0.47.2, the re-scored row is red as well,
+with its escape evidence absent, which is what a later reversal of the order would look like.
+
+**Rejected alternatives.** Staying on v0.47.2: its compile cache refuses `src/core/session`, so
+every process that imports session compiles it again, and every release that fixes that has the
+new order (v0.52.0 against v0.52.2). Keeping the fourth class with no member: a class that prints
+`0/0` reads as scored and proves nothing. Leaving the row in the fourth class with its
+expectation reversed: the class is defined as compiler-clean with no effect performed, and the
+row performs.
+
 ## Related records
 
 - [037: Skills system](../037_skills_system/ADR-001-skills-system.md) — D2 is the decision Amendment 5 records
