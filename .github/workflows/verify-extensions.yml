@@ -323,6 +323,31 @@ jobs:
           echo "new_contract_policy base: $contract_base"
           make new_contract_policy BASE="$contract_base"
 
+  # ~3 min, nearly all of it setup: the gate is nine sub-second runs. The one job
+  # with BOTH toolchains, because the question is whether two implementations of
+  # one rule agree: the host's (bun) and the runtime's config loader (ailang).
+  # dst_l2 has only the first and tests the host against a stand-in runtime;
+  # core has only the second. See the target's comment in the Makefile.
+  profile_dir_agreement:
+    name: profile_dir_agreement
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - uses: ./.github/actions/dst-setup
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.14'
+
+      - name: Install TUI dependencies
+        run: cd src/tui && bun install --frozen-lockfile
+
+      - name: MOTOKO_PROFILE_DIR names the directory the runtime's loader reads
+        run: make verify_profile_dir_agreement
+
   dst_l2:
     name: dst_l2
     runs-on: ubuntu-latest

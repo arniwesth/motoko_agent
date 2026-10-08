@@ -324,7 +324,7 @@ export function resolveDelegatedSpawn(exec: DelegatedExecReq): { cmd: string; ar
   return { cmd: exec.cmd, args: exec.args ?? [] };
 }
 
-function supervisorWorkdirArg(workdir: string): string {
+export function supervisorWorkdirArg(workdir: string): string {
   const absWorkdir = path.resolve(workdir);
   const rel = path.relative(process.cwd(), absWorkdir);
   if (rel === "") return ".";

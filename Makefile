@@ -3102,6 +3102,30 @@ install:
 dst_l2:
 	cd src/tui && bun test src/harness-dst.test.ts
 
+# MOTOKO_PROFILE_DIR names the directory the runtime's config loader reads.
+#
+# The host tells the runtime where the profile is twice: `--workdir`/`--profile`
+# to the loader (`config.ail`, `resolve_profile_dir`), and MOTOKO_PROFILE_DIR to
+# everything that reads the profile without the loaded config (the context-limit
+# resolver, six extensions). `loaderProfileDir` in runtime-process.ts restates
+# the loader's rules on the host, including what AILANG_FS_SANDBOX lets the
+# loader see. dst_l2 holds that restatement against a shell script standing in
+# for the runtime, which cannot tell whether the two agree.
+#
+# This asks both for real, over nine layouts (per-profile, the legacy flat
+# config, both, neither, three shapes of symlinked per-profile config, a
+# symlinked workdir): the variable in the environment `buildChildEnv` builds,
+# and the directory the loader settles on when run under that environment. It
+# fails unless they are the same directory and the one the layout should give.
+# The runtime half imports only `config`, so the whole gate is about a second.
+#
+# It needs bun AND ailang, which no other target does, so it has a CI job of its
+# own and is not in check_core or DST_TARGETS. Not covered: a workdir beneath
+# the host's cwd, where the loader finds no profile at all (#242).
+.PHONY: verify_profile_dir_agreement
+verify_profile_dir_agreement:
+	@bun src/tui/scripts/verify-profile-dir-agreement.ts
+
 # Run all core runtime module tests
 test_core:
 	@echo "Running src/core/agents_md.ail tests..."
