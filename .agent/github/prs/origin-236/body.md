@@ -38,13 +38,14 @@ faults are not simulated, and contracts also run as property tests on generated 
 | Deterministic Simulation Testing | One paragraph: this is single-actor, logical-fault DST; physical faults and several actors are out of scope; the invariant families are properties in the property-based-testing sense, and DST differs in generating whole executions. A link to 007 ADR-001 |
 | Limits | The simulation-boundary line names physical faults and several actors. A new line says a failing run is not minimized |
 
-## One naming question for the operator
+## The name
 
-The operator proposed "logic-based Deterministic Simulation Testing". This PR uses
-"logical-fault", the term 007 ADR-001 D1 adopted, because "logic-based" can be read as formal
-logic next to the Z3 material. The title and the section heading are unchanged. 007's D3 says the
-name "logical-fault DST" is available once its D2 bar is met; no record was found that declares
-the bar met, and the merged README already uses "DST" without a qualifier.
+The operator proposed "logic-based Deterministic Simulation Testing", to stress that hardware and
+network errors are not simulated, and on 2026-10-08 chose "logical-fault" for it: the term 007
+ADR-001 D1 adopted, and one that cannot be read as formal logic next to the Z3 material. The title
+and the section heading are unchanged. 007's D3 says the name "logical-fault DST" is available once
+its D2 bar is met; no record was found that declares the bar met, and the merged README already
+uses "DST" without a qualifier.
 
 ## Predicted outcome
 
