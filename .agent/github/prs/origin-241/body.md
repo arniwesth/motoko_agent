@@ -43,6 +43,7 @@ nine layouts, and one launch outside those is known to still differ (#242). See 
 - fix(tui): MOTOKO_PROFILE_DIR names the directory the config loader reads, flat layout included
 - fix(tui): a profile config reached through a symlink does not count, as it does not for the sandboxed loader
 - ci: a gate that the host's MOTOKO_PROFILE_DIR is the directory the runtime's loader reads
+- build: move verify_profile_dir_agreement above dst_l2 so it does not collide with #239's target
 
 6 files changed, and the record of #242.
 
@@ -207,7 +208,12 @@ Four mutants for the gate, the failing layouts named before each run:
 | host: flat beats per-profile | "both" | host exports `.motoko`, loader reads `.motoko/config/p` |
 | runtime: `resolve_profile_dir` skips the flat config | the same five | host exports `.motoko`, loader reads `.motoko/config/p` |
 
-The CI job has not run yet when this was written; this pull request's own run is its first.
+The new CI job passed on its first run, in 2 min 41 s, with the gate's step green.
+
+A trial merge of this branch with #239's head is clean, and on the merged tree `make dst_l2`
+(19 tests), #239's `make tui_context_limit` (14 tests) and this gate (nine layouts) all pass. The
+first trial conflicted in the Makefile, where both branches had added a target directly after
+`dst_l2`; this branch's target was moved above it.
 
 ## Review
 
