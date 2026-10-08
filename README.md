@@ -72,6 +72,7 @@ The demo then has Motoko restore the file. In the [recorded run](docs/motoko-dst
 
 ## Key Features
 
+- **Written in AILANG** - A purely functional, effect-typed language with capabilities, Z3 contracts and deterministic semantics, designed as a target for AI-generated code. See [Why AILANG](#why-ailang)
 - **Deterministic simulation** - The production driver runs against a seeded world of model replies, tool results, approvals and virtual time
 - **Logical fault injection** - Modeled provider errors, tool failures, correlation mismatches, approval denials and deadlines; no hardware or network faults
 - **Record and replay** - Recording ports turn a run into an execution program that replay serves again and checks
@@ -83,6 +84,41 @@ The demo then has Motoko restore the file. In the [recorded run](docs/motoko-dst
 - **Agent-written** - Developed by coding agents, with delegation through [herdr](https://herdr.dev) and an [agent sandbox](.devcontainer/agent_sandbox/README.md)
 
 Learn more: [DST technical report](papers/motoko-dst-report/DRAFT-current.md) | [Demo run](docs/motoko-dst-demo-run-2026-10-04.md) | [Scope notes](papers/motoko-dst-report/SCOPE-current.md) | [Design archive](.agent/projects/)
+
+---
+
+## Why AILANG
+
+Motoko is written in [AILANG](https://github.com/sunholo-data/ailang), a purely functional, effect-typed language designed as a target for AI-generated code. What makes simulation and verification practical here is enforced by the language, so it does not depend on an agent remembering a convention:
+
+- **Effects are in the type** - A signature lists every effect a function may perform, such as `! {FS, Net, AI}`, and a function without that row is pure. What code can touch is read off its signature, without reading its body
+- **Authority is granted, not ambient** - A program runs with the capabilities it is given (`ailang run --caps IO,FS`). A test withholds one to catch code that reaches around a port
+- **Deterministic by construction** - Values are immutable and there are no loops or mutable variables. Time, randomness and I/O are effects, and state is passed explicitly, which is why the same driver can run against the real world or a simulated one
+- **Contracts are proved** - `requires` and `ensures` on a pure function are checked by Z3 for every input, and `ailang test` also runs the contract as a property test
+- **A toolchain an agent can drive** - `ailang check`, `ailang test` and `ailang verify` give machine-checkable feedback at each step, and `ailang prompt` teaches a model the current syntax
+
+A contract from Motoko's retry policy, in `src/core/recovery.ail`:
+
+```ailang
+export pure func should_retry_stream_error(retryable: bool, retry_enabled: bool, remaining_step_budget: int) -> bool
+  ensures { not result || (remaining_step_budget > 1 && retryable) }
+  {
+  retryable
+    && retry_enabled
+    && remaining_step_budget > 1
+}
+```
+
+```bash
+ailang verify src/core/recovery.ail
+#   ✓ VERIFIED should_retry_stream_error
+```
+
+Z3 proves that a retry is never approved without budget left and a retryable error, for every budget. An example test can fix only a few points.
+
+AILANG is young, and Motoko pins the release it is tested against. The verifier covers a fragment of the language, so a function that recurses or uses a builtin Z3 cannot encode is left unproved, and the compiler has the effect-checking gap listed under [Limits](#limits). Gaps Motoko finds are reported upstream, as [CONTRIBUTING.md](CONTRIBUTING.md) describes.
+
+Learn more: [AILANG](https://github.com/sunholo-data/ailang) | [Why AILANG exists](https://ailang.sunholo.com/docs/why-ailang) | [Design axioms](https://ailang.sunholo.com/docs/references/axioms) | [No loops](https://ailang.sunholo.com/docs/reference/no-loops)
 
 ---
 

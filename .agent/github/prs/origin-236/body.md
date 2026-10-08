@@ -3,7 +3,7 @@ repo: arniwesth/motoko_agent
 pr: 236
 branch: docs/readme-pbt-and-logical-faults
 ticket: null
-title: "docs(readme): name the DST scope as logical faults, and mention property-based testing"
+title: "docs(readme): logical-fault DST, property-based testing, and a section on why AILANG"
 ---
 
 ## Summary
@@ -11,13 +11,16 @@ title: "docs(readme): name the DST scope as logical faults, and mention property
 A follow-up to #233, asked for by the operator on 2026-10-08. The README did not mention
 property-based testing, and it did not say that the simulation covers logical faults only. It now
 says both: the simulated faults are the ones at the agent's own boundary, hardware and network
-faults are not simulated, and contracts also run as property tests on generated inputs.
+faults are not simulated, and contracts also run as property tests on generated inputs. The
+operator then asked for AILANG to be featured more: it is now the first Key Features bullet, and a
+"Why AILANG" section sits before the DST section.
 
 ## Changes
 
 - docs(readme): name the DST scope as logical faults, and mention property-based testing
+- docs(readme): feature AILANG — a Key Features bullet and a "Why AILANG" section
 
-1 file changed.
+1 file changed, and this record.
 
 ## Governing docs
 
@@ -37,6 +40,8 @@ faults are not simulated, and contracts also run as property tests on generated 
 | Key Features | "Fault injection" becomes "Logical fault injection" and says no hardware or network faults. The contracts bullet adds that `ailang test` runs a contract as a property test on generated inputs, where it can build the arguments |
 | Deterministic Simulation Testing | One paragraph: this is single-actor, logical-fault DST; physical faults and several actors are out of scope; the invariant families are properties in the property-based-testing sense, and DST differs in generating whole executions. A link to 007 ADR-001 |
 | Limits | The simulation-boundary line names physical faults and several actors. A new line says a failing run is not minimized |
+| Key Features | A first bullet, "Written in AILANG", linking the new section |
+| Why AILANG, new, before the DST section | Five reasons the language suits verified software written by models: effects in the type, granted capabilities, deterministic semantics, proved contracts, and a toolchain an agent can drive. One real contract from `src/core/recovery.ail` with its `ailang verify` result. A paragraph on AILANG's limits: young, a pinned release, a verifier that covers a fragment, and the effect-checking gap |
 
 ## The name
 
@@ -64,6 +69,11 @@ Run on 2026-10-08 in the branch's worktree at `b07e760f`, AILANG v0.47.2.
 - [x] **No shrinker exists.** A search of `src/core`, `scripts/dst` and the `Makefile` for
   `ddmin`, `shrink_program` and `minimize_program` finds nothing, and 011 ADR-001 is Proposed.
 - [x] **Every relative link in the README resolves**, the new link to 007 ADR-001 included.
+- [x] **`ailang verify src/core/recovery.ail`** prints `✓ VERIFIED should_retry_stream_error`, and
+  the code block in the README is that function, identical to lines 23 to 29 of the source.
+- [x] **What the section says about AILANG is from AILANG's README and documentation**, read on
+  2026-10-07 and -08: the effect rows, `--caps`, no loops, Z3 contracts and `ailang prompt`. Its
+  claim that models write AILANG more correctly than other languages is not repeated.
 - [ ] **No record was found that 007's D2 bar has been declared met.** Searched 009's final
   acceptance note and ADR, and the DST report and its scope notes.
 - [ ] **CI was not awaited.** The change is documents only.
