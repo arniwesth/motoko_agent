@@ -15,6 +15,12 @@ again: about 35 s on every Motoko start in this container. v0.52.2 raised the li
 artifact and 128 MiB per module (sunholo-data/ailang `07e1a89bc`, the fix for
 sunholo-data/ailang#1328). The operator reported the warning on 2026-10-08 and asked for the fix.
 
+Running the gates on the new version found two things the bump changes besides the cache. One is
+fixed here, at the operator's instruction: a row of `declared_vs_performed` pinned a name-resolution
+order the compiler has reversed. The other is **open and keeps CI red**: seven gates fail on the
+v0.52.5 stdlib because the ambient inventory can no longer prove one builtin pure. Each has its own
+section below.
+
 ```
 Warning: CACHE_WRITE_FAILED module=src/core/session stage=encoding
  path=src/core/.ailang/cache/compile/modules/src__core__session/coretypeinfo.gob: ARTIFACT_TOO_LARGE:
@@ -24,8 +30,9 @@ Warning: CACHE_WRITE_FAILED module=src/core/session stage=encoding
 ## Changes
 
 - chore: AILANG v0.47.2 -> v0.52.5
+- fix(dst): on AILANG v0.52 the import shadow is an escape — LIMITATION 18 moves to group 3 (031 ADR-001 Amendment 6)
 
-26 files changed.
+The bump is 26 files:
 
 - `scripts/install-prerequisites.sh`: `AILANG_REF` and `AILANG_MIN_VERSION`.
 - `ailang.toml`: the floor, `>=0.52.5`. CI builds the toolchain from this line
@@ -35,11 +42,30 @@ Warning: CACHE_WRITE_FAILED module=src/core/session stage=encoding
   (`motoko_ext_herdr`, `motoko_ext_test_dummy`), and the package locks take the current
   `motoko_ext_abi` hash. No dependency version moved.
 
-No source file changes.
+The fix is 14 files, eight of them the amendment's artifact:
+
+- `scripts/dst/run_declared_vs_performed.sh`: LIMITATION 18 is a group-3 row; the fourth group,
+  its checker and its score line are removed.
+- `scripts/dst/fixtures/adr001_boundary/gate/expected.json`: the two import-shadow rows are
+  labelled `fail`. Their pins are unchanged.
+- `tools/ext_ambient_inventory/hook_scope.py`: docstrings and two rejection reasons that said the
+  compiler runs the import. No code path changes.
+- `scripts/dst/adr001_boundary_mutgate_spec.tsv` and `adr001_boundary_mutgate.tsv`: the row's
+  mutation, replaced.
+- `.agent/projects/031_system_one_decisions/ADR-001-extension-owned-structured-decisions.md`:
+  Amendment 6, and `evidence/amendment-6/`.
+
+No file under `src/` or `packages/` changes, apart from the lockfiles.
 
 ## Governing docs
 
-No project document governs a toolchain bump. Where the repository already records this defect:
+- `.agent/projects/031_system_one_decisions/ADR-001-extension-owned-structured-decisions.md`:
+  the registration boundary. **Amendment 6**, added here, records the reversed name-resolution
+  order under the ADR's own rule that a change is a numbered amendment with an artifact attached
+  (`evidence/amendment-6/ARTIFACT.txt`).
+
+No project document governs the toolchain bump itself. Where the repository already records the
+cache defect:
 
 - `.github/workflows/verify-extensions.yml`: the `dst_gates_heavy` and `coverage` jobs carry
   timeouts of 45 and 60 minutes "since AILANG v0.47", each with a note to re-measure and lower
@@ -64,13 +90,16 @@ No project document governs a toolchain bump. Where the repository already recor
   `ailang check src/core/types.ail`, exit 0.
 - **This pull request's CI run is the first run of the gates on v0.52.5 in CI.** Its job
   durations are what the two raised timeouts should be re-measured from. Lowering them is left
-  for a follow-up. CI will not show the red row below: no workflow runs `make dst` or
-  `declared_vs_performed`.
+  for a follow-up.
+- **CI stays red on `DST gates (rest)` until the open finding below is decided.** On the bump
+  alone that job failed on `profile_definition`, `driver_only` and `ext_hook_scope_selftest`;
+  every other job passed. No workflow runs `make dst` or `declared_vs_performed`, so CI never
+  showed the row that is fixed here.
 - **Headroom is about 2.3x, not unlimited.** At 29.3 MB against a 64 MiB limit, the same warning
   returns if session's type info more than doubles.
 
-Three upstream changes between the two versions can change what a caller does. Two were looked
-for before the sweep; the sweep found the third, which has its own section below:
+Four upstream changes between the two versions can change what this repository's code or gates
+do. Two were looked for before the sweep, the sweep found the third and CI found the fourth:
 
 - An imported name that the module also defines is now compile error MOD015 (v0.52.0). Not
   present in what `make check_core` compiles, which passes.
@@ -78,64 +107,101 @@ for before the sweep; the sweep found the third, which has its own section below
   grep in `Makefile`, `scripts/`, `tools/`, `src/tui/src`, `packages/` or `.github/`; the TUI
   passes its flags before `src/core/supervisor.ail` and the program's arguments after `--`.
 - A local binder now shadows an import of the same name (v0.52.0). One row of
-  `declared_vs_performed` pins the old order and is red.
+  `declared_vs_performed` pinned the old order. Fixed here; first section below.
+- `std/list` gained effect-polymorphic functions that call the builtin `_list_length`. The
+  ambient inventory stops proving that builtin pure. Open; second section below.
 
-## One red gate: a compiler behaviour the suite pins has reversed
+## Fixed here: a name-resolution order the suite pinned has reversed
 
-`make dst` on v0.52.5 is red on one row of one target, and the row is right to be red.
-`declared_vs_performed`'s LIMITATION 18 (`scripts/dst/run_declared_vs_performed.sh:1541`) pins a
-fact about the compiler, fact 6 of
-`.agent/projects/031_system_one_decisions/ADR-001-extension-owned-structured-decisions.md` (N62):
-an imported name outranks a local `let` of the same name. AILANG v0.52.0 reversed that on purpose
-(AILANG issue 1467, "local binders no longer captured by imports, builtins or constructors of the
-same name"): a `let`, a parameter or a match binder now shadows an import.
+`declared_vs_performed`'s LIMITATION 18 pinned a fact about the compiler, fact 6 of ADR-001 in
+project 031 (N62): an imported name outranks a local `let` of the same name. AILANG v0.52.0
+reversed that on purpose (AILANG issue 1467, "local binders no longer captured by imports,
+builtins or constructors of the same name"). On the bump alone the row went red and named the
+class it belongs in.
 
-Measured on `scripts/dst/fixtures/adr001_boundary/v7_delegate_import_shadow.ail` with
-`ailang run --caps IO,FS --entry main`:
+Measured on both versions with `ailang run --caps IO,FS --entry main`
+(`.agent/projects/031_system_one_decisions/evidence/amendment-6/ARTIFACT.txt` has the sources and
+the raw output):
 
-| AILANG | Output | Which `make_hooks` ran |
+| Construction | v0.47.2 | v0.52.5 |
 |---|---|---|
-| v0.47.2 | `result=2` | the imported one; no effect performed |
-| v0.52.5 | `NAMED RULE ESCAPE`, then `result=1` | the local `let`; a lambda annotated `! {}` performs IO |
+| a local `let make_hooks` over an imported `make_hooks` (the suite's fixture) | `result=2`: the import ran, no effect | `NAMED RULE ESCAPE`, `result=1`: the local ran and performed |
+| a local `let body` over an imported `body` | `result=2` | `PAYLOAD SHADOW ESCAPE`, `result=1` |
+| a parameter `body` over an imported `body` | `result=2`: the import ran, not the argument | `result=7`: the argument ran |
+| a same-module `func make_hooks` beside an imported one | `result=2`: the import ran | does not compile, `MOD015` |
 
-`ailang check` accepts the file on both versions, with no warning.
+`ailang check` accepts the first three on both versions, with no warning.
 
-**What does not change.** The registration-shape gate resolves locals first (ADR-001 D2) and
-still rejects both import-shadow fixtures on v0.52.5:
-`python3 tools/ext_ambient_inventory/hook_scope.py --gate-fixtures --only fx_import_shadow,fx_delegate_import_shadow`
-reports 2 ok, 0 failures (`payload-let-bound`, `delegation-let-bound`), and
-`ext_hook_scope_selftest` is green in the sweep. Nothing the gate accepts changes meaning.
+**The boundary did not move.** The registration-shape gate resolves locals first (ADR-001 D2) and
+rejects both import-shadow fixtures on v0.52.5 as it did before, for `payload-let-bound` and
+`delegation-let-bound`. Nothing the gate accepts changes meaning.
 
-**What does change.** The row's class. On v0.47.2 the compiled program was harmless, so the
-gate's rejection was an over-rejection, taken by design. On v0.52.5 the construction is a real
-escape and the rejection is what stops it. In the suite's terms the row moves from group 4
-(compiler-clean, rejected by design) to group 3 (compiler-accepted escapes), which leaves group 4
-empty. Three texts describe the old order: ADR-001's D2 paragraph (v0.33.0 resolves an imported
-name over a local `let`), `scripts/dst/fixtures/adr001_boundary/gate/expected.json`
-(`fail-compiler-clean`, "the pinned compiler runs the import") and the docstring of
-`gate_fixture_suite` in `tools/ext_ambient_inventory/hook_scope.py`.
+**The row's class did.** Up to v0.47.2 the compiled program was harmless and the gate's rejection
+was an over-rejection, taken by design. On v0.52.5 the construction is a real escape and the
+rejection is what stops it. LIMITATION 18 is now scored with the compiler-accepted escapes (group
+3, thirteen rows), the fourth group has no member and is removed, and ADR-001 Amendment 6 records
+it. The mutation that proves the row can go red is replaced, because the old one changed the
+imported body, which the row no longer reads.
 
-**The rest of the tree.** The scoping change applies to every `.ail` file, so the tree was
-scanned for a local binder that shares a name with an explicitly imported lowercase name: 494
-files under `src`, `packages`, `scripts` and `tools`, 4,952 imported names. The only binders
-found are the three boundary fixtures written for this case; three other hits, in
-`src/eval/journal/candidate_checks_live_test.ail`, are uses and not binders. No binder is named
-`show`, `floatToInt` or `intToFloat`. The scan is a regular-expression heuristic over `let`,
-tuple `let`, function and lambda parameters and single-line match arms, not a parser.
+**The rest of the tree.** The scoping change applies to every `.ail` file. A scan of 494 files
+under `src`, `packages`, `scripts` and `tools` (4,952 imported lowercase names) found no local
+binder that shares a name with an import outside the three boundary fixtures written for this
+case. The scan is a regular-expression heuristic, not a parser; its method and limits are in the
+artifact.
 
-**No version avoids it.** The scoping change shipped in v0.52.0 and the cache limits in v0.52.2,
-so every release that fixes the warning has the new scoping.
+## Open: seven gates are red on the v0.52.5 stdlib, for one cause
 
-**Not done here, and open.** This pull request does not touch the row, the fixtures or the ADR.
-The row's own failure text says ADR fact 6 and the fourth class must be re-read before the suite
-is trusted, and that re-reading is the operator's. Until it is done, `make dst` on this branch
-exits 2 on this one row.
+With the compiler and the stdlib both at v0.52.5, `make dst` fails seven targets:
+`ext_ambient_inventory`, `ext_ambient_inventory_selftest`, `ext_hook_scope_selftest`,
+`profile_definition`, `driver_only`, `driver_plus_compose` and `driver_plus_no_ops`. CI runs three
+of them and is red on those three. All seven fail on one line of the ambient inventory:
+
+```
+UNRESOLVED -- fail closed, triage required:
+  compaction_structural  packages/motoko-ext-compaction-structural/compaction_structural.ail:246  <builtin>._list_length  [effect-variable]
+  compose  packages/motoko-ext-compose/authoring/dispatcher.ail:321  <builtin>._list_length  [effect-variable]
+  ...
+```
+
+**Cause.** `tools/ext_ambient_inventory/derive.py` proves a builtin pure from the stdlib exports
+that call it. Its stated rule (`:140-144`): some export calling the builtin carries a closed empty
+row, and no export calling it carries labels or a row variable. In v0.52.5's `std/list`, `mapE`,
+`filterE`, `foldlE` and `flatMapE` are effect-polymorphic and call `_list_length` directly, so the
+builtin now has both a closed-row caller (`length`, `nth`, `last`) and row-variable callers, and
+is classed unprovable. Two extensions call it directly and fail closed: `compaction_structural`
+(one call, in a test function) and `compose` (eighteen calls in seven files).
+
+**Scope, measured.** On v0.52.5, `_list_length` is the only builtin with this mixed evidence, of
+327 the tool sees. On v0.47.2 no builtin has it. The compiler's own registry gives
+`_list_length: list[a] -> int` on both versions.
+
+**The tool states two things that no longer agree.** Its header gives the rule above. Its
+self-test's control, `tools/ext_ambient_inventory/fixtures/control_pure_builtin.ail`, says
+`_list_length` "is provably effect-free on compiler-derived evidence -- `std/list.length`'s body
+calls it and carries a closed empty cached row -- so it must NOT be a rejection". On v0.47.2 both
+held. On v0.52.5 the rule rejects what the control says must pass.
+
+**Not decided here.** Two ways to close it, and the choice is the operator's:
+
+1. Keep the rule, change the callers: the two extensions call `std/list.length`, and the control
+   moves to another builtin. The gate's rule is untouched; nineteen call sites in two packages
+   and the tool's own control change.
+2. Change the rule: a closed-row caller proves the builtin pure whatever other exports call it.
+   One line in `builtin_effects`, a no-op on v0.47.2, and the control holds as written. It gives
+   up the protection the stricter rule would offer if a builtin ever took an effectful callback,
+   which v0.52.5's `std/list` says a builtin cannot do "yet".
 
 ## Test evidence
 
 All on this branch in one worktree, with v0.52.5 built from the `v0.52.5` tag into a scratch
 directory (the container's shared `~/.local/bin/ailang` is still v0.47.2) and its own `std`
 beside it.
+
+**One correction to how the first sweep was run.** The compiler read its own stdlib, but
+`tools/ext_ambient_inventory/derive.py` reads stdlib sources from `AILANG_STDLIB_PATH` or else
+`~/.local/share/ailang/std`, which in this container is v0.47.2's. So the first sweep paired the
+v0.52.5 compiler with v0.47.2 stdlib sources for the gates built on that tool, and was green on
+gates that CI, which has both at v0.52.5, showed red. The later sweep sets the variable.
 
 - **The defect, on `origin/main` (`36ce3973`) with v0.47.2.**
   `MOTOKO_HEADLESS=1 MOTOKO_JSONL_OUTPUT=1 AILANG_FS_SANDBOX=workdir MOTOKO_CONFIG=default MODEL=anthropic/claude-nonexistent-probe ./scripts/run-agent.sh "say hi"`,
@@ -151,8 +217,21 @@ beside it.
   changes only `generated_at`.
 - **`ailang check src/core/session.ail` on a filled cache:** 33.2 s on v0.47.2 (which prints the
   warning each time), 2.3 s, 1.8 s and 1.7 s on v0.52.5.
-- **`make dst`** (the full sweep, 54 targets, `-j8`) on v0.52.5: exit 2 after 1,228 s. 53
-  targets pass; `declared_vs_performed` reports 136 passed, 1 failed, the row described above.
-  The log has no `CACHE_WRITE_FAILED` line.
+- **`make dst` on the bump alone** (`a7c77571`, 54 targets, `-j8`, stdlib sources at v0.47.2 for
+  the inventory tool, as corrected above): exit 2 after 1,228 s from cold caches. 53 targets
+  pass; `declared_vs_performed` reports 136 passed, 1 failed, LIMITATION 18. The log has no
+  `CACHE_WRITE_FAILED` line.
+- **The fix for LIMITATION 18**, on v0.52.5: `make declared_vs_performed` 137 passed, 0 failed,
+  group 3 at 13 of 13. `hook_scope.py --gate-fixtures --ailang-check`: 29 ok, 0 failures. The
+  mutation gate for the row's new mutation: baseline green, mutated red, restored green. On
+  v0.47.2 the same suite is red on that row alone, with its escape evidence absent.
+- **`make dst` on the fix** (`3a8afa6b`), compiler and stdlib both at v0.52.5: exit 2 after 359 s
+  on filled caches. 47 targets pass, `declared_vs_performed` among them. The seven named above
+  fail, each on the `_list_length` line.
+- **CI on the bump** (`023857d7`): `DST gates (rest)` failed on `profile_definition`,
+  `driver_only` and `ext_hook_scope_selftest`. Passed: `DST gates (heavy)` in 6 m 34 s,
+  `test_coverage + smoke_parity` in 5 m 43 s, `check_core + verify_extensions +
+  smoke_no_delegated_storm`, `verify_core + mutations + classify + contract policy`, `pr-corpus`
+  and `dst_l2`.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
