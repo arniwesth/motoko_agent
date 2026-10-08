@@ -3130,6 +3130,16 @@ install:
 dst_l2:
 	cd src/tui && bun test src/harness-dst.test.ts
 
+# The host tests that hold the unknown-context-limit warning (#237): the
+# message, the once-per-resolution rule, the same through a real RuntimeProcess
+# whose runtime is a shell script, and one run of the host itself, headless,
+# for the plain logger's stderr line. Needs bun and the TUI's dependencies and
+# no AILANG, so CI runs it in the dst_l2 job. Until this target nothing in CI
+# ran them: no job runs the TUI's jest suite.
+.PHONY: tui_context_limit
+tui_context_limit:
+	cd src/tui && bun test src/context-limit.test.ts
+
 # Run all core runtime module tests
 test_core:
 	@echo "Running src/core/agents_md.ail tests..."
