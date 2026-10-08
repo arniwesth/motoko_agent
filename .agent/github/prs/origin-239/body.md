@@ -31,6 +31,9 @@ them. It now prints each as `[warning] …` on stderr. That includes the runtime
 two lines AILANG writes on every start (`CACHE_WRITE_FAILED …`, `models registry: source=embedded
 …`), which the TUI and the JSONL wire already carried.
 
+**A workflow file changes:** `.github/workflows/verify-extensions.yml`. The `dst_l2` job gains one
+step, `make tui_context_limit`, so the warning's 14 host tests run in CI.
+
 **`check_core` gets slower.** The new gate is three runs that each compile the session modules,
 3 min 28 s of CPU here. The CI job that runs `check_core` took 12 min 15 s on this pull request,
 against 10 min 27 s on `main`'s last run and a 20-minute limit.
@@ -51,8 +54,9 @@ describes #241.
 - docs(configuration): extensions.strict, the unknown-limit warning, and how to give a model a window
 - fix(tui): with no catalogue the unknown-limit warning names the run's model, and a second model warns again
 - docs(013): ADR-001 amended — the strict refusal under Unknown, and where rule 2's visibility landed
+- ci: run the unknown-context-limit warning's host tests in the dst_l2 job
 
-10 files changed, and the record of #240.
+11 files changed, and the record of #240.
 
 | file | what |
 |---|---|
@@ -62,7 +66,8 @@ describes #241.
 | `src/tui/src/index.ts` | the plain logger prints `warning` events on stderr |
 | `src/core/rpc.ail` | `reject_if_strict_and_limit_unknown`, called at boot, at the first task after a `model_change`, and on a resume |
 | `scripts/verify_strict_context_limit.ail` | new: loads a profile, builds its runtime, hands both to the refusal |
-| `Makefile` | `verify_strict_context_limit`, six arms over three runs, added to `check_core` |
+| `Makefile` | `verify_strict_context_limit`, six arms over three runs, added to `check_core`; `tui_context_limit`, the warning's host tests |
+| `.github/workflows/verify-extensions.yml` | one step in the `dst_l2` job: `make tui_context_limit` |
 | `docs/configuration.md` | what `extensions.strict` refuses; the warning; how to give a model a window; `"disabled"` |
 | `.agent/projects/013_core_architecture_for_dst/ADR-001-…-caps.md` | two dated amendments, the original text kept |
 | `src/core/context_limit.ail` | one comment: its line citation of the ADR's type sketch moves from 284-302 to 326-344 |
@@ -269,8 +274,8 @@ JSONL run, and the warning on plain stderr and in the transcript.
 - **Finding 2: resolved.** It re-ran the 14 tests and a real two-model session with an undecodable
   catalogue, which named both models.
 - **Finding 3: partly resolved.** The plain logger's arm is now held by a test. The first-task and
-  resume calls still have no gate arm. It also pointed out that CI does not run these tests; see
-  "Not done here".
+  resume calls still have no gate arm. It also pointed out that CI did not run these tests; the
+  `dst_l2` job now does (`make tui_context_limit`).
 - **Finding 1: partly resolved**, as above.
 - **Two statements in the ADR amendment claimed too much, and are narrowed.** "No run that starts
   today is stopped" was true of shipped profiles only: a strict profile of someone's own can be
@@ -290,8 +295,8 @@ JSONL run, and the warning on plain stderr and in the transcript.
   also reads the window for its relief check and its fold cap.
 - **Two of the three calls have no gate arm.** The first-task call was checked by hand (above).
   The resume call was not exercised at all.
-- **CI does not run the 14 new TUI tests.** No job runs the TUI jest suite; `dst_l2` runs
-  `harness-dst.test.ts` only. They hold the warning locally and nowhere else.
+- **CI runs the 14 new TUI tests and no other TUI test file besides `harness-dst.test.ts`.** No
+  job runs the TUI's jest suite as a whole.
 - **The TUI status-bar context counter is not touched, and is dead.** It reads a `context_usage`
   event the runtime has not emitted since `6350b7ad`. ADR-001 D1 names "rendering unmeasured in
   the TUI counter" as a follow-up; there is no live counter to render it in.
