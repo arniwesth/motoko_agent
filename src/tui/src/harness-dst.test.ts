@@ -204,6 +204,61 @@ describe("profile_dir.child_env_names_the_directory_the_loader_reads", () => {
     expect(buildChildEnv(workdir, "p", "", "").MOTOKO_PROFILE_DIR).toBe(perProfile("p"));
   });
 
+  // The child's reads are pinned to the workdir, and the runtime refuses a path that goes through
+  // any symlink below it, wherever the link points (its sandbox log says "escapes sandbox" for all
+  // three shapes here). So for the loader such a per-profile config.json does not exist and the
+  // flat one is taken. Seen on real launches: the host, following the link, exported the
+  // per-profile directory, and the limit resolved `unknown`.
+  const outsideFile = () => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "harness-dst-outside-"));
+    extra.push(outside);
+    writeConfig(outside);
+    return path.join(outside, "config.json");
+  };
+  const insideFile = () => {
+    writeConfig(path.join(workdir, "elsewhere"));
+    return path.join(workdir, "elsewhere", "config.json");
+  };
+  const flatThenNot = () => {
+    // Without a flat config there is nothing else to name, so the per-profile path stands.
+    expect(buildChildEnv(workdir, "p", "", "").MOTOKO_PROFILE_DIR).toBe(perProfile("p"));
+    writeConfig(flat());
+    expect(buildChildEnv(workdir, "p", "", "").MOTOKO_PROFILE_DIR).toBe(flat());
+  };
+
+  it("does not count a config.json that is a symlink to a file outside the workdir", () => {
+    fs.mkdirSync(perProfile("p"), { recursive: true });
+    fs.symlinkSync(outsideFile(), path.join(perProfile("p"), "config.json"));
+    flatThenNot();
+  });
+
+  it("does not count a config.json that is a symlink to a file inside the workdir", () => {
+    fs.mkdirSync(perProfile("p"), { recursive: true });
+    fs.symlinkSync(insideFile(), path.join(perProfile("p"), "config.json"));
+    flatThenNot();
+  });
+
+  it("does not count a regular config.json in a per-profile directory that is a symlink", () => {
+    fs.mkdirSync(path.dirname(perProfile("p")), { recursive: true });
+    fs.symlinkSync(path.dirname(insideFile()), perProfile("p"));
+    flatThenNot();
+  });
+
+  // The sandbox is about what lies below the workdir: a workdir that is itself reached through a
+  // symlink reads its files normally (checked on the runtime). The flat config is the one asked
+  // about because the per-profile path is also the fallback, and a test that expected it would
+  // pass with this rule broken.
+  it("counts a config reached through a workdir that is itself a symlink", () => {
+    const link = path.join(os.tmpdir(), `harness-dst-link-${process.pid}`);
+    fs.symlinkSync(workdir, link);
+    try {
+      writeConfig(path.join(link, ".motoko"));
+      expect(loaderProfileDir(link, "p")).toBe(path.resolve(link, ".motoko"));
+    } finally {
+      fs.rmSync(link, { force: true });
+    }
+  });
+
   /** The MOTOKO_PROFILE_DIR a spawned child actually has: a shell script stands in for the runtime. */
   function spawnedProfileDir(profile: string): Promise<string> {
     const bin = path.join(workdir, "fake-ailang.sh");

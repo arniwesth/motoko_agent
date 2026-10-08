@@ -402,12 +402,33 @@ export function mirrorModelCatalogFromRepo(workdir: string, repoPath: string): v
 // compose, agentcli, ailang_tools). A flat config's `agent.context_limit` was
 // loaded and never took effect: the run's limit resolved `unknown` with
 // `profile_config_absent` (found in the review of #239).
+//
+// "Holds a config.json" means one the child can read. AILANG_FS_SANDBOX pins
+// the child's reads to the workdir, and AILANG v0.47.2 refuses a path that goes
+// through ANY symlink below that directory, wherever the link points: its
+// sandbox log says "escapes sandbox" for a config.json that is a link to a file
+// outside the workdir, for one that is a link to a file inside it, and for a
+// regular config.json in a per-profile directory that is itself a link. In all
+// three the loader then takes the flat config, while `fs.existsSync` follows
+// the link and says the per-profile one exists (found in the second review of
+// #239, on a real launch). Symlinks above the workdir are not the sandbox's
+// business, so the workdir's own real path is the base.
 export function loaderProfileDir(workdir: string, profile: string): string {
   const perProfile = path.resolve(workdir, ".motoko", "config", profile);
-  if (fs.existsSync(path.join(perProfile, "config.json"))) return perProfile;
+  if (readableInWorkdir(workdir, path.join(perProfile, "config.json"))) return perProfile;
   const flat = path.resolve(workdir, ".motoko");
-  if (fs.existsSync(path.join(flat, "config.json"))) return flat;
+  if (readableInWorkdir(workdir, path.join(flat, "config.json"))) return flat;
   return perProfile;
+}
+
+function readableInWorkdir(workdir: string, file: string): boolean {
+  const below = path.relative(path.resolve(workdir), path.resolve(file));
+  if (below === "" || below.startsWith("..") || path.isAbsolute(below)) return false;
+  try {
+    return fs.realpathSync(file) === path.join(fs.realpathSync(workdir), below);
+  } catch {
+    return false;
+  }
 }
 
 // 2026-05-14: if MOTOKO_CONFIG points to an absolute path OUTSIDE the workdir
