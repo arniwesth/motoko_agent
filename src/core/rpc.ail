@@ -12,7 +12,8 @@ module src/core/rpc
 -- MIGRATION sprint plan + CHANGELOG.md and git log around 2026-05-06.
 
 import src/core/agent_loop_v2 (run_v2_with_conversation, run_v2_resume_with_conversation)
-import src/core/context_usage (resolve_context_limit)
+import src/core/context_usage (resolve_context_limit, resolve_context_limit_sum)
+import src/core/context_limit (Unknown, profile_miss_id, catalogue_miss_id)
 import src/core/ports (ambient_context_reader, empty_world_state)
 import src/core/test/stub_step (LiveAI)
 import std/io     (println, exit, readLine)
@@ -28,7 +29,7 @@ import src/core/prompts (with_agents_context)
 import src/core/phase_vocab (msgs_to_messages, system_prefix_digest_for)
 import src/core/journal (fold_journal, journal_leaf, parse_journal_text, plan_resume, refusal_id, refusal_message, Refusal, Header, ResumePlan, ResumeInvocation)
 import src/core/config  (RuntimeConfig, InvocationConfig, load_runtime_config, load_invocation_config, CostRates)
-import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, BudgetPlan, ExtRuntime, NotReached)
+import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, BudgetPlan, ExtRuntime, NotReached, ExtEntry, Capability, Compactor)
 import src/core/ext/runtime (init_runtime_with_config, loaded_extension_names, ext_set_digest, dispatch_build_system_prompt, dispatch_budget_plan)
 import src/core/ext/ctx_defaults (noop_ext_ports, empty_ext_artifacts, zero_token_telemetry, empty_tool_evidence)
 
@@ -312,6 +313,9 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
   -- the loop's own `readLine` is the wait. See `resume_from_journal`.
   if inv.resume != "" then resume_from_journal(cfg, inv, ext_runtime, raw_system, cwd, env_url, hybrid_enabled)
   else {
+  -- #237: at boot and before the wait, so a pre-warm spawn says so before a
+  -- prompt is spent on it. See `reject_if_strict_and_limit_unknown`.
+  let _ = reject_if_strict_and_limit_unknown(cfg, ext_runtime, model);
   -- Everything above this line is task-independent warming. Everything below it
   -- reads the task, so it waits for one: see `await_first_task`.
   let first =
@@ -339,6 +343,9 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
   else {
   let run_task = first.task;
   let run_model = first.model;
+  -- #237: asked again only when a `model_change` reached the waiting runtime
+  -- before its first task. Otherwise this is the model admitted above.
+  let _ = if run_model == model then () else reject_if_strict_and_limit_unknown(cfg, ext_runtime, run_model);
   let settings = {
     task: run_task,
     ailang_built: ailang_built,
@@ -552,6 +559,7 @@ func resume_from_journal(cfg: RuntimeConfig, inv: InvocationConfig, ext_runtime:
         Ok(s) => {
           let task = s.header.boot.task;
           let run_model = if inv.model_override != "" then inv.model_override else s.model;
+          let _ = reject_if_strict_and_limit_unknown(cfg, ext_runtime, run_model);
           let settings = run_settings_for(cfg, task, inv.ailang_built, cwd);
           let budget = compute_budget_plan(ext_runtime, task, run_model, cwd, hybrid_enabled, 0, settings);
           let system_msg = build_system_msg(ext_runtime, raw_system, task, run_model, cwd, hybrid_enabled, budget, env_url);
@@ -587,6 +595,75 @@ func resume_from_journal(cfg: RuntimeConfig, inv: InvocationConfig, ext_runtime:
           }
         }
       }
+    }
+  }
+}
+
+-- ============================================================================
+-- #237: extensions.strict and an unknown context limit.
+-- ============================================================================
+
+func has_compactor(caps: [Capability]) -> bool {
+  match caps {
+    [] => false,
+    Compactor(_) :: _ => true,
+    _ :: rest => has_compactor(rest)
+  }
+}
+
+-- The registered extensions that carry at least one `Compactor` atom, by the
+-- name `session_start` reports them under. Read off the registry's
+-- capabilities, so an extension counts for what it registered and not for what
+-- it is called. `names` is `loaded_extension_names`, which is `entries` in order.
+func compactor_names(entries: [ExtEntry], names: [string]) -> [string] {
+  match entries {
+    [] => [],
+    e :: rest => match names {
+      [] => [],
+      n :: more =>
+        if has_compactor(e.caps) then n :: compactor_names(rest, more)
+        else compactor_names(rest, more)
+    }
+  }
+}
+
+-- A profile under `extensions.strict` may not run with less than it declares
+-- (`registry_generated.ail`: an uninstalled name, an empty registration). A
+-- compactor whose model has no window is the same case one step later: it is
+-- installed and registered and passes through on every step, because both
+-- shipped compactors take a percentage of the window and `Unknown` hands them 0
+-- (#237: 157 steps, 3k to 260k tokens, nothing compacted). So strict refuses to
+-- start, naming both misses and both fixes. Non-strict starts as before, and
+-- the host warns from `ContextLimitResolved` (tui `context-limit.ts`).
+--
+-- `Disabled` is not refused: it is declared in the profile (013 ADR-001 D1
+-- rule 3), so the profile already says what it runs with. Nor is a
+-- `model_change` after the start: this is a refusal to START, and the host's
+-- warning is what a later switch to an uncatalogued model gets.
+--
+-- Called where the run's model becomes known: at boot with the profile's or
+-- `--model`'s, at the first task if a `model_change` arrived before it, and in
+-- `resume_from_journal` with the model the resume will run.
+--
+-- The AMBIENT reader, as everywhere in this module (see `compute_budget_plan`),
+-- and only under strict with a compactor registered, so every other start
+-- performs exactly the reads it did.
+export func reject_if_strict_and_limit_unknown(cfg: RuntimeConfig, ext_runtime: ExtRuntime, model: string) -> () ! {Env, FS, IO} {
+  if not cfg.extensions.strict then ()
+  else match compactor_names(ext_runtime.registry.entries, loaded_extension_names(ext_runtime)) {
+    [] => (),
+    compactors => match resolve_context_limit_sum(ambient_context_reader(), empty_world_state(), model).limit {
+      Unknown(u) => {
+        let _ = emit(encode(jo([
+          kv("type", js("error")),
+          kv("error_code", js("strict_context_limit_unknown")),
+          kv("config_profile", js(cfg.profile)),
+          kv("config_dir", js(cfg.profile_dir)),
+          kv("message", js("extensions.strict: the context limit for '${model}' is unknown (${catalogue_miss_id(u.catalogue)}, ${profile_miss_id(u.profile)}), so ${join_csv(compactors)} would never compact; refusing to start. Set agent.context_limit in the profile's config.json, or add the model under context_limits in .motoko/model-catalog.json."))
+        ])));
+        exit(2)
+      },
+      _ => ()
     }
   }
 }
