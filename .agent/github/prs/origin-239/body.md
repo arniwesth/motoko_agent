@@ -38,9 +38,10 @@ against 10 min 27 s on `main`'s last run and a 20-minute limit.
 Not in it: a fallback window (suggestion 2) and a fixed token threshold (suggestion 3, now #240).
 See "Not done here".
 
-**Reviewed by Codex Sol on 2026-10-08; one finding is open.** The refusal and the warning report
-what the runtime's limit resolver sees, and that is not always the profile the config loader
-loaded. See "Review".
+**Reviewed by Codex Sol on 2026-10-08.** Its main finding is fixed at the cause in #241: the
+refusal and the warning report what the runtime's limit resolver sees, and with the legacy flat
+config layout that was not the profile the loader loaded. See "Review". This should not leave
+draft before #241 lands.
 
 ## Changes
 
@@ -49,7 +50,7 @@ loaded. See "Review".
 - docs(configuration): extensions.strict, the unknown-limit warning, and how to give a model a window
 - fix(tui): with no catalogue the unknown-limit warning names the run's model, and a second model warns again
 
-8 files changed, and the record of #240.
+8 files changed, plus the draft ADR amendment and the record of #240.
 
 | file | what |
 |---|---|
@@ -71,7 +72,8 @@ loaded. See "Review".
   `Unknown` (option 4: "loud, not blocking") and left "behaviour under `Unknown` beyond loudness"
   to the owner. The refusal here is narrower than option 4: opt-in through `extensions.strict`, and
   only when a compactor is registered. The operator asked for it on 2026-10-08. The ADR text is
-  not edited.
+  not edited; an amendment is drafted beside it and not applied
+  (`DRAFT-amendment-adr-001-strict-refusal-under-unknown.md`).
 - `docs/configuration.md`, "Model identifiers": compaction for an uncatalogued model "is skipped
   rather than guessed". Unchanged, and the reason there is no fallback window here.
 - `.agent/meta-decisions/mutate-each-stated-rule-once-and-see-its-test-fail.md`: how the seven
@@ -213,7 +215,8 @@ Codex Sol (`gpt-6.1-sol`) reviewed head `3c529b40` on 2026-10-08 in its own deta
 from a brief that asked it to read the diff before this body. Its verdict was to keep this in
 draft. Each finding was checked against the code before it was acted on.
 
-**1. Open: the refusal and the warning can describe a different profile from the one loaded.**
+**1. Fixed at the cause in #241: the refusal and the warning can describe a different profile from
+the one loaded.**
 
 - **What.** `reject_if_strict_and_limit_unknown` takes the loaded `cfg`, but the limit is resolved
   the way the session resolves it: from `$MOTOKO_PROFILE_DIR/config.json`. The host always exports
@@ -230,9 +233,11 @@ draft. Each finding was checked against the code before it was acted on.
   strict it makes it a refusal.
 - **So the decision is right and the reason is wrong.** The run really would not compact. What the
   message says about why, and how to fix it, is misleading in these two layouts.
-- **Not fixed here.** The fix is either on the host (export the directory the loader will use) or
-  in the resolver (read the profile that was loaded, which moves env reads that five DST fixtures
-  pin). Both are wider than #237. Awaiting the operator's choice.
+- **Not fixed here, by the operator's choice.** #241 makes the host export the directory the
+  loader will use, so the flat layout resolves its own `agent.context_limit` and the refusal no
+  longer fires on it. What remains after #241 is a hand-run `supervisor.ail` with no
+  `MOTOKO_PROFILE_DIR`: closing that means the resolver reads the profile that was loaded, which
+  moves env reads that five DST fixtures pin.
 
 **2. Fixed: with no catalogue the warning named no model, and a second model got no warning.**
 Commit `f24dd1f3`. Confirmed first on a real wire: with the catalogue absent both records carry
@@ -242,8 +247,11 @@ Commit `f24dd1f3`. Confirmed first on a real wire: with the catalogue absent bot
 passed. There is now a test that runs the host headless and reads stderr. The first-task and
 resume calls are still without a gate arm, as "Not done here" says.
 
-**Opinion, not acted on:** record the strict-only refusal and the operator's decision as a short
-amendment to 013 ADR-001, since that document still describes non-blocking behaviour.
+**Opinion, taken as a draft:** record the strict-only refusal and the operator's decision as a
+short amendment to 013 ADR-001, since that document still describes non-blocking behaviour. The
+draft is in this branch,
+`.agent/projects/013_core_architecture_for_dst/DRAFT-amendment-adr-001-strict-refusal-under-unknown.md`.
+It is not applied to the ADR and waits for the operator's acceptance.
 
 **Claims it re-ran and confirmed:** the six gate lines, the ten TUI tests then present, `tsc`,
 `verify_classify_check`, `new_contract_policy`, the warning directly after the record on a real
