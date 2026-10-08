@@ -35,21 +35,26 @@ two lines AILANG writes on every start (`CACHE_WRITE_FAILED …`, `models regist
 3 min 28 s of CPU here. The CI job that runs `check_core` took 12 min 15 s on this pull request,
 against 10 min 27 s on `main`'s last run and a 20-minute limit.
 
-Not in it: a fallback window (suggestion 2) and a fixed token threshold (suggestion 3). See "Not
-done here".
+Not in it: a fallback window (suggestion 2) and a fixed token threshold (suggestion 3, now #240).
+See "Not done here".
+
+**Reviewed by Codex Sol on 2026-10-08; one finding is open.** The refusal and the warning report
+what the runtime's limit resolver sees, and that is not always the profile the config loader
+loaded. See "Review".
 
 ## Changes
 
 - fix(tui): an unknown context limit is a warning, in the TUI and in headless output (#237)
 - feat(core): extensions.strict refuses to start a compactor whose model has no context limit (#237)
 - docs(configuration): extensions.strict, the unknown-limit warning, and how to give a model a window
+- fix(tui): with no catalogue the unknown-limit warning names the run's model, and a second model warns again
 
-8 files changed.
+8 files changed, and the record of #240.
 
 | file | what |
 |---|---|
 | `src/tui/src/context-limit.ts` | new: the message for an `unknown` resolution, and `UnknownLimitWatch`, which raises it once per distinct resolution |
-| `src/tui/src/context-limit.test.ts` | new: 10 tests, two of them through a real `RuntimeProcess` with a shell script as the runtime |
+| `src/tui/src/context-limit.test.ts` | new: 14 tests, three of them through a real `RuntimeProcess` with a shell script as the runtime, one through the host run headless |
 | `src/tui/src/runtime-process.ts` | raises the `warning` right after the record; `context_limit_resolved` is typed in `AgentEvent` |
 | `src/tui/src/index.ts` | the plain logger prints `warning` events on stderr |
 | `src/core/rpc.ail` | `reject_if_strict_and_limit_unknown`, called at boot, at the first task after a `model_change`, and on a resume |
@@ -99,7 +104,9 @@ after the record:
 - With no compactor loaded it says that context usage is unmeasured instead.
 - A declared `disabled` limit is silent. It is a choice written in the profile.
 - A TTY runtime serves each follow-up turn as a new run and re-emits the record, so the warning is
-  keyed on the model and the two misses. Another uncatalogued model warns again.
+  keyed on the model and the two misses. Another model with no window warns again.
+- The model is the record's when it names one, which the core does only for
+  `model_not_in_catalogue`. Otherwise it is the model the run's `session_start` named.
 
 ## The refusal
 
@@ -159,7 +166,7 @@ README-only merge (#236). The machine was shared with other sessions, so the tim
 | `make verify_classify_check` | exit 0; `17 contracts, register agrees` |
 | `make new_contract_policy` | exit 0; `no pure func added under src/core/ since origin/main` |
 | TUI `tsc --noEmit` | exit 0 |
-| TUI jest (`src/.*\.test\.ts`) | 440 tests pass in 44 suites, 10 of them new. 5 suites fail to load; see "Not done here" |
+| TUI jest (`src/.*\.test\.ts`) | 444 tests pass in 44 suites, 14 of them new, in 16 of 17 runs. One run had two failing tests in a sixth suite that I did not capture and could not reproduce. 5 suites fail to load; see "Not done here" |
 | `make dst_l2` | 9 pass, 0 fail |
 | `make dst` | exit 0, "all targets passed", 2,981 s at `-j8`. Started on `4bab6bd2`; the record commit landed while it ran |
 
@@ -179,6 +186,14 @@ its run. The arm was named before the run:
 Every arm before the red one stayed green. Under the last mutant the launcher ran a one-step stub
 session and exited 0, so a launcher that stops asking fails the arm; it does not hang it.
 
+Three mutants of the TUI side, added with the review fix, the tests named before each run:
+
+| mutant | tests that failed |
+|---|---|
+| the plain logger's `warning` arm removed | the host test, alone |
+| the de-duplication key built from the record's model only | the two model-change tests with no catalogue |
+| the message ignoring the run's model | the four tests that read a model name from a record that has none |
+
 Against the real runtime, by hand, with a model id the provider rejects, so no paid call was made:
 
 - **Warning, JSONL:** default profile. `context_limit_resolved` (`unknown`, `profile_key_absent`,
@@ -192,15 +207,57 @@ Against the real runtime, by hand, with a model id the provider rejects, so no p
 - **Not run:** the interactive TUI. It shows `warning` and `error` events through arms `ui.ts`
   already had.
 
+## Review
+
+Codex Sol (`gpt-6.1-sol`) reviewed head `3c529b40` on 2026-10-08 in its own detached worktree,
+from a brief that asked it to read the diff before this body. Its verdict was to keep this in
+draft. Each finding was checked against the code before it was acted on.
+
+**1. Open: the refusal and the warning can describe a different profile from the one loaded.**
+
+- **What.** `reject_if_strict_and_limit_unknown` takes the loaded `cfg`, but the limit is resolved
+  the way the session resolves it: from `$MOTOKO_PROFILE_DIR/config.json`. The host always exports
+  `<workdir>/.motoko/config/<profile>`. The config loader also accepts the legacy flat
+  `<workdir>/.motoko/config.json`, and a hand-run `supervisor.ail` may have no
+  `MOTOKO_PROFILE_DIR` at all.
+- **Reproduced** through `scripts/run-agent.sh`, headless: a flat `.motoko/config.json` with
+  `agent.context_limit: 200000`, a compactor and `strict: true` is refused with
+  `profile_config_absent`. The remedy in the message is what the operator already did.
+- **It is older than this PR.** The same flat config with `strict: false` starts, and the
+  session's own record says `unknown`, `profile_config_absent`: with the flat layout
+  `agent.context_limit` has never taken effect, and the extensions that read
+  `$MOTOKO_PROFILE_DIR/<ext>.json` have the same blind spot. This PR makes that visible, and under
+  strict it makes it a refusal.
+- **So the decision is right and the reason is wrong.** The run really would not compact. What the
+  message says about why, and how to fix it, is misleading in these two layouts.
+- **Not fixed here.** The fix is either on the host (export the directory the loader will use) or
+  in the resolver (read the profile that was loaded, which moves env reads that five DST fixtures
+  pin). Both are wider than #237. Awaiting the operator's choice.
+
+**2. Fixed: with no catalogue the warning named no model, and a second model got no warning.**
+Commit `f24dd1f3`. Confirmed first on a real wire: with the catalogue absent both records carry
+`model: ""`.
+
+**3. Coverage.** Nothing held the plain logger's `warning` arm: with it removed all ten tests
+passed. There is now a test that runs the host headless and reads stderr. The first-task and
+resume calls are still without a gate arm, as "Not done here" says.
+
+**Opinion, not acted on:** record the strict-only refusal and the operator's decision as a short
+amendment to 013 ADR-001, since that document still describes non-blocking behaviour.
+
+**Claims it re-ran and confirmed:** the six gate lines, the ten TUI tests then present, `tsc`,
+`verify_classify_check`, `new_contract_policy`, the warning directly after the record on a real
+JSONL run, and the warning on plain stderr and in the transcript.
+
 ## Not done here
 
 - **No fallback window** (suggestion 2). A guessed window is what `docs/configuration.md` says
   Motoko does not do. With the 65,536-token output reservation, a 128k guess leaves about 62k of
   working budget, so a 75% threshold would fire near 46k tokens on a model that may have 1M.
   `agent.context_limit` already gives a profile its own fallback. This stays ADR-001's open item.
-- **No fixed token threshold** (suggestion 3). Worth its own issue: 75% of a 1M window is past
-  where cost hurts even for a catalogued model. It is more than a config key, because
-  `compaction_ai` also reads the window for its relief check and its fold cap.
+- **No fixed token threshold** (suggestion 3). Filed as #240: 75% of a 1M window is past where
+  cost hurts even for a catalogued model. It is more than a config key, because `compaction_ai`
+  also reads the window for its relief check and its fold cap.
 - **Two of the three calls have no gate arm.** The first-task call was checked by hand (above).
   The resume call was not exercised at all.
 - **The TUI status-bar context counter is not touched, and is dead.** It reads a `context_usage`
