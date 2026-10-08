@@ -277,7 +277,7 @@ JSONL run, and the warning on plain stderr and in the transcript.
   stopped, which is the point. "Since PR #241 a normal launch does not make the two differ" was
   false for two layouts it tried. The amendment now says what #241 covers and what it does not.
 - **It found that `WORKDIR` beneath the repository loads no profile at all.** Reproduced, with and
-  without either PR. Recorded in #241; it has no issue yet.
+  without either PR, and on a clean `main`. Filed as #242.
 
 ## Not done here
 
