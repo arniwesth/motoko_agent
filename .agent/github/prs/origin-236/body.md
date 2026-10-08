@@ -38,10 +38,10 @@ operator then asked for AILANG to be featured more: it is now the first Key Feat
 |---|---|
 | Opening paragraph | Two sentences: the simulated faults are logical ones at the agent's boundary, and hardware and network faults are not simulated |
 | Key Features | "Fault injection" becomes "Logical fault injection" and says no hardware or network faults. The contracts bullet adds that `ailang test` runs a contract as a property test on generated inputs, where it can build the arguments |
-| Deterministic Simulation Testing | One paragraph: this is single-actor, logical-fault DST; physical faults and several actors are out of scope; the invariant families are properties in the property-based-testing sense, and DST differs in generating whole executions. A link to 007 ADR-001 |
+| Deterministic Simulation Testing | One paragraph: this is single-actor, logical-fault DST; physical faults and several actors are out of scope; the invariant families are properties in the property-based-testing sense, and what is generated is an execution of the production driver in a controlled environment. A link to 007 ADR-001 |
 | Limits | The simulation-boundary line names physical faults and several actors. A new line says a failing run is not minimized |
 | Key Features | A first bullet, "Written in AILANG", linking the new section |
-| Why AILANG, new, before the DST section | Five reasons the language suits verified software written by models: effects in the type, granted capabilities, deterministic semantics, proved contracts, and a toolchain an agent can drive. One real contract from `src/core/recovery.ail` with its `ailang verify` result. A paragraph on AILANG's limits: young, a pinned release, a verifier that covers a fragment, and the effect-checking gap |
+| Why AILANG, new, before the DST section | Five reasons the language suits verified software written by models: effects in the type, granted capabilities, deterministic semantics, proved contracts, and a toolchain an agent can drive. One real contract from `src/core/recovery.ail` with its `ailang verify` result. A paragraph on AILANG's limits: young, a pinned release, proofs over unbounded integers, bounded proofs for recursion, and builtins Z3 cannot encode |
 
 ## The name
 
@@ -51,6 +51,34 @@ ADR-001 D1 adopted, and one that cannot be read as formal logic next to the Z3 m
 and the section heading are unchanged. 007's D3 says the name "logical-fault DST" is available once
 its D2 bar is met; no record was found that declares the bar met, and the merged README already
 uses "DST" without a qualifier.
+
+## Review
+
+Reviewed on 2026-10-08 at `e7e01b3c` by Codex on GPT-6.1-Sol (high reasoning), read-only, in the
+session that reviewed #233, briefed to check claims about AILANG against the installed CLI and
+AILANG's own documentation. It reported four verified errors and three opinions. The authoring
+session reproduced the four and fixed them in the commit after `e7e01b3c`:
+
+| Finding | Fix |
+|---|---|
+| "Checked by Z3 for every input": the proof assumes the `requires`, and Z3 reasons over unbounded integers. AILANG's own example `doubleRange` is VERIFIED and fails its `ensures` at run time for 2^62 | The bullet says what is proved under what, and the limits paragraph names overflow |
+| "Enforced by the language", "lists every effect": the ABI documents effects escaping through function-valued record fields, and a dropped world successor compiles | The lead says the language gives the footing and Motoko's ports, state threading and tests build the discipline. The effects bullet says "declares" and links Limits. The determinism bullet says the types do not check that the right state is passed |
+| "What DST adds is that whole executions are generated": 007 ADR-001 says state-machine property testing also generates command sequences | The sentence now says what is generated here, without claiming it as the difference |
+| "A function that recurses is left unproved": v0.47.2 gives recursive functions a proof to a bounded depth | Stated as a bounded proof, not an inductive one |
+
+Also taken, from an opinion with a factual part: the skipped property test in
+`context_limit.ail` is skipped because the generated input did not meet its `requires`, so "where
+it can build the arguments" was replaced.
+
+Open, for the operator: say that durable resume activates the fault catalogue's triggers for
+reconsidering the physical-fault exclusion, so "out of scope by decision" is not read as settled;
+and shorten "Why AILANG" to two reasons plus the example and move it after the DST section. The
+position before the DST section and the first Key Features bullet were the operator's request.
+
+The reviewer found the scoped name consistent with 007 D1 and no naming violation, noting that
+009's ADR and its D5 and D28 notes carry the name. It found the retry sample, the release pin, the
+no-loops claim, the logical fault classes and the shrinking limit correct, and the in-page links
+and code blocks rendering.
 
 ## Predicted outcome
 
@@ -64,8 +92,9 @@ Run on 2026-10-08 in the branch's worktree at `b07e760f`, AILANG v0.47.2.
 
 - [x] **`ailang test src/core/context_limit.ail`** prints contract-derived property tests:
   `raw_window_of_property_1 (100 cases)`, `working_budget_for_ext_property_2 (100 cases)`, and
-  one skipped, `working_budget_for_ext_property_1 (1 cases)`. The README says "where it can build
-  the arguments" for that reason.
+  one skipped, `working_budget_for_ext_property_1 (1 cases)`, because the generated input did not
+  meet its `requires`. The README says the tests run on inputs "that meet its preconditions" and
+  that skips are reported.
 - [x] **No shrinker exists.** A search of `src/core`, `scripts/dst` and the `Makefile` for
   `ddmin`, `shrink_program` and `minimize_program` finds nothing, and 011 ADR-001 is Proposed.
 - [x] **Every relative link in the README resolves**, the new link to 007 ADR-001 included.
@@ -74,8 +103,9 @@ Run on 2026-10-08 in the branch's worktree at `b07e760f`, AILANG v0.47.2.
 - [x] **What the section says about AILANG is from AILANG's README and documentation**, read on
   2026-10-07 and -08: the effect rows, `--caps`, no loops, Z3 contracts and `ailang prompt`. Its
   claim that models write AILANG more correctly than other languages is not repeated.
-- [ ] **No record was found that 007's D2 bar has been declared met.** Searched 009's final
-  acceptance note and ADR, and the DST report and its scope notes.
+- [x] **The name.** 009's ADR-001 is titled for "Motoko Logical-Fault DST" and states what earns
+  the name. The reviewer reports that 009's D5 and D28 notes record its adoption; the authoring
+  session did not read those two notes.
 - [ ] **CI was not awaited.** The change is documents only.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)

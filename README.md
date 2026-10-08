@@ -78,7 +78,7 @@ The demo then has Motoko restore the file. In the [recorded run](docs/motoko-dst
 - **Record and replay** - Recording ports turn a run into an execution program that replay serves again and checks
 - **Trace invariants** - 13 families, including tool pairing, budget accounting and journal fold; each reports whether it ran and on how much input
 - **Mutation testing** - Source mutants and negative controls show, for the rules tested, that a check can fail and which defects no check sees
-- **SMT contracts and property tests** - Z3-verified contracts on pure core functions, classified as substantive, tautology or spec-equals-body. `ailang test` also runs a contract as a property test on generated inputs, where it can build the arguments
+- **SMT contracts and property tests** - Z3-verified contracts on pure core functions, classified as substantive, tautology or spec-equals-body. `ailang test` also runs a contract as a property test on generated inputs that meet its preconditions, and reports the ones it has to skip
 - **Effect-typed extensions** - A hook's signature declares the effects it may perform, and a run can withhold a capability
 - **Durable sessions** - A session journal, checked reconstruction on resume, and park/wake for external waits
 - **Agent-written** - Developed by coding agents, with delegation through [herdr](https://herdr.dev) and an [agent sandbox](.devcontainer/agent_sandbox/README.md)
@@ -89,12 +89,12 @@ Learn more: [DST technical report](papers/motoko-dst-report/DRAFT-current.md) | 
 
 ## Why AILANG
 
-Motoko is written in [AILANG](https://github.com/sunholo-data/ailang), a purely functional, effect-typed language designed as a target for AI-generated code. What makes simulation and verification practical here is enforced by the language, so it does not depend on an agent remembering a convention:
+Motoko is written in [AILANG](https://github.com/sunholo-data/ailang), a purely functional, effect-typed language designed as a target for AI-generated code. The language gives simulation and verification their footing. Motoko's ports, its explicit state threading and its tests build the discipline on top:
 
-- **Effects are in the type** - A signature lists every effect a function may perform, such as `! {FS, Net, AI}`, and a function without that row is pure. What code can touch is read off its signature, without reading its body
+- **Effects are declared in the type** - A signature declares the effects a function may perform, such as `! {FS, Net, AI}`, and a function with no effect row is declared pure. What code is meant to touch can be read from its signature, with one compiler gap listed under [Limits](#limits)
 - **Authority is granted, not ambient** - A program runs with the capabilities it is given (`ailang run --caps IO,FS`). A test withholds one to catch code that reaches around a port
-- **Deterministic by construction** - Values are immutable and there are no loops or mutable variables. Time, randomness and I/O are effects, and state is passed explicitly, which is why the same driver can run against the real world or a simulated one
-- **Contracts are proved** - `requires` and `ensures` on a pure function are checked by Z3 for every input, and `ailang test` also runs the contract as a property test
+- **Deterministic by construction** - Values are immutable and there are no loops or mutable variables. Time, randomness and I/O are effects, and state has to be passed explicitly, which is what lets the same driver run against the real world or a simulated one. Passing the right state is not checked by the types: a dropped successor compiles, and the tests catch it
+- **Contracts are proved** - `requires` states what a caller must guarantee and `ensures` what the result satisfies. Z3 proves the `ensures` for all inputs that meet the `requires`, and `ailang test` also runs it on generated inputs
 - **A toolchain an agent can drive** - `ailang check`, `ailang test` and `ailang verify` give machine-checkable feedback at each step, and `ailang prompt` teaches a model the current syntax
 
 A contract from Motoko's retry policy, in `src/core/recovery.ail`:
@@ -116,7 +116,7 @@ ailang verify src/core/recovery.ail
 
 Z3 proves that a retry is never approved without budget left and a retryable error, for every budget. An example test can fix only a few points.
 
-AILANG is young, and Motoko pins the release it is tested against. The verifier covers a fragment of the language, so a function that recurses or uses a builtin Z3 cannot encode is left unproved, and the compiler has the effect-checking gap listed under [Limits](#limits). Gaps Motoko finds are reported upstream, as [CONTRIBUTING.md](CONTRIBUTING.md) describes.
+AILANG is young, and Motoko pins the release it is tested against. A proof has limits. Z3 reasons over unbounded integers while the runtime uses machine integers, so a verified contract can still fail on overflow. A recursive function gets a proof to a bounded depth, not an inductive one, and a function that uses a builtin Z3 cannot encode is left unproved. Gaps Motoko finds are reported upstream, as [CONTRIBUTING.md](CONTRIBUTING.md) describes.
 
 Learn more: [AILANG](https://github.com/sunholo-data/ailang) | [Why AILANG exists](https://ailang.sunholo.com/docs/why-ailang) | [Design axioms](https://ailang.sunholo.com/docs/references/axioms) | [No loops](https://ailang.sunholo.com/docs/reference/no-loops)
 
@@ -131,7 +131,7 @@ Motoko's session driver reaches the model, tools, files, environment, clock and 
 3. **Replay** - The driver runs again against that program. Replay checks each request against its recorded identity, a projection such as the model and message count of a model step, and that every recorded interaction is consumed
 4. **Judge** - A run's trace is checked against 13 invariant families, such as tool pairing, budget accounting and journal fold. Each family reports whether it ran and on how much input
 
-This is single-actor, logical-fault DST: one sequential agent loop against a model of its logical environment. Physical faults such as torn writes and network partitions, and the interleaving of several actors, are out of scope by decision. The invariant families are properties in the property-based-testing sense. What DST adds is that whole executions are generated, with faults and virtual time, and not input values.
+This is single-actor, logical-fault DST: one sequential agent loop against a model of its logical environment. Physical faults such as torn writes and network partitions, and the interleaving of several actors, are out of scope by decision. The invariant families are properties in the property-based-testing sense. What is generated is an execution of the production driver in a controlled environment, with seeded faults and virtual time.
 
 Not every run takes all four steps. CI runs the fixed corpus on every pull request, a bank of seeds and one constructed scenario, and `make corpus_judge` applies the invariant set to each of its runs. A rotating corpus runs every night with a seed window that changes with the day; its runs are checked for corpus, rotation and shard accounting, without replay or the invariant set. Promoting a nightly failure into the fixed corpus as an exact recorded program is the stated policy and is not built yet. A result is scoped to a versioned execution profile, which names the installed extensions and what is excluded. `make dst` runs the full sweep of 53 targets.
 
