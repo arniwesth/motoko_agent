@@ -263,8 +263,10 @@ Its two stand-in binaries are refused by the control: one that runs the real loa
 exits 42 ("the loader did not run to the end"), and one that only echoes the variable and exits 0
 ("answered with MOTOKO_PROFILE_DIR itself").
 
-The dedicated CI job passed on its only run, in 2 min 41 s, before it was removed. A trial merge
-of this branch with #239's head is clean.
+The dedicated CI job passed on its only run, in 2 min 41 s, before it was removed. With the gate
+as three steps of the `core` job, that job passed in 10 min 49 s with all three green, against
+10 min 27 s on `main`'s last run. A trial merge of this branch with #239's head is clean, and on
+the merged tree the gate, `make dst_l2` (25 tests) and #239's `make tui_context_limit` (14) pass.
 
 ## Review
 
