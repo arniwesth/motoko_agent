@@ -9,6 +9,7 @@ import std/fs      (readFile, writeFile, fileExists, mkdirAll, isDir, readFileRe
 import std/process (exec, ProcessError, ProcessOutput)
 import std/bytes   (toString)
 import std/crypto  (sha256Hex)
+import pkg/sunholo/motoko_ext_abi/path_guard (path_guard_script)
 import src/core/types   (ToolBackend, ProcessExecReq, ToolResultItem, ToolResultMeta, SearchMatch, TestFailure, EditOp)
 import src/core/tool_contract (ToolCallEnvelope)
 
@@ -465,14 +466,16 @@ func validate_path_common(tool: string, id: string, path: string, workdir: strin
       else if starts_with_root_dir(stripped) then
         Err(path_error(id, tool, "path appears absolute (missing leading slash): ${path}"))
       else {
-        let guard_script = "set -eu\nwd=$(realpath \"$1\")\nrel=\"$2\"\njoined=\"$wd/$rel\"\ntarget=$(realpath -m \"$joined\")\ncase \"$target\" in\n  \"$wd\"|\"$wd\"/*) ;;\n  *) exit 43 ;;\nesac\nif [ -e \"$joined\" ]; then\n  resolved=$(realpath \"$joined\")\n  case \"$resolved\" in\n    \"$wd\"|\"$wd\"/*) ;;\n    *) exit 44 ;;\n  esac\nfi\n";
-        -- exec is Ok for ANY exit code (Err only when bash cannot run), so the
-        -- guard's verdict is its exit code: 43/44 mean the path escapes. Any
-        -- other failure is let through as before: `realpath -m` is GNU-only,
-        -- and refusing on it would refuse every path where it is missing.
-        match exec("bash", ["-lc", guard_script, "motoko-path-guard", workdir, stripped]) {
-          Ok(out) => if out.exitCode == 43 || out.exitCode == 44 then Err(path_error(id, tool, "path escapes workspace: ${path}")) else Ok(()),
-          Err(_) => Err(path_error(id, tool, "path escapes workspace: ${path}"))
+        -- The shared guard (motoko_ext_abi/path_guard). FAIL CLOSED: any
+        -- non-zero exit refuses. Before, only 43/44 refused and every other
+        -- failure was let through, because `realpath -m` is GNU-only; on
+        -- macOS that let reads and writes follow a symlink out (#209).
+        match exec("bash", ["-c", path_guard_script(), "motoko-path-guard", workdir, stripped]) {
+          Ok(out) =>
+            if out.exitCode == 0 then Ok(())
+            else if out.exitCode == 43 || out.exitCode == 44 then Err(path_error(id, tool, "path escapes workspace: ${path}"))
+            else Err(path_error(id, tool, "path guard could not resolve the workspace (exit ${show(out.exitCode)}): ${path}")),
+          Err(_) => Err(path_error(id, tool, "path guard could not run: ${path}"))
         }
       }
     }
