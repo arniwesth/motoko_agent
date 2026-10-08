@@ -17,6 +17,11 @@ wrapped native tool is the native one.
 
 This is the second ask of #204. The first, letting a profile hide native tools, is not in this PR.
 
+#235 makes the same change to `tools_with_extensions`. It was written independently (its commit is
+dated 2026-10-02, three days before this branch's first) and this PR supersedes it: the three
+inline tests and the gate added here pass against #235's implementation, so the two behave the
+same.
+
 ## Changes
 
 - `src/core/tool_catalog.ail`: `tools_with_extensions` keeps one schema per tool name. The first
@@ -63,16 +68,16 @@ allowlist) is being drafted separately; this fix does not depend on it.
 
 ## Test evidence
 
-On this branch, AILANG v0.47.2:
+On this branch with `main` at `37f92741` merged in (2026-10-08), AILANG v0.47.2:
 
 ```
 ailang test src/core/tool_catalog.ail     8 tests: 8 passed
-make tool_catalog_registry                tool_catalog_registry PASS (19 extensions registered, 73 tools)
-make check_core                           green, exit 0
-make dst                                  53 targets, 47 pass, 6 fail (the same 6 that fail on main; see below)
-make new_contract_policy                  2 in-scope new pure funcs, both justified and checked; 17 more test-only
+make tool_catalog_registry                tool_catalog_registry PASS (20 extensions registered, 74 tools)
+make check_core                           green, exit 0 (60 passed, 0 failed)
+make dst                                  54 targets, all passed (3544 s wall, -j8)
+make new_contract_policy                  2 in-scope new pure funcs, both justified; 17 more test-only
 make verify_classify_check                OK, register agrees
-make verify_core                          15 contracts proven, 1 blocked, 0 files failed
+make verify_core                          16 contracts proven, 1 blocked, 0 files failed
 ```
 
 Both new checks fail without the fix. With the one line in `tools_with_extensions` put back:
@@ -82,18 +87,27 @@ ailang test src/core/tool_catalog.ail     8 tests: 5 passed, 3 failed (the three
 make tool_catalog_registry                FAIL count=9
   order: microrag                         ✗ every name once (8 tools) — sent more than once: WriteFile
   order: ailang_tools                     ✗ every name once (10 tools) — sent more than once: ReadFile,WriteFile,EditFile
-  all 19 extensions                       ✗ every name once (77 tools) — sent more than once: ReadFile,WriteFile,EditFile
+  all 20 extensions                       ✗ every name once (78 tools) — sent more than once: ReadFile,WriteFile,EditFile
 ```
 
-`make tool_catalog_registry` also passes with the `HERDR_*` variables unset, as in CI (71 tools).
+`make tool_catalog_registry` also passes with the `HERDR_*` variables unset, as in CI (72 tools).
 
-The six `make dst` targets that fail are `declared_vs_performed`, `driver_plus_compose`,
-`driver_plus_no_ops`, `ext_ambient_inventory_selftest`, `ext_hook_scope` and
-`ext_hook_scope_selftest`. They fail identically on `main` (swept at `cf54dff9`, before this
-change), with messages about `ailang_tools` being an extension their inventories do not list (18
-expected, 19 found) and about `test_dummy`'s registration shape. CI does not run those six, and
-this PR does not touch them. Inside the sweep, `test_coverage` reports
-`src/core/tool_catalog.ail: 8/8 passed` and `tool_catalog_registry` passes.
+Inside the sweep, `test_coverage` reports `src/core/tool_catalog.ail: 8/8 passed` and
+`tool_catalog_registry` passes. The six targets that were red when this PR was opened
+(`declared_vs_performed`, `driver_plus_compose`, `driver_plus_no_ops`,
+`ext_ambient_inventory_selftest`, `ext_hook_scope` and `ext_hook_scope_selftest`) were red on
+`main` too and have since been fixed there; they pass in this sweep.
+
+The merge with `main` had one conflict, in `.github/workflows/verify-extensions.yml`: `main` added
+`ext_hook_scope` and `ext_hook_scope_selftest` to the "DST AILANG gates — rest" step on the line
+where this branch added `tool_catalog_registry`. The step runs all three.
+
+Against #235's implementation of `tools_with_extensions` (its two helpers in place of this
+branch's): the inline tests go 9/9 (#235's one test plus this branch's three new ones) and
+`make tool_catalog_registry` passes.
+
+The live steps and the request-body capture below were run on 2026-10-05, before the merge, and
+were not repeated after it.
 
 Live, one model step each through `stub_step.live_ports(rt).model_step` via OpenRouter, asking the
 model to write `hello` to `notes/a.txt`:
@@ -108,6 +122,12 @@ model to write `hello` to `notes/a.txt`:
 Providers that accepted the duplicate before (DeepSeek V4 Flash, Muse Spark 1.3, Qwen 3.7 Flash,
 Mistral Small 3.2, and OpenAI models on Azure) were not re-run on this branch. OpenAI's own API was
 not tested at all.
+
+"Accepted" holds only for the routes sampled here. #235 reports that on
+`deepseek/deepseek-v4-flash-0731` the outcome depended on which provider OpenRouter routed to:
+Relace and Sail Research answered 400 (its author's measurement of 2026-10-02, from OpenRouter's
+Broadcast traces), and six concurrent eval runs on that model went 6/6 with the same fix. Neither
+figure was reproduced here.
 
 Request bodies, captured on a loopback OpenAI-shaped endpoint with `src/core/tool_catalog.ail` from
 `origin/main` and from this branch:
