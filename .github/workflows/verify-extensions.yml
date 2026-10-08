@@ -109,17 +109,16 @@ jobs:
       - name: smoke_no_delegated_storm (ohmy_pi=false across shipped profiles)
         run: make smoke_no_delegated_storm
 
-  # ~10 min on v0.33. The three heaviest DST gates, measured cold: terminal_trace
-  # 213 s, smoke_driver 92 s, world_state 72 s. They are one job so the other
-  # twelve are not held behind them.
-  # 45 min, not 25, since AILANG v0.47: src/core/session's type info exceeds the
-  # compile cache's blob cap (CACHE_WRITE_FAILED ... ARTIFACT_TOO_LARGE), so every
-  # `ailang` process that imports session recompiles it (~40 s each here). Re-measure
-  # and lower once that, or sunholo-data/ailang#1328, is fixed upstream.
+  # The three heaviest DST gates: terminal_trace, smoke_driver, world_state. They
+  # are one job so the other twelve are not held behind them.
+  # 4.5 to 6.5 min on AILANG v0.52.5 (three runs of PR #243, the whole job). It
+  # was ~10 min on v0.33, and the limit was 45 min on v0.47, whose compile cache
+  # refused src/core/session's type info so that every process importing session
+  # compiled it again. v0.52.2 raised that cap; 25 is the limit from before.
   dst_gates_heavy:
     name: DST gates (heavy)
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -182,17 +181,20 @@ jobs:
             ext_call_inventory_selftest ext_hook_scope ext_hook_scope_selftest \
             tool_catalog_registry
 
-  # ~11 min. The second coverage axis (WI-A17) plus smoke_parity: 334 s and
-  # 108 s cold. check_core type-checks src/core and never runs its inline
-  # tests; test_coverage runs every one of them, and stays its own red check so
-  # a coverage regression is legible as itself.
-  # 60 min, not 25, since AILANG v0.47: smoke_parity alone took 21 min (108 s on
-  # v0.33) because every process importing src/core/session recompiles it (see
-  # dst_gates_heavy). Re-measure and lower once that is fixed upstream.
+  # The second coverage axis (WI-A17) plus smoke_parity. check_core type-checks
+  # src/core and never runs its inline tests; test_coverage runs every one of
+  # them, and stays its own red check so a coverage regression is legible as
+  # itself.
+  # 5.5 to 7 min on AILANG v0.52.5 (three runs of PR #243, the whole job), without
+  # session.ail, ext/runtime.ail and test/scripted_ports.ail, which were walked by
+  # a separate job that could not block a merge while `ailang test` took ~40 min
+  # on each (sunholo-data/ailang#1328). On v0.52.5 the three take under 2 min
+  # together and are walked here again. The limit was 60 min on v0.47 (see
+  # dst_gates_heavy); 25 is the limit from before.
   coverage:
     name: test_coverage + smoke_parity
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -201,25 +203,8 @@ jobs:
       - name: smoke_parity
         run: make smoke_parity
 
-      - name: test_coverage (every inline test under src/core but TEST_COVERAGE_SLOW)
+      - name: test_coverage (run every inline test under src/core)
         run: make test_coverage_selftest test_coverage
-
-  # TEMPORARY, for sunholo-data/ailang#1328: the three files in the Makefile's
-  # TEST_COVERAGE_SLOW take ~40 min each under `ailang test` on AILANG >= 0.41,
-  # so they run here, on their own runner, and a red or slow run never blocks a
-  # merge. Delete this job with the list once #1328 is fixed.
-  coverage_slow:
-    name: test_coverage_slow (non-blocking, ailang#1328)
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    continue-on-error: true
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - uses: ./.github/actions/dst-setup
-
-      - name: test_coverage_slow (session.ail, ext/runtime.ail, test/scripted_ports.ail)
-        run: make test_coverage_slow
 
   # ~6 min: the seeded gate and the three verify ratchets (76 + 42 + 88 s cold),
   # plus the contract policy, which needs the full history its checkout fetches.
