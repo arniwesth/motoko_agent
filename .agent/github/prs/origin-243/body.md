@@ -64,17 +64,72 @@ No project document governs a toolchain bump. Where the repository already recor
   `ailang check src/core/types.ail`, exit 0.
 - **This pull request's CI run is the first run of the gates on v0.52.5 in CI.** Its job
   durations are what the two raised timeouts should be re-measured from. Lowering them is left
-  for a follow-up.
+  for a follow-up. CI will not show the red row below: no workflow runs `make dst` or
+  `declared_vs_performed`.
 - **Headroom is about 2.3x, not unlimited.** At 29.3 MB against a 64 MiB limit, the same warning
   returns if session's type info more than doubles.
 
-Two upstream changes between the two versions can break a caller, and were looked for:
+Three upstream changes between the two versions can change what a caller does. Two were looked
+for before the sweep; the sweep found the third, which has its own section below:
 
 - An imported name that the module also defines is now compile error MOD015 (v0.52.0). Not
   present in what `make check_core` compiles, which passes.
 - A `run` flag placed after the file path is now an error (v0.51.0). No such call was found by
   grep in `Makefile`, `scripts/`, `tools/`, `src/tui/src`, `packages/` or `.github/`; the TUI
   passes its flags before `src/core/supervisor.ail` and the program's arguments after `--`.
+- A local binder now shadows an import of the same name (v0.52.0). One row of
+  `declared_vs_performed` pins the old order and is red.
+
+## One red gate: a compiler behaviour the suite pins has reversed
+
+`make dst` on v0.52.5 is red on one row of one target, and the row is right to be red.
+`declared_vs_performed`'s LIMITATION 18 (`scripts/dst/run_declared_vs_performed.sh:1541`) pins a
+fact about the compiler, fact 6 of
+`.agent/projects/031_system_one_decisions/ADR-001-extension-owned-structured-decisions.md` (N62):
+an imported name outranks a local `let` of the same name. AILANG v0.52.0 reversed that on purpose
+(AILANG issue 1467, "local binders no longer captured by imports, builtins or constructors of the
+same name"): a `let`, a parameter or a match binder now shadows an import.
+
+Measured on `scripts/dst/fixtures/adr001_boundary/v7_delegate_import_shadow.ail` with
+`ailang run --caps IO,FS --entry main`:
+
+| AILANG | Output | Which `make_hooks` ran |
+|---|---|---|
+| v0.47.2 | `result=2` | the imported one; no effect performed |
+| v0.52.5 | `NAMED RULE ESCAPE`, then `result=1` | the local `let`; a lambda annotated `! {}` performs IO |
+
+`ailang check` accepts the file on both versions, with no warning.
+
+**What does not change.** The registration-shape gate resolves locals first (ADR-001 D2) and
+still rejects both import-shadow fixtures on v0.52.5:
+`python3 tools/ext_ambient_inventory/hook_scope.py --gate-fixtures --only fx_import_shadow,fx_delegate_import_shadow`
+reports 2 ok, 0 failures (`payload-let-bound`, `delegation-let-bound`), and
+`ext_hook_scope_selftest` is green in the sweep. Nothing the gate accepts changes meaning.
+
+**What does change.** The row's class. On v0.47.2 the compiled program was harmless, so the
+gate's rejection was an over-rejection, taken by design. On v0.52.5 the construction is a real
+escape and the rejection is what stops it. In the suite's terms the row moves from group 4
+(compiler-clean, rejected by design) to group 3 (compiler-accepted escapes), which leaves group 4
+empty. Three texts describe the old order: ADR-001's D2 paragraph (v0.33.0 resolves an imported
+name over a local `let`), `scripts/dst/fixtures/adr001_boundary/gate/expected.json`
+(`fail-compiler-clean`, "the pinned compiler runs the import") and the docstring of
+`gate_fixture_suite` in `tools/ext_ambient_inventory/hook_scope.py`.
+
+**The rest of the tree.** The scoping change applies to every `.ail` file, so the tree was
+scanned for a local binder that shares a name with an explicitly imported lowercase name: 494
+files under `src`, `packages`, `scripts` and `tools`, 4,952 imported names. The only binders
+found are the three boundary fixtures written for this case; three other hits, in
+`src/eval/journal/candidate_checks_live_test.ail`, are uses and not binders. No binder is named
+`show`, `floatToInt` or `intToFloat`. The scan is a regular-expression heuristic over `let`,
+tuple `let`, function and lambda parameters and single-line match arms, not a parser.
+
+**No version avoids it.** The scoping change shipped in v0.52.0 and the cache limits in v0.52.2,
+so every release that fixes the warning has the new scoping.
+
+**Not done here, and open.** This pull request does not touch the row, the fixtures or the ADR.
+The row's own failure text says ADR fact 6 and the fourth class must be re-read before the suite
+is trusted, and that re-reading is the operator's. Until it is done, `make dst` on this branch
+exits 2 on this one row.
 
 ## Test evidence
 
@@ -94,7 +149,10 @@ beside it.
   `verify_extensions (default): 9 booted, 0 failed`, herdr `orchestrator.ail` 90 of 90 tests.
 - **The root lock is stable:** a second `ailang lock` after regenerating the package locks
   changes only `generated_at`.
-- **`make dst`** (the full sweep) on v0.52.5: started, and still running when this pull request
-  was opened. Its result will be added here.
+- **`ailang check src/core/session.ail` on a filled cache:** 33.2 s on v0.47.2 (which prints the
+  warning each time), 2.3 s, 1.8 s and 1.7 s on v0.52.5.
+- **`make dst`** (the full sweep, 54 targets, `-j8`) on v0.52.5: exit 2 after 1,228 s. 53
+  targets pass; `declared_vs_performed` reports 136 passed, 1 failed, the row described above.
+  The log has no `CACHE_WRITE_FAILED` line.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
