@@ -1,0 +1,191 @@
+→ Type checking...
+→ Effect checking...
+✓ Running scripts/dst/run_report_dst.ail
+=== run_report_dst (D11, run-report/1) ===
+
+-- the complete report, which must survive --
+  ✓ a complete report validates
+  ✓ report_ok agrees
+
+-- D11's field list --
+  ✓ generator id/version
+  ✓ attempted seeds (5) and declared minimum (5)
+  ✓ completed SystemRun count (5)
+  ✓ harness and generator failure lists are present and separate
+  ✓ fault classes reached: 9 of 11
+  ✓ NAMED recovery branches reached: 9 of 11
+  ✓ waived classes carry their conditions
+  ✓ terminal reasons reached (3)
+  ✓ elapsed budget (4200 of 60000 ms)
+
+-- D11: class-reached and branch-reached are SEPARATE counters --
+  ✓ a report can reach every class and execute no branch (classes=9 branches=0)
+  ✓ and the gate fails it on required-branch-not-reached, not on a class rule
+
+-- cluster 12: the surviving unreached classes, each in its OWN way --
+  ✓ the 2 surviving gaps carry 2 DISTINCT reasons (statuses: waived, waived)
+  ✓ the 4 classes WI-D1 closed stay closed and none is reported as a waiver
+  ✓ the entry WI-A15 closed stays closed: ToolCorrelationMismatch is reached
+  ✓ every status id the register uses is one all_reach_ids() declares
+  ✓ every non-reached class carries a reason
+  ✓ the register is complete against D3's required set
+  ✓ all five reach statuses are distinct ids
+
+-- clusters 7/8: two kinds of completeness evidence --
+  ✓ six classes carry a runtime witness, one carries a source-derived key set (6 / 1)
+  ✓ the env evidence is the source-derived one
+  ✓ the env expectation asserts MULTIPLICITY (19 reads over 12 keys), not presence
+  ✓ a first-read-only recorder is caught
+
+-- D8: the CI replay affordance --
+  ✓ the reference carries a path AND an identity, not a digest alone
+  ✓ it carries the execution manifest it ran under
+  ✓ a copy-pasteable local replay command names the artifact path
+      replay motoko_driver_only/1 seed 13 under manifest 'driver_only/3':
+    MOTOKO_DST_PROGRAM=.dst/programs/motoko_driver_only/1/seed-13.artifact ailang run --caps IO,FS,Env --entry replay_artifact scripts/dst/run_report_dst.ail
+    artifact: .dst/programs/motoko_driver_only/1/seed-13.artifact  identity: sha256:0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0
+
+-- mutants: one per rejection rule, each asserting its own --
+  ✓ mutant: no attempted seeds → seed-window-empty
+  ✓ mutant: fewer seeds than the declared minimum → seed-window-below-minimum
+  ✓ mutant: a silently truncated window → seed-window-truncated
+  ✓ mutant: a required class with no coverage row → required-class-unaccounted
+  ✓ mutant: a required class neither reached nor waived → required-class-not-reached
+  ✓ mutant: a recovery branch that did not execute → required-branch-not-reached
+  ✓ mutant: a waiver with a blank condition → waived-without-condition
+  ✓ mutant: an AlwaysApplicable class reported waived → waived-but-not-conditional
+  ✓ mutant: a class the catalogue does not declare → unknown-class-counted
+  ✓ mutant: a branch id the catalogue does not name → branch-not-in-catalogue
+  ✓ mutant: a replay reference that is a digest alone → replay-reference-digest-without-bytes
+  ✓ mutant: a replay reference with no manifest → replay-reference-without-manifest
+  ✓ mutant: a window over its declared budget → budget-exceeded
+
+-- the rendered report (a complete window) --
+run report run-report/1
+  generator:    motoko_driver_only/1
+  schemas:      program=execution-program/4 vocabulary=event-vocabulary/1 catalogue=fault-catalogue/2
+  profile:      driver_only/34 under manifest 'driver_only/3'
+  seeds:        5 attempted (minimum 5): 9, 13, 94, 101, 137
+  completed:    5 SystemRun(s)
+  failures:
+  first failed invariant: (none)
+  COUNTERS (D11 keeps these separate; reaching a class is not evidence its branch ran)
+    fault classes reached:     9 of 11
+    recovery branches reached: 9 of 11
+  class coverage:
+    provider_error_retryable: reached ×1
+    provider_error_non_retryable: reached ×1
+    provider_protocol_inconsistent_result: reached ×1
+    provider_partial_stream_then_error: reached ×1
+    provider_empty_terminal_response: reached ×1
+    ToolFailed: reached ×1
+    ToolCorrelationMismatch: reached ×1
+    ToolDeadlineExceeded: reached ×1
+    approval_denied: reached ×1
+    approval_deadline_exceeded: waived — the production approval policy declares a deadline AND the request's default_allow is false; with default_allow true the same input resolves to ApprovalAllowed and the class is not exercised
+    extension_effect_fault: waived — the selected D5 profile installs an extension with an effectful hook that issues this world request; driver_only installs none, so it waives this class by construction (plan P4)
+  branch coverage:
+    provider_error_retryable → session.c2_loop/stream_error_retry: reached ×1
+    provider_error_non_retryable → session.c2_loop/provider_failure_finalize: reached ×1
+    provider_protocol_inconsistent_result → tool_dispatch_adapter.tool_call_to_envelope/malformed_arguments: reached ×1
+    provider_partial_stream_then_error → session.c2_loop/stream_error_retry: reached ×1
+    provider_empty_terminal_response → session.c2_loop/empty_stop_finalize: reached ×1
+    ToolFailed → tool_phase.tool_outcome_message/ToolFailed: reached ×1
+    ToolCorrelationMismatch → tool_phase.tool_outcome_message/ToolCorrelationMismatch: reached ×1
+    ToolDeadlineExceeded → tool_phase.tool_outcome_message/ToolDeadlineExceeded: reached ×1
+    approval_denied → session.c2_loop/approval_denied: reached ×1
+    approval_deadline_exceeded → tool_phase.resolve_approval/eof: waived
+    extension_effect_fault → compaction_ai.compact_with_ai/summarizer_failed: waived
+  terminal reasons reached:
+    stop: 3
+    max_steps: 1
+    cost_exhausted: 1
+  completeness evidence (two KINDS; the second does not inherit the first's standing):
+    expect_provider [runtime-witness] witnessed=4 logged=4
+        an independent driver counter for this class, compared against the recorded log
+    expect_tool [runtime-witness] witnessed=3 logged=3
+        an independent driver counter for this class, compared against the recorded log
+    expect_approval [runtime-witness] witnessed=5 logged=5
+        an independent driver counter for this class, compared against the recorded log
+    advance_clock [runtime-witness] witnessed=2 logged=2
+        an independent driver counter for this class, compared against the recorded log
+    runtime_random_draw [runtime-witness] witnessed=6 logged=6
+        an independent driver counter for this class, compared against the recorded log
+    expect_extension_effect [runtime-witness] witnessed=0 logged=0
+        an independent driver counter for this class, compared against the recorded log
+    environment_read [source-derived-key-set] witnessed=19 logged=19
+        derived from dst_discovery.driver_env_keys() over 12 driver keys; asserts MULTIPLICITY, not presence — the driver reads MOTOKO_TOOL_TIMEOUT_MS once per native tool dispatch, so a recorder logging only the first read of each key would look complete
+  elapsed:      4200 ms of 60000 ms
+  replay (D8: a digest without retained bytes is not sufficient):
+    replay motoko_driver_only/1 seed 13 under manifest 'driver_only/3':
+    MOTOKO_DST_PROGRAM=.dst/programs/motoko_driver_only/1/seed-13.artifact ailang run --caps IO,FS,Env --entry replay_artifact scripts/dst/run_report_dst.ail
+    artifact: .dst/programs/motoko_driver_only/1/seed-13.artifact  identity: sha256:0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0
+
+  i TODAY's DOCUMENTED coverage register — declared, not measured.
+  i WI-A15's corpora feed these counters from a real seed sweep; until then
+  i the statuses below are sourced per class from the cluster reports and D3.
+run report run-report/1
+  generator:    motoko_driver_only/1
+  schemas:      program=execution-program/4 vocabulary=event-vocabulary/1 catalogue=fault-catalogue/2
+  profile:      driver_only/34 under manifest 'driver_only/3'
+  seeds:        5 attempted (minimum 5): 9, 13, 94, 101, 137
+  completed:    5 SystemRun(s)
+  failures:
+  first failed invariant: (none)
+  COUNTERS (D11 keeps these separate; reaching a class is not evidence its branch ran)
+    fault classes reached:     9 of 11
+    recovery branches reached: 9 of 11
+  class coverage:
+    provider_error_retryable: reached ×1
+    provider_error_non_retryable: reached ×1
+    provider_protocol_inconsistent_result: reached ×1
+    provider_partial_stream_then_error: reached ×1
+    provider_empty_terminal_response: reached ×1
+    ToolFailed: reached ×1
+    ToolCorrelationMismatch: reached ×1
+    ToolDeadlineExceeded: reached ×1
+    approval_denied: reached ×1
+    approval_deadline_exceeded: waived — the production approval policy declares a deadline AND the request's default_allow is false; with default_allow true the same input resolves to ApprovalAllowed and the class is not exercised
+    extension_effect_fault: waived — the selected D5 profile installs an extension with an effectful hook that issues this world request; driver_only installs none, so it waives this class by construction (plan P4)
+  branch coverage:
+    provider_error_retryable → session.c2_loop/stream_error_retry: reached ×1
+    provider_error_non_retryable → session.c2_loop/provider_failure_finalize: reached ×1
+    provider_protocol_inconsistent_result → tool_dispatch_adapter.tool_call_to_envelope/malformed_arguments: reached ×1
+    provider_partial_stream_then_error → session.c2_loop/stream_error_retry: reached ×1
+    provider_empty_terminal_response → session.c2_loop/empty_stop_finalize: reached ×1
+    ToolFailed → tool_phase.tool_outcome_message/ToolFailed: reached ×1
+    ToolCorrelationMismatch → tool_phase.tool_outcome_message/ToolCorrelationMismatch: reached ×1
+    ToolDeadlineExceeded → tool_phase.tool_outcome_message/ToolDeadlineExceeded: reached ×1
+    approval_denied → session.c2_loop/approval_denied: reached ×1
+    approval_deadline_exceeded → tool_phase.resolve_approval/eof: waived
+    extension_effect_fault → compaction_ai.compact_with_ai/summarizer_failed: waived
+  terminal reasons reached:
+    stop: 3
+    max_steps: 1
+    cost_exhausted: 1
+  completeness evidence (two KINDS; the second does not inherit the first's standing):
+    expect_provider [runtime-witness] witnessed=4 logged=4
+        an independent driver counter for this class, compared against the recorded log
+    expect_tool [runtime-witness] witnessed=3 logged=3
+        an independent driver counter for this class, compared against the recorded log
+    expect_approval [runtime-witness] witnessed=5 logged=5
+        an independent driver counter for this class, compared against the recorded log
+    advance_clock [runtime-witness] witnessed=2 logged=2
+        an independent driver counter for this class, compared against the recorded log
+    runtime_random_draw [runtime-witness] witnessed=6 logged=6
+        an independent driver counter for this class, compared against the recorded log
+    expect_extension_effect [runtime-witness] witnessed=0 logged=0
+        an independent driver counter for this class, compared against the recorded log
+    environment_read [source-derived-key-set] witnessed=19 logged=19
+        derived from dst_discovery.driver_env_keys() over 12 driver keys; asserts MULTIPLICITY, not presence — the driver reads MOTOKO_TOOL_TIMEOUT_MS once per native tool dispatch, so a recorder logging only the first read of each key would look complete
+  elapsed:      4200 ms of 60000 ms
+  replay (D8: a digest without retained bytes is not sufficient):
+    replay motoko_driver_only/1 seed 13 under manifest 'driver_only/3':
+    MOTOKO_DST_PROGRAM=.dst/programs/motoko_driver_only/1/seed-13.artifact ailang run --caps IO,FS,Env --entry replay_artifact scripts/dst/run_report_dst.ail
+    artifact: .dst/programs/motoko_driver_only/1/seed-13.artifact  identity: sha256:0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0
+
+run_report_dst PASS
+  ✓ 5 ReachStatus variants == 5 ids; all 13 ReportRejection constructors sampled by name; entry point 'replay_artifact' exists
+  ✓ the rendered replay command runs and loads the frozen v1 specimen's retained bytes
+  ✓ src/core/dst_run_report.ail
+exit=0

@@ -30,6 +30,15 @@
 --     family is the `SecondVote` rejection exactly as two legacy atoms are. One
 --     finalize atom and one tool-policy atom coexist.
 --
+-- 037 ADR-001 D2 ADDS ONE MORE, and it is not a multiplicity rule:
+--
+--   * THE REGISTRATION REFUSAL. `ExtRegistration` has no error channel, so an
+--     extension that has found it must not be started says so in `config`,
+--     under the reserved key `registration_refusal`. `normalize_registration`
+--     reads that ONE value BEFORE the walk and returns `RegistrationRefused`.
+--     The host learns nothing about why: it reads one string and refuses with
+--     it. See `read_registration_refusal` below for the four cases.
+--
 -- THE RULES, and their status:
 --
 --   D3 (DECIDED)   a second `ToolPolicy` atom is rejected; a second
@@ -84,8 +93,8 @@ import std/list as List (length)
 import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
 import std/crypto (sha256Hex)
-import std/string (charAt, charCode, length as string_length)
-import std/json (Json, JObject, JArray, encode, jo, ja, kv, js, jb)
+import std/string (charAt, charCode, startsWith, endsWith, length as string_length)
+import std/json (Json, JObject, JArray, JString, JNull, JNumber, encode, get, jo, ja, kv, js, jb)
 import pkg/sunholo/motoko_ext_abi/types (
   PureCtx,
   ProcessCtx,
@@ -150,6 +159,7 @@ export type RegistrationRejection
   | DuplicateToolName(string, string, int)   -- id, tool name, position of the atom
   | DuplicateExitLabel(string, string, int)  -- id, intent label, position of the atom
   | EmptyRegistration(string)                -- id (D7 alternative reading)
+  | RegistrationRefused(string, string)      -- id, the refusal's message (037 ADR-001 D2)
 
 export pure func rejection_rule(r: RegistrationRejection) -> string {
   match r {
@@ -157,7 +167,8 @@ export pure func rejection_rule(r: RegistrationRejection) -> string {
     FoldKindRepeated(_, _, _) => "fold-kind-repeated",
     DuplicateToolName(_, _, _) => "duplicate-tool-name",
     DuplicateExitLabel(_, _, _) => "duplicate-exit-label",
-    EmptyRegistration(_) => "empty-registration"
+    EmptyRegistration(_) => "empty-registration",
+    RegistrationRefused(_, _) => "registration-refused"
   }
 }
 
@@ -167,7 +178,8 @@ export pure func rejection_extension(r: RegistrationRejection) -> string {
     FoldKindRepeated(e, _, _) => e,
     DuplicateToolName(e, _, _) => e,
     DuplicateExitLabel(e, _, _) => e,
-    EmptyRegistration(e) => e
+    EmptyRegistration(e) => e,
+    RegistrationRefused(e, _) => e
   }
 }
 
@@ -182,7 +194,11 @@ export pure func rejection_message(r: RegistrationRejection) -> string {
     DuplicateExitLabel(e, l, p) =>
       "[duplicate-exit-label] extension '${e}' registers a second ExitIntent labelled '${l}' at list position ${show(p)}; intent labels must be disjoint within an extension (7.0)",
     EmptyRegistration(e) =>
-      "[empty-registration] extension '${e}' registers no capability atom (D7, the rejecting reading; empty_registration_omits is false)"
+      "[empty-registration] extension '${e}' registers no capability atom (D7, the rejecting reading; empty_registration_omits is false)",
+    -- The extension's string goes LAST and unedited: it is the message (D2), and
+    -- everything before the colon is the host's.
+    RegistrationRefused(e, m) =>
+      "[registration-refused] extension '${e}' refuses its own registration through the config key '${registration_refusal_key()}' (037 ADR-001 D2): ${m}"
   }
 }
 
@@ -322,16 +338,78 @@ pure func walk(id: string, caps: [Capability], pos: int, seen_kinds: [string], s
   }
 }
 
+-- ============================================================================
+-- 037 ADR-001 D2: THE REGISTRATION REFUSAL.
+--
+-- The reserved `config` key. The HOST's copy of the string: an extension that
+-- refuses writes the same literal, and the ABI package exports neither (a
+-- shared owner would be an 8.1 minor -- D2 prices that sweep), so the two are
+-- tied by a row in scripts/dst/registry_multiplicity_dst.ail instead.
+-- The contract is `result != ""` rather than the literal, on
+-- `exit_manifest.manifest_path_var`'s reasoning: an EMPTY key would make the
+-- reader look up a key no extension sets, and the host would then start every
+-- extension that refuses -- silently, since "no refusal" is the ordinary case.
+-- Pinning the literal would be spec-equals-body; the `tests` clause pins it.
+-- ============================================================================
+export pure func registration_refusal_key() -> string
+  ensures { result != "" }
+  tests [((), "registration_refusal")]
+  { "registration_refusal" }
+
+-- What the host says when the key holds something that is not a string. Its
+-- own message, since there is no extension string to pass on.
+export pure func malformed_registration_refusal() -> string
+  ensures { result != "" }
+  tests [((), "the value of 'registration_refusal' is not a string; a refusal is a string, so this registration is refused as malformed")]
+  { "the value of 'registration_refusal' is not a string; a refusal is a string, so this registration is refused as malformed" }
+
+-- THE READER. `Some(message)` refuses the registration; `None` does not.
+--
+--   key absent, or `config` not an object   -> None
+--   key present, the empty string           -> None
+--   key present, a non-empty string         -> Some(that string, unedited)
+--   key present, any other JSON type        -> Some(malformed_registration_refusal())
+--
+-- The last row is the fail-closed one: an extension that meant to refuse and
+-- wrote `true`, `null` or a list of violations must not start because the host
+-- found nothing it recognised. A key repeated in one object is read as its
+-- FIRST occurrence -- `std/json.get`'s reading, and so the one the extension
+-- gets when it reads its own `ext_config`.
+-- contracts: SKIPPED — "calls "get" whose signature uses an unencodable type
+-- "Option[Json]"" (and "has deeply nested patterns", which flattening would
+-- clear without clearing the first). The property worth stating is that a
+-- refusal never carries an EMPTY message -- tried as `result != Some("")` and
+-- skipped on the same callee. The four rows above are the inline tests
+-- `test_refusal_*` below, one per row.
+export pure func read_registration_refusal(config: Json) -> Option[string] {
+  match get(config, registration_refusal_key()) {
+    None => None,
+    Some(JString(s)) => if s == "" then None else Some(s),
+    Some(_) => Some(malformed_registration_refusal())
+  }
+}
+
 -- THE BOUNDARY. `caps` passes through UNCHANGED on acceptance -- list order is
 -- the order every dispatcher sees -- and so does `config` (8.0): the entry's
 -- `config` IS the registration's, byte for byte, which is what makes the
 -- stamped `ext_config` and the digest below statements about what the
 -- extension returned.
+--
+-- 037 ADR-001 D2: THE REFUSAL IS READ FIRST -- before the D7 empty-list test
+-- and before the walk -- so a registration that refuses is rejected AS a
+-- refusal whatever its atoms are, and the message an operator sees is the
+-- extension's own rather than whichever multiplicity rule its list happened
+-- to trip. An accepted entry still carries `config` unchanged, the key
+-- included when it is the empty string.
 export pure func normalize_registration(id: string, config: Json, caps: [Capability]) -> Result[ExtEntry, RegistrationRejection] {
-  if List.length(caps) == 0 && not empty_registration_omits() then Err(EmptyRegistration(id))
-  else match walk(id, caps, 0, [], [], [], []) {
-    Err(e) => Err(e),
-    Ok(_) => Ok({ id: id, config: config, caps: caps })
+  match read_registration_refusal(config) {
+    Some(m) => Err(RegistrationRefused(id, m)),
+    None =>
+      if List.length(caps) == 0 && not empty_registration_omits() then Err(EmptyRegistration(id))
+      else match walk(id, caps, 0, [], [], [], []) {
+        Err(e) => Err(e),
+        Ok(_) => Ok({ id: id, config: config, caps: caps })
+      }
   }
 }
 
@@ -760,6 +838,162 @@ pure func test_one_bad_extension_rejects_the_build_and_empties_are_named() -> bo
       Err(_) => false
     };
     whole && named
+  }
+
+-- ----------------------------------------------------------------------------
+-- 037 ADR-001 D2 / A4: the registration refusal, as pure tests of
+-- `normalize_registration`. One test per row of `read_registration_refusal`'s
+-- table, then the ordinary registration, the order, and the whole build.
+--
+-- THE KEY IS WRITTEN AS A LITERAL in every fixture, the way an extension writes
+-- it, and never as `registration_refusal_key()`: a test that built its config
+-- from the host's own function would pass whatever that function returned.
+-- ----------------------------------------------------------------------------
+
+pure func refusal_caps() -> [Capability] {
+  [PromptShaper(p_shape), ToolPolicy(p_policy), ToolProvider(["A", "B"], p_handle)]
+}
+
+-- An ordinary key beside the reserved one, so the reader is shown to pick ITS
+-- key out of a config rather than to react to a config of one key.
+pure func refusal_cfg(v: Json) -> Json { jo([kv("model", js("m")), kv("registration_refusal", v)]) }
+
+pure func refuses_with(config: Json, message: string) -> bool {
+  match normalize_registration("r#0", config, refusal_caps()) {
+    Err(RegistrationRefused(e, m)) => e == "r#0" && m == message,
+    _ => false
+  }
+}
+
+pure func accepts_unchanged(config: Json) -> bool {
+  match normalize_registration("r#0", config, refusal_caps()) {
+    Ok(e) => e.id == "r#0" && encode(e.config) == encode(config) && List.length(e.caps) == 3,
+    Err(_) => false
+  }
+}
+
+-- A4, case 1. A non-empty string refuses, and that string IS the message: the
+-- variant carries it unedited and the rendered line ends with it.
+pure func test_refusal_non_empty_string_refuses_with_that_string() -> bool
+  tests [((), true)]
+  {
+    let said = "two violations: a/SKILL.md V1; b/SKILL.md V4";
+    let r = RegistrationRefused("r#0", said);
+    refuses_with(refusal_cfg(js(said)), said)
+      && rejection_rule(r) == "registration-refused"
+      && rejection_extension(r) == "r#0"
+      && startsWith(rejection_message(r), "[registration-refused] extension 'r#0' ")
+      && endsWith(rejection_message(r), ": ${said}")
+  }
+
+-- A4, case 2. Every JSON type that is not a string refuses as malformed --
+-- `null` included: the key is PRESENT, and an extension that wrote it meant
+-- something by it.
+pure func test_refusal_non_string_value_refuses_as_malformed() -> bool
+  tests [((), true)]
+  {
+    let m = malformed_registration_refusal();
+    refuses_with(refusal_cfg(JNull), m)
+      && refuses_with(refusal_cfg(jb(true)), m)
+      && refuses_with(refusal_cfg(jb(false)), m)
+      && refuses_with(refusal_cfg(JNumber(0.0)), m)
+      && refuses_with(refusal_cfg(ja([js("a/SKILL.md V1"), js("b/SKILL.md V4")])), m)
+      && refuses_with(refusal_cfg(jo([kv("message", js("a/SKILL.md V1"))])), m)
+  }
+
+-- A4, case 3. The key absent: accepted, config unchanged. Absent means absent
+-- at the TOP LEVEL of an object -- a near-miss key, the key nested one level
+-- down, the key's name as a VALUE, and a config that is no object at all are
+-- each no refusal.
+pure func test_refusal_absent_key_is_accepted() -> bool
+  tests [((), true)]
+  {
+    accepts_unchanged(jo([kv("model", js("m"))]))
+      && accepts_unchanged(jo([kv("registration_refused", js("x")), kv("refusal", js("x"))]))
+      && accepts_unchanged(jo([kv("inner", jo([kv("registration_refusal", js("x"))]))]))
+      && accepts_unchanged(jo([kv("note", js("registration_refusal"))]))
+      && accepts_unchanged(ja([js("registration_refusal")]))
+      && accepts_unchanged(JNull)
+  }
+
+-- A4, case 4. The empty string is no refusal, and the entry still carries the
+-- key: the host reads `config`, it does not edit it.
+pure func test_refusal_empty_string_is_accepted() -> bool
+  tests [((), true)]
+  {
+    accepts_unchanged(refusal_cfg(js("")))
+  }
+
+-- A4, case 5. An ordinary registration -- the empty config every in-tree
+-- fixture above uses -- is accepted exactly as before.
+pure func test_refusal_ordinary_registration_is_accepted() -> bool
+  tests [((), true)]
+  {
+    accepts_unchanged(no_cfg())
+  }
+
+-- D2's ORDER. The refusal is read before the walk and before the D7 empty-list
+-- test: a refusing registration is rejected AS a refusal on a list that trips a
+-- multiplicity rule (the control: the same list without the key is
+-- `SecondVote`) and on an EMPTY list, which D7 would otherwise omit by name.
+pure func test_refusal_is_read_before_the_multiplicity_walk() -> bool
+  tests [((), true)]
+  {
+    let said = "refused";
+    let twice = [ToolPolicy(p_policy), ToolPolicy(p_policy)];
+    let control = match normalize_registration("ord", no_cfg(), twice) {
+      Err(SecondVote(_, _, p)) => p == 1,
+      _ => false
+    };
+    let before_walk = match normalize_registration("ord", refusal_cfg(js(said)), twice) {
+      Err(RegistrationRefused(e, m)) => e == "ord" && m == said,
+      _ => false
+    };
+    let before_empty = match normalize_registration("ord", refusal_cfg(js(said)), []) {
+      Err(RegistrationRefused(e, m)) => e == "ord" && m == said,
+      _ => false
+    };
+    control && before_walk && before_empty
+  }
+
+-- The whole build: one refusing extension rejects it, like any other rejection
+-- (FAIL-CLOSED SHAPE above) -- including one whose list is empty, which must
+-- not be turned into a NAMED OMISSION and a host that starts.
+pure func test_refusal_rejects_the_whole_build() -> bool
+  tests [((), true)]
+  {
+    let good: ExtEntry = { id: "good", config: no_cfg(), caps: [ToolPolicy(p_policy)] };
+    let refusing: ExtEntry = { id: "skills", config: refusal_cfg(js("refused")), caps: refusal_caps() };
+    let refusing_empty: ExtEntry = { id: "skills", config: refusal_cfg(js("refused")), caps: [] };
+    let whole = match normalize_registry([good, refusing]) {
+      Err(RegistrationRefused(e, m)) => e == "skills" && m == "refused",
+      _ => false
+    };
+    let not_omitted = match normalize_registry([good, refusing_empty]) {
+      Err(RegistrationRefused(e, m)) => e == "skills" && m == "refused",
+      _ => false
+    };
+    whole && not_omitted
+  }
+
+-- The reader itself, including the one reading the table does not show: a key
+-- repeated in one object is read as its FIRST occurrence.
+pure func reads_as(config: Json, expected: string) -> bool {
+  match read_registration_refusal(config) {
+    Some(m) => m == expected,
+    None => expected == ""
+  }
+}
+
+pure func test_refusal_reader_reads_one_top_level_key() -> bool
+  tests [((), true)]
+  {
+    reads_as(no_cfg(), "")
+      && reads_as(refusal_cfg(js("")), "")
+      && reads_as(refusal_cfg(js("x")), "x")
+      && reads_as(refusal_cfg(JNull), malformed_registration_refusal())
+      && reads_as(jo([kv("registration_refusal", js("")), kv("registration_refusal", js("x"))]), "")
+      && reads_as(jo([kv("registration_refusal", js("x")), kv("registration_refusal", js(""))]), "x")
   }
 
 -- ----------------------------------------------------------------------------

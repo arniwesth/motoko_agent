@@ -1,0 +1,77 @@
+# 031 ADR-001 Amendment 5 (DRAFT) -- the artifact
+#
+# Acceptance rule (ii) of 031 ADR-001: a change to that ADR cites an artifact --
+# "a fixture that fails, a compile that fails, a probe with a measured result".
+# This one is a fixture with a measured result, taken three times.
+#
+# Produced 2026-10-04 by 037 PLAN-001 P2, worktree /workspaces/motoko_agent-skills,
+# branch feat/skills-extension, AILANG v0.47.2 (e939cba), extension ABI 8.0.
+# Branch HEAD when P2 started: 18065e4a.
+
+## 1. The fixture
+
+In scripts/dst/registry_multiplicity_dst.ail (the registration-boundary script,
+`make registry_multiplicity`). A registration on the script's clean capability
+list -- its negative control, eleven atoms -- whose `config` is
+
+    {"registration_refusal":"fixture: this extension found its own root broken and lists every violation here (one; two)"}
+
+One mutation from the control, and the mutation is in `config`. The fixture's
+source at the commit that introduced it:
+
+    git show cfdf74c1:scripts/dst/registry_multiplicity_dst.ail     # `refusing_config`, `scenario_refusal_key_as_the_host_stands`
+
+## 2. The key was unused
+
+    $ git grep -n 'registration_refusal' 18065e4a -- src packages scripts tools Makefile ailang.toml
+    (no output; exit 1)
+
+## 3. Measured: the host as it stood ACCEPTS it
+
+Tree: commit cfdf74c1 (the fixture alone; src/core/ext/registry_normalize.ail is
+byte-identical to 18065e4a). Run on the working tree that was then committed as
+cfdf74c1 without change.
+
+    $ make registry_multiplicity ; echo exit=$?
+      -- 037 D2: a registration whose config carries registration_refusal --
+      ✓ config carries registration_refusal (non-empty string): ACCEPTED -- the host as it stands does not read `registration_refusal`; the entry carries config {"registration_refusal":"fixture: this extension found its own root broken and lists every violation here (one; two)"} unchanged and all 11 atoms
+    registry_multiplicity_dst PASS
+      ✓ src/core/ext/registry_normalize.ail
+    exit=0
+
+Full output: step1_host_as_it_stands.raw.log
+
+So an extension that finds at registration that it must not be started has no
+way to make the host refuse: `ExtRegistration` is `{ config, caps }`, and the
+host carries `config` onto the entry without reading it.
+
+## 4. Measured: the same row goes RED when the check lands
+
+Tree: the script of cfdf74c1, unchanged, against the registry_normalize.ail that
+was then committed as fdeda2cc (the reader, `RegistrationRefused`, three arms).
+
+    $ make registry_multiplicity ; echo exit=$?
+      -- 037 D2: a registration whose config carries registration_refusal --
+      ✗ config carries registration_refusal (non-empty string): expected acceptance by the host as it stands, got [registration-refused] extension 'refuse#6' refuses its own registration through the config key 'registration_refusal' (037 ADR-001 D2): fixture: this extension found its own root broken and lists every violation here (one; two)
+    registry_multiplicity_dst FAIL
+    make: *** [Makefile:853: registry_multiplicity] Error 1
+    exit=2
+
+Full output: step2_check_landed_fixture_red.raw.log
+
+To reproduce 3 and 4 without touching a working tree:
+
+    git worktree add <tmp> cfdf74c1 && (cd <tmp> && make registry_multiplicity)                 # section 3: PASS
+    (cd <tmp> && git checkout fdeda2cc -- src/core/ext/registry_normalize.ail \
+              && make registry_multiplicity)                                                    # section 4: FAIL
+
+## 5. Now: the same fixture, asserted the other way
+
+From fdeda2cc on the row asserts the refusal, beside an order row (the same
+config on a list that also trips `second-vote-atom`) and the empty-string
+control. The final run is in ../gates/registry_multiplicity.log.
+
+The four cases of the key's value, and the order, are pure tests of
+`normalize_registration` in src/core/ext/registry_normalize.ail
+(`test_refusal_*`, commit 714b3a71); ../mutgate.tsv shows nine mutants of the
+reader, the order and the three arms each killed by a named test.

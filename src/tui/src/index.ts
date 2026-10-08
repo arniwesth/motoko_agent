@@ -835,8 +835,9 @@ async function main(): Promise<void> {
     // Runtime not available (ailang not on PATH, etc.) — banner shows "unknown".
   }
 
-  // Get ailang build datetime from the binary itself.
+  // Get ailang build datetime and release version from the binary itself.
   let ailangVersion = "unknown";
+  let ailangRelease = "";
   try {
     const ailangBin = (process.env.AILANG_BIN && process.env.AILANG_BIN.trim() !== "")
       ? process.env.AILANG_BIN
@@ -845,6 +846,9 @@ async function main(): Promise<void> {
     // Look for "Built:  YYYY-MM-DD_HH:MM:SS"
     const m = raw.match(/^Built:\s+(.*)$/m);
     if (m) ailangVersion = m[1].trim();
+    // First line is "AILANG v0.47.2" (or "AILANG dev" without version ldflags).
+    const v = raw.match(/^AILANG\s+(\S+)/m);
+    if (v) ailangRelease = v[1];
   } catch {}
 
   // Future improvement: regenerate/reflow banner on terminal resize events.
@@ -858,7 +862,9 @@ async function main(): Promise<void> {
     const bannerLines = renderBanner({ columns: process.stdout.columns });
     process.stdout.write(
       bannerLines.join("\n") +
-      "\nMotoko 素子 (AILANG built " +
+      "\nMotoko 素子 (AILANG " +
+      (ailangRelease ? ailangRelease + ", " : "") +
+      "built " +
       ailangVersion +
       ") TUI v" +
       pkgVersion +

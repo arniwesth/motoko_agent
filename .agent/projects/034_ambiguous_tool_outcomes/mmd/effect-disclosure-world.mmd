@@ -1,0 +1,84 @@
+flowchart TB
+  %% 034 ADR-001 D4 and §2 — THE CASE THE HARNESS CANNOT SEE: where "the update applied and the
+  %% call still faulted" lives in the deterministic world, why it can never reach the model, and
+  %% the three properties that check it. Phases 1 and 2; the live path is
+  %% effect-disclosure-mapping.
+  %% Colour = role: blue exists at HEAD (the wire rows are not edited; scripted_tool_outcome
+  %% stays a function of the observation fields) · green what Phase 1 builds · gray-solid a log
+  %% or message an oracle reads · teal a property, with what its oracle reads ·
+  %% red a mutation fixture, which must be seen red before its property counts · amber-dashed
+  %% the hazard the types leave open · gray-dashed a metric, not a verdict.
+  %% Read it top to bottom as one scripted tool call: the program says what the world does, the
+  %% catalogue says which constructor delivers it, the world keeps the applied bit, the driver
+  %% gets the observation only, and the oracles compare the two sides.
+  %% Layout note: the renderer lays same-rank nodes in a row and ranks by edges, so the four
+  %% bands are subgraphs in the order a call passes through them, and each mutation hangs off
+  %% the property it must turn red rather than off the code it would change.
+  %% Grounded 2026-10-03: ADR-001 as written 2026-10-02 against HEAD 4023bf08, AILANG v0.47.2;
+  %% only src/tui changed between 4023bf08 and 21ba95c9, so the coordinates stand. NOTHING in the
+  %% green, teal or red nodes exists at HEAD, and P3 holds trivially today: no retry path exists.
+
+  subgraph PROG["The program — the next schema version"]
+    direction TB
+    gen["<b>choose_tool draws applied</b> · dst_generator.ail:740<br/>under its own salt<br/>generator_version bump · canary re-pinned by hand<br/>PR bank re-derived · all four profile versions move"]:::now
+    st["<b>ScriptedTool gains applied and a stage</b> · ports.ail:599–606<br/>legacy default, recommended: after dispatch, not applied<br/>applied set on a before-dispatch fault<br/>is rejected at validation<br/>not /5: that number is claimed by 031 PLAN-001 P2.1"]:::now
+  end
+  gen --> st
+
+  subgraph CAT["The catalogue — fault-catalogue/2 → /3, eleven rows → thirteen"]
+    direction TB
+    rows["<b>the wire rows, not edited</b><br/>ToolFailed · ToolDeadlineExceeded — their ids are wire names<br/>one delivery constructor and one recovery branch per row<br/>editing a transition in place is what 009 D8 forbids"]:::cap
+    twins["<b>two world-only rows</b><br/>tool_effect_applied_then_failed → twin ToolFailed<br/>tool_effect_applied_then_deadline → twin ToolDeadlineExceeded<br/>each copies its twin's constructor and branch"]:::now
+    vis["<b>a visibility field on every row</b><br/>a wire name, or world-only with a twin id<br/>validate_catalogue rejects a twin that is missing,<br/>is itself world-only, or differs in constructor or branch"]:::now
+  end
+  rows --> twins
+  twins --> vis
+
+  subgraph WORLD["The deterministic world — the only place the applied bit exists"]
+    direction TB
+    sto["<b>scripted_tool_outcome</b> · ports.ail:1775–1788<br/>stays a function of the observation fields<br/>a world-only row is delivered through its twin's constructor"]:::cap
+    eff[("<b>the WorldState effect log</b> · new in Phase 1<br/>where an applied update is recorded<br/>never rendered")]:::artifact
+    ilog[("<b>the world-served interaction log</b> · at HEAD<br/>what the world actually served,<br/>call id by call id")]:::artifact
+  end
+  st --> sto
+  vis --> sto
+  sto -->|"applied"| eff
+  sto -->|"served"| ilog
+
+  subgraph DRV["The driver and the wire — the observation, and nothing else"]
+    direction TB
+    out["<b>ToolOutcome</b> · ports.ail<br/>ToolFailed (:649) gains a dispatch stage: before or after<br/>ToolDeadlineExceeded and ToolCorrelationMismatch gain nothing:<br/>a deadline is measured from dispatch, a mismatch answers<br/>a dispatched call, so both are unknown by construction<br/>nothing here carries applied"]:::now
+    msg[("<b>the ledger's projected tool message</b><br/>fault.effects, rendered from the stage by tool_fault_message<br/>lexical guard: no projected message contains a world-only class id")]:::artifact
+    hazard["<b>the driver does hold next_state</b> · ports.ail:653–656<br/>so the types do not prevent a read of applied<br/>P2 is what does"]:::open
+  end
+  sto -->|"the observation only"| out
+  out --> msg
+  out -.-> hazard
+
+  p1["<b>P1 · the disclosure is sound, one-sided</b><br/>effects = none ⇒ the world did not apply the update,<br/>and every harness-reported fault message carries effects<br/>unknown is always permitted after dispatch<br/><i>oracle: the interaction log and the effect log against the projected message —</i><br/><i>never tool_outcome_message or anything it calls · a finding under ToolPairing</i>"]:::unlocked
+  p2["<b>P2 · nothing leaks, nothing is invented</b><br/>two programs differing only in one applied field<br/>produce identical traces, outcomes and served interactions<br/><i>oracle: a pair relation beside discovery_contract_findings,</i><br/><i>dst_invariants.ail:2154–2168 — not a family</i>"]:::unlocked
+  p3["<b>P3 · no call is dispatched twice</b><br/>the driver dispatches no tool call id twice<br/><i>oracle: the world-served interaction log, as DeniedCallDispatched</i><br/><i>reads it, dst_invariants.ail:395, :1429–1441 · a finding under ToolPairing</i>"]:::unlocked
+  eff --> p1
+  ilog --> p1
+  msg --> p1
+  msg --> p2
+  ilog --> p3
+
+  m1["<b>mutation for P1</b><br/>render none for an after-dispatch ToolFailed<br/>and drop the key"]:::mutant
+  m2["<b>mutation for P2</b><br/>read applied from next_state<br/>into the message"]:::mutant
+  m3["<b>mutation for P3</b><br/>a retry-on-deadline in the driver<br/>P3 holds trivially today, so this<br/>fixture is its only evidence"]:::mutant
+  p1 -.->|"seen red on"| m1
+  p2 -.->|"seen red on"| m2
+  p3 -.->|"seen red on"| m3
+  hazard -.-> p2
+
+  metric["<b>Phase 3 — a metric, not a verdict</b><br/>duplicate effect keys from the model: a new call id, the same effect<br/>class and branch counters pick the two rows up from required_class_ids()"]:::capped
+  eff -.-> metric
+
+  classDef cap fill:#16294d,stroke:#7aa2f7,color:#cdd9f5,stroke-width:2px;
+  classDef now fill:#16351f,stroke:#3fb950,color:#c6f0cf;
+  classDef unlocked fill:#123038,stroke:#2ac3de,color:#bdeef5,stroke-width:2px;
+  classDef artifact fill:#2a2f3a,stroke:#9aa4b2,color:#d5dbe5,stroke-width:2px;
+  classDef mutant fill:#3b1d24,stroke:#f7768e,color:#f5c6ce;
+  classDef open fill:#3a2f12,stroke:#e0af68,color:#f2e2c2,stroke-dasharray:6 4;
+  classDef capped fill:#24262f,stroke:#6e7681,color:#9aa4b2,stroke-dasharray:5 5;

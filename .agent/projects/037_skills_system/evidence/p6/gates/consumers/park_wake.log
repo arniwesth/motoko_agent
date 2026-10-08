@@ -1,0 +1,113 @@
+./scripts/dst/run_park_wake.sh
+=== park_wake (PLAN-002 W4 Parts 6-7) ===
+success (Settled) + Part 7 trace channel:
+METRIC trace provider_call_prepared=4 inside_park=0
+  ✓ success: the run ends Ok
+  ✓ success: one ParkEntered, `w4.r0.0.p0` on [h1]
+  ✓ success: one WakeReceived, settled on h1
+  ✓ success: the final answer is the DoneEvent's
+  ✓ success: the wake message told the model to call DelegateCheck once
+  ✓ success: no park payload finding
+  ✓ success: the wakes cursor is consumed
+  ✓ metric (trace): exactly 4 ProviderCallPrepared
+  ✓ metric (trace): zero ProviderCallPrepared between ParkEntered and WakeReceived
+Part 7 program channel:
+METRIC program provider_identity=4 wake_identity=1 providers_before_wake=2
+  ✓ metric (program): exactly 4 ProviderIdentity interactions
+  ✓ metric (program): exactly one WakeIdentity interaction
+  ✓ metric (program): the WakeIdentity sits between the 2nd and 3rd ProviderIdentity
+Part 7 verified variant (reported separately):
+METRIC verified trace_provider_call_prepared=5 program_provider_identity=5
+  ✓ metric verified (trace): at least 5 ProviderCallPrepared
+  ✓ metric verified (program): at least 5 ProviderIdentity
+Lost:
+  ✓ lost: WakeReceived lost on h1
+  ✓ lost: the model is told the wait was lost
+  ✓ lost: the run ends Ok after DelegateCheck
+OperatorInput leaves the delegate pending:
+  ✓ operator_input: the first wake is the operator's
+  ✓ operator_input: the second park still waits on h1
+  ✓ operator_input: the operator's text reached the model, loop-tagged
+  ✓ operator_input: the run ends Ok
+two delegates, one wake:
+  ✓ two_delegates: the first park waits on both, in order
+  ✓ two_delegates: one wake settles h1 and h2 stays open
+  ✓ two_delegates: the run ends Ok
+HostError leaves the wait open, then a second park succeeds:
+  ✓ host_error: the first wake is HostError, not Lost
+  ✓ host_error: the wait stays open into the second park
+  ✓ host_error: the second park succeeds
+  ✓ host_error: the run ends Ok
+  ✓ stale world: one wake_read witness per wake read (2)
+  ✓ stale world: world ordinals strictly +1 across both parks
+  ✓ stale world: the second park does not re-read the consumed wake
+TimedOut removes only the timer (TimerWait constructed by the fixture; no producer):
+  ✓ timed_out: the first park waits on the delegate and the timer
+  ✓ timed_out: only the timer is removed
+  ✓ timed_out: the run ends Ok
+re-delegation: the model is told both are open:
+  ✓ redelegation: the second Delegate's result names every open wait
+  ✓ redelegation: the sentence is loop-authored
+  ✓ redelegation: the first Delegate's result, with one wait open, is untouched
+  ✓ redelegation: the run ends Ok
+mid-park commands (§8.7): abort and restart:
+  ✓ abort: the run ends Err(ParkCancelled) with message abort
+  ✓ abort: WakeReceived(aborted) carries the command, recorded before the exit
+  ✓ abort: no DoneEvent and no ErrorEvent; RunSummary closes the trace
+  ✓ abort: not a suspension
+  ✓ restart: the run ends Err(ParkCancelled) with message restart:dogfood
+  ✓ restart: WakeReceived(aborted) carries restart:dogfood
+  ✓ mid-park: no park payload finding on either run
+control: wrong handle (the re-issue bound):
+PARK_DROPS wrong_handle 4
+  ✓ wrong_handle: the run is suspended, not failed, and its last decision is Fail
+  ✓ wrong_handle: the bound held after at least two issues
+  ✓ wrong_handle: exactly one ParkEntered
+  ✓ wrong_handle: no WakeReceived
+  ✓ wrong_handle: attempt ordinals 0..3 with request_id and step equal across them
+control: duplicate or late wake:
+PARK_DROPS duplicate_wake 1
+  ✓ duplicate_wake: the late p0 reply is dropped at p1 and re-issued once
+  ✓ duplicate_wake: only the two matching wakes are applied
+  ✓ duplicate_wake: the run ends Ok
+control: missing wake:
+  ✓ missing_wake: the FIRST wake is HostError("wake_read unbound") on p0, at the exhaustion point
+control: empty stop with open waits:
+  ✓ empty_stop: the blank candidate parks
+  ✓ empty_stop: no empty-stop finalize while the wait is open
+  ✓ empty_stop: the run ends Ok with the final answer
+control: the DP7-rejected candidate with open waits:
+  ✓ dp7_rejected: the verifier rejected the candidate while h1 was open
+  ✓ dp7_rejected: stage 2 wins over stage 3, the rejection injects before any park
+  ✓ dp7_rejected: no ParkEntered precedes the first rejection
+determinism: two runs from one script:
+  ✓ determinism: identical record order
+  ✓ determinism: identical parks and wakes
+  ✓ determinism: identical final world ordinal
+saved-program replay through recording_wake:
+  ✓ replay: the saved program round-trips with its one wake interaction
+  ✓ replay: the reconstituted world balances, wakes queue included
+  ✓ replay: the replay reproduces the program exactly
+  ✓ replay: the replayed run applies the same wake and ends Ok
+PARK_WAKE_FIXTURES 17
+park_wake_dst PASS
+  ✓ the in-process fixtures passed (exit 0)
+  ✓ all 17 fixtures reported
+  ✓ frame success is printed once, closed
+  ✓ frame wrong_handle is printed once, closed
+  ✓ frame duplicate_wake is printed once, closed
+  ✓ frame abort_exit is printed once, closed
+  ✓ frame restart_exit is printed once, closed
+  ✓ frame determinism_a is printed once, closed
+  ✓ frame determinism_b is printed once, closed
+  ✓ wrong_handle: one warning per dropped reply (drops=4, warnings=4)
+  ✓ duplicate_wake: one warning per dropped reply (drops=1, warnings=1)
+  ✓ success: no reply is dropped
+  ✓ wrong_handle: no wake_received reaches the wire
+  ✓ wrong_handle: one park_entered on the wire
+  ✓ restart: the conversation loop's exit emits one session_suspend for dogfood
+  ✓ abort: the conversation loop's exit emits no session_suspend
+  ✓ abort/restart: no error event in either run
+  ✓ determinism: the two runs' wire frames are byte-identical (60 lines)
+park_wake gate PASS
+exit=0

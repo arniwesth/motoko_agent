@@ -1,0 +1,134 @@
+→ Type checking...
+→ Effect checking...
+✓ Running scripts/dst/driver_plus_compose_dst.ail
+Warning: dependency sunholo/motoko_ext_abi content changed (locked: sha256:7804bdc524d4f36e7..., current: sha256:9f5b6b188020564ac...)
+Run 'ailang lock' to update
+CACHE_WRITE_FAILED module=src/core/session stage=encoding path=/workspaces/motoko_agent-skills/.ailang/lane/driver_plus_compose/compile/modules/src__core__session/coretypeinfo.gob: ARTIFACT_TOO_LARGE: /workspaces/motoko_agent-skills/.ailang/lane/driver_plus_compose/compile/modules/src__core__session/coretypeinfo.gob: artifact exceeds blob byte limit; using fresh compilation
+driver_plus_compose_dst  (driver_plus_compose v13)
+  ✓ driver_plus_compose v13 LOADS CLEAN at the bound revision, with compose INSTALLED and on_tool_handle EXCLUDED
+  ✓ the recorded attribution reference is current: (c0fbf10, sha256:0211ac242f677bd392bb317611b03a335d266426ec9d050cd5cce4e96b8f5583)
+      D4's re-issue rule now has THREE consumers, not two; tools/predicate-anchors/anchors.sh carries the derived list
+  ✓ installed 1 + omitted 17 = every extension in the resolved install set (the partition is checked against ailang.toml by the guard)
+      installed: compose
+      omitted:   compaction_ai, compaction_structural, decision_framework, empty_stop_guard, progress_contract_guard, a2a, agentcli, ailang_docs, context_mode, exa_search, herdr, mcp, microrag, omnigraph, repetition_guard, scratchpad, test_dummy
+  ================================================================
+  ADR-001 row 3's installed-extension clauses, plus the one this
+  profile is the first to be able to ask: a NON-EMPTY exclusion.
+  ================================================================
+  -- ROW 3 CLAUSE 1: the coverage floor, over 1 installed extension(s) --
+      compose: 3 hook(s) covered, 1 excluded — floor satisfied, non-vacuously
+      ↳ BINDS: compose covering zero hooks → rejected by [coverage-floor]
+  -- ROW 3 CLAUSE 2: no unconditionally-dispatched hook excluded --
+      compose excludes on_tool_handle, which is the ONE gated slot in the ABI
+      (ext/runtime.ail tests contains_tool before dispatching). Excluding any of
+      the other registered atoms would make the run unable to complete, and the rule says so.
+      ↳ BINDS: compose excluding on_response_intercept, which is unconditionally dispatched → rejected by [unconditional-hook-excluded]
+  -- ROW 3 CLAUSE 2b: the exclusion is stated in TWO D5 fields and they agree --
+      field 9 disclosures.excluded = [tool_provider[0]]
+      hook_classifications         = ExplicitlyExcluded on the same id, basis `disclosure`
+      ↳ BINDS: the disclosure covering on_tool_handle while the classification still excludes it → rejected by [classification-disagrees-with-disclosure]
+  -- ROW 3 CLAUSE 3: no installed extension calls a classifier-2 ExtPorts field --
+      the derived call list is EMPTY at HEAD, so the AILANG rule passes over nothing;
+      what discharges the clause is CLAIM row3c below, re-derived by the guard.
+      NOTE THE ASYMMETRY WITH CLASSIFIER 3: compose makes 36 ExtPorts field calls and
+      NONE of them is a classifier-2 member, because classifier 2's set is the fields
+      whose seam cannot thread successor state and that set is empty since WI-B2b.
+      ↳ BINDS: a classifier-2 call ATTRIBUTED to compose → rejected by [classifier-2-extension-installed]
+  -- ROW 3 CLAUSE 4: per-extension covered/excluded hook IDS --
+      compose
+        atoms:    prompt_shaper[0], tool_policy[0], tool_provider[0], response_interceptor[0]
+        covered:  prompt_shaper[0], tool_policy[0], response_interceptor[0]
+        excluded: tool_provider[0]
+  -- what each hook RESTS ON, per entry --
+      2 hook(s) on criterion 1 (basis: declared_row, ASSUMED — ADR:1415)
+      1 hook(s) on criterion 2 (basis: discovery, MEASURED — dynamic, over the run below)
+      1 hook(s) EXPLICITLY EXCLUDED (basis: disclosure) — the first in the project
+      0 criterion-2 hook(s) satisfy the port and origin clauses VACUOUSLY
+      1 covered hook(s) mediate the world SUBSTANTIVELY
+  -- THE COVERAGE STATEMENT, computed from the record (not written) --
+      extension-model coverage is NON-ZERO: 3 hook(s) covered across 1 installed extension(s), of which 1 mediate the world SUBSTANTIVELY through a D1 port and 0 satisfy criterion 2 vacuously.
+  ================================================================
+  THE DEMONSTRATION — goal-line clause 1. A graded session through
+  the real traced driver, with compose installed, recorded,
+  validated and strictly replayed.
+  ================================================================
+  ✓ the graded session reached its terminator
+      census: expect_provider=2 expect_tool=0 expect_approval=0 expect_wake=0 expect_extension_effect=1 environment_read=11 runtime_random_draw=0 advance_clock=4 file_write=1 file_remove=1 dir_make=1
+  ✓ compose's routed seam RAN — the extension reached the recorder
+  ✓ NON-VACUITY: the recorded program carries a world-mediated effect ORIGIN-TAGGED to compose
+  ✓ compose took the FAILURE branch, on the typed exit code and not on the rendered one
+  ✓ the served content reached the model: the diagnostic came back through the decode
+  ✓ the DISCOVERY instrument grades the run clean in both directions
+  ✓ the recorded program VALIDATES
+  ✓ the reconstituted world's queues balance against the log — nothing unconsumed, nothing missing
+  ✓ the reconstituted queue serves the same TYPED exit code the recording did
+  ✓ the graded session REPLAYS to an identical interaction log
+  ✓ NON-VACUITY, REPRODUCED: the replay records the same origin-tagged compose effect
+  ✓ the REPLAY takes the same failure branch
+  -- ROW 4: injected faults, and the extension_effect_fault waiver --
+      waives all 2 conditional D3 classes, each condition READ from the catalogue
+      extension_effect_fault: WAIVED, and this profile installs an extension WITH an
+      effectful hook — so the waiver rests on neither emptiness (driver_only) nor
+      'no effectful hook' (driver_plus_no_ops). It rests on a per-FIELD fact: the class
+      is delivered by ExtPorts.ai_step, compose's only path to a provider is the ambient
+      callStreamResult, and that path is behind the EXCLUDED on_tool_handle. The waiver
+      would fail the moment this profile covered that slot or installed compaction_ai.
+      FINDING (third profile to record it): the catalogue's condition text names
+      `driver_only` inside it and the machinery requires a verbatim match, so this
+      profile records a sentence about a different profile. Reported, not fixed.
+  -- ROW 5: every time-bearing read reachable in the profile is routed --
+      routed-set claim, COMPUTED at the bound revision (nothing recorded):
+        reachable core sites: 7
+        routed:               6
+        declared unrouted:    1
+      installing compose added NO reachable core site: the table's two attributed rows
+      belong to test_dummy and scratchpad, neither of which is installed
+      AND THIS IS THE FIRST PROFILE WHOSE INSTALL SET READS A CLOCK AT ALL. compose's
+      intercept calls clock_now — through ExtPorts, which is routed; WI-D26 §13.1
+      measured 0 ambient Clock sources in any compose hook path. driver_plus_no_ops
+      earned this row with 'no installed extension reads a clock'; that sentence is
+      FALSE here, and the row is re-earned on routing instead of on absence.
+  -- ROW 7: the ScratchpadResult exemption, re-earned --
+      the variant is emitted only when a tool named `scratchpad` is served by a hook
+      returning `Handled` with a `cells` key (dst_invariants.parity_gap_reasons).
+      NEITHER of driver_plus_no_ops's two grounds is available: compose's
+      provided_tools is NOT empty, and its on_tool_handle does NOT delegate. What
+      keeps this profile off that path is TWO different facts:
+        (1) on_tool_handle is EXCLUDED in D5 field 9, so no dispatch of it is
+            conformant under this profile, and routing_violation_at fires on one;
+        (2) compose provides no tool named `scratchpad` — its provided_tools are
+            compose's own — so even a dispatched handle could not emit the variant.
+      Neither is the empty install list and neither is `provided_tools: []`.
+  ✓ the runtime exclusion check BINDS on a non-empty excluded list, both ways:
+      dispatching on_tool_handle under this profile IS a routing violation
+      dispatching on_response_intercept is NOT — and the graded session dispatches no tool at all
+  ✓ the per-run execution manifest validates against the definition it realizes
+      profile:            driver_plus_compose/13
+      extension packages: 1, projected from the install list
+      profile rules:      profile-rules/3
+      event vocabulary:   event-vocabulary/1
+  -- REGISTRATION RUNS AMBIENT, AND THIS PROFILE'S RUNS GRANT {Env, FS} --
+      compose's register_with_config reads getEnvOr("MOTOKO_PROFILE_DIR", ".") at
+      register.ail:9, then fileExists/readFile at config.ail, BEFORE any hook is
+      dispatched. AILANG capabilities are per PROCESS, so the withheld-capability
+      poison discipline `make world_state` runs for the driver DOES NOT EXTEND across
+      compose's registration. The gap is stated, not closed.
+      WHAT CARRIES THE DETERMINISM CLAIM INSTEAD: the record → strict-replay identity
+      asserted above. A registration read that varied with the host would make the two
+      runs diverge, and the replay row would go red.
+      The registration-effects amendment is DRAFT and on the maintenance register;
+      this item deliberately does not land it.
+  -- NOT CLAIMED for this profile (D10: nothing is inherited) --
+      rows 1, 2, 6, 8, 9, 10 and 11 are NOT re-earned here; a row not run is a row
+      not earned, and this profile borrows no predecessor's answer to any of them.
+      NOT CLAIMED ABOUT COMPOSE: that it is classifier-clean. `make
+      ext_ambient_inventory` reports it AMBIENT — 8 sources, in the three classes the
+      goal line closes by disclosure (four println, registration's three, one AI). The
+      three slot-level barriers STAND, `make profile_definition` says so on every run,
+      and door 3 is untouched. This profile's criterion-2 evidence is EXISTENTIAL —
+      what compose did in this run, through ports, tagged and replayed — and it does
+      not bound what compose could do on inputs this run did not supply.
+driver_plus_compose_dst PASS
+FAIL: extension(s) ['ailang_tools'] are in ailang.toml's [extensions] packages and appear in neither this profile's install list nor its omissions. An extension in neither is a decision INHERITED rather than taken (WI-D7).
+make: *** [Makefile:1477: driver_plus_compose] Error 1
+exit=2

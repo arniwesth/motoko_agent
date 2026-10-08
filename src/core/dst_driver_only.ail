@@ -509,7 +509,23 @@ export pure func driver_only_id() -> string { "driver_only" }
 -- profile earned at WI-D5. The four vacuities WI-D5 tabulated for THIS profile
 -- are unchanged in extent, and the mandatory zero-coverage caveat is still
 -- true of `driver_only` verbatim.
-export pure func driver_only_version() -> string { "32" }
+--
+-- v32 → v33 AT 037 PLAN-001 P6 (2026-10-05), THE REPAIR. A CLAIM changed and no
+-- anchor moved: `omitted_extensions` names `ailang_tools`, with its measured
+-- reason. It had been in ailang.toml's [extensions] packages and in none of the
+-- four profile records (037 ADR-001 D13). The omitted list is a semantic scope
+-- field, so the version moves with it.
+--
+-- WHAT DID NOT CHANGE: driver_only still installs nothing and still covers
+-- nothing. The install list, the coverage claim, the waived set, the hook
+-- classifications, the catalogue and the attribution ref are as v32 had them.
+-- `make driver_only` was green before this entry and did not ask for it.
+--
+-- v33 → v34 AT 037 PLAN-001 P6 (2026-10-05), THE RE-PIN. The same kind of bump:
+-- `omitted_extensions` names `skills`, the extension 037 adds, with its
+-- measured reason (037 ADR-001 D13 and A8). Installed, covered, waived,
+-- classified and attributed: all as v33 had them.
+export pure func driver_only_version() -> string { "34" }
 
 -- The attribution table this profile was issued against. Literals by design —
 -- see the header. Re-issuing the profile after a table correction means bumping
@@ -1034,7 +1050,35 @@ export pure func driver_only() -> ProfileDefinition {
       { extension_id: "empty_stop_guard",
         reason: "OMITTED BY CHOICE from WI-D13 (2026-08-07), on the same measured basis as compaction_structural above. Classifier 3 reports PORT-MEDIATED over its 3-module closure — 0 ambient sources, 0 ExtPorts field calls — so criterion 2 holds with clauses 1 and 2 VACUOUS and clause 3 substantive, and zero barriers remain. Its on_solver_candidate is the only one of the four's twelve barrier-slot bodies that calls a helper rather than returning a literal (decide, from empty_stop_guard.ail), and it measures identically: rowless ACCEPTED, plus one println REJECTED 'Missing effects: IO'. That helper is inside the closure classifier 3 measured, which is why a closure-scoped instrument is the right unit and a module-scoped one would not have settled it. What would have to change for it to be installed: this profile's willingness to record coverage of hooks that perform nothing." },
       { extension_id: "progress_contract_guard",
-        reason: "OMITTED BY CHOICE from WI-D13 (2026-08-07), on the same measured basis as compaction_structural above. Classifier 3 reports PORT-MEDIATED over its 3-module closure — 0 ambient sources, 0 ExtPorts field calls — so criterion 2 holds with clauses 1 and 2 VACUOUS and clause 3 substantive, and zero barriers remain. Same shape as empty_stop_guard: on_solver_candidate calls decide from its own package and the other two barrier-slot hooks return literals, and the two-sided control gives the same answer on all three — rowless ACCEPTED, plus one println REJECTED 'Missing effects: IO'. What would have to change for it to be installed: this profile's willingness to record coverage of hooks that perform nothing." }
+        reason: "OMITTED BY CHOICE from WI-D13 (2026-08-07), on the same measured basis as compaction_structural above. Classifier 3 reports PORT-MEDIATED over its 3-module closure — 0 ambient sources, 0 ExtPorts field calls — so criterion 2 holds with clauses 1 and 2 VACUOUS and clause 3 substantive, and zero barriers remain. Same shape as empty_stop_guard: on_solver_candidate calls decide from its own package and the other two barrier-slot hooks return literals, and the two-sided control gives the same answer on all three — rowless ACCEPTED, plus one println REJECTED 'Missing effects: IO'. What would have to change for it to be installed: this profile's willingness to record coverage of hooks that perform nothing." },
+
+      -- ======================================================================
+      -- 037 PLAN-001 P6 (2026-10-05). ONE NEW ENTRY, AND A THIRD KIND OF
+      -- OMISSION.
+      -- ======================================================================
+      --
+      -- `compaction_ai` is named because every shipped configuration installs
+      -- it; the four above are named because they are at zero barriers and the
+      -- profile DECLINES them. `ailang_tools` is neither. It is named because
+      -- 037 ADR-001 D13 states an extension's position in all four profiles and
+      -- found this one in none of them.
+      --
+      -- THIS LIST IS STILL NOT A PARTITION OF THE INSTALLABLE SET, and the entry
+      -- does not make it one. Apart from `compaction_ai`, and `skills` below,
+      -- no other AMBIENT extension is named anywhere in this file, as before,
+      -- and no gate asks for one:
+      -- `check_fixtures.py` requires by name only a classifier-2 caller and an
+      -- extension at zero barriers, and `ailang_tools` is neither of those.
+      { extension_id: "ailang_tools",
+        reason: "OMITTED BY CONSEQUENCE, not by choice, and named from 037 P6 (2026-10-05); until then no list in this profile named it. This profile installs nothing, so what the entry records is a measurement and not a decision to decline. Measured at 0f4724de: classifier 3 (make ext_ambient_inventory) reports it AMBIENT, with 6 ambient sources in a 3-module closure (std/process.exec; std/fs.readFileResult, writeFileResult, mkdirAllResult and isDir; std/env.getEnvOr) and 0 ExtPorts field calls, so criterion 2's first clause fails on evidence and the per-(extension, slot) derivation in tools/profile_definition/check_fixtures.py clears nothing for it: it is not among the extensions that derivation finds installable. make ext_hook_scope lists one of the six as registration-only (std/env.getEnvOr) and reports its hook scope HOOK-UNRESOLVED. It registers one atom, a ToolProvider claiming WriteFile, EditFile and ReadFile, and handles them for .ail paths: write_ail and edit_ail declare ! {FS, Process} and reach std/fs and std/process directly, writing the file and running `ailang check` themselves, and the outcome returns next_state: ctx.world as it was handed. So the effects are the hook's own and leave outside ctx.ports; a registration read is not the whole of it. Per WI-D2's rule a reason names what would have to CHANGE: the handler's file and process effects reaching the world through mediated ports, which is the package's change and not this profile's." },
+
+      -- 037 PLAN-001 P6 (2026-10-05), THE RE-PIN. `skills` is the extension 037
+      -- adds, and it is named for the reason `ailang_tools` is: D13 states its
+      -- position in all four profiles. It is the one entry here omitted by a
+      -- RULING. Its hooks perform one effect, a port read, and the profile that
+      -- could cover that is D13's later step.
+      { extension_id: "skills",
+        reason: "OMITTED BY RULING, and named from 037 P6 (2026-10-05). 037 ADR-001 D13 (ruling 10, 2026-10-03) keeps the skills extension outside every DST profile in v1, and this profile installs nothing in any case. Its position, measured at c708d2cc: classifier 3 (make ext_ambient_inventory) reports it AMBIENT, with 5 ambient sources in a 3-module closure (std/env.getEnvOr; std/fs.isDir, isFile, listDir and readFileResult) and 1 ExtPorts field call, and that closure reading is the one a profile may rely on, so criterion 2's first clause fails on it. make ext_hook_scope reports the second reading, HOOK-PORT-MEDIATED, with all five sources registration-only: discovery of .motoko/skills runs at registration, before any world exists, reads the real disk, and is disclosed through config and not mediated. The one effect a hook performs is the port read ctx.ports.file_read (register.ail:331, make ext_call_inventory), which a deterministic run serves from the world's file table. It registers two atoms: DescribeTools, which renders from config on a declared empty row, and a ToolProvider for the one tool Skill, the gated kind. Covering the ToolProvider takes a recorded, validated and strictly replayed run that dispatches Skill; the classifier cannot clear it, because its verdict is closure-wide and a registration read taints every hook, and this profile records no run of an extension at all. Per WI-D2's rule a reason names what would have to CHANGE: a driver_plus_skills profile with its own graded run, which D13 names as the later step and 037 leaves out of scope. What the extension was measured to do, reported and not gated (037 P1, NOTE-p1-prototype-results.md): the expected skill was loaded in the first response in 88% to 100% of sessions per model, 261 of 270 over seven models; its instructions were followed to the end in 53 of 54 sessions; after compaction it was reloaded 0 times in three runs under the structural compactor and once in each of three under compaction_ai; and a 16,000-char index was accepted by all 7 provider families it was sent to. Default-profile membership is D11's and is ruled at gate G2, not here." }
     ],
 
     -- A10 decision 1, in force. Exactly the reachable-and-unrouted set; the
@@ -1162,6 +1206,21 @@ pure func test_omission_is_named() -> bool
       o :: _ => o.extension_id == "compaction_ai" && o.reason != ""
     }
   }
+
+-- The two entries 037 P6 added are in the list BY NAME. Nothing else in this
+-- file reads an id past the first: with `skills` misspelt in the list above,
+-- every other test here passed (037 REVIEW-003). A check, not a pin: it holds
+-- no count and no version.
+pure func test_skills_and_ailang_tools_are_omitted_by_name() -> bool
+  tests [((), true)]
+  {
+    omits(driver_only().omitted_extensions, "skills")
+      && omits(driver_only().omitted_extensions, "ailang_tools")
+  }
+
+pure func omits(os: [{ extension_id: string, reason: string }], id: string) -> bool {
+  match os { [] => false, o :: rest => if o.extension_id == id then true else omits(rest, id) }
+}
 
 -- The waiver list is READ from the catalogue, so it cannot fall behind it. A
 -- transcribed list would pass a count check the day it was written and fail

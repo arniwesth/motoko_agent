@@ -1,0 +1,13 @@
+diff --git a/packages/motoko-ext-skills/register.ail b/packages/motoko-ext-skills/register.ail
+index 79a78596..b222c848 100644
+--- a/packages/motoko-ext-skills/register.ail
++++ b/packages/motoko-ext-skills/register.ail
+@@ -291,7 +291,7 @@ pure func unsandboxed_error(workdir: string) -> string {
+ }
+ 
+ pure func launched_elsewhere(cfg: Json, workdir: string) -> bool {
+-  if config_sandbox_set(cfg) then false else workdir != "."
++  if config_sandbox_set(cfg) then false else startsWith(workdir, "/")
+ }
+ 
+ pure func requested_name(arguments: Json) -> string {

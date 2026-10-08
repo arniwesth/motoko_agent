@@ -1,0 +1,121 @@
+-- 037 P1.2 scratch driver: registers the prototype against the sandboxed
+-- workdir, prints the catalogue, and drives the ToolProvider handler through a
+-- stub `file_read` port. Not part of the worktree.
+module scratch/skills_handler_probe
+
+import std/io (println)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/string (length, substring, concat, intToStr, repeat, split)
+import std/fs (readFileResult)
+import std/json (Json, jo, kv, js, encode)
+import pkg/sunholo/motoko_ext_abi/types (Capability, DescribeTools, ToolProvider, ToolSchema,
+  ProviderCtx, ToolCallEnvelope, ToolHandleOutcome, Handled, Delegate, ExtFileRead, ExtWorld, ExtPorts,
+  pure_ctx, provider_ctx, empty_ext_world)
+import pkg/sunholo/motoko_ext_skills/register (register_with_config)
+import src/core/ext/ctx_defaults (noop_ext_ports)
+
+-- the real file, through std/fs (the live adapter's behaviour for a present file)
+func real_read(w: ExtWorld, path: string) -> ExtFileRead ! {FS} {
+  match readFileResult(path) {
+    Ok(t) => { present: true, content: t, next_state: w },
+    Err(_) => { present: false, content: "", next_state: w }
+  }
+}
+func gone_read(w: ExtWorld, _path: string) -> ExtFileRead ! {FS} {
+  { present: false, content: "", next_state: w }
+}
+func nofm_read(w: ExtWorld, _path: string) -> ExtFileRead ! {FS} {
+  { present: true, content: "# no frontmatter here\n", next_state: w }
+}
+func unterminated_read(w: ExtWorld, _path: string) -> ExtFileRead ! {FS} {
+  { present: true, content: "---\nname: workdir-stamp\ndescription: x\n\nbody\n", next_state: w }
+}
+func badyaml_read(w: ExtWorld, _path: string) -> ExtFileRead ! {FS} {
+  { present: true, content: "---\nname: workdir-stamp\ndescription: a: b\n---\nbody\n", next_state: w }
+}
+func renamed_read(w: ExtWorld, _path: string) -> ExtFileRead ! {FS} {
+  { present: true, content: "---\nname: other-name\ndescription: x\n---\nbody\n", next_state: w }
+}
+func nodesc_read(w: ExtWorld, _path: string) -> ExtFileRead ! {FS} {
+  { present: true, content: "---\nname: workdir-stamp\ndescription: \"  \"\n---\nbody\n", next_state: w }
+}
+func huge_read(w: ExtWorld, _path: string) -> ExtFileRead ! {FS} {
+  { present: true, content: concat(["---\nname: workdir-stamp\ndescription: x\n---\n", repeat("0123456789", 6100)]), next_state: w }
+}
+
+func first_line(s: string) -> string {
+  match split(s, "\n") { [] => "", l :: _ => l }
+}
+
+func show_outcome(label: string, o: ToolHandleOutcome) -> () ! {IO} {
+  match o.decision {
+    Handled(env) => println(concat([
+      label, " => exit_code=", intToStr(env.exit_code),
+      " stdout_chars=", intToStr(length(env.stdout)),
+      " stdout_line1=[", first_line(env.stdout), "]",
+      " stderr=[", env.stderr, "]"
+    ])),
+    _ => println(concat([label, " => NOT HANDLED"]))
+  }
+}
+
+func call_skill(label: string, caps: [Capability], cfg: Json, limit: int, reader: (ExtWorld, string) -> ExtFileRead ! {FS}, args: Json)
+  -> () ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  match caps {
+    [] => println(concat([label, " => no ToolProvider"])),
+    ToolProvider(_, h) :: _ => {
+      let ports = { noop_ext_ports() | file_read: reader };
+      let ctx = { provider_ctx(pure_ctx(cfg), ports, empty_ext_world()) | context_limit: limit };
+      let call: ToolCallEnvelope = { id: "call_0123456789abcdef0123456789abcdef", tool: "Skill", arguments: args };
+      show_outcome(label, h(ctx, call))
+    },
+    _ :: rest => call_skill(label, rest, cfg, limit, reader, args)
+  }
+}
+
+func show_catalogue(caps: [Capability], cfg: Json) -> () ! {IO} {
+  match caps {
+    [] => (),
+    DescribeTools(f) :: rest => {
+      match f(cfg) {
+        [s] => {
+          println(concat(["SCHEMA name=", s.name]));
+          println("DESCRIPTION-BEGIN");
+          println(s.description);
+          println("DESCRIPTION-END");
+          println(concat(["PARAMETERS ", s.parameters]))
+        },
+        _ => println("SCHEMA count != 1")
+      };
+      show_catalogue(rest, cfg)
+    },
+    _ :: rest => show_catalogue(rest, cfg)
+  }
+}
+
+func name_arg(n: string) -> Json { jo([kv("name", js(n))]) }
+
+export func main() -> () ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  let reg = register_with_config(());
+  println(concat(["CONFIG ", encode(reg.config)]));
+  show_catalogue(reg.caps, reg.config);
+  call_skill("01 load workdir-stamp, limit 0 (unknown)", reg.caps, reg.config, 0, real_read, name_arg("workdir-stamp"));
+  call_skill("02 load dagr-producer, limit 0 (unknown)", reg.caps, reg.config, 0, real_read, name_arg("dagr-producer"));
+  call_skill("03 load dagr-producer, limit 200000", reg.caps, reg.config, 200000, real_read, name_arg("dagr-producer"));
+  call_skill("04 load dagr-producer, limit 32768", reg.caps, reg.config, 32768, real_read, name_arg("dagr-producer"));
+  call_skill("05 load dagr-producer, limit 20000", reg.caps, reg.config, 20000, real_read, name_arg("dagr-producer"));
+  call_skill("05a load dagr-producer, limit 24309 (24%)", reg.caps, reg.config, 24309, real_read, name_arg("dagr-producer"));
+  call_skill("05b load dagr-producer, limit 24308 (25%)", reg.caps, reg.config, 24308, real_read, name_arg("dagr-producer"));
+  call_skill("06 load workdir-stamp, limit 20000", reg.caps, reg.config, 20000, real_read, name_arg("workdir-stamp"));
+  call_skill("07 unknown name", reg.caps, reg.config, 0, real_read, name_arg("nope"));
+  call_skill("08 path-shaped name", reg.caps, reg.config, 0, real_read, name_arg("../config/skills_proto"));
+  call_skill("09 no name argument", reg.caps, reg.config, 0, real_read, jo([]));
+  call_skill("10 file gone since startup", reg.caps, reg.config, 0, gone_read, name_arg("workdir-stamp"));
+  call_skill("11 V4 no frontmatter", reg.caps, reg.config, 0, nofm_read, name_arg("workdir-stamp"));
+  call_skill("12 V4 unterminated", reg.caps, reg.config, 0, unterminated_read, name_arg("workdir-stamp"));
+  call_skill("13 V4 bad yaml", reg.caps, reg.config, 0, badyaml_read, name_arg("workdir-stamp"));
+  call_skill("14 V5 name differs", reg.caps, reg.config, 0, renamed_read, name_arg("workdir-stamp"));
+  call_skill("15 V6 empty description", reg.caps, reg.config, 0, nodesc_read, name_arg("workdir-stamp"));
+  call_skill("16 V7 too large", reg.caps, reg.config, 0, huge_read, name_arg("workdir-stamp"))
+}

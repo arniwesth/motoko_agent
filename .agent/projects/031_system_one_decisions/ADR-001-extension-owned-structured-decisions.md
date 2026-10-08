@@ -1310,8 +1310,69 @@ token rather than per step; none exists, and a future one reads these numbers fi
 alternative:** the host handing each atom a decoded, typed value — a contract change (a typed config
 position or a per-extension decode hook, 9.0 under the 8.x rule) to save about 0.1 ms per step.
 
+### Amendment 5 (2026-10-04) — a reserved `config` key, `registration_refusal`, by which an extension refuses its own registration
+
+**Adds to** D2 (the configuration channel, `:347-375`; `ExtRegistration = { config, caps }` at
+`:355`). **No type, constructor, function or version in the ABI package moves**: the amendment
+reserves one key of `config` and states what the host does with it.
+
+**The artifact: a registration the host accepted.** `ExtRegistration` has no error channel, and a
+record the ABI exports no constructor for gains no field in 8.x (the ABI header's rule 1,
+`packages/motoko-ext-abi/types.ail:27`). So an extension that finds at registration that it must
+not be started had no way to say so — the case that raised it is 037 ADR-001 D1, a skill root that
+breaks a rule. 037 PLAN-001 P2 put the gap in a fixture in the registration-boundary script
+(`scripts/dst/registry_multiplicity_dst.ail`): a registration on the clean capability list whose
+`config` is `{"registration_refusal": "<a non-empty string>"}`. At `cfdf74c1`, against the host as
+it stood, `make registry_multiplicity` reported that row **accepted**, the entry carrying the
+config unchanged and all eleven atoms (`../037_skills_system/evidence/p2/amendment-5/ARTIFACT.txt`,
+with both raw logs). The key was unused: no match for it under `src`, `packages`, `scripts` or
+`tools` at `18065e4a`. The same row went red when the check landed (`fdeda2cc`) and now asserts
+the refusal.
+
+**The rule.** The top-level key `registration_refusal` of `ExtRegistration.config` is reserved,
+and an extension uses it for nothing else. An extension that refuses sets it and still returns its
+ordinary `caps`.
+
+| the key | the host |
+|---|---|
+| absent, or `config` is not an object | registers the extension, as before |
+| the empty string | registers the extension, as before |
+| a non-empty string | refuses the registration; that string is the message |
+| any other JSON type, `null` included | refuses the registration, as a malformed refusal |
+
+The host reads the key at the registration boundary — `normalize_registration` in
+`src/core/ext/registry_normalize.ail` — **before** the multiplicity walk, and returns a sixth
+`RegistrationRejection`, `RegistrationRefused(id, message)`, rule `registration-refused`. One
+refusing extension rejects the whole registry build, as any rejection does; the generated registry
+already turns a rejection into one JSONL `error` event and exit 2, and is not regenerated. The
+host reads one string and learns nothing about why. A key that does not refuse is ordinary
+configuration: carried on the entry, stamped as `ext_config` and hashed, unchanged.
+
+**No version change, and what ties the two sides.** The key's name and semantics are stated in the
+comment beside `ExtRegistration` in `packages/motoko-ext-abi/types.ail`. The ABI package exports
+neither the key nor a reader and stays 8.0. The host's copy of the string and its reader are in
+core, where `new_contract_policy` applies. The string therefore has two writers, and one row in
+the registration-boundary script, which can import both sides, asserts that the extension's
+spelling and the host's are equal.
+
+**Consequence, stated.** The check is in core, and a package version says nothing about core: an
+extension cannot depend its way onto a host that has the check. A host without it ignores the key
+and starts. An extension that sets the key must therefore fail safe by itself — 037 ADR-001 D2
+requires that, with a refusal recorded, its catalogue lists nothing and every call returns the
+refusal as a tool error.
+
+**Rejected alternatives.** An 8.1 minor exporting the key and its reader from the ABI package, so
+the string has one owner: the manifest version is re-derived and compared by `check_abi_version`,
+the package and DST manifests pin `8.0`, and journal admission compares a recorded ABI version
+with the lock's, so corpora recorded at 8.0 would stop being admitted — a repository-wide sweep to
+share one string (037 ADR-001 D2 prices it). An error field on `ExtRegistration`: excluded by the
+8.x rule above. The extension printing the event and calling `exit(2)` itself: the first
+registration in the tree to end the process, with the refusal and its message format outside the
+one host-owned boundary.
+
 ## Related records
 
+- [037: Skills system](../037_skills_system/ADR-001-skills-system.md) — D2 is the decision Amendment 5 records
 - [First review: Claude Fable](REVIEW-adr001-v0.1-verdicts-fable.md)
 - [Second review: Claude](REVIEW-adr001-v0.2-verdicts-claude.md)
 - [Third review: Codex, full review of v0.3](REVIEW-adr001-v0.3-verdicts-codex.md) — Appendix A is the 21-probe suite D2 relies on

@@ -1,0 +1,22 @@
+# The blind reviewer's rows, as they will be scored. Written before any of them runs; hashed in
+# blind-scoring.tsv.sha256 and in sequence.log. Derived mechanically from blind-mutants.tsv
+# (sha256 a042edec77876964276571f09cd5dcf0bc81022219b7e8cdca89cba8c5670753): nothing is retyped.
+#
+# The reviewer's brief numbers the eight rules 1 to 8; `rule_named` is that number as a rule id.
+#  B-S1. The rule a row NAMES is the rule its edit breaks (`rule_broken`). The row is a KILL when
+#        the gate prints `JUDGE <member> <that rule id> RED` on a bank member, as for rows 1 to 13.
+#  B-S2. `reviewer_predicts` is the reviewer's own forecast and is scored separately: `none` is a
+#        forecast that every rule stays green. A row the reviewer forecast green that stays green
+#        is a SURVIVOR, forecast or not: the named rule was not printed. It is reported as one.
+#  B-S3. A compile error, a timeout or another rule red alone is recorded as that. No direction
+#        is scored: the reviewer named none.
+#  B-S4. `members` is the reviewer's free text; the set seen is recorded beside it, not compared.
+# id	file	rule_broken	rule_named	reviewer_predicts	members
+B1	src/core/session.ail	5	retry-at-budget-edge	none	-
+B2	src/core/tool_phase.ail	7	tool-dispatches-unbalanced	none	-
+B3	src/core/session.ail	2	driver-step-repeated	none	-
+B4	src/core/step_machine.ail	4	provider-calls-exceed-budget	provider-calls-exceed-budget	any member that ends max_steps; my guess is seed-244
+B5	src/core/session.ail	8	request-ordinals-not-contiguous	request-ordinals-not-contiguous	constructed-empty-terminal and every seed that ends Ok
+B6	src/core/session.ail	1	outcome-finish-disagrees	outcome-finish-disagrees	seed-30, seed-32 and any other member that ends on a provider error
+B7	src/core/session.ail	3	steps-not-contiguous	steps-not-contiguous	every member that finishes a tool batch and then calls the model again
+B8	src/core/session.ail	7	tool-dispatches-unbalanced	tool-dispatches-unbalanced	every member that runs an approved tool: at least seed-1, seed-12, seed-15, seed-19, seed-62, seed-141

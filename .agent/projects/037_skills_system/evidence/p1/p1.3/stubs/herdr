@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# 037 P1.3 stub: sessions must not control Herdr panes. Logs the call and fails.
+echo "$(date -u +%FT%TZ) herdr $*" >> "${P13_STUB_LOG:-/dev/null}"
+echo "herdr: not available in this measurement workspace (stub; no pane control)" >&2
+exit 1

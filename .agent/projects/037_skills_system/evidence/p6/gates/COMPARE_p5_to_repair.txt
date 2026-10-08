@@ -1,0 +1,77 @@
+== check_core: exit 0 -> 0  identical
+== conformance: exit 0 -> 0  identical
+== declared_vs_performed: exit 2 -> 2  identical
+== driver_only: exit 0 -> 0  8 line(s) differ
+   @@ -4,2 +4,2 @@
+   -driver_only_dst  (driver_only v32)
+   -  ✓ driver_only v32 LOADS CLEAN at the bound revision
+   +driver_only_dst  (driver_only v33)
+   +  ✓ driver_only v33 LOADS CLEAN at the bound revision
+   @@ -7 +7 @@
+   -  ✓ names 5 omission(s), each with a reason: compaction_ai, compaction_structural, decision_framework, empty_stop_guard, progress_contract_guard
+   +  ✓ names 6 omission(s), each with a reason: compaction_ai, compaction_structural, decision_framework, empty_stop_guard, progress_contract_guard, ailang_tools
+   @@ -23 +23 @@
+   -      profile:            driver_only/32
+   +      profile:            driver_only/33
+== driver_plus_compose: exit 2 -> 2  12 line(s) differ
+   @@ -4,2 +4,2 @@
+   -driver_plus_compose_dst  (driver_plus_compose v13)
+   -  ✓ driver_plus_compose v13 LOADS CLEAN at the bound revision, with compose INSTALLED and on_tool_handle EXCLUDED
+   +driver_plus_compose_dst  (driver_plus_compose v14)
+   +  ✓ driver_plus_compose v14 LOADS CLEAN at the bound revision, with compose INSTALLED and on_tool_handle EXCLUDED
+   @@ -8 +8 @@
+   -  ✓ installed 1 + omitted 17 = every extension in the resolved install set (the partition is checked against ailang.toml by the guard)
+   +  ✓ installed 1 + omitted 18 = every extension in the resolved install set (the partition is checked against ailang.toml by the guard)
+   @@ -10 +10 @@
+   -      omitted:   compaction_ai, compaction_structural, decision_framework, empty_stop_guard, progress_contract_guard, a2a, agentcli, ailang_docs, context_mode, exa_search, herdr, mcp, microrag, omnigraph, repetition_guard, scratchpad, test_dummy
+   +      omitted:   compaction_ai, compaction_structural, decision_framework, empty_stop_guard, progress_contract_guard, a2a, agentcli, ailang_docs, context_mode, exa_search, herdr, mcp, microrag, omnigraph, repetition_guard, scratchpad, test_dummy, ailang_tools
+   @@ -103 +103 @@
+   -      profile:            driver_plus_compose/13
+   +      profile:            driver_plus_compose/14
+   @@ -129 +129 @@
+   -FAIL: extension(s) ['ailang_tools', 'skills'] are in ailang.toml's [extensions] packages and appear in neither this profile's install list nor its omissions. An extension in neither is a decision INHERITED rather than taken (WI-D7).
+   +FAIL: extension(s) ['skills'] are in ailang.toml's [extensions] packages and appear in neither this profile's install list nor its omissions. An extension in neither is a decision INHERITED rather than taken (WI-D7).
+== driver_plus_herdr: exit 0 -> 0  4 line(s) differ
+   @@ -18 +18 @@
+   -  ✓ driver_plus_herdr v2 LOADS CLEAN at the bound revision, with herdr INSTALLED, its TOOL path COVERED and only the lifecycle slot excluded
+   +  ✓ driver_plus_herdr v3 LOADS CLEAN at the bound revision, with herdr INSTALLED, its TOOL path COVERED and only the lifecycle slot excluded
+   @@ -34 +34 @@
+   -HERDR-GRADED: PASS — the ToolProvider path is reachable under DST, the run is recorded, graded, validated and strictly replayed, and driver_plus_herdr/2 rests on it
+   +HERDR-GRADED: PASS — the ToolProvider path is reachable under DST, the run is recorded, graded, validated and strictly replayed, and driver_plus_herdr/3 rests on it
+== driver_plus_no_ops: exit 2 -> 2  12 line(s) differ
+   @@ -4,2 +4,2 @@
+   -driver_plus_no_ops_dst  (driver_plus_no_ops v21)
+   -  ✓ driver_plus_no_ops v21 LOADS CLEAN at the bound revision, with 4 extensions INSTALLED
+   +driver_plus_no_ops_dst  (driver_plus_no_ops v22)
+   +  ✓ driver_plus_no_ops v22 LOADS CLEAN at the bound revision, with 4 extensions INSTALLED
+   @@ -7 +7 @@
+   -  ✓ installed 4 + omitted 14 = every extension in the resolved install set (the partition is checked against ailang.toml by the guard)
+   +  ✓ installed 4 + omitted 15 = every extension in the resolved install set (the partition is checked against ailang.toml by the guard)
+   @@ -9 +9 @@
+   -      omitted:   compaction_ai, a2a, agentcli, ailang_docs, compose, context_mode, exa_search, herdr, mcp, microrag, omnigraph, repetition_guard, scratchpad, test_dummy
+   +      omitted:   compaction_ai, a2a, agentcli, ailang_docs, compose, context_mode, exa_search, herdr, mcp, microrag, omnigraph, repetition_guard, scratchpad, test_dummy, ailang_tools
+   @@ -81 +81 @@
+   -      profile:            driver_plus_no_ops/21
+   +      profile:            driver_plus_no_ops/22
+   @@ -93 +93 @@
+   -FAIL: extension(s) ['ailang_tools', 'skills'] are in ailang.toml's resolved install set and this
+   +FAIL: extension(s) ['skills'] are in ailang.toml's resolved install set and this
+== ext_ambient_inventory: exit 0 -> 0  identical
+== ext_ambient_inventory_selftest: no log on the first side; second exit=2
+== ext_call_inventory: exit 0 -> 0  identical
+== ext_call_inventory_selftest: exit 0 -> 0  identical
+== ext_hook_scope: exit 2 -> 2  identical
+== ext_hook_scope_selftest: no log on the first side; second exit=2
+== herdr_graded: no log on the first side; second exit=0
+== new_contract_policy: exit 0 -> 0  identical
+== profile_coverage: exit 0 -> 0  identical
+== profile_definition: exit 0 -> 0  identical
+== registry_gen_check: exit 0 -> 0  identical
+== registry_multiplicity: exit 0 -> 0  identical
+== test_coverage: exit 0 -> 0  2 line(s) differ
+   @@ -50 +50 @@
+   -slowest against the <dur> per-file cap: src/core/dst_profile.ail <dur> = 18%, 50 CPU-s, 0.5 cores; src/core/ext/exit_manifest.ail <dur> = 18%, 51 CPU-s, 0.5 cores; src/core/dst_replay.ail <dur> = 15%, 43 CPU-s, 0.5 cores
+   +slowest against the <dur> per-file cap: src/core/dst_profile.ail <dur> = 19%, 54 CPU-s, 0.5 cores; src/core/ext/exit_manifest.ail <dur> = 19%, 51 CPU-s, 0.5 cores; src/core/dst_replay.ail <dur> = 16%, 44 CPU-s, 0.5 cores
+== verify_classify_check: no log on the first side; second exit=0
+== verify_core: no log on the first side; second exit=0
+== verify_skills_refusal: exit 0 -> 0  identical

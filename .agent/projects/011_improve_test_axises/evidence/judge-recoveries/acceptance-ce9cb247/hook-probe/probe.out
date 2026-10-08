@@ -1,0 +1,14 @@
+→ Type checking...
+→ Effect checking...
+✓ Running scripts/dst/hook_calls_model_probe.ail
+Warning: dependency sunholo/motoko_ext_herdr content changed (locked: sha256:e1e96240660e9c037..., current: sha256:6928b495ef76aff83...)
+Run 'ailang lock' to update
+CACHE_WRITE_FAILED module=src/core/session stage=encoding path=scripts/dst/.ailang/cache/compile/modules/src__core__session/coretypeinfo.gob: ARTIFACT_TOO_LARGE: scripts/dst/.ailang/cache/compile/modules/src__core__session/coretypeinfo.gob: artifact exceeds blob byte limit; using fresh compilation
+011 ADR-003 D6, precondition 4 — a recording run whose pre-step hook calls the model
+HOOKPROBE passthrough-hook ended=Ok finish=stop step_budget=4 script_steps=1 script_left=0 prepared=1 providers_logged=1 balance=balanced steps_contiguous=true ordinals_contiguous=true healthy=true set_information_only=[]
+HOOKPROBE hook-calls-model ended=Ok finish=stop step_budget=4 script_steps=2 script_left=0 prepared=1 providers_logged=2 balance=log above trace steps_contiguous=true ordinals_contiguous=true healthy=true set_information_only=[]
+  ✓ passthrough hook: the run is healthy and the two counts are equal
+  ✓ hook that calls the model: the run is healthy
+  ✓ hook that calls the model: more provider interactions logged than prepared records (2 against 1)
+
+✓ hook probe: provider-calls-unbalanced would be red, log above trace, on a healthy run whose hook calls the model

@@ -1,0 +1,246 @@
+→ Type checking...
+→ Effect checking...
+✓ Running scripts/dst/corpus_judge_dst.ail
+Warning: dependency sunholo/motoko_ext_herdr content changed (locked: sha256:e1e96240660e9c037..., current: sha256:6928b495ef76aff83...)
+Run 'ailang lock' to update
+CACHE_WRITE_FAILED module=src/core/session stage=encoding path=/workspaces/motoko_agent-011-accept-scratch/.ailang/lane/corpus_judge/compile/modules/src__core__session/coretypeinfo.gob: ARTIFACT_TOO_LARGE: /workspaces/motoko_agent-011-accept-scratch/.ailang/lane/corpus_judge/compile/modules/src__core__session/coretypeinfo.gob: artifact exceeds blob byte limit; using fresh compilation
+011 ADR-003 D1 — the invariant set and six two-channel checks on every corpus member's real run (invariant-set/2)
+
+-- each check can fire, and can stay silent --
+  ✓ each run gets one row for each of the six rule ids, in a fixed order
+  ✓ all six are silent on the good input: 4 calls on a budget of 4, a retry at step 2, both counts balanced, ordinals 1 to 5
+  ✓ steps-not-contiguous fires on steps 0, 1, 3, 4 (a gap), and no other check does
+  ✓ steps-not-contiguous fires on steps 1, 2, 3, 4 (not from zero), and no other check does
+  ✓ provider-calls-exceed-budget fires on 5 calls on a budget of 4, and no other check does
+  ✓ retry-at-budget-edge fires on a retry at step 3 of 4, and no other check does
+  ✓ provider-calls-unbalanced fires on 4 prepared records and 3 logged, as 'log below trace', and no other check does
+  ✓ provider-calls-unbalanced fires on 4 prepared records and 5 logged, as 'log above trace', and no other check does
+  ✓ tool-dispatches-unbalanced fires on 1 dispatch start and 0 logged, as 'log below trace', and no other check does
+  ✓ tool-dispatches-unbalanced fires on 1 dispatch start and 2 logged, as 'log above trace', and no other check does
+  ✓ request-ordinals-not-contiguous fires on ordinals 1, 2, 4, 5 (a gap), and no other check does
+  ✓ request-ordinals-not-contiguous fires on ordinals 1 to 5 and a returned world at 4 (a successor dropped after its witness), and no other check does
+  ✓ request-ordinals-not-contiguous fires on ordinals 2 to 5 from a world at 0 (the first request is missing), and no other check does
+SELFCHECK undeclared-budget steps-not-contiguous clean prepared steps 0..3 (4)
+SELFCHECK undeclared-budget provider-calls-exceed-budget not-evaluated the step budget is undeclared, so 4 provider call(s) were held against nothing
+SELFCHECK undeclared-budget retry-at-budget-edge not-evaluated the step budget is undeclared, so the retries at [2] were held against nothing
+SELFCHECK undeclared-budget provider-calls-unbalanced clean trace=4 log=4
+SELFCHECK undeclared-budget tool-dispatches-unbalanced clean trace=1 log=1
+SELFCHECK undeclared-budget request-ordinals-not-contiguous clean ordinals 1..5 (5) from a world at 0 to a world at 5
+  ✓ a run started with a budget of 0 declares none: the two budget rules are NOT EVALUATED and the other four are clean
+  ✓ and not evaluated is not clean, which is what makes it red on a bank member
+  ✓ an empty trace is clean on all six checks, and the guard names it: no prepared call, no request ordinal
+  ✓ the guard is silent on the good input
+  ✓ a bank with no retry and no dispatch is clean on all six checks, and the bank guard names both
+  ✓ the bank guard is silent once a member holds a retry and a dispatch
+
+-- the bank: every member's run, bridged and judged --
+budgets, declared once: step 12 (bank_step_budget(), the value each member's run is started with), retry 11, decision undeclared
+panic: division by zero [recovered, repanicked]
+
+goroutine 1 [running]:
+github.com/sunholo-data/ailang/internal/runner.runSingle.func1.1()
+	/home/motoko/.local/share/ailang/internal/runner/run.go:632 +0x80
+panic({0x1ff2ea0?, 0x2c94b10?})
+	/home/motoko/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.6.linux-arm64/src/runtime/panic.go:860 +0x12c
+github.com/sunholo-data/ailang/internal/types.(*DictionaryRegistry).registerNumInt.func4(0x48970b9907b8?, 0x11c1ee8?)
+	/home/motoko/.local/share/ailang/internal/types/dictionaries.go:129 +0x40
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalDictRef.wrapDictionaryMethod.func6({0x4896d80b6260?, 0x2cebe60?, 0x264428d?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_patterns.go:515 +0x2f0
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalDictApp(0x4896c9d8fd50, 0x4896b6b9f440)
+	/home/motoko/.local/share/ailang/internal/eval/eval_patterns.go:458 +0x448
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreDispatch(0x48970b990a28?, {0x2cebe20?, 0x4896b6b9f440?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:145 +0x130
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCore(0x4896c9d8fd50, {0x2cebe20?, 0x4896b6b9f440?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:39 +0x58
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreLet(0x4896c9d8fd50, 0x4896b6b9f560)
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:345 +0x28
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreDispatch(0x4897069365a0?, {0x2ceb7a0?, 0x4896b6b9f560?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:100 +0x208
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCore(0x4896c9d8fd50, {0x2ceb7a0?, 0x4896b6b9f560?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:39 +0x58
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreLet(0x4896c9d8fd50, 0x4896b6b9f5f0)
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:357 +0xd8
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreDispatch(0x489706936510?, {0x2ceb7a0?, 0x4896b6b9f5f0?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:100 +0x208
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCore(0x4896c9d8fd50, {0x2ceb7a0?, 0x4896b6b9f5f0?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:39 +0x58
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreLet(0x4896c9d8fd50, 0x4896b6b9f680)
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:357 +0xd8
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreDispatch(0x4897069364b0?, {0x2ceb7a0?, 0x4896b6b9f680?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:100 +0x208
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCore(0x4896c9d8fd50, {0x2ceb7a0?, 0x4896b6b9f680?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:39 +0x58
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreLet(0x4896c9d8fd50, 0x4896b6b9f710)
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:357 +0xd8
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreDispatch(0x4897069259e0?, {0x2ceb7a0?, 0x4896b6b9f710?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:100 +0x208
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCore(0x4896c9d8fd50, {0x2ceb7a0?, 0x4896b6b9f710?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:39 +0x58
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreLet(0x4896c9d8fd50, 0x4896b6b9f7a0)
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:357 +0xd8
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreDispatch(0x489706925950?, {0x2ceb7a0?, 0x4896b6b9f7a0?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:100 +0x208
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCore(0x4896c9d8fd50, {0x2ceb7a0?, 0x4896b6b9f7a0?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:39 +0x58
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreLet(0x4896c9d8fd50, 0x4896b6b9f830)
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:357 +0xd8
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreDispatch(0x48970b990fc8?, {0x2ceb7a0?, 0x4896b6b9f830?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:100 +0x208
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCore(0x4896c9d8fd50, {0x2ceb7a0?, 0x4896b6b9f830?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:39 +0x58
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreLet(0x4896c9d8fd50, 0x4896b6b9fd40)
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:345 +0x28
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreDispatch(0x4897069258f0?, {0x2ceb7a0?, 0x4896b6b9fd40?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:100 +0x208
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCore(0x4896c9d8fd50, {0x2ceb7a0?, 0x4896b6b9fd40?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:39 +0x58
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreLet(0x4896c9d8fd50, 0x4896b6b9fdd0)
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:357 +0xd8
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreDispatch(0x28?, {0x2ceb7a0?, 0x4896b6b9fdd0?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:100 +0x208
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCore(0x4896c9d8fd50, {0x2ceb7a0?, 0x4896b6b9fdd0?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:39 +0x58
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreMatch(0x4896c9d8fd50, 0x4896b6b9fe60)
+	/home/motoko/.local/share/ailang/internal/eval/eval_patterns.go:95 +0x608
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreDispatch(0x4897055b3800?, {0x2cebbe0?, 0x4896b6b9fe60?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:136 +0x250
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCore(0x4896c9d8fd50, {0x2cebbe0?, 0x4896b6b9fe60?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:39 +0x58
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreLet(0x4896c9d8fd50, 0x4896b6ba2000)
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:357 +0xd8
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreDispatch(0x4897051f94d0?, {0x2ceb7a0?, 0x4896b6ba2000?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:100 +0x208
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCore(0x4896c9d8fd50, {0x2ceb7a0?, 0x4896b6ba2000?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:39 +0x58
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreLet(0x4896c9d8fd50, 0x4896b6ba2090)
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:357 +0xd8
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreDispatch(0x4897051f92f0?, {0x2ceb7a0?, 0x4896b6ba2090?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:100 +0x208
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCore(0x4896c9d8fd50, {0x2ceb7a0?, 0x4896b6ba2090?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:39 +0x58
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreLet(0x4896c9d8fd50, 0x4896b6ba2120)
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:357 +0xd8
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreDispatch(0x4897051f9200?, {0x2ceb7a0?, 0x4896b6ba2120?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:100 +0x208
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCore(0x4896c9d8fd50, {0x2ceb7a0?, 0x4896b6ba2120?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:39 +0x58
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreLet(0x4896c9d8fd50, 0x4896b6ba21b0)
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:357 +0xd8
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreDispatch(0x4897051ec150?, {0x2ceb7a0?, 0x4896b6ba21b0?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:100 +0x208
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCore(0x4896c9d8fd50, {0x2ceb7a0?, 0x4896b6ba21b0?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:39 +0x58
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreLet(0x4896c9d8fd50, 0x4896b6ba2240)
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:357 +0xd8
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreDispatch(0x4897051b51d0?, {0x2ceb7a0?, 0x4896b6ba2240?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:100 +0x208
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCore(0x4896c9d8fd50, {0x2ceb7a0?, 0x4896b6ba2240?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:39 +0x58
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreLet(0x4896c9d8fd50, 0x4896b6ba22d0)
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:357 +0xd8
+...417 frames elided...
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreDispatch(0x1?, {0x2ceb7a0?, 0x4896c5a01440?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:100 +0x208
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCore(0x4896c9d8fd50, {0x2ceb7a0?, 0x4896c5a01440?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:39 +0x58
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreApp(0x4896c9d8fd50, 0x4896c9007380)
+	/home/motoko/.local/share/ailang/internal/eval/eval_operations.go:190 +0x10c8
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreDispatch(0xffff8b5d0108?, {0x2ceb820?, 0x4896c9007380?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:106 +0x7c
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCore(0x4896c9d8fd50, {0x2ceb820?, 0x4896c9007380?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:39 +0x58
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreLet(0x4896c9d8fd50, 0x4896c900d9e0)
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:345 +0x28
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreDispatch(0x48970b99e7a8?, {0x2ceb7a0?, 0x4896c900d9e0?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:100 +0x208
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCore(0x4896c9d8fd50, {0x2ceb7a0?, 0x4896c900d9e0?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:39 +0x58
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreLet(0x4896c9d8fd50, 0x4896c900d950)
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:345 +0x28
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreDispatch(0x48970b99e7d8?, {0x2ceb7a0?, 0x4896c900d950?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:100 +0x208
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCore(0x4896c9d8fd50, {0x2ceb7a0?, 0x4896c900d950?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:39 +0x58
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreMatch(0x4896c9d8fd50, 0x4896c900d8c0)
+	/home/motoko/.local/share/ailang/internal/eval/eval_patterns.go:95 +0x608
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreDispatch(0x20?, {0x2cebbe0?, 0x4896c900d8c0?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:136 +0x250
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCore(0x4896c9d8fd50, {0x2cebbe0?, 0x4896c900d8c0?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:39 +0x58
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreApp(0x4896c9d8fd50, 0x4896c9062e00)
+	/home/motoko/.local/share/ailang/internal/eval/eval_operations.go:190 +0x10c8
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreDispatch(0x4896fae97620?, {0x2ceb820?, 0x4896c9062e00?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:106 +0x7c
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCore(0x4896c9d8fd50, {0x2ceb820?, 0x4896c9062e00?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:39 +0x58
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreLet(0x4896c9d8fd50, 0x4896c9060e10)
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:357 +0xd8
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreDispatch(0x48970b99f258?, {0x2ceb7a0?, 0x4896c9060e10?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:100 +0x208
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCore(0x4896c9d8fd50, {0x2ceb7a0?, 0x4896c9060e10?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:39 +0x58
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreLet(0x4896c9d8fd50, 0x4896c9060d80)
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:345 +0x28
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreDispatch(0x4896fae96750?, {0x2ceb7a0?, 0x4896c9060d80?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:100 +0x208
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCore(0x4896c9d8fd50, {0x2ceb7a0?, 0x4896c9060d80?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:39 +0x58
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreLet(0x4896c9d8fd50, 0x4896c9060510)
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:357 +0xd8
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreDispatch(0x4896fa36fd40?, {0x2ceb7a0?, 0x4896c9060510?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:100 +0x208
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCore(0x4896c9d8fd50, {0x2ceb7a0?, 0x4896c9060510?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:39 +0x58
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreLet(0x4896c9d8fd50, 0x4896c9060480)
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:357 +0xd8
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreDispatch(0x4896fa36fc80?, {0x2ceb7a0?, 0x4896c9060480?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:100 +0x208
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCore(0x4896c9d8fd50, {0x2ceb7a0?, 0x4896c9060480?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:39 +0x58
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreLet(0x4896c9d8fd50, 0x4896c9060360)
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:357 +0xd8
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreDispatch(0x4896fa36f920?, {0x2ceb7a0?, 0x4896c9060360?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:100 +0x208
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCore(0x4896c9d8fd50, {0x2ceb7a0?, 0x4896c9060360?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:39 +0x58
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreLet(0x4896c9d8fd50, 0x4896c90602d0)
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:357 +0xd8
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreDispatch(0x4896e04ee5d0?, {0x2ceb7a0?, 0x4896c90602d0?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:100 +0x208
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCore(0x4896c9d8fd50, {0x2ceb7a0?, 0x4896c90602d0?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:39 +0x58
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreLet(0x4896c9d8fd50, 0x4896c9060000)
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:357 +0xd8
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCoreDispatch(0x4896e04ee301?, {0x2ceb7a0?, 0x4896c9060000?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:100 +0x208
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).evalCore(0x4896c9d8fd50, {0x2ceb7a0?, 0x4896c9060000?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_expressions.go:39 +0x58
+github.com/sunholo-data/ailang/internal/eval.(*CoreEvaluator).CallFunction(0x4896c9d8fd50, 0x4896ca045040, {0x4896c97e2d30?, 0x191ceb8?, 0x48970b99f918?})
+	/home/motoko/.local/share/ailang/internal/eval/eval_evaluator.go:363 +0x3f8
+github.com/sunholo-data/ailang/internal/runtime.CallEntrypointPrepared(0x4896c96feb00, 0x4896c97117a0, {0xfffff9da7e76, 0x4}, {0x4896c97e2d30, 0x1, 0x1}, 0x0)
+	/home/motoko/.local/share/ailang/internal/runtime/entrypoint.go:133 +0x348
+github.com/sunholo-data/ailang/internal/runtime.CallEntrypoint(...)
+	/home/motoko/.local/share/ailang/internal/runtime/entrypoint.go:78
+github.com/sunholo-data/ailang/internal/runner.ExecuteModuleEntrypoint(0x4896c96feb00, {{0xfffff9da7e7b, 0x20}, 0x4896c9083730, 0x4896de27ca50, {0xfffff9da7e76, 0x4}, {0x2644b9f, 0x4}, 0x1, ...})
+	/home/motoko/.local/share/ailang/internal/runner/entrypoint.go:159 +0x554
+github.com/sunholo-data/ailang/internal/runner.runSingle.func1(0x0?, 0x0?, {{0xfffff9da7e7b, 0x20}, 0x4896c9083730, 0x4896de27ca50, {0xfffff9da7e76, 0x4}, {0x2644b9f, 0x4}, ...}, ...)
+	/home/motoko/.local/share/ailang/internal/runner/run.go:635 +0x80
+github.com/sunholo-data/ailang/internal/runner.runSingle({_, _}, {{0x0, 0x0}, {0x0, 0x0}, {0x0, 0x0, 0x0}, {0x0, ...}, ...}, ...)
+	/home/motoko/.local/share/ailang/internal/runner/run.go:641 +0x1294
+github.com/sunholo-data/ailang/internal/runner.Run({_, _}, {{0xfffff9da7e7b, 0x20}, {0x46e5220, 0x0, 0x0}, 0x0, 0x0, 0x0, ...})
+	/home/motoko/.local/share/ailang/internal/runner/run.go:290 +0xf24
+main.runFile({_, _}, {_, _, _}, _, _, _, _, _, ...)
+	/home/motoko/.local/share/ailang/cmd/ailang/main_run_exec.go:173 +0xfb4
+main.runCommand()
+	/home/motoko/.local/share/ailang/cmd/ailang/main_run.go:266 +0x18e0
+main.languageCommands.noArgs.func6({0x21ac800?, 0x4896b3d31a70?, 0xfffff9da7e23?})
+	/home/motoko/.local/share/ailang/cmd/ailang/commands.go:417 +0x24
+main.dispatchCommand({0xfffff9da7e23, 0x3}, {0x4896b3ad60a0, 0x6, 0x6})
+	/home/motoko/.local/share/ailang/cmd/ailang/commands.go:265 +0x15c
+main.main()
+	/home/motoko/.local/share/ailang/cmd/ailang/main.go:121 +0x584
+
+  source revision    ce9cb247ce4c240679bc46453a146c99bfcb8971 (with uncommitted changes)
+  toolchain version  AILANG v0.47.2
+  trace              /tmp/tmp.FjWg0aq4f6 (kept: every member's wire, and every row above)
+make: *** [Makefile:2017: corpus_judge] Error 1

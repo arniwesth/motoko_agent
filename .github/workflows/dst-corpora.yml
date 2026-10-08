@@ -97,6 +97,19 @@ jobs:
         run: make CI=1 sync_packages
       - name: D11's blocking PR corpus
         run: make corpus_pr
+      # 011 ADR-003 D1, ruling 15. The invariant set and six two-channel checks
+      # on the same sixteen runs. Its own step, so `corpus_pr`'s wall-clock
+      # check stays alone, and after it, because a red member's failure record
+      # names the program artifact `corpus_pr` has just persisted.
+      #
+      # `!cancelled()`: a step after a failed one is skipped by default, and a
+      # wall-clock red on `corpus_pr` must not hide a rule this gate would name.
+      #
+      # No workflow runs `make dst`, so being in DST_TARGETS alone would leave
+      # this gate to whoever next ran the sweep by hand.
+      - name: ADR-003 D1's judge of every corpus member's run
+        if: ${{ !cancelled() }}
+        run: make corpus_judge
 
   # ---------------------------------------------------------------------------
   # 2. THE SCHEDULED ROTATING CORPUS, sharded. `shard_job` divides the declared

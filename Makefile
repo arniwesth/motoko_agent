@@ -505,7 +505,7 @@ DST_JOBS ?= $(shell nproc 2>/dev/null || echo 4)
 DST_LOG  ?= .ailang/dst-last.log
 
 DST_TARGETS := test_coverage declared_vs_performed terminal_trace smoke_parity \
-  profile_definition smoke_driver corpus_pr strict_replay world_state \
+  profile_definition smoke_driver corpus_pr corpus_judge strict_replay world_state \
   corpus_rotating driver_plus_compose driver_plus_herdr driver_only seeded_generator \
   event_vocabulary phase_c_l1 recorded_stream driver_plus_no_ops \
   ext_hook_scope_selftest ext_hook_scope invariants run_report discovery program_persistence \
@@ -680,6 +680,9 @@ $(DST_LANE_TARGETS): export AILANG_CACHE_DIR = $(CURDIR)/.ailang/lane/$@
 # (eba309c, driver_plus_herdr/1 -> /2): ABI 7.4 transcribed, attribution re-recorded
 # to the live identity, :318 -> :389 pin. Both targets green from a delegate pane
 # and plain-shell re-runs; drop confirmed by the post-sweep verdict.
+# (The variable itself kept both names until 2026-10-07: d5edebf wrote this note
+# and left the line below unchanged, and every sweep since reported the pair as
+# listed but PASSED. Emptied after a sweep at bb47e33 with all targets passing.)
 # (Prior entry, kept for history: listed 2026-09-12 on the owner's ruling at
 # PLAN-003 P3G. One cause, two targets (they run the same script and read its two
 # halves): driver_plus_herdr/1 does not load clean, 2 rejections --
@@ -695,7 +698,7 @@ $(DST_LANE_TARGETS): export AILANG_CACHE_DIR = $(CURDIR)/.ailang/lane/$@
 # before any P3 part. Disposition pending the owner's D4 re-issue of the profile
 # against the corrected table. Drop both entries when the summary reports them
 # PASSED.)
-DST_KNOWN_RED := driver_plus_herdr herdr_graded
+DST_KNOWN_RED :=
 
 # bash for `pipefail` alone: the phases are piped through `tee` so the run is
 # both watchable and logged, and without pipefail the pipeline would report
@@ -2009,6 +2012,47 @@ corpus_pr:
 	fi; \
 	echo "  ✓ measured CI cost, WHOLE TARGET: $$elapsed ms against a declared ceiling of $$ceiling ms"
 
+# 011 ADR-003 D1: THE INVARIANT SET ON EVERY CORPUS MEMBER'S REAL RUN.
+#
+# The same sixteen runs `corpus_pr` builds, started by `corpus_pr_dst`'s own
+# helpers, each bridged to `dst_invariants.evaluate` and held to six two-channel
+# checks the script states: the driver's step numbers, two rules against the
+# step budget, the provider and tool balances, and the request ordinals. The
+# script's header says what each reads and where it stops being sound.
+#
+# A SEPARATE TARGET, AND NOT A ROW IN corpus_pr (ADR-003 ruling 4). That target
+# gates on its own wall clock, and a red here should name a rule. So this one is
+# in DST_TARGETS and NOT in DST_TIMED_TARGETS: it runs in the fan-out, on its
+# own cache lane, and costs corpus_pr's measurement nothing.
+#
+# IT WRITES NOTHING UNDER .ailang/dst-corpus. corpus_pr deletes and rewrites
+# that store; a second writer would race with it whenever the two are run by
+# hand. On a red member the script names the artifact corpus_pr persisted for
+# it (ruling 16), and says so if it is absent.
+#
+# THE OUTPUT FILE IS KEPT WHEN THE TARGET IS RED, and its path printed. It holds
+# every member's wire, which is the trace 009 ADR-001 D8 asks a failure record
+# to locate. The source revision and the toolchain version are printed beside
+# it because the script cannot know either. Every non-wire line is printed on
+# red, not a tail: the row that names the rule is the point of the gate.
+#
+# The exit status is the script's own, taken before any pipeline.
+.PHONY: corpus_judge
+corpus_judge:
+	@set -eu; \
+	out=$$(mktemp); \
+	if ! ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+	     --ai-stub --entry main scripts/dst/corpus_judge_dst.ail < /dev/null > $$out 2>&1; then \
+		grep -v '^{' $$out || true; \
+		echo ""; \
+		echo "  source revision    $$(git rev-parse HEAD 2>/dev/null || echo unknown)$$(git diff --quiet HEAD 2>/dev/null || echo ' (with uncommitted changes)')"; \
+		echo "  toolchain version  $$(ailang --version 2>/dev/null | head -1)"; \
+		echo "  trace              $$out (kept: every member's wire, and every row above)"; \
+		exit 1; \
+	fi; \
+	grep -v '^{' $$out; \
+	rm -f $$out
+
 # D11's SCHEDULED ROTATING CORPUS (WI-A15 commit 2). Six checks.
 #
 #   1. THE SUITE. The rotation checked three non-redundant ways — position by
@@ -2645,16 +2689,20 @@ verify_herdr_owner_tag:
 # extensions.strict (`.motoko/config/<profile>/config.json`): a profile that
 # names an extension which is not installed, or one that registers no
 # capability, must refuse to start rather than run with less than it declares.
-# Three arms on throwaway profiles: strict + an uninstalled name exits 2 with the
-# JSON error line; lax + the same name builds an empty registry; strict + an
-# extension that registers nothing (test_dummy, EXT_DUMMY_REGISTER_NOTHING=1)
-# exits 2. AILANG_FS_SANDBOX is cleared: inside a Motoko session the TUI pins it
-# to the workdir, which would make the mktemp profile unreadable.
+# Four arms on throwaway profiles: strict + an uninstalled name exits 2 with the
+# JSON error line; lax + the same name builds an empty registry; strict + a
+# registration with no capability atom exits 2; lax + the same registration
+# omits it with a warning. No installable extension registers nothing, and one
+# that did so on a condition would fail the registration-shape gate
+# (make ext_hook_scope), so the script builds the empty registration and hands
+# it to the registry's own boundary, `admit_registration`. AILANG_FS_SANDBOX is
+# cleared: inside a Motoko session the TUI pins it to the workdir, which would
+# make the mktemp profile unreadable.
 .PHONY: verify_strict_extensions
 verify_strict_extensions:
 	@d=$$(mktemp -d); trap 'rm -rf "$$d"' EXIT; mkdir -p "$$d/.motoko/config/probe"; \
-	run() { env -u AILANG_FS_SANDBOX AILANG_RELAX_MODULES=1 "$$@" ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry main \
-	    scripts/verify_strict_extensions.ail -- "$$d" 2>/dev/null; }; \
+	run() { env -u AILANG_FS_SANDBOX AILANG_RELAX_MODULES=1 ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry main \
+	    scripts/verify_strict_extensions.ail -- "$$d" "$$@" 2>/dev/null; }; \
 	printf '{"agent":{"model":"stub"},"extensions":{"order":["no_such_ext"],"strict":true}}\n' > "$$d/.motoko/config/probe/config.json"; \
 	out=$$(run); rc=$$?; \
 	if [ $$rc -eq 2 ] && echo "$$out" | grep -q 'extensions.strict.*no_such_ext.*refusing to start'; then echo "OK strict: an uninstalled extension refused to start (exit 2)"; \
@@ -2663,10 +2711,60 @@ verify_strict_extensions:
 	out=$$(run); rc=$$?; \
 	if [ $$rc -eq 0 ] && echo "$$out" | grep -q 'OK registry built with 0 entries' && echo "$$out" | grep -q 'not installed; skipped'; then echo "OK lax: skipped with a warning"; \
 	else echo "FAIL lax: rc=$$rc"; echo "$$out" | tail -3; echo "verify_strict_extensions: the non-strict path changed"; exit 1; fi; \
-	printf '{"agent":{"model":"stub"},"extensions":{"order":["test_dummy"],"strict":true}}\n' > "$$d/.motoko/config/probe/config.json"; \
-	out=$$(run EXT_DUMMY_REGISTER_NOTHING=1); rc=$$?; \
+	printf '{"agent":{"model":"stub"},"extensions":{"order":[],"strict":true}}\n' > "$$d/.motoko/config/probe/config.json"; \
+	out=$$(run empty); rc=$$?; \
 	if [ $$rc -eq 2 ] && echo "$$out" | grep -q 'extensions.strict.*registers no capability atom'; then echo "OK strict: an empty registration refused to start (exit 2)"; \
-	else echo "FAIL strict/empty: rc=$$rc"; echo "$$out" | tail -3; echo "verify_strict_extensions: a strict profile started without an extension that registered nothing"; exit 1; fi
+	else echo "FAIL strict/empty: rc=$$rc"; echo "$$out" | tail -3; echo "verify_strict_extensions: a strict profile started without an extension that registered nothing"; exit 1; fi; \
+	printf '{"agent":{"model":"stub"},"extensions":{"order":[],"strict":false}}\n' > "$$d/.motoko/config/probe/config.json"; \
+	out=$$(run empty); rc=$$?; \
+	if [ $$rc -eq 0 ] && echo "$$out" | grep -q 'OK empty registration omitted (strict=false)' && echo "$$out" | grep -q 'registers no capability atom; omitted from the registry'; then echo "OK lax: an empty registration omitted with a warning"; \
+	else echo "FAIL lax/empty: rc=$$rc"; echo "$$out" | tail -3; echo "verify_strict_extensions: the non-strict path for an empty registration changed"; exit 1; fi
+
+# 037 ADR-001 A3, A1 and A2: a broken skill tree refuses startup. One fixture
+# workdir per rule of D1 (R1 three ways, V1-V8 with V4's four cases, one with
+# two violations), each run with AILANG_FS_SANDBOX set to it: the process must
+# exit 2 with exactly one JSONL `error` event naming the rule and the path. The
+# controls must start with one `Skill` schema: no root, an empty root, and a
+# valid set with every scalar style. Then the digests: a change to the index
+# moves ext_config_digest alone and a resume continues; a body edit moves
+# nothing. Last, D7 and A9 through the real host and the live port
+# (scripts/verify_skills_call.ail): the config record's sandbox flag, a `Skill`
+# call that loads, one that names no skill, and one from an unsandboxed start
+# whose workdir is elsewhere. Every start runs under a timeout, so a startup
+# that hangs is a failed check. The script builds its fixtures and says what
+# each case checks.
+#
+# NOT a prerequisite of check_core, which every session's local baseline runs:
+# `skills` is in no profile check_core boots (ADR D11), and this takes about
+# 2 min. CI runs it on every pull request as its own step, with
+# verify_skills_tests (.github/workflows/verify-extensions.yml, job `core`).
+.PHONY: verify_skills_refusal
+verify_skills_refusal:
+	@bash scripts/verify_skills_refusal.sh
+
+# The skills package's inline tests (037 ADR-001): the rules of D1, D3, D8, D9
+# and D10 as pure functions in skills.ail, A6b in a6b_test.ail, and the config,
+# the catalogue and the handler over a stub port in register.ail. `test_coverage`
+# walks src/core only, so this target is what runs them.
+#
+# Each file's COUNT line is read, never only an exit status (WI-A17's rule:
+# `ailang test` exits 0 when every test was skipped). A file passes when it ran
+# at least one test and none failed or was skipped; a file that does not
+# compile prints no count line and fails here.
+.PHONY: verify_skills_tests
+verify_skills_tests:
+	@fail=0; for f in skills.ail a6b_test.ail register.ail; do \
+		out=$$(ailang test --no-color packages/motoko-ext-skills/$$f 2>&1 < /dev/null); \
+		line=$$(printf '%s\n' "$$out" | grep -E '^[0-9]+ tests:' | tail -1); \
+		if printf '%s\n' "$$line" | grep -qE '^[1-9][0-9]* tests: [0-9]+ passed, 0 failed, 0 skipped'; then \
+			echo "  ✓ packages/motoko-ext-skills/$$f: $$line"; \
+		else \
+			echo "  ✗ packages/motoko-ext-skills/$$f: $${line:-no count line}"; \
+			printf '%s\n' "$$out" | grep -vE '^ *✓ |^ +at |^$$' | cut -c1-400 | tail -30; \
+			fail=1; \
+		fi; \
+	done; \
+	[ $$fail -eq 0 ] || { echo "verify_skills_tests: the skills package's inline tests are not all passing"; exit 1; }
 
 verify_native_path_guard:
 	@out=$$(AILANG_RELAX_MODULES=1 ailang run --caps IO,FS,Process,Env,Clock --entry main \
@@ -2833,6 +2931,20 @@ verify_repetition_guard:
 	echo "$$out" | grep -E '^(OK|FAIL)'; \
 	[ $$rc -eq 0 ] || (echo "verify_repetition_guard: the no-progress loop guard regressed" && exit 1)
 
+# The boot runs as a session's does (037 ADR-001 D1), in two respects.
+#
+# UNDER THE SANDBOX, AILANG_FS_SANDBOX set to the repository root. The TUI pins
+# the runtime's sandbox to the workdir, and std/fs answers differently with it:
+# a relative path resolves against the sandbox root, and a symlink that leaves
+# it reads as neither file nor directory. An extension that scans a directory
+# at registration (skills: .motoko/skills) could otherwise pass here and be
+# refused in a session, or the reverse.
+#
+# THE REJECTION IS PRINTED. A registration the host refuses is one JSONL
+# `error` event on stdout and exit 2 (registry_generated.ail, `parse_tokens`).
+# The filter used to keep only lines matching `Error|UNKNOWN`, which that
+# lower-case event does not, so a refused extension printed its name and no
+# reason.
 verify_extensions:
 	@profile=$${MOTOKO_CONFIG:-$(PROFILE)}; \
 	cfg=".motoko/config/$$profile/config.json"; \
@@ -2849,6 +2961,7 @@ verify_extensions:
 	for ext in $$exts; do \
 		out=$$(MOTOKO_PROFILE_DIR="$$PWD/.motoko/config/$$profile" \
 		      AILANG_RELAX_MODULES=1 \
+		      AILANG_FS_SANDBOX="$$PWD" \
 		      ailang run --caps Net,AI,SharedMem,IO,Env,Clock,FS,Process,Stream \
 		        --ai-stub --entry main \
 		        scripts/verify_extension_boot.ail -- "$$ext" 2>&1); \
@@ -2858,7 +2971,7 @@ verify_extensions:
 			ok=$$((ok + 1)); \
 		else \
 			echo "  ✗ $$ext"; \
-			echo "$$out" | sed -E 's/\x1b\[[0-9;]*[a-zA-Z]//g' | grep -E "Error|UNKNOWN" | head -3 | sed 's/^/      /'; \
+			echo "$$out" | sed -E 's/\x1b\[[0-9;]*[a-zA-Z]//g' | grep -E 'Error|UNKNOWN|"type":"error"' | head -3 | sed 's/^/      /'; \
 			fail=$$((fail + 1)); \
 			failed_names="$$failed_names $$ext"; \
 		fi; \

@@ -1,0 +1,770 @@
+-- The effectful shell of the skills extension (037 ADR-001; PLAN-001 P4).
+--
+-- `skills.ail` holds every rule as a pure function of a listing and file
+-- contents. This module reads the listing and the files and hands them over:
+--
+--   registration  `register_with_config ! {Env, FS}`: `isDir`, `listDir` and
+--                 `readFileResult` over `.motoko/skills`, then `scan`. The
+--                 result goes into `config`: the index, whether the sandbox
+--                 variable was set, and the refusal if there is one (D2).
+--   the catalogue `skills_describe`: one `Skill` schema rendered from `config`.
+--   a call        `skills_handle`: the name is checked against the index, the
+--                 file is read through `ctx.ports.file_read`, and what was read
+--                 goes to `load_skill` (D10's per-file rules, then D8's size
+--                 check). The handler calls no `std/fs` function and returns
+--                 the world the port handed back (D13).
+--
+-- The registration tail is the literal `{ config, caps }`, `caps` is a literal
+-- list, and both payloads are named top-level functions of this module: the
+-- registration-shape gate reads exactly that (`make ext_hook_scope`). Whether
+-- there are skills, and whether startup is refused, is data in `config`, never
+-- a different capability list (D12).
+--
+-- Hook-reachable text keeps to what the inventories resolve, as `skills.ail`
+-- does: no `import std/x as X`, no helper whose name starts with `_`, no `*E`
+-- list function, no `show` or string interpolation, the port called through
+-- the typed receiver `ctx.ports`, and no local or parameter applied.
+
+module sunholo/motoko_ext_skills/register
+
+import std/env (getEnvOr)
+import std/fs (isDir, isFile, listDir, readFileResult)
+import std/json (Json, JString, JBool, JArray, jo, kv, js, jb, ja, get, encode)
+import std/list (map, flatMap, foldl)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/string (concat, join, contains, startsWith, repeat)
+import pkg/sunholo/motoko_ext_abi/types (
+  ProviderCtx, ExtRegistration, DescribeTools, ToolProvider, ToolSchema,
+  ToolHandleOutcome, ToolCallEnvelope, ToolResultEnvelope, Handled, Delegate,
+  ExtPorts, ExtWorld, ExtFileRead, ExtFileMutation, ExtPathStat, ExtPathMissing,
+  ExtDirListing, ExtClockReading, ExtProcOutcome, AiStepOutcome, Msg,
+  pure_ctx, provider_ctx
+)
+import pkg/sunholo/motoko_ext_skills/skills (
+  Skill, RootEntry, RegularFile, OtherEntry, DirWithoutSkillMd, DirUnreadableSkillMd, DirWithSkillMd,
+  RootListing, RootAbsent, RootIsFile, RootIsNeither, RootEntries,
+  ScanResult, Accepted, Refused,
+  skills_root, skill_dir, skill_md_path, has_skill_md, scan, refusal_of, registration_refusal_key,
+  skill_names, skill_tool_description, no_skills_description, skill_tool_instruction,
+  load_skill, skill_result_envelope
+)
+
+-- ============================================================================
+-- The fixed strings.
+-- ============================================================================
+
+-- D4: the one tool. `ToolProvider`'s name list in `register_with_config` is
+-- the same word, written there as a literal because the registration-shape
+-- gate reads that list as text.
+pure func skill_tool_name() -> string
+  tests [((), "Skill")]
+  { "Skill" }
+
+-- D1 R1: the directory that should hold the root, and the root's entry in it.
+pure func skills_parent() -> string { ".motoko" }
+
+pure func skills_entry() -> string { "skills" }
+
+-- D7: the variable the TUI sets to the workdir (`src/tui/src/runtime-process.ts`).
+pure func sandbox_variable() -> string { "AILANG_FS_SANDBOX" }
+
+pure func lists_name(names: [string], wanted: string) -> bool {
+  foldl(\seen n. seen || n == wanted, false, names)
+}
+
+-- ============================================================================
+-- Discovery (D1, D7). Registration only: there is no world and no port yet, so
+-- this reads the disk through `std/fs` (D13: disclosed, not mediated).
+--
+-- The conditions are those `std/fs` reports under `AILANG_FS_SANDBOX`: an
+-- entry that is in its parent's `listDir` and is neither `isDir` nor `isFile`
+-- is a symlink that leaves the workdir or has an absolute target.
+--
+-- `listDir` has no `Result` form and ends the process when it fails (D1, "what
+-- the guarantee does not cover"). Nothing here can turn that into a refusal.
+-- ============================================================================
+
+-- One entry directly under the root, as `skills.ail`'s listing data. `SKILL.md`
+-- is looked for in the directory's own listing, not by reading the path (V1 is
+-- exact case, and a read finds `skill.md` where the filesystem ignores case),
+-- and is opened only when `isFile` says so: opening a named pipe blocks (V3).
+func read_entry(entry: string) -> RootEntry ! {FS} {
+  let path = skill_dir(entry);
+  if isDir(path) then
+    (if not has_skill_md(listDir(path)) then DirWithoutSkillMd(entry)
+    else if not isFile(skill_md_path(entry)) then DirUnreadableSkillMd(entry, "it is not a regular file, or is a symlink that does not lead to one inside the working directory")
+    else match readFileResult(skill_md_path(entry)) {
+      Ok(text) => DirWithSkillMd(entry, text),
+      Err(why) => DirUnreadableSkillMd(entry, why)
+    })
+  else if isFile(path) then RegularFile(entry)
+  else OtherEntry(entry)
+}
+
+-- Recursion, not `std/list.map`: `map` takes a pure function, and the `*E`
+-- forms are effect-polymorphic, which the ambient inventory rejects.
+func read_entries(names: [string]) -> [RootEntry] ! {FS} {
+  match names {
+    [] => [],
+    n :: rest => read_entry(n) :: read_entries(rest)
+  }
+}
+
+-- True when the directory that should hold the root lists an entry named
+-- `skills`. Asked only once `isDir` and `isFile` have both said no.
+func root_is_listed() -> bool ! {FS} {
+  if isDir(skills_parent()) then lists_name(listDir(skills_parent()), skills_entry()) else false
+}
+
+-- The root, located by D7's one spelling. R1's three cases are two shapes
+-- here: a regular file, and an entry that is neither (both symlink cases).
+func read_root() -> RootListing ! {FS} {
+  if isDir(skills_root()) then RootEntries(read_entries(listDir(skills_root())))
+  else if isFile(skills_root()) then RootIsFile
+  else if root_is_listed() then RootIsNeither
+  else RootAbsent
+}
+
+-- ============================================================================
+-- `config` (D2, D4, D7): what registration found, as data.
+--
+--   root                  the root's one spelling
+--   skills                the index: name and decoded description, in name order
+--   sandbox_set           whether `AILANG_FS_SANDBOX` was set at registration
+--   registration_refusal  present only when startup is refused: every
+--                         violation, in one string. The host reads this key at
+--                         the registration boundary (031 Amendment 5).
+--
+-- A refused scan carries no skills, so a refused `config` has an empty index
+-- by construction.
+-- ============================================================================
+
+pure func skill_json(s: Skill) -> Json {
+  jo([kv("name", js(s.name)), kv("description", js(s.description))])
+}
+
+pure func scanned_skills(result: ScanResult) -> [Skill] {
+  match result {
+    Accepted(skills) => skills,
+    Refused(_) => []
+  }
+}
+
+pure func refusal_fields(refusal: string) -> [{ key: string, value: Json }] {
+  if refusal == "" then [] else [kv(registration_refusal_key(), js(refusal))]
+}
+
+export pure func skills_config(result: ScanResult, sandbox_set: bool) -> Json {
+  jo([
+    kv("root", js(skills_root())),
+    kv("skills", ja(map(skill_json, scanned_skills(result)))),
+    kv("sandbox_set", jb(sandbox_set))
+  ] ++ refusal_fields(refusal_of(result)))
+}
+
+pure func config_skill(entry: Json) -> [Skill] {
+  match get(entry, "name") {
+    Some(JString(n)) =>
+      match get(entry, "description") {
+        Some(JString(d)) => [{ name: n, description: d }],
+        _ => []
+      },
+    _ => []
+  }
+}
+
+pure func config_skills(cfg: Json) -> [Skill] {
+  match get(cfg, "skills") {
+    Some(JArray(entries)) => flatMap(config_skill, entries),
+    _ => []
+  }
+}
+
+-- A `config` with no flag is read as "not set": the handler then loads only
+-- where the workdir is `.`, which is the cautious side.
+pure func config_sandbox_set(cfg: Json) -> bool {
+  match get(cfg, "sandbox_set") {
+    Some(JBool(b)) => b,
+    _ => false
+  }
+}
+
+pure func malformed_refusal() -> string {
+  concat(["skills: `", registration_refusal_key(), "` is present in this extension's config and is not a string. No skill is served."])
+}
+
+-- The refusal this registration recorded, or the empty string. The host's
+-- semantics for the key, read here the same way: absent or empty is no
+-- refusal, a non-empty string is the refusal, any other type is a malformed
+-- one. This is what makes the extension safe on a host that ignores the key.
+pure func config_refusal(cfg: Json) -> string {
+  match get(cfg, registration_refusal_key()) {
+    None => "",
+    Some(JString(s)) => s,
+    Some(_) => malformed_refusal()
+  }
+}
+
+-- ============================================================================
+-- The catalogue (D4, D12, D2's fail-safe): one `Skill` schema, always.
+-- ============================================================================
+
+-- D2: with a refusal recorded the catalogue lists no skill. D12's text would
+-- be untrue here (the root does hold something), so this says what happened.
+pure func refused_description() -> string {
+  concat(["Load a skill by name. No skill can be loaded in this session: what is under ", skills_root(), " failed validation at startup, so none is listed. Calling this tool loads nothing and returns the validation errors. Do not call this tool."])
+}
+
+pure func catalogue_skills(cfg: Json) -> [Skill] {
+  if config_refusal(cfg) != "" then [] else config_skills(cfg)
+}
+
+pure func catalogue_description(cfg: Json) -> string {
+  if config_refusal(cfg) != "" then refused_description()
+  else skill_tool_description(config_skills(cfg))
+}
+
+-- The `name` parameter. With skills its `enum` is their names (D4); with none
+-- it has no `enum` (D12).
+pure func name_parameter(names: [string]) -> Json {
+  match names {
+    [] => jo([
+      kv("type", js("string")),
+      kv("description", js("The name of the skill to load."))
+    ]),
+    _ => jo([
+      kv("type", js("string")),
+      kv("description", js("The name of the skill to load, exactly as listed.")),
+      kv("enum", ja(map(js, names)))
+    ])
+  }
+}
+
+pure func skill_parameters(names: [string]) -> string {
+  encode(jo([
+    kv("type", js("object")),
+    kv("properties", jo([kv("name", name_parameter(names))])),
+    kv("required", ja([js("name")]))
+  ]))
+}
+
+func skills_describe(cfg: Json) -> [ToolSchema] {
+  [{
+    name: skill_tool_name(),
+    description: catalogue_description(cfg),
+    parameters: skill_parameters(skill_names(catalogue_skills(cfg)))
+  }]
+}
+
+-- ============================================================================
+-- A call (D10, D8, D7, D2's fail-safe).
+-- ============================================================================
+
+pure func tool_error(call_id: string, message: string) -> ToolResultEnvelope {
+  { tool_call_id: call_id, tool: skill_tool_name(), exit_code: 1, stdout: "", stderr: message, metadata: jo([]) }
+}
+
+-- D10: a name not in the index is a tool error that lists the valid names.
+pure func unknown_skill_error(wanted: string, names: [string]) -> string {
+  match names {
+    [] => concat(["Unknown skill '", wanted, "'. No skills are installed in this workspace (", skills_root(), " holds none)."]),
+    _ => concat(["Unknown skill '", wanted, "'. Valid names: ", join(", ", names), "."])
+  }
+}
+
+-- D10: a file that has gone since startup.
+pure func gone_error(skill: string) -> string {
+  concat(["Skill '", skill, "' is in the index but ", skill_md_path(skill), " is no longer there."])
+}
+
+-- D7: without the sandbox a relative path resolves against the directory the
+-- runtime was started in, and registration cannot see the workdir to correct
+-- it. A launch like that with a workdir other than `.` may have indexed
+-- another tree, so nothing is loaded.
+pure func unsandboxed_error(workdir: string) -> string {
+  concat([
+    "Skill: nothing was loaded. This runtime was started without ", sandbox_variable(),
+    " and its working directory is '", workdir, "', not '.'. Without the sandbox ", skills_root(),
+    " is read from the directory the runtime was started in, so the skills indexed at startup may not be this working directory's. Do not call Skill again in this session."
+  ])
+}
+
+pure func launched_elsewhere(cfg: Json, workdir: string) -> bool {
+  if config_sandbox_set(cfg) then false else workdir != "."
+}
+
+pure func requested_name(arguments: Json) -> string {
+  match get(arguments, "name") {
+    Some(JString(s)) => s,
+    _ => ""
+  }
+}
+
+-- What a call is answered with before any file is read: an error, or the
+-- indexed name whose file is to be read. The name reaches a path only after it
+-- has matched an index entry, so a path-shaped argument is never read.
+type Precheck = Answer(string) | ReadSkill(string)
+
+pure func precheck(cfg: Json, workdir: string, arguments: Json) -> Precheck {
+  if config_refusal(cfg) != "" then Answer(config_refusal(cfg))
+  else if launched_elsewhere(cfg, workdir) then Answer(unsandboxed_error(workdir))
+  else if lists_name(skill_names(config_skills(cfg)), requested_name(arguments)) then ReadSkill(requested_name(arguments))
+  else Answer(unknown_skill_error(requested_name(arguments), skill_names(config_skills(cfg))))
+}
+
+-- What was read, validated: the envelope `load_skill` builds, or a tool error
+-- naming the rule broken or the size that does not fit.
+pure func skill_answer(call_id: string, skill: string, present: bool, content: string, declared_limit: int) -> ToolResultEnvelope {
+  if not present then tool_error(call_id, gone_error(skill))
+  else match load_skill(skill, content, call_id, declared_limit) {
+    Ok(env) => env,
+    Err(why) => tool_error(call_id, why)
+  }
+}
+
+-- The row is `ToolProvider`'s. The one effect performed is the port's read.
+func skills_handle(ctx: ProviderCtx, call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  match precheck(ctx.ext_config, ctx.workdir, call.arguments) {
+    Answer(message) => { decision: Handled(tool_error(call.id, message)), next_state: ctx.world },
+    ReadSkill(skill) => {
+      let read = ctx.ports.file_read(ctx.world, skill_md_path(skill));
+      {
+        decision: Handled(skill_answer(call.id, skill, read.present, read.content, ctx.context_limit)),
+        next_state: read.next_state
+      }
+    }
+  }
+}
+
+-- ============================================================================
+-- Registration.
+-- ============================================================================
+
+export func register_with_config(_cfg: a) -> ExtRegistration ! {Env, FS} {
+  let sandbox_set = getEnvOr(sandbox_variable(), "") != "";
+  let found = scan(read_root());
+  {
+    config: skills_config(found, sandbox_set),
+    caps: [
+      DescribeTools(skills_describe),
+      ToolProvider(["Skill"], skills_handle)
+    ]
+  }
+}
+
+-- ============================================================================
+-- Inline tests.
+-- ============================================================================
+
+pure func stamp_md(body: string) -> string {
+  concat(["---\nname: workdir-stamp\ndescription: Stamp the working directory.\n---\n", body])
+}
+
+pure func observer_md() -> string {
+  "---\nname: observer\ndescription: >\n  Supervise a run\n  from outside it.\n---\n# Observer\n"
+}
+
+pure func two_skills() -> ScanResult {
+  scan(RootEntries([
+    DirWithSkillMd("workdir-stamp", stamp_md("# Stamp\n")),
+    RegularFile("README.md"),
+    DirWithSkillMd("observer", observer_md())
+  ]))
+}
+
+pure func refused_scan() -> ScanResult {
+  scan(RootEntries([
+    DirWithSkillMd("workdir-stamp", stamp_md("# Stamp\n")),
+    DirWithoutSkillMd("empty")
+  ]))
+}
+
+pure func one_schema(cfg: Json) -> ToolSchema {
+  match skills_describe(cfg) {
+    [s] => s,
+    _ => { name: "<not one schema>", description: "", parameters: "" }
+  }
+}
+
+-- ---- the fixed strings -----------------------------------------------------
+
+pure func test_parent_and_entry_spell_the_root() -> bool
+  tests [((), true)]
+  {
+    concat([skills_parent(), "/", skills_entry()]) == skills_root()
+      -- the tool name is the one `skills.ail` puts in its envelope
+      && skill_result_envelope("call_1", "a", "text").tool == skill_tool_name()
+  }
+
+-- ---- config ----------------------------------------------------------------
+
+-- The reserved key as it sits in `config`: its string, or a marker.
+pure func refusal_key_value(cfg: Json) -> string {
+  match get(cfg, registration_refusal_key()) {
+    None => "<absent>",
+    Some(JString(s)) => s,
+    Some(_) => "<not a string>"
+  }
+}
+
+pure func index_of(skills: [Skill]) -> string {
+  join("\n", map(\s. concat([s.name, "=", s.description]), skills))
+}
+
+pure func test_config_is_the_index_and_the_sandbox_flag() -> bool
+  tests [((), true)]
+  {
+    encode(skills_config(two_skills(), true))
+      == "{\"root\":\".motoko/skills\",\"skills\":[{\"name\":\"observer\",\"description\":\"Supervise a run from outside it.\\n\"},{\"name\":\"workdir-stamp\",\"description\":\"Stamp the working directory.\"}],\"sandbox_set\":true}"
+      && encode(skills_config(scan(RootAbsent), false)) == "{\"root\":\".motoko/skills\",\"skills\":[],\"sandbox_set\":false}"
+      -- no refusal: the reserved key is absent, which the host reads as none
+      && refusal_key_value(skills_config(two_skills(), true)) == "<absent>"
+      && config_refusal(skills_config(two_skills(), true)) == ""
+      && config_sandbox_set(skills_config(two_skills(), true))
+      && not config_sandbox_set(skills_config(two_skills(), false))
+      && not config_sandbox_set(jo([]))
+  }
+
+pure func test_config_round_trips_the_index() -> bool
+  tests [((), true)]
+  {
+    index_of(config_skills(skills_config(two_skills(), true))) == index_of(scanned_skills(two_skills()))
+      && index_of(config_skills(skills_config(two_skills(), true))) == "observer=Supervise a run from outside it.\n\nworkdir-stamp=Stamp the working directory."
+      && skill_names(config_skills(skills_config(two_skills(), true))) == ["observer", "workdir-stamp"]
+      && skill_names(config_skills(jo([]))) == []
+      -- an entry without both strings is not a skill
+      && skill_names(config_skills(jo([kv("skills", ja([jo([kv("name", js("a"))]), js("b")]))]))) == []
+  }
+
+pure func test_config_carries_the_refusal_and_no_skill() -> bool
+  tests [((), true)]
+  {
+    let cfg = skills_config(refused_scan(), true);
+    refusal_key_value(cfg) == refusal_of(refused_scan())
+      && startsWith(config_refusal(cfg), "skills: 1 violation under .motoko/skills; ")
+      && contains(config_refusal(cfg), "[1] V1: .motoko/skills/empty: ")
+      -- the valid skill beside the broken one is not served either
+      && skill_names(config_skills(cfg)) == []
+      && startsWith(encode(cfg), "{\"root\":\".motoko/skills\",\"skills\":[],\"sandbox_set\":true,\"registration_refusal\":\"skills: 1 violation")
+  }
+
+pure func test_refusal_key_is_read_as_the_host_reads_it() -> bool
+  tests [((), true)]
+  {
+    config_refusal(jo([])) == ""
+      && config_refusal(jo([kv(registration_refusal_key(), js(""))])) == ""
+      && config_refusal(jo([kv(registration_refusal_key(), js("broken"))])) == "broken"
+      && config_refusal(jo([kv(registration_refusal_key(), jb(true))])) == malformed_refusal()
+      && config_refusal(jo([kv(registration_refusal_key(), ja([]))])) == malformed_refusal()
+  }
+
+-- ---- the catalogue: A1, D12, D2's fail-safe --------------------------------
+
+pure func test_catalogue_is_one_skill_schema_with_the_index() -> bool
+  tests [((), true)]
+  {
+    let s = one_schema(skills_config(two_skills(), true));
+    s.name == "Skill"
+      && s.description == concat([skill_tool_instruction(), "\n\nAvailable skills:\n- observer: Supervise a run from outside it.\n- workdir-stamp: Stamp the working directory."])
+      && s.parameters == "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"description\":\"The name of the skill to load, exactly as listed.\",\"enum\":[\"observer\",\"workdir-stamp\"]}},\"required\":[\"name\"]}"
+  }
+
+pure func test_catalogue_with_no_skills_says_so_and_has_no_enum() -> bool
+  tests [((), true)]
+  {
+    let s = one_schema(skills_config(scan(RootAbsent), true));
+    s.name == "Skill"
+      && s.description == no_skills_description()
+      && s.parameters == "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"description\":\"The name of the skill to load.\"}},\"required\":[\"name\"]}"
+      -- a root with no skill in it is the same catalogue as no root
+      && one_schema(skills_config(scan(RootEntries([RegularFile("README.md")])), true)).description == s.description
+      && one_schema(skills_config(scan(RootEntries([RegularFile("README.md")])), true)).parameters == s.parameters
+  }
+
+pure func test_catalogue_with_a_refusal_lists_no_skill() -> bool
+  tests [((), true)]
+  {
+    let s = one_schema(skills_config(refused_scan(), true));
+    s.name == "Skill"
+      && s.description == refused_description()
+      && not contains(s.description, "workdir-stamp")
+      && not contains(s.description, "Available skills")
+      && not contains(s.parameters, "enum")
+      -- and on a config that names skills beside a refusal, still none
+      && not contains(one_schema(jo([
+           kv("skills", ja([skill_json({ name: "a", description: "d" })])),
+           kv(registration_refusal_key(), js("broken"))
+         ])).parameters, "enum")
+  }
+
+-- ---- the handler, through a stub port: A6, A9, D8, D7, D2 ------------------
+
+-- The stub port serves files from the world it is handed, keyed on the path
+-- string, as a deterministic world's file table is (D13). The world it returns
+-- records the path it was asked for, so a test can see both that the handler
+-- returns the port's world and which path it read.
+pure func world_holding(path: string, served: Option[string]) -> ExtWorld {
+  match served {
+    Some(text) => { token: jo([kv("files", jo([kv(path, js(text))]))]) },
+    None => { token: jo([kv("files", jo([]))]) }
+  }
+}
+
+pure func world_after(path: string) -> ExtWorld {
+  { token: jo([kv("read", js(path))]) }
+}
+
+pure func held_file(world: ExtWorld, path: string) -> Option[string] {
+  match get(world.token, "files") {
+    Some(files) =>
+      match get(files, path) {
+        Some(JString(text)) => Some(text),
+        _ => None
+      },
+    None => None
+  }
+}
+
+func stub_file_read(world: ExtWorld, path: string) -> ExtFileRead ! {FS} {
+  match held_file(world, path) {
+    Some(text) => { present: true, content: text, next_state: world_after(path) },
+    None => { present: false, content: "", next_state: world_after(path) }
+  }
+}
+
+func stub_ai_step(world: ExtWorld, model_id: string, sent: [Msg]) -> AiStepOutcome ! {AI, IO, Trace} {
+  { result: Err("no model behind this port"), next_state: world }
+}
+
+func stub_tool_handle(world: ExtWorld, tool: string, args_json: string) -> ExtProcOutcome ! {IO, Process, FS} {
+  { output: "", exit_code: 0 - 1, next_state: world }
+}
+
+func stub_file_mutation(world: ExtWorld, path: string) -> ExtFileMutation ! {FS} {
+  { ok: false, error: "no filesystem behind this port", next_state: world }
+}
+
+func stub_file_write(world: ExtWorld, path: string, content: string) -> ExtFileMutation ! {FS} {
+  { ok: false, error: "no filesystem behind this port", next_state: world }
+}
+
+func stub_path_stat(world: ExtWorld, path: string) -> ExtPathStat ! {FS} {
+  { kind: ExtPathMissing, next_state: world }
+}
+
+func stub_dir_list(world: ExtWorld, path: string) -> ExtDirListing ! {FS} {
+  { present: false, entries: [], next_state: world }
+}
+
+func stub_clock_now(world: ExtWorld) -> ExtClockReading ! {Clock} {
+  { now_ms: 0, next_state: world }
+}
+
+func stub_env_get(key: string, fallback: string) -> string ! {Env} {
+  fallback
+}
+
+func stub_ports() -> ExtPorts {
+  {
+    ai_step: stub_ai_step,
+    tool_handle: stub_tool_handle,
+    file_read: stub_file_read,
+    file_write: stub_file_write,
+    file_remove: stub_file_mutation,
+    path_stat: stub_path_stat,
+    dir_list: stub_dir_list,
+    dir_make: stub_file_mutation,
+    clock_now: stub_clock_now,
+    env_get: stub_env_get
+  }
+}
+
+-- One call, flattened for comparison. `world` is the returned world's token.
+type Seen = { handled: bool, call_id: string, tool: string, exit_code: int, stdout: string, stderr: string, world: string }
+
+pure func seen_of(out: ToolHandleOutcome) -> Seen {
+  match out.decision {
+    Handled(env) => { handled: true, call_id: env.tool_call_id, tool: env.tool, exit_code: env.exit_code, stdout: env.stdout, stderr: env.stderr, world: encode(out.next_state.token) },
+    Delegate => { handled: false, call_id: "", tool: "", exit_code: 0, stdout: "", stderr: "", world: encode(out.next_state.token) }
+  }
+}
+
+-- `served` is what the world holds at `workdir-stamp`'s path, and at no other
+-- (None: the world holds no file).
+func call_with(cfg: Json, served: Option[string], workdir: string, declared_limit: int, arguments: Json) -> Seen ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
+  let ctx = { provider_ctx(pure_ctx(cfg), stub_ports(), world_holding(skill_md_path("workdir-stamp"), served)) | workdir: workdir, context_limit: declared_limit };
+  let call: ToolCallEnvelope = { id: "call_0123456789abcdef0123456789abcdef", tool: "Skill", arguments: arguments };
+  seen_of(skills_handle(ctx, call))
+}
+
+pure func name_arg(skill: string) -> Json { jo([kv("name", js(skill))]) }
+
+pure func indexed() -> Json { skills_config(two_skills(), true) }
+
+-- The world a call was given, when nothing was read from it.
+pure func untouched_world(served: Option[string]) -> string {
+  encode(world_holding(skill_md_path("workdir-stamp"), served).token)
+}
+
+pure func world_after_reading(skill: string) -> string {
+  encode(world_after(skill_md_path(skill)).token)
+}
+
+-- A6: a present file. The result is the directory line, then the whole file.
+func test_a6_present_file_loads_through_the_port() -> bool ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace}
+  tests [((), true)]
+  {
+    let text = stamp_md("# Stamp\n\nWrite STAMP.txt.\n");
+    let r = call_with(indexed(), Some(text), ".", 0, name_arg("workdir-stamp"));
+    r.handled
+      && r.exit_code == 0
+      && r.stdout == concat([".motoko/skills/workdir-stamp\n", text])
+      && r.stderr == ""
+      && r.tool == "Skill"
+      && r.call_id == "call_0123456789abcdef0123456789abcdef"
+  }
+
+-- A6: an absent file is a tool error (D10: gone since startup).
+func test_a6_absent_file_is_a_tool_error() -> bool ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace}
+  tests [((), true)]
+  {
+    let r = call_with(indexed(), None, ".", 0, name_arg("workdir-stamp"));
+    r.handled
+      && r.exit_code == 1
+      && r.stdout == ""
+      && r.stderr == "Skill 'workdir-stamp' is in the index but .motoko/skills/workdir-stamp/SKILL.md is no longer there."
+  }
+
+-- A6: the port changes the world, and the changed world is what the handler
+-- returns, for a present file and an absent one. The token also shows the one
+-- path read: the bare relative spelling of D7.
+func test_a6_the_ports_world_is_returned() -> bool ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace}
+  tests [((), true)]
+  {
+    let stamp = call_with(indexed(), Some(stamp_md("")), ".", 0, name_arg("workdir-stamp"));
+    -- `observer` is indexed, and the world holds no file at its path
+    let observer = call_with(indexed(), Some(stamp_md("")), ".", 0, name_arg("observer"));
+    stamp.exit_code == 0
+      && stamp.world == "{\"read\":\".motoko/skills/workdir-stamp/SKILL.md\"}"
+      && observer.exit_code == 1
+      && observer.stderr == "Skill 'observer' is in the index but .motoko/skills/observer/SKILL.md is no longer there."
+      && observer.world == "{\"read\":\".motoko/skills/observer/SKILL.md\"}"
+      && untouched_world(Some("x")) == "{\"files\":{\".motoko/skills/workdir-stamp/SKILL.md\":\"x\"}}"
+      && stamp.world != untouched_world(Some(stamp_md("")))
+  }
+
+-- A9: a name not in the index is an error listing the names, and nothing is
+-- read: the world is the one the handler was given.
+func test_a9_unknown_name_lists_the_names_and_reads_nothing() -> bool ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace}
+  tests [((), true)]
+  {
+    let unknown = call_with(indexed(), Some(stamp_md("")), ".", 0, name_arg("nope"));
+    let pathy = call_with(indexed(), Some(stamp_md("")), ".", 0, name_arg("../config/dogfood"));
+    let missing = call_with(indexed(), Some(stamp_md("")), ".", 0, jo([]));
+    let number = call_with(indexed(), Some(stamp_md("")), ".", 0, jo([kv("name", jb(true))]));
+    let none = call_with(skills_config(scan(RootAbsent), true), Some(stamp_md("")), ".", 0, name_arg("workdir-stamp"));
+    unknown.exit_code == 1
+      && unknown.stdout == ""
+      && unknown.stderr == "Unknown skill 'nope'. Valid names: observer, workdir-stamp."
+      && unknown.world == untouched_world(Some(stamp_md("")))
+      && pathy.stderr == "Unknown skill '../config/dogfood'. Valid names: observer, workdir-stamp."
+      && pathy.world == untouched_world(Some(stamp_md("")))
+      && missing.stderr == "Unknown skill ''. Valid names: observer, workdir-stamp."
+      && number.stderr == "Unknown skill ''. Valid names: observer, workdir-stamp."
+      && none.exit_code == 1
+      && none.stderr == "Unknown skill 'workdir-stamp'. No skills are installed in this workspace (.motoko/skills holds none)."
+      && none.world == untouched_world(Some(stamp_md("")))
+  }
+
+-- A9: the file is read on every call, so an edit to the text is in the next
+-- result, while the index stays what registration captured.
+func test_a9_an_edit_to_the_text_is_in_the_next_result() -> bool ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace}
+  tests [((), true)]
+  {
+    let first = call_with(indexed(), Some(stamp_md("# Stamp\n")), ".", 0, name_arg("workdir-stamp"));
+    let second = call_with(indexed(), Some(stamp_md("# Stamp, edited\n\nA new step.\n")), ".", 0, name_arg("workdir-stamp"));
+    first.exit_code == 0
+      && second.exit_code == 0
+      && first.stdout == concat([".motoko/skills/workdir-stamp\n", stamp_md("# Stamp\n")])
+      && second.stdout == concat([".motoko/skills/workdir-stamp\n", stamp_md("# Stamp, edited\n\nA new step.\n")])
+      -- a reworded description loads too: the index entry is registration's
+      && call_with(indexed(), Some("---\nname: workdir-stamp\ndescription: Reworded.\n---\n"), ".", 0, name_arg("workdir-stamp")).exit_code == 0
+  }
+
+-- A9: an edit that breaks a V-rule, or grows the file past V7, is a tool error
+-- naming the rule, and nothing is delivered.
+func test_a9_a_broken_edit_is_a_tool_error_naming_the_rule() -> bool ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace}
+  tests [((), true)]
+  {
+    let v4 = call_with(indexed(), Some("# no frontmatter here\n"), ".", 0, name_arg("workdir-stamp"));
+    let v5 = call_with(indexed(), Some("---\nname: other-name\ndescription: d\n---\n"), ".", 0, name_arg("workdir-stamp"));
+    let v6 = call_with(indexed(), Some("---\nname: workdir-stamp\ndescription: \"  \"\n---\n"), ".", 0, name_arg("workdir-stamp"));
+    let v7 = call_with(indexed(), Some(stamp_md(repeat("0123456789", 6100))), ".", 0, name_arg("workdir-stamp"));
+    v4.exit_code == 1 && v4.stdout == "" && startsWith(v4.stderr, "V4: .motoko/skills/workdir-stamp/SKILL.md: no frontmatter block")
+      && v5.exit_code == 1 && v5.stdout == "" && startsWith(v5.stderr, "V5: .motoko/skills/workdir-stamp/SKILL.md: `name` (`other-name`) differs from the directory name")
+      && v6.exit_code == 1 && v6.stdout == "" && startsWith(v6.stderr, "V6: .motoko/skills/workdir-stamp/SKILL.md: `description` is empty after trimming")
+      && v7.exit_code == 1 && v7.stdout == "" && startsWith(v7.stderr, "V7: .motoko/skills/workdir-stamp/SKILL.md: the skill is too large to deliver whole: ")
+      -- the port was read in each case, and its world came back
+      && v4.world == world_after_reading("workdir-stamp")
+      && v7.world == world_after_reading("workdir-stamp")
+  }
+
+-- D8: the size check, against the handler's `ctx.context_limit`.
+func test_d8_a_skill_that_does_not_fit_is_a_tool_error() -> bool ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace}
+  tests [((), true)]
+  {
+    let text = stamp_md(repeat("0123456789", 400));
+    let small = call_with(indexed(), Some(text), ".", 4000, name_arg("workdir-stamp"));
+    small.exit_code == 1
+      && small.stdout == ""
+      && startsWith(small.stderr, "Skill 'workdir-stamp' does not fit this model's context: about ")
+      && contains(small.stderr, " tokens against a context limit of 4000, ")
+      -- the same text loads at a large window, and when the limit is unknown
+      && call_with(indexed(), Some(text), ".", 200000, name_arg("workdir-stamp")).exit_code == 0
+      && call_with(indexed(), Some(text), ".", 0, name_arg("workdir-stamp")).exit_code == 0
+  }
+
+-- D2, A4: with a refusal recorded every call returns the refusal, whatever it
+-- names, and no file is read.
+func test_d2_with_a_refusal_every_call_returns_it() -> bool ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace}
+  tests [((), true)]
+  {
+    let cfg = skills_config(refused_scan(), true);
+    let valid_on_disk = call_with(cfg, Some(stamp_md("")), ".", 0, name_arg("workdir-stamp"));
+    let unknown = call_with(cfg, Some(stamp_md("")), ".", 0, name_arg("nope"));
+    valid_on_disk.exit_code == 1
+      && valid_on_disk.stdout == ""
+      && valid_on_disk.stderr == refusal_of(refused_scan())
+      && valid_on_disk.world == untouched_world(Some(stamp_md("")))
+      && unknown.stderr == refusal_of(refused_scan())
+      && unknown.world == untouched_world(Some(stamp_md("")))
+      -- a malformed refusal is a refusal
+      && call_with(jo([kv(registration_refusal_key(), jb(true))]), Some(stamp_md("")), ".", 0, name_arg("workdir-stamp")).stderr == malformed_refusal()
+  }
+
+-- D7: started without the sandbox and with a workdir other than `.`, the
+-- handler says so instead of loading, and reads nothing.
+func test_d7_unsandboxed_launch_with_another_workdir_does_not_load() -> bool ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace}
+  tests [((), true)]
+  {
+    let unsandboxed = skills_config(two_skills(), false);
+    let elsewhere = call_with(unsandboxed, Some(stamp_md("")), "/srv/project", 0, name_arg("workdir-stamp"));
+    let relative = call_with(unsandboxed, Some(stamp_md("")), "sub", 0, name_arg("workdir-stamp"));
+    elsewhere.exit_code == 1
+      && elsewhere.stdout == ""
+      && elsewhere.stderr == unsandboxed_error("/srv/project")
+      && contains(elsewhere.stderr, "started without AILANG_FS_SANDBOX and its working directory is '/srv/project', not '.'")
+      && elsewhere.world == untouched_world(Some(stamp_md("")))
+      -- a relative workdir other than `.` is elsewhere too: the same error, nothing read
+      && relative.exit_code == 1
+      && relative.stdout == ""
+      && relative.stderr == unsandboxed_error("sub")
+      && relative.world == untouched_world(Some(stamp_md("")))
+      -- unsandboxed with the workdir `.`: loads
+      && call_with(unsandboxed, Some(stamp_md("")), ".", 0, name_arg("workdir-stamp")).exit_code == 0
+      -- sandboxed with another workdir (the TUI's layout 1): loads
+      && call_with(indexed(), Some(stamp_md("")), "/srv/project", 0, name_arg("workdir-stamp")).exit_code == 0
+      -- the refusal is reported ahead of the launch check
+      && call_with(skills_config(refused_scan(), false), Some(stamp_md("")), "/srv/project", 0, name_arg("workdir-stamp")).stderr == refusal_of(refused_scan())
+  }

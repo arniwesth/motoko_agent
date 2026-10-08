@@ -1,0 +1,32 @@
+[package]
+name = "sunholo/motoko_ext_skills"
+version = "0.1.0"
+edition = "1"
+ailang = ">=0.47.0"
+description = "Skills for motoko: a SKILL.md folder under .motoko/skills, indexed in one Skill tool's description and loaded as that tool's result (037 ADR-001)"
+license = "Apache-2.0"
+
+[exports]
+modules = [
+  "sunholo/motoko_ext_skills/register",
+  "sunholo/motoko_ext_skills/skills"
+]
+
+# The two compactors are dependencies of `a6b_test.ail` only (037 ADR-001 A6b
+# runs the real compactors on a loaded skill). `skills.ail` imports neither.
+[dependencies]
+"sunholo/motoko_ext_abi" = { path = "../motoko-ext-abi", version = "8.0" }
+"sunholo/motoko_ext_compaction_structural" = { path = "../motoko-ext-compaction-structural", version = "1.1.0" }
+"sunholo/motoko_ext_compaction_ai" = { path = "../motoko-ext-compaction-ai", version = "0.3.0" }
+
+# The eleven effects are `ToolProvider`'s row. `skills_handle` has to declare
+# that row exactly (the capability's row is closed, and a narrower one does not
+# unify with it), and this ceiling has to cover what a function declares:
+# with `max = ["Env", "FS"]` the package does not check. What is performed is
+# less: `Env` and `FS` at registration, and one read through
+# `ctx.ports.file_read` per call (037 evidence/p4/logs/effects_max_narrowed.out).
+[effects]
+max = ["IO", "Process", "FS", "AI", "Env", "Net", "SharedMem", "Clock", "Stream", "Rand", "Trace"]
+
+[stability]
+level = "experimental"

@@ -212,7 +212,17 @@ export pure func no_ops_id() -> string { "driver_plus_no_ops" }
 -- entries) to the extension's OWN list (`registered_atoms_of`, 4 entries in
 -- all). `check_no_op_profile.py` cross-checks each claim against B2's
 -- enumeration, which is what turned v10 red — as B8 §5 said it would.
-export pure func no_ops_version() -> string { "21" }
+-- v22 (2026-10-05, 037 PLAN-001 P6, the repair). RE-ISSUED because the omitted
+-- list changed: `ailang_tools` is named in it, with its own measured reason
+-- (see `not_installed`). It had been in ailang.toml's [extensions] packages and
+-- in neither list of this profile, which is what `make driver_plus_no_ops` was
+-- red on at 037's baseline (501cd879). Nothing installed, covered, excluded or
+-- routed changes; the omitted count goes 14 -> 15.
+-- v23 (2026-10-05, 037 PLAN-001 P6, the re-pin). RE-ISSUED because the omitted
+-- list changed again: `skills`, the extension 037 adds, is named in it with
+-- its measured reason (037 ADR-001 D13 and A8). Nothing installed, covered,
+-- excluded or routed changes; the omitted count goes 15 -> 16.
+export pure func no_ops_version() -> string { "23" }
 
 -- The same attribution table `driver_only` binds, at the same identity. Two
 -- profiles referring to one table is the case D4's rule was written for: a
@@ -647,6 +657,20 @@ pure func not_installed() -> [OmittedExtension] {
                   -- claim is checked rather than asserted.
                   "herdr", "mcp", "microrag", "omnigraph", "repetition_guard", "scratchpad",
                   "test_dummy"], barrier_reason())
+    -- `ailang_tools` joined ailang.toml's [extensions] packages and this profile named
+    -- it in neither list: `make driver_plus_no_ops` was red on it when 037 recorded its
+    -- baseline (501cd879). It has its own entry and not a place in the list above,
+    -- because `barrier_reason()` counts the extensions that share it and what stands
+    -- against this one is narrower: one gated atom whose handler performs its effects
+    -- itself. Re-measured for this entry with `make ext_ambient_inventory` and
+    -- `make ext_hook_scope` at 0f4724de, not carried over from the others.
+    ++ [{ extension_id: "ailang_tools",
+          reason: "NOT INSTALLED: it is not in the zero-barrier set this profile's install list is defined as, and that is a measurement. Until 037 P6 (2026-10-05) this profile named it in neither list. Measured at 0f4724de: classifier 3 (make ext_ambient_inventory) reports it AMBIENT, with 6 ambient sources in a 3-module closure (std/process.exec; std/fs.readFileResult, writeFileResult, mkdirAllResult and isDir; std/env.getEnvOr) and 0 ExtPorts field calls, so criterion 2's first clause fails on evidence and the per-(extension, slot) derivation in tools/profile_definition/check_fixtures.py clears nothing for it. make ext_hook_scope lists one of the six as registration-only (std/env.getEnvOr) and reports its hook scope HOOK-UNRESOLVED. It registers one atom, a ToolProvider claiming WriteFile, EditFile and ReadFile, and handles them for .ail paths: write_ail and edit_ail declare ! {FS, Process} and reach std/fs and std/process directly, writing the file and running `ailang check` themselves, and the outcome returns next_state: ctx.world as it was handed. So the effects are the hook's own and leave outside ctx.ports; a registration read is not the whole of it. ToolProvider is the gated kind, so the slot could be excluded, but an install with its only atom excluded would cover nothing. Per WI-D2's rule a reason names what would have to CHANGE: the handler's file and process effects reaching the world through mediated ports, which is the package's change and not this profile's. check_no_op_profile.py fails if a zero-barrier extension appears in this list." }]
+    -- `skills` is the extension 037 adds (packages/motoko-ext-skills). The gate named
+    -- it beside `ailang_tools` from the commit that wired it (9884fe1c). Omitted by
+    -- 037 ADR-001 D13, with its own measured reason.
+    ++ [{ extension_id: "skills",
+          reason: "NOT INSTALLED, and named from 037 P6 (2026-10-05). 037 ADR-001 D13 (ruling 10, 2026-10-03) keeps the skills extension outside every DST profile in v1, and it is not in the zero-barrier set this profile's install list is defined as: the per-(extension, slot) derivation in tools/profile_definition/check_fixtures.py clears nothing for an AMBIENT closure, and check_no_op_profile.py fails if a zero-barrier extension appears in this list. Its position, measured at c708d2cc: classifier 3 (make ext_ambient_inventory) reports it AMBIENT, with 5 ambient sources in a 3-module closure (std/env.getEnvOr; std/fs.isDir, isFile, listDir and readFileResult) and 1 ExtPorts field call, and that closure reading is the one a profile may rely on, so criterion 2's first clause fails on it. make ext_hook_scope reports the second reading, HOOK-PORT-MEDIATED, with all five sources registration-only: discovery of .motoko/skills runs at registration, before any world exists, reads the real disk, and is disclosed through config and not mediated. The one effect a hook performs is the port read ctx.ports.file_read (register.ail:331, make ext_call_inventory), which a deterministic run serves from the world's file table. It registers two atoms: DescribeTools, which renders from config on a declared empty row, and a ToolProvider for the one tool Skill, the gated kind. Covering the ToolProvider takes a recorded, validated and strictly replayed run that dispatches Skill; the classifier cannot clear it, because its verdict is closure-wide and a registration read taints every hook, and this profile covers no-ops and records no graded session. Per WI-D2's rule a reason names what would have to CHANGE: a driver_plus_skills profile with its own graded run, which D13 names as the later step and 037 leaves out of scope. What the extension was measured to do, reported and not gated (037 P1, NOTE-p1-prototype-results.md): the expected skill was loaded in the first response in 88% to 100% of sessions per model, 261 of 270 over seven models; its instructions were followed to the end in 53 of 54 sessions; after compaction it was reloaded 0 times in three runs under the structural compactor and once in each of three under compaction_ai; and a 16,000-char index was accepted by all 7 provider families it was sent to. Default-profile membership is D11's and is ruled at gate G2, not here." }]
 }
 
 -- ---------------------------------------------------------------------------
@@ -971,7 +995,7 @@ pure func test_installed_and_omitted_are_disjoint() -> bool
   {
     let d = driver_plus_no_ops();
     disjoint(omitted_ids(d.omitted_extensions), installed_extension_ids())
-      && List.length(d.omitted_extensions) == 14
+      && List.length(d.omitted_extensions) == 16
   }
 
 pure func omitted_ids(os: [OmittedExtension]) -> [string] {
@@ -981,6 +1005,17 @@ pure func omitted_ids(os: [OmittedExtension]) -> [string] {
 pure func disjoint(xs: [string], ys: [string]) -> bool {
   match xs { [] => true, x :: rest => if contains_str(ys, x) then false else disjoint(rest, ys) }
 }
+
+-- The two entries 037 P6 added are in the list BY NAME. The count above says
+-- how long the list is and disjointness says what is NOT in it: with `skills`
+-- misspelt in `not_installed`, both held (037 REVIEW-003). A check, not a pin:
+-- it holds no count and no version.
+pure func test_skills_and_ailang_tools_are_omitted_by_name() -> bool
+  tests [((), true)]
+  {
+    let ids = omitted_ids(driver_plus_no_ops().omitted_extensions);
+    contains_str(ids, "skills") && contains_str(ids, "ailang_tools")
+  }
 
 -- The manifest's extension list is a PROJECTION of the install list, not a
 -- second record of it. `driver_only` could not assert this: its list is empty

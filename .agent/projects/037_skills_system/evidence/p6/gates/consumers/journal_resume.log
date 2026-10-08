@@ -1,0 +1,25 @@
+→ Type checking...
+→ Effect checking...
+✓ Running scripts/dst/journal_resume_dst.ail
+CACHE_WRITE_FAILED module=src/core/session stage=encoding path=/workspaces/motoko_agent-skills/.ailang/lane/journal_resume/compile/modules/src__core__session/coretypeinfo.gob: ARTIFACT_TOO_LARGE: /workspaces/motoko_agent-skills/.ailang/lane/journal_resume/compile/modules/src__core__session/coretypeinfo.gob: artifact exceeds blob byte limit; using fresh compilation
+Warning: --caps AI requires --ai <model> flag.
+  No AI model configured. Programs using AI.call will fail.
+  Fix: ailang run --caps AI --ai gemini-2-5-flash ...
+  Or for testing: ailang run --caps AI --ai-stub ...
+== journal_resume: ADR-003 D6's cross-process resume, through the harness ==
+  ✓ the first run suspends at its step budget holding 8 messages
+  ✓ the first run's journal folds
+  ✓ the fold's boundary is `suspended` and its history is the continuation's
+  ✓ an unchanged resume is planned, holding the continuation, forced=false, one prompt digest
+  ✓ BEGIN₂.ordinal₀ == END₁.final: the resumed frame opens at the first run's final world ordinal
+  ✓ THE GATE: the resumed run's HistorySeeded.digest equals the first run's last digest_after
+  ✓ SessionResumed is the FIRST record of the resumed frame, and there is exactly one
+  ✓ the resumed run starts from the folded history and the step count carries (3 + 3 completed)
+  ✓ the two-frame journal folds to the resumed run's final history
+  ✓ a same-profile resume against an edited prompt is REFUSED with `prompt`
+  ✓ ...and FORCED: accepted, forced=true, the head replaced by the edited prompt
+  ✓ the forced resume's two-frame journal folds, through D1's second arm, to the edited head
+  ✓ RESUME_TRACE count for the forced frame
+journal_resume PASS rows=13
+  ✓ SessionResumed: projected 2, returned 2 (D6.4, out of process)
+exit=0

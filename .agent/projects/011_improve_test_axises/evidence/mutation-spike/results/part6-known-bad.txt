@@ -1,0 +1,13 @@
+# SPIKE ONLY, part 6 — known-bad control: the v0.2 prototype with StepBudgetExhausted -> "error" in D2's table.
+witness_live_test rc=1
+candidate_checks_live_test rc=1
+restored OK
+# witness_live_test.ail, the suspended run:
+m11_t0_suspended_clean: findings=[A8:outcome-summary-disagree@aggregate:invariants:outcome-agreement]
+m11_t0_suspended_clean: budget=7 retry=0 decisions=7 unevaluated=replay-consistency vacuous=checkpoint-history evaluate=1
+FAIL m11_t0_suspended_clean
+# the same run with the unmodified prototype (from the matrix run):
+m11_t0_suspended_clean: findings=[]
+m11_t0_suspended_clean: budget=7 retry=0 decisions=7 unevaluated=replay-consistency vacuous=checkpoint-history evaluate=0
+# candidate_checks_live_test.ail:
+FAIL admission of the entries

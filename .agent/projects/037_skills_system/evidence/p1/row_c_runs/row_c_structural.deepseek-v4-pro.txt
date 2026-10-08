@@ -1,0 +1,92 @@
+run structural.deepseek-v4-pro  model openrouter/deepseek/deepseek-v4-pro
+  requests                                 60
+  finish                                   max_steps
+  killed                                   no
+  input_tokens                             2025920
+  output_tokens                            45467
+  list_cost_usd                            0.441999
+  first_compacted_request                  20
+  compacted_requests                       40
+  skill_first_load_step                    0
+  skill_reload_steps                       []
+  failed_skill_calls                       []
+  skill_result_tokens                      6075
+  requests_without_whole_skill             40
+  loss_episodes                            1
+  episodes_answered_by_reload              0
+  reload_result_tokens_total               0
+  input_tokens_carrying_reloaded_copies    0
+  input_tokens_carrying_first_copy         115425
+  reload_share_of_input_pct                0.0
+  ai_folds                                 0
+  reports_read                             13
+  last_report_read                         R13
+  dagr_check                               {'run-atlas.json': 'exit=0'}
+  other_skill_calls                        []
+  reconstruction_mismatches                0
+  skill_file_reads_by_other_tools          []
+  skill_md_reads_after_first_compaction    []
+  example_reads_after_first_compaction     []
+  loss episodes: 20-59 never reloaded (40 requests without it)
+  diagnostics: []
+  step  mode        msgs  est_tok  in_tok  out_tok  whole_copies/in_history  note
+     0                 2     2115    3993     120   0/0    -> Skill(dagr-producer), ReadFile(PROJECT.md)
+     1                 5     8594   11424     275   1/1    -> BashExec(command -v dagr || echo "not on PATH"), BashExec(ls -la .dagr/run-atlas.json 2>/dev/nul), BashExec(ls reports/)
+     2                 9     8745   11807     191   1/1    -> ReadFile(reports/R01.md)
+     3                11    11362   15389    3384   1/1    -> WriteFile(.dagr/run-atlas.json.tmp)
+     4                13    12204   17566      76   1/1    -> BashExec(dagr check .dagr/run-atlas.json.tmp --)
+     5                15    12240   17695     123   1/1    -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-), ReadFile(reports/R02.md)
+     6                18    14911   21362     227   1/1    -> ReadFile(.dagr/run-atlas.json)
+     7                20    15706   22559    1209   1/1    -> WriteFile(.dagr/run-atlas.json.tmp)
+     8                22    16715   25193     326   1/1    -> BashExec(dagr check .dagr/run-atlas.json.tmp --)
+     9                24    16751   25322     116   1/1    -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-), ReadFile(reports/R03.md)
+    10                27    19493   29151    1283   1/1    -> ReadFile(.dagr/run-atlas.json)
+    11                29    20467   30597    1675   1/1    -> WriteFile(.dagr/run-atlas.json.tmp)
+    12                31    21633   33692      75   1/1    -> BashExec(dagr check .dagr/run-atlas.json.tmp --)
+    13                33    21669   33821     114   1/1    -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-), ReadFile(reports/R04.md)
+    14                36    24386   37600     661   1/1    -> ReadFile(.dagr/run-atlas.json)
+    15                38    25509   39276    1513   1/1    -> WriteFile(.dagr/run-atlas.json.tmp)
+    16                40    26747   42546     205   1/1    -> EditFile(.dagr/run-atlas.json.tmp)
+    17                42    26881   42836     124   1/1    -> BashExec(dagr check .dagr/run-atlas.json.tmp --)
+    18                44    26917   42965     117   1/1    -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-), ReadFile(reports/R05.md)
+    19                47    29627   46742     937   1/1    -> ReadFile(.dagr/run-atlas.json)
+    20  structural    49    11928   23795    1888   0/1  structural: tier=tier1 keep_last=10  -> WriteFile(.dagr/run-atlas.json.tmp)
+    21  structural    51    13344   27633      80   0/1  structural: tier=tier1 keep_last=10  -> BashExec(dagr check .dagr/run-atlas.json.tmp --)
+    22  structural    53    13372   27753     115   0/1  structural: tier=tier1 keep_last=10  -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-), ReadFile(reports/R06.md)
+    23  structural    56    12336   26384     178   0/1  structural: tier=tier1 keep_last=10  -> ReadFile(.dagr/run-atlas.json)
+    24  structural    58    12534   26645    2290   0/1  structural: tier=tier1 keep_last=10  -> WriteFile(.dagr/run-atlas.json.tmp)
+    25  structural    60    14226   31267     152   0/1  structural: tier=tier1 keep_last=10  -> BashExec(dagr check .dagr/run-atlas.json.tmp --)
+    26  structural    62    14312   31467     163   0/1  structural: tier=tier1 keep_last=10  -> EditFile(.dagr/run-atlas.json.tmp)
+    27  structural    64    14429   31764     114   0/1  structural: tier=tier1 keep_last=10  -> BashExec(dagr check .dagr/run-atlas.json.tmp --)
+    28  structural    66    11824   28322     115   0/1  structural: tier=tier1 keep_last=10  -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-), ReadFile(reports/R07.md)
+    29  structural    69    11986   28299     382   0/1  structural: tier=tier1 keep_last=10  -> ReadFile(.dagr/run-atlas.json)
+    30  structural    71    13641   30743    3143   0/1  structural: tier=tier1 keep_last=10  -> WriteFile(.dagr/run-atlas.json.tmp)
+    31  structural    73    15669   36166     377   0/1  structural: tier=tier1 keep_last=10  -> BashExec(dagr check .dagr/run-atlas.json.tmp --)
+    32  structural    75    13152   32832     285   0/1  structural: tier=tier1 keep_last=10  -> EditFile(.dagr/run-atlas.json.tmp)
+    33  structural    77    11943   31179     102   0/1  structural: tier=tier1 keep_last=10  -> BashExec(dagr check .dagr/run-atlas.json.tmp --)
+    34  structural    79    10239   28663     117   0/1  structural: tier=tier1 keep_last=10  -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-), ReadFile(reports/R08.md)
+    35  structural    82    12802   32226     129   0/1  structural: tier=tier1 keep_last=10  -> ReadFile(.dagr/run-atlas.json)
+    36  structural    84    14497   34699    2661   0/1  structural: tier=tier1 keep_last=10  -> WriteFile(.dagr/run-atlas.json.tmp)
+    37  structural    86    16731   40705     120   0/1  structural: tier=tier1 keep_last=10  -> BashExec(dagr check .dagr/run-atlas.json.tmp --)
+    38  structural    88    14129   37284     115   0/1  structural: tier=tier1 keep_last=10  -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-), ReadFile(reports/R09.md)
+    39  structural    91    13205   35635     260   0/1  structural: tier=tier1 keep_last=10  -> ReadFile(.dagr/run-atlas.json)
+    40  structural    93    14892   38084    2781   0/1  structural: tier=tier1 keep_last=10  -> WriteFile(.dagr/run-atlas.json.tmp)
+    41  structural    95    17165   44272      94   0/1  structural: tier=tier1 keep_last=10  -> BashExec(dagr check .dagr/run-atlas.json.tmp --)
+    42  structural    97    17251   44464     300   0/1  structural: tier=tier1 keep_last=10  -> EditFile(.dagr/run-atlas.json.tmp)
+    43  structural    99    17394   44907      66   0/1  structural: tier=tier1 keep_last=10  -> BashExec(dagr check .dagr/run-atlas.json.tmp --)
+    44  structural   101    14818   41493     280   0/1  structural: tier=tier1 keep_last=10  -> EditFile(.dagr/run-atlas.json.tmp)
+    45  structural   103    13380   39695     260   0/1  structural: tier=tier1 keep_last=10  -> BashExec(dagr check .dagr/run-atlas.json.tmp --)
+    46  structural   105    11199   36467     115   0/1  structural: tier=tier1 keep_last=10  -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-), ReadFile(reports/R10.md)
+    47  structural   108    13868   40198      79   0/1  structural: tier=tier1 keep_last=10  -> ReadFile(.dagr/run-atlas.json)
+    48  structural   110    12921   39139    3118   0/1  structural: tier=tier1 keep_last=10  -> WriteFile(.dagr/run-atlas.json.tmp)
+    49  structural   112    13794   43679      71   0/1  structural: tier=tier1 keep_last=10  -> BashExec(dagr check .dagr/run-atlas.json.tmp --)
+    50  structural   114    11503   40290     115   0/1  structural: tier=tier1 keep_last=10  -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-), ReadFile(reports/R11.md)
+    51  structural   117    13988   43787     108   0/1  structural: tier=tier1 keep_last=10  -> ReadFile(.dagr/run-atlas.json)
+    52  structural   119    15686   46255    3530   0/1  structural: tier=tier1 keep_last=10  -> WriteFile(.dagr/run-atlas.json.tmp)
+    53  structural   121    11542   44007      78   0/1  structural: tier=hard keep_last=5  -> BashExec(dagr check .dagr/run-atlas.json.tmp --)
+    54  structural   123    11567   44120     118   0/1  structural: tier=hard keep_last=5  -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-), ReadFile(reports/R12.md)
+    55  structural   126    11727   44457    4064   0/1  structural: tier=hard keep_last=5  -> WriteFile(.dagr/run-atlas.json.tmp)
+    56  structural   128    13351   51151      71   0/1  structural: tier=hard keep_last=5  -> BashExec(dagr check .dagr/run-atlas.json.tmp --)
+    57  structural   130     4502   38152     115   0/1  structural: tier=emergency keep_last=1  -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-), ReadFile(reports/R13.md)
+    58  structural   133     7174   41845     165   0/1  structural: tier=emergency keep_last=3  -> ReadFile(.dagr/run-atlas.json)
+    59  structural   135     8982   44461    4402   0/1  structural: tier=emergency keep_last=3  -> WriteFile(.dagr/run-atlas.json.tmp)

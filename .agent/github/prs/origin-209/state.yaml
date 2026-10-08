@@ -1,0 +1,17 @@
+# Per-comment processing state. Machine-maintained by `make pr_sync`; the
+# rank/test/respond loop owns every judgment field.
+#
+# Sync only adds facts; only the loop changes judgments (ADR-001 D3).
+# `dismissed` requires a `reason`; `responded` requires both `artifact` and
+# `response_comment_id`. Schema is provisional pending 008 fork 2.
+# Notes belong in a record's `reason:`, not in comments here — this file is
+# rewritten in place and free-standing comments do not survive.
+- repo: arniwesth/motoko_agent
+  pr: 209
+  kind: issue_comment
+  comment_id: 5937743550
+  status: responded
+  seen_updated_at: 2026-10-01T18:20:38Z
+  rank: high
+  artifact: .agent/github/prs/origin-209/response-5937743550.md
+  response_comment_id: 5977513434

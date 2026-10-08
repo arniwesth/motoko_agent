@@ -1,0 +1,23 @@
+─── make dst ──────────────────────────────────────────────────────────
+  3032s wall, -j8, load 2.06 3.92 7.20
+  full log: .ailang/dst-last.log
+
+  FAILED (4):
+    driver_plus_compose          NEW — this one is yours
+    driver_plus_no_ops           NEW — this one is yours
+    ext_hook_scope               NEW — this one is yours
+    ext_hook_scope_selftest      NEW — this one is yours
+
+  NOTE: driver_plus_herdr is listed in DST_KNOWN_RED but PASSED.
+        Drop it from that list in the Makefile — an expected-failure
+        list that outlives the failure teaches the next reader to
+        ignore a real one.
+
+  NOTE: herdr_graded is listed in DST_KNOWN_RED but PASSED.
+        Drop it from that list in the Makefile — an expected-failure
+        list that outlives the failure teaches the next reader to
+        ignore a real one.
+
+  exit 2 — make's "errors were encountered". See the NEW rows above.
+───────────────────────────────────────────────────────────────────────
+make[1]: *** [Makefile:705: dst] Error 2

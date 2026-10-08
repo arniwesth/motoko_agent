@@ -1,0 +1,13 @@
+diff --git a/src/core/dst_driver_only.ail b/src/core/dst_driver_only.ail
+index 81d7020c..427e07f8 100644
+--- a/src/core/dst_driver_only.ail
++++ b/src/core/dst_driver_only.ail
+@@ -1069,7 +1069,7 @@ export pure func driver_only() -> ProfileDefinition {
+       -- and no gate asks for one:
+       -- `check_fixtures.py` requires by name only a classifier-2 caller and an
+       -- extension at zero barriers, and `ailang_tools` is neither of those.
+-      { extension_id: "ailang_tools",
++      { extension_id: "ailang_tools_typo",
+         reason: "OMITTED BY CONSEQUENCE, not by choice, and named from 037 P6 (2026-10-05); until then no list in this profile named it. This profile installs nothing, so what the entry records is a measurement and not a decision to decline. Measured at 0f4724de: classifier 3 (make ext_ambient_inventory) reports it AMBIENT, with 6 ambient sources in a 3-module closure (std/process.exec; std/fs.readFileResult, writeFileResult, mkdirAllResult and isDir; std/env.getEnvOr) and 0 ExtPorts field calls, so criterion 2's first clause fails on evidence and the per-(extension, slot) derivation in tools/profile_definition/check_fixtures.py clears nothing for it: it is not among the extensions that derivation finds installable. make ext_hook_scope lists one of the six as registration-only (std/env.getEnvOr) and reports its hook scope HOOK-UNRESOLVED. It registers one atom, a ToolProvider claiming WriteFile, EditFile and ReadFile, and handles them for .ail paths: write_ail and edit_ail declare ! {FS, Process} and reach std/fs and std/process directly, writing the file and running `ailang check` themselves, and the outcome returns next_state: ctx.world as it was handed. So the effects are the hook's own and leave outside ctx.ports; a registration read is not the whole of it. Per WI-D2's rule a reason names what would have to CHANGE: the handler's file and process effects reaching the world through mediated ports, which is the package's change and not this profile's." },
+ 
+       -- 037 PLAN-001 P6 (2026-10-05), THE RE-PIN. `skills` is the extension 037

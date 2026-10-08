@@ -1,0 +1,12 @@
+gate	tree	baseline	p4	exit	newly_red	note	commit
+registry_gen_check	worktree	green	green	0	NO	log identical to P3's	3213cd422a5cbc113c97b212db4532ea3fbdf021
+ext_call_inventory	worktree	green	green	0	NO	non-member port calls 91 -> 92; the new line is packages/motoko-ext-skills/register.ail:331 ctx.ports.file_read (ADR A6: recorded, not gated); otherwise only the source revision differs from P2's and P3's	3213cd422a5cbc113c97b212db4532ea3fbdf021
+ext_call_inventory_selftest	worktree	green	green	0	NO	log identical to P3's	3213cd422a5cbc113c97b212db4532ea3fbdf021
+profile_definition	worktree	green	green	0	NO	one line differs from P3's: 34 ABI pins across 564 tracked .ail files, was 563 (register.ail)	3213cd422a5cbc113c97b212db4532ea3fbdf021
+ext_ambient_inventory	worktree	green	green	0	NO	differs from P2's and P3's only in the source revision; the package is not in the root manifest, so it is not among the 19 extensions	3213cd422a5cbc113c97b212db4532ea3fbdf021
+ext_hook_scope	worktree	red	red	2	NO	red in the baseline on test_dummy; log identical to P3's (no new failure)	3213cd422a5cbc113c97b212db4532ea3fbdf021
+registry_gen_check	wired clone	green	green	0	NO	the generated registry (20 packages) matches the generator; log identical to the worktree's	3213cd422a5cbc113c97b212db4532ea3fbdf021
+ext_call_inventory	wired clone	green	green	0	NO	the same 92 calls as the worktree; two lines in a different order	3213cd422a5cbc113c97b212db4532ea3fbdf021
+ext_ambient_inventory	wired clone	green	green	0	NO	PASS 20/20 extensions, 19/19 std modules (std/yaml is the 19th); skills is AMBIENT: closure 3, 5 registration-time sources (std/env.getEnvOr, std/fs.isDir, isFile, listDir, readFileResult), 1 ExtPorts field call, 0 rejected	3213cd422a5cbc113c97b212db4532ea3fbdf021
+ext_hook_scope	wired clone	red	red	2	NO	skills: config-caps pass, and HOOK-PORT-MEDIATED; REGISTRATION SHAPE pass 19 of 20; the one fail is test_dummy, as in the baseline	3213cd422a5cbc113c97b212db4532ea3fbdf021
+profile_definition	wired clone	green	green	0	NO	80 of 100 (extension, slot) pairs stand, was 75 of 95; all 5 barriers stand for skills; no lock warnings, because the clone's root lock is fresh	3213cd422a5cbc113c97b212db4532ea3fbdf021

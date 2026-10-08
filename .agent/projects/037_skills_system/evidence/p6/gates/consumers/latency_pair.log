@@ -1,0 +1,47 @@
+→ Type checking...
+→ Effect checking...
+✓ Running scripts/dst/latency_pair_dst.ail
+CACHE_WRITE_FAILED module=src/core/session stage=encoding path=/workspaces/motoko_agent-skills/.ailang/lane/latency_pair/compile/modules/src__core__session/coretypeinfo.gob: ARTIFACT_TOO_LARGE: /workspaces/motoko_agent-skills/.ailang/lane/latency_pair/compile/modules/src__core__session/coretypeinfo.gob: artifact exceeds blob byte limit; using fresh compilation
+=== latency_pair_dst (D4) ===
+  i deadline=1000ms, fast=40ms, slow=3000ms
+
+-- S8: latency cannot reach the outcome except through the deadline comparison --
+  ✓ the two tool inputs agree on tool_call_id, code, message and content
+  ✓ the two tool inputs differ in duration_ms, and only there (40 vs 3000)
+  ✓ the provider script, the approval queue and the declared deadline are identical
+  ✓ the declared deadline lies strictly between the two latencies (40 < 1000 < 3000)
+
+-- D4: the same request and completion result, two latencies --
+      fast: advance=40ms deadline=1000ms status=ok class=''
+      slow: advance=3000ms deadline=1000ms status=fault class='ToolDeadlineExceeded'
+  ✓ both runs made the SAME tool request (identity and projection identical)
+  ✓ both runs carry the SAME declared deadline (1000ms), read through the env class
+  ✓ the fast run's advance is UNDER the deadline (40 <= 1000) and it COMPLETED
+  ✓ the slow run's advance is OVER the deadline (3000 > 1000) and it recorded ToolDeadlineExceeded
+  ✓ the two runs' clocks differ by exactly the latency difference (2960 == 2960)
+
+-- S8's control: the SAME slow latency with no declared deadline must COMPLETE --
+      control: advance=3000ms deadline=0ms status=ok class=''
+  ✓ the control carries the same 3000ms latency as the slow half
+  ✓ with no declared deadline (0) the same latency COMPLETES
+
+-- D4: both programs must replay deterministically --
+  ✓ fast: the discovered program validates
+  ✓ fast: its manifest validates against driver_only/34
+  ✓ fast: the exact program replays to an identical interaction log
+  ✓ fast: the replay reproduces the terminal outcome
+  ✓ fast: the reconstituted tool queue carries the latency back
+  ✓ slow: the discovered program validates
+  ✓ slow: its manifest validates against driver_only/34
+  ✓ slow: the exact program replays to an identical interaction log
+  ✓ slow: the replay reproduces the terminal outcome
+  ✓ slow: the reconstituted tool queue carries the latency back
+
+-- the pair is TWO programs, not one reported twice --
+      fast identity: 445a3800edc18ff51173284c158e1397d6e8e1effc1ae7fe6b8dbfdb366a1f2a
+      slow identity: 28653c76b026fb19dcf3319fa8f90ae0698809b288ab5982330b93ccb21ef91e
+  ✓ the two artifacts have different identities
+
+latency_pair_dst PASS
+  ✓ wire witness: 4 of 9 native_tool_results carry ToolDeadlineExceeded (the slow halves, and only those)
+exit=0

@@ -1,0 +1,9 @@
+# 037 P5: what scripts/verify_skills_startup.ail prints when startup is not refused. The fixture is real_entry.sh's a2 workdir with one skill (alpha) and the profile probe (extensions.order = [skills]).
+# command: AILANG_FS_SANDBOX=<workdir> AILANG_RELAX_MODULES=1 ailang run --caps Net,AI,SharedMem,IO,Env,Clock,FS,Process,Stream,Trace,Rand --ai-stub --entry main scripts/verify_skills_startup.ail -- <workdir> probe   (HEAD 3b8494a54fcd74962455a9c670e9b15183718e55)
+OK started: profile=probe strict=false entries=1 loaded=skills
+SKILL_SCHEMAS 1
+SKILL_SCHEMA {"name":"Skill","description":"Load a skill by name. Skills are task-specific instructions. Before starting a task that matches a skill's description, call Skill with its name to load the instructions. Do not load a skill that does not match the task. The first line of the result is the skill's directory, relative to the working directory; file paths in the skill's text are relative to that directory. If an earlier Skill result shows as elided or cut short and you still need that skill, call Skill again with the same name.\n\nAvailable skills:\n- alpha: The first skill.","parameters":"{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"description\":\"The name of the skill to load, exactly as listed.\",\"enum\":[\"alpha\"]}},\"required\":[\"name\"]}"}
+EXT_SET_DIGEST sha256:d0805bbf62f2d9f6d968de3bd4508ad28d67e1ad9820a46f867b08dfa486c74b
+EXT_CONFIG_DIGEST sha256:9fdca1f94becd0c915597bb200904ab58d6ac88954ddbac2eabf54868424c458
+SYSTEM_PREFIX_DIGEST sha256:2a707ed9d750df0376bfdf16777d9b64289cfee0406899c10a3d83d636912cc0
+# exit 0

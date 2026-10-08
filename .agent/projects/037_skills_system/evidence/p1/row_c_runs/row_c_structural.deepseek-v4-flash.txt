@@ -1,0 +1,92 @@
+run structural.deepseek-v4-flash  model openrouter/deepseek/deepseek-v4-flash
+  requests                                 60
+  finish                                   max_steps
+  killed                                   no
+  input_tokens                             1739140
+  output_tokens                            21206
+  list_cost_usd                            0.066100
+  first_compacted_request                  32
+  compacted_requests                       28
+  skill_first_load_step                    0
+  skill_reload_steps                       []
+  failed_skill_calls                       []
+  skill_result_tokens                      6075
+  requests_without_whole_skill             28
+  loss_episodes                            1
+  episodes_answered_by_reload              0
+  reload_result_tokens_total               0
+  input_tokens_carrying_reloaded_copies    0
+  input_tokens_carrying_first_copy         188325
+  reload_share_of_input_pct                0.0
+  ai_folds                                 0
+  reports_read                             7
+  last_report_read                         R07
+  dagr_check                               {'run-atlas.json': 'exit=0'}
+  other_skill_calls                        []
+  reconstruction_mismatches                0
+  skill_file_reads_by_other_tools          [(1, 'BashExec', 'examples'), (4, 'BashExec', 'examples'), (5, 'ReadFile', 'examples'), (5, 'ReadFile', 'examples')]
+  skill_md_reads_after_first_compaction    []
+  example_reads_after_first_compaction     []
+  loss episodes: 32-59 never reloaded (28 requests without it)
+  diagnostics: []
+  step  mode        msgs  est_tok  in_tok  out_tok  whole_copies/in_history  note
+     0                 2     2115    4072      64   0/0    -> Skill(dagr-producer)
+     1                 4     8190   10990     391   1/1    -> ReadFile(PROJECT.md), BashExec($DAGR_BIN 2>/dev/null || command -v da), BashExec(ls reports/ 2>/dev/null || echo "no re), BashExec(ls .dagr/ 2>/dev/nu
+     2                 9     8750   11960     252   1/1    -> BashExec(echo "DAGR_BIN=$DAGR_BIN"; which dagr )
+     3                11     8890   12300     197   1/1    -> BashExec(export DAGR_BIN=/home/motoko/.local/bi), BashExec(mkdir -p .dagr)
+     4                14     9219   12827     193   1/1    -> BashExec(ls .motoko/skills/dagr-producer/exampl), ReadFile(reports/R01.md)
+     5                17    11919   16561     270   1/1    -> ReadFile(.motoko/skills/dagr-producer/examples/01-init.json), ReadFile(.motoko/skills/dagr-producer/examples/02-first-attempt.json)
+     6                20    12314   17312    1336   1/1    -> WriteFile(.dagr/run-atlas.json.tmp)
+     7                22    13050   19227      86   1/1    -> BashExec(/home/motoko/.local/bin/dagr check .da)
+     8                24    13092   19374      99   1/1    -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-)
+     9                26    13137   19508     188   1/1    -> ReadFile(reports/R02.md)
+    10                28    15783   23085     132   1/1    -> ReadFile(.dagr/run-atlas.json)
+    11                30    16471   24133     784   1/1    -> EditFile(.dagr/run-atlas.json.tmp)
+    12                32    16525   24877      98   1/1    -> BashExec(cp .dagr/run-atlas.json .dagr/run-atla)
+    13                34    16574   25016     674   1/1    -> EditFile(.dagr/run-atlas.json.tmp)
+    14                36    18038   27899     122   1/1    -> BashExec(/home/motoko/.local/bin/dagr check .da)
+    15                38    18089   28053      68   1/1    -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-)
+    16                40    18126   28179      99   1/1    -> ReadFile(reports/R03.md)
+    17                42    20842   31921     494   1/1    -> BashExec(cp .dagr/run-atlas.json .dagr/run-atla)
+    18                44    20901   32069    1306   1/1    -> EditFile(.dagr/run-atlas.json.tmp)
+    19                46    22736   35635      85   1/1    -> BashExec(/home/motoko/.local/bin/dagr check .da)
+    20                48    22778   35782      68   1/1    -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-)
+    21                50    22815   35908      85   1/1    -> ReadFile(reports/R04.md)
+    22                52    25503   39592     257   1/1    -> BashExec(cp .dagr/run-atlas.json .dagr/run-atla)
+    23                54    25551   39729     821   1/1    -> EditFile(.dagr/run-atlas.json.tmp)
+    24                56    27670   43490     181   1/1    -> BashExec(/home/motoko/.local/bin/dagr check .da)
+    25                58    27761   43705     221   1/1    -> BashExec(cp .dagr/run-atlas.json .dagr/run-atla)
+    26                60    27827   43852     610   1/1    -> EditFile(.dagr/run-atlas.json.tmp)
+    27                62    28614   45428      75   1/1    -> BashExec(/home/motoko/.local/bin/dagr check .da)
+    28                64    28656   45575     334   1/1    -> EditFile(.dagr/run-atlas.json.tmp)
+    29                66    28831   46038      75   1/1    -> BashExec(/home/motoko/.local/bin/dagr check .da)
+    30                68    28873   46185      82   1/1    -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-)
+    31                70    28910   46311      92   1/1    -> ReadFile(reports/R05.md)
+    32  structural    72     9120   20386     247   0/1  structural: tier=tier1 keep_last=10  -> BashExec(cp .dagr/run-atlas.json .dagr/run-atla)
+    33  structural    74     9169   20528      99   0/1  structural: tier=tier1 keep_last=10  -> ReadFile(.dagr/run-atlas.json.tmp)
+    34  structural    76     8184   19049    1167   0/1  structural: tier=tier1 keep_last=10  -> EditFile(.dagr/run-atlas.json.tmp)
+    35  structural    78    10659   23692      95   0/1  structural: tier=tier1 keep_last=10  -> BashExec(/home/motoko/.local/bin/dagr check .da)
+    36  structural    80    10818   24006     504   0/1  structural: tier=tier1 keep_last=10  -> EditFile(.dagr/run-atlas.json.tmp)
+    37  structural    82    10630   23992     185   0/1  structural: tier=tier1 keep_last=10  -> EditFile(.dagr/run-atlas.json.tmp)
+    38  structural    84    10741   24256     203   0/1  structural: tier=tier1 keep_last=10  -> EditFile(.dagr/run-atlas.json.tmp)
+    39  structural    86    10728   24389      75   0/1  structural: tier=tier1 keep_last=10  -> BashExec(/home/motoko/.local/bin/dagr check .da)
+    40  structural    88    10753   24512      69   0/1  structural: tier=tier1 keep_last=10  -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-)
+    41  structural    90    10778   24625      83   0/1  structural: tier=tier1 keep_last=10  -> ReadFile(reports/R06.md)
+    42  structural    92    10792   24718     232   0/1  structural: tier=tier1 keep_last=10  -> BashExec(cp .dagr/run-atlas.json .dagr/run-atla)
+    43  structural    94    10857   24878     187   0/1  structural: tier=tier1 keep_last=10  -> ReadFile(.dagr/run-atlas.json.tmp)
+    44  structural    96    11237   25466    1077   0/1  structural: tier=tier1 keep_last=10  -> EditFile(.dagr/run-atlas.json.tmp)
+    45  structural    98    11885   27318     105   0/1  structural: tier=tier1 keep_last=10  -> BashExec(/home/motoko/.local/bin/dagr check .da)
+    46  structural   100    11786   27265     445   0/1  structural: tier=tier1 keep_last=10  -> BashExec(cp .dagr/run-atlas.json .dagr/run-atla)
+    47  structural   102    11464   26821      93   0/1  structural: tier=tier1 keep_last=10  -> ReadFile(.dagr/run-atlas.json)
+    48  structural   104    12864   28855    2088   0/1  structural: tier=tier1 keep_last=10  -> WriteFile(.dagr/run-atlas.json.tmp)
+    49  structural   106    16004   35587     102   0/1  structural: tier=tier1 keep_last=10  -> BashExec(/home/motoko/.local/bin/dagr check .da)
+    50  structural   108    16029   35710     578   0/1  structural: tier=tier1 keep_last=10  -> EditFile(.dagr/run-atlas.json.tmp)
+    51  structural   110    16379   36728      75   0/1  structural: tier=tier1 keep_last=10  -> BashExec(/home/motoko/.local/bin/dagr check .da)
+    52  structural   112    13809   33330      73   0/1  structural: tier=tier1 keep_last=10  -> BashExec(mv .dagr/run-atlas.json.tmp .dagr/run-)
+    53  structural   114    13838   33447     119   0/1  structural: tier=tier1 keep_last=10  -> ReadFile(reports/R07.md)
+    54  structural   116    15080   35068     251   0/1  structural: tier=tier1 keep_last=10  -> BashExec(cp .dagr/run-atlas.json .dagr/run-atla)
+    55  structural   118    12022   30602     201   0/1  structural: tier=tier1 keep_last=10  -> ReadFile(.dagr/run-atlas.json.tmp)
+    56  structural   120    13645   32973    2606   0/1  structural: tier=tier1 keep_last=10  -> WriteFile(.dagr/run-atlas.json.tmp)
+    57  structural   122    17321   40827     153   0/1  structural: tier=tier1 keep_last=10  -> BashExec(/home/motoko/.local/bin/dagr check .da)
+    58  structural   124    15986   39012     180   0/1  structural: tier=tier1 keep_last=10  -> EditFile(.dagr/run-atlas.json.tmp)
+    59  structural   126    12908   34507      75   0/1  structural: tier=tier1 keep_last=10  -> BashExec(/home/motoko/.local/bin/dagr check .da)

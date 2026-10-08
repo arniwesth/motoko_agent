@@ -27,12 +27,19 @@
 --
 -- Exit code:
 --   0   = register_with_config returned without panic
---   non-0 = AILANG runtime crashed (the wrapping shell loop in
+--   2   = the host refused the registration at the registration boundary
+--         (`parse_tokens` in registry_generated.ail): a multiplicity rule, or
+--         the extension's own `registration_refusal` (037 ADR-001 D2). The
+--         reason is one JSONL `error` event on stdout, printed there and not
+--         by this script; the wrapper prints it.
+--   other non-0 = AILANG runtime crashed (the wrapping shell loop in
 --           Makefile :: verify_extensions catches this)
 --
 -- Wrapping driver:
 --   make verify_extensions
---   (iterates over each extension in the active profile's registry)
+--   (iterates over each extension in the active profile's registry, with
+--   AILANG_FS_SANDBOX set to the repository root as a session's is set to its
+--   workdir: 037 ADR-001 D1)
 module scripts/verify_extension_boot
 
 import std/io (println)

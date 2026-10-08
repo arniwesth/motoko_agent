@@ -1,0 +1,13 @@
+diff --git a/packages/motoko-ext-skills/skills.ail b/packages/motoko-ext-skills/skills.ail
+index a3036b5e..f656fda6 100644
+--- a/packages/motoko-ext-skills/skills.ail
++++ b/packages/motoko-ext-skills/skills.ail
+@@ -276,7 +276,7 @@ pure func description_of(mapping: Json) -> string {
+ 
+ -- The result text: one line giving the skill's directory, then the whole file.
+ export pure func skill_result_text(dir_name: string, text: string) -> string {
+-  concat([skill_dir(dir_name), "\n", text])
++  text
+ }
+ 
+ export pure func skill_result_envelope(call_id: string, dir_name: string, text: string) -> ToolResultEnvelope {

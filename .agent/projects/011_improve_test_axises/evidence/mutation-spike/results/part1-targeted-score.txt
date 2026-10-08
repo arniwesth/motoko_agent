@@ -1,0 +1,47 @@
+id	check	contract	corpus_pr	strict_replay	discovery	stream_parity	ledger_parity	secs	verdict	predicted	match
+K0	ok	ok	ok	ok	ok	ok	ok	198	SURVIVED_T	SURVIVE	as predicted
+K1	ok	ok	ok	RED(2)	RED(2)	ok	RED(2)	154	KILLED	KILL	as predicted
+M1	ok	ok	ok	ok	ok	ok	ok	153	SURVIVED_T	SURVIVE	as predicted
+M2	ok	ok	ok	ok	ok	ok	ok	139	SURVIVED_T	KILL	survived, predicted to be killed
+M3	ok	ok	ok	ok	ok	ok	ok	192	SURVIVED_T	SURVIVE	as predicted
+M4	ok	ok	ok	ok	ok	ok	ok	196	SURVIVED_T	SURVIVE	as predicted
+M5	ok	ok	RED(2)	ok	ok	ok	ok	185	KILLED	KILL	as predicted
+M6	ok	ok	RED(2)	RED(2)	RED(2)	ok	ok	135	KILLED	KILL	predicted gate (no signature named)
+M7	ok	ok	RED(2)	ok	ok	ok	ok	172	KILLED	KILL	as predicted
+M8	ok	ok	ok	ok	ok	ok	ok	153	SURVIVED_T	SURVIVE	as predicted
+M9	ok	RED(1)	ok	ok	ok	ok	ok	164	SURVIVED_T	SURVIVE	as predicted
+M10	ok	RED(1)	RED(2)	ok	ok	ok	ok	163	KILLED	KILL	as predicted
+M12	ok	ok	ok	RED(2)	RED(2)	ok	RED(2)	128	KILLED	KILL	predicted gate, different check
+
+K0	corpus_pr witness	✓ wire witness, branch-reached: approval_denied×35 empty_stop_finalize×1 ToolFailed×3 ToolCorrelationMismatch×5 ToolDeadlineExceeded×3 stream_error_retry×4 provider_failure_finalize×11 malformed_arguments×6 (against 67 executed dispatch batch(es), so neither s
+K1	strict_replay	✗ rich: the REPLAYED run's log accounts for it, against witnesses the recorder did not write — 1 finding(s) above
+K1	strict_replay	✗ maxsteps: the REPLAYED run's log accounts for it, against witnesses the recorder did not write — 1 finding(s) above
+K1	discovery	✗ approve: the recorded log accounts for the run, in both directions — 1 finding(s) above
+K1	discovery	✗ deny: the recorded log accounts for the run, in both directions — 1 finding(s) above
+K1	ledger_parity	✗ the in-process census failed (exit 1); its rows:
+K1	ledger_parity	✗ order: the dispatch events land BETWEEN the batch announcement and its results
+K1	corpus_pr witness	✓ wire witness, branch-reached: approval_denied×35 empty_stop_finalize×1 ToolFailed×3 ToolCorrelationMismatch×5 ToolDeadlineExceeded×3 stream_error_retry×4 provider_failure_finalize×11 malformed_arguments×6 (against 67 executed dispatch batch(es), so neither s
+M1	corpus_pr witness	✓ wire witness, branch-reached: approval_denied×37 empty_stop_finalize×1 ToolFailed×3 ToolCorrelationMismatch×5 ToolDeadlineExceeded×3 stream_error_retry×5 provider_failure_finalize×11 malformed_arguments×6 (against 69 executed dispatch batch(es), so neither s
+M2	corpus_pr witness	✓ wire witness, branch-reached: approval_denied×30 empty_stop_finalize×1 ToolFailed×3 ToolCorrelationMismatch×5 ToolDeadlineExceeded×3 stream_error_retry×33 provider_failure_finalize×42 malformed_arguments×5 (against 60 executed dispatch batch(es), so neither 
+M3	corpus_pr witness	✓ wire witness, branch-reached: approval_denied×35 empty_stop_finalize×1 ToolFailed×3 ToolCorrelationMismatch×5 ToolDeadlineExceeded×3 stream_error_retry×4 provider_failure_finalize×11 malformed_arguments×6 (against 67 executed dispatch batch(es), so neither s
+M4	corpus_pr witness	✓ wire witness, branch-reached: approval_denied×35 empty_stop_finalize×1 ToolFailed×3 ToolCorrelationMismatch×5 ToolDeadlineExceeded×3 stream_error_retry×4 provider_failure_finalize×11 malformed_arguments×6 (against 67 executed dispatch batch(es), so neither s
+M5	corpus_pr	FAIL: the fixed bank reached the fault class and the wire carries NO
+M6	corpus_pr	✗ WI-A15 commit 1 FAILED
+M6	strict_replay	✗ rich: the REPLAYED run's log accounts for it, against witnesses the recorder did not write — 1 finding(s) above
+M6	strict_replay	✗ rich: the surviving fixture carries every shape the specification protects — chunks=1 exhausted_providers=1 tool_ok=1 tool_fault=0 approval_ok=1 approval_missing=0 env_ok=2 env_missing=10 — a shape the fixture claims and does no
+M6	discovery	✗ deny: the recorded log accounts for the run, in both directions — 1 finding(s) above
+M6	discovery	✗ eof: the recorded log accounts for the run, in both directions — 1 finding(s) above
+M7	corpus_pr	FAIL: the fixed bank reached the fault class and the wire carries NO
+M8	corpus_pr witness	✓ wire witness, branch-reached: approval_denied×35 empty_stop_finalize×1 ToolFailed×3 ToolCorrelationMismatch×5 ToolDeadlineExceeded×3 stream_error_retry×4 provider_failure_finalize×11 malformed_arguments×6 (against 67 executed dispatch batch(es), so neither s
+M9	corpus_pr witness	✓ wire witness, branch-reached: approval_denied×35 empty_stop_finalize×1 ToolFailed×3 ToolCorrelationMismatch×5 ToolDeadlineExceeded×3 stream_error_retry×5 provider_failure_finalize×11 malformed_arguments×6 (against 67 executed dispatch batch(es), so neither s
+M10	corpus_pr	FAIL: 10 stream_error_retry record(s) on the wire carry a NON-RETRYABLE
+M10	corpus_pr witness	✓ wire witness, branch-reached: approval_denied×45 empty_stop_finalize×1 ToolFailed×5 ToolCorrelationMismatch×5 ToolDeadlineExceeded×4 stream_error_retry×14 provider_failure_finalize×15 malformed_arguments×7 (against 84 executed dispatch batch(es), so neither 
+M12	strict_replay	✗ rich: the REPLAYED run's log accounts for it, against witnesses the recorder did not write — 4 finding(s) above
+M12	strict_replay	✗ maxsteps: the REPLAYED run's log accounts for it, against witnesses the recorder did not write — 4 finding(s) above
+M12	discovery	✗ approve: the recorded log accounts for the run, in both directions — 4 finding(s) above
+M12	discovery	✗ deny: the recorded log accounts for the run, in both directions — 4 finding(s) above
+M12	ledger_parity	✗ the in-process census failed (exit 1); its rows:
+M12	ledger_parity	✗ order: the dispatch events land BETWEEN the batch announcement and its results
+M12	corpus_pr witness	✓ wire witness, branch-reached: approval_denied×35 empty_stop_finalize×1 ToolFailed×3 ToolCorrelationMismatch×5 ToolDeadlineExceeded×3 stream_error_retry×4 provider_failure_finalize×11 malformed_arguments×6 (against 67 executed dispatch batch(es), so neither s
+
+rows=13 killed=6 survived_T=7 other=0 predictions_right_at_gate_level=11

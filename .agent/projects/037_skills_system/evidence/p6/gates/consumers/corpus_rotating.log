@@ -1,0 +1,44 @@
+→ Type checking...
+→ Effect checking...
+✓ Running scripts/dst/corpus_rotating_dst.ail
+CACHE_WRITE_FAILED module=src/core/session stage=encoding path=/workspaces/motoko_agent-skills/.ailang/lane/corpus_rotating/compile/modules/src__core__session/coretypeinfo.gob: ARTIFACT_TOO_LARGE: /workspaces/motoko_agent-skills/.ailang/lane/corpus_rotating/compile/modules/src__core__session/coretypeinfo.gob: artifact exceeds blob byte limit; using fresh compilation
+WI-A15 commit 2 — D11's scheduled rotating corpus (corpus-rules/1)
+
+-- the window moves, at every position, and its wrap branch is entered --
+  ✓ the scheduled rotation validates over 6 contiguous epochs
+  ✓ mutant: a window that ignores its epoch → rotation-position-frozen
+  ✓ mutant: a sample that never crosses the end of the space → rotation-wrap-not-exercised
+  ✓ mutant: consecutive windows that overlap → rotation-window-not-disjoint
+
+-- the input's route to the reported seeds (S8) --
+  ✓ a blank epoch — what an unset scheduler variable reads as — FAILS CLOSED
+  ✓ a non-numeric epoch fails closed too
+  ✓ a numeric epoch resolves, including 0
+  ✓ consecutive epochs share NO seed, so no position is reachable without the rotation
+  ✓ the same epoch reproduces the same window (D11's 'deterministically')
+
+-- sharding, which is D11's truncation rule one level down --
+  ✓ the 4 shards partition the 240-seed window
+  ✓ each shard is the window divided, not a copy of it (60 per shard)
+  ✓ mutant: a shard scheme that drops seeds → shards-do-not-partition
+
+-- the demo scale `make dst` runs the real driver at --
+  ✓ the demo rotation satisfies the SAME rotation contract
+  ✓ the demo shards partition too
+  ✓ 'full' selects the scheduled config (240 seeds), 'demo' the demo one (4)
+
+-- D11's operator-accepted minimum, selected from measured CI cost --
+  ✓ declared: dst-scheduled-corpus: minimum 240 seed(s), budget 600000 ms (1442 affordable at 416 ms/seed), 4 shard(s), retaining 14 run(s)
+  ✓ the declared minimum is the window size, so the job cannot declare a number the rotation does not produce
+  ✓ the minimum fits the budget at the measured 416 ms/seed (1442 affordable)
+  ✓ ...with headroom rather than exactly, because a window whose seeds all terminate long must still fit
+
+✓ WI-A15 commit 2: the scheduled rotating corpus
+  ✓ the job runs a real window off epoch 5: WINDOWROW epoch=5 first=21 size=4 seeds=21, 22, 23, 24
+  ✓ re-derived outside the process: epoch 5 starts at 21, epoch 6 at 25
+  ✓ forced 'no-epoch': the job exited 1 — [epoch-not-resolved]
+  ✓ forced 'zero': the job exited 1 — REJECTED: corpus-empty
+  ✓ forced 'below-minimum': the job exited 1 — REJECTED: window-below-minimum
+  ✓ forced 'truncated': the job exited 1 — REJECTED: window-truncated
+  ✓ the workflow names an entry point that exists, does not select the demo scale, and its matrix is 4 against 4 declared shard(s)
+exit=0

@@ -1,0 +1,29 @@
+-- 037 P3 evidence driver: prints the core's own `working_budget_for_ext`
+-- (src/core/context_limit.ail) for the declared windows and pinned prefixes
+-- that `packages/motoko-ext-skills/a6b_test.ail` pins its copy to. Run from
+-- the worktree root.
+module scratch/working_limit_core
+
+import std/io (println)
+import std/string (concat, intToStr)
+import src/core/context_limit (Bounded, ProfileOverride, working_budget_for_ext, raw_window_of)
+
+func row(declared: int, pinned: int) -> () ! {IO} {
+  let limit = Bounded({ raw_window: declared, source: ProfileOverride });
+  println(concat(["declared=", intToStr(raw_window_of(limit)), " pinned=", intToStr(pinned), " working=", intToStr(working_budget_for_ext(limit, pinned))]))
+}
+
+export func main() -> () ! {IO} {
+  row(80000, 1936);
+  row(100000, 1936);
+  row(107472, 1936);
+  row(117472, 1936);
+  row(117473, 1936);
+  row(131472, 1936);
+  row(262144, 1936);
+  row(64000, 1936);
+  row(67472, 1936);
+  row(67473, 1936);
+  row(65536, 0);
+  row(65537, 0)
+}

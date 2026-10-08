@@ -1,0 +1,25 @@
+→ Type checking...
+→ Effect checking...
+✓ Running scripts/dst/registry_multiplicity_dst.ail
+=== registry_multiplicity_dst (ADR-001 B4; D3 decided, D4 open = true, D7 omits = true) ===
+  -- the negative control --
+  ✓ every kind once + a second ToolProvider with disjoint names: accepted, 11 atom(s) pass through in list order
+  -- one mutation each --
+  ✓ second ToolPolicy: [second-vote-atom] extension 'vote#1' registers a ToolPolicy at list position 11 in a vote family that already has an atom; at most one of SolverJudge/DecisionSolverJudge and one of ToolPolicy/DecisionToolPolicy per extension (D3; 031 ADR-001 D2)
+  ✓ second SolverJudge: [second-vote-atom] extension 'vote#2' registers a SolverJudge at list position 11 in a vote family that already has an atom; at most one of SolverJudge/DecisionSolverJudge and one of ToolPolicy/DecisionToolPolicy per extension (D3; 031 ADR-001 D2)
+  ✓ two ToolProviders sharing 'Beta': [duplicate-tool-name] extension 'prov#3' advertises tool 'Beta' twice, the second time in the ToolProvider at list position 11; provider names must be disjoint within an extension (D3)
+  ✓ one ToolProvider advertising 'Alpha' twice: [duplicate-tool-name] extension 'prov#4' advertises tool 'Alpha' twice, the second time in the ToolProvider at list position 1; provider names must be disjoint within an extension (D3)
+  ✓ second Compactor (fold kind): D4 SIGNED (fold_kind_repeats_allowed = true) -- second Compactor passes through at position 11, 12 atoms in order
+  ✓ a third ExitIntent reusing the label 'panes': [duplicate-exit-label] extension 'exit#5' registers a second ExitIntent labelled 'panes' at list position 11; intent labels must be disjoint within an extension (7.0)
+  -- 037 D2: a registration whose config carries registration_refusal --
+  ✓ config carries registration_refusal (non-empty string): [registration-refused] extension 'refuse#6' refuses its own registration through the config key 'registration_refusal' (037 ADR-001 D2): fixture: this extension found its own root broken and lists every violation here (one; two)
+  ✓ the same config on the 'second ToolPolicy' list (read before the walk): [registration-refused] extension 'refuse#7' refuses its own registration through the config key 'registration_refusal' (037 ADR-001 D2): fixture: this extension found its own root broken and lists every violation here (one; two)
+  ✓ config carries registration_refusal = "" (the control): accepted -- the entry carries config {"registration_refusal":""} unchanged and all 11 atoms
+  ✓ the extension and the host use the same key: extension 'registration_refusal' == host 'registration_refusal'; a config written with the extension's spelling is refused and the near-miss 'registration_refusals' is not (extension side: registration_refusal_key() exported by packages/motoko-ext-skills/skills.ail)
+  -- the whole build --
+  ✓ registry of good + empty + bad: one bad extension rejects the WHOLE build -- [second-vote-atom] extension 'bad#2' registers a SolverJudge at list position 11 in a vote family that already has an atom; at most one of SolverJudge/DecisionSolverJudge and one of ToolPolicy/DecisionToolPolicy per extension (D3; 031 ADR-001 D2)
+  ✓ registry of good + empty + bad: D7 RECOMMENDED reading (empty_registration_omits = true) -- 'empty#1' omitted from the effective registry and NAMED in omitted_empty (B3 rejects it in a profile as installed-with-no-capabilities)
+  ✓ control: the boundary both accepts and rejects
+registry_multiplicity_dst PASS
+  ✓ src/core/ext/registry_normalize.ail
+exit=0
