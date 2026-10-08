@@ -41,7 +41,7 @@ See "Not done here".
 **Reviewed by Codex Sol on 2026-10-08.** Its main finding is fixed at the cause in #241: the
 refusal and the warning report what the runtime's limit resolver sees, and with the legacy flat
 config layout that was not the profile the loader loaded. See "Review". This should not leave
-draft before #241 lands.
+draft before #241 lands; the ADR amendment in it says "since PR #241".
 
 ## Changes
 
@@ -49,8 +49,9 @@ draft before #241 lands.
 - feat(core): extensions.strict refuses to start a compactor whose model has no context limit (#237)
 - docs(configuration): extensions.strict, the unknown-limit warning, and how to give a model a window
 - fix(tui): with no catalogue the unknown-limit warning names the run's model, and a second model warns again
+- docs(013): ADR-001 amended — the strict refusal under Unknown, and where rule 2's visibility landed
 
-8 files changed, plus the draft ADR amendment and the record of #240.
+10 files changed, and the record of #240.
 
 | file | what |
 |---|---|
@@ -62,6 +63,8 @@ draft before #241 lands.
 | `scripts/verify_strict_context_limit.ail` | new: loads a profile, builds its runtime, hands both to the refusal |
 | `Makefile` | `verify_strict_context_limit`, six arms over three runs, added to `check_core` |
 | `docs/configuration.md` | what `extensions.strict` refuses; the warning; how to give a model a window; `"disabled"` |
+| `.agent/projects/013_core_architecture_for_dst/ADR-001-…-caps.md` | two dated amendments, the original text kept |
+| `src/core/context_limit.ail` | one comment: its line citation of the ADR's type sketch moves from 284-302 to 320-338 |
 
 ## Governing docs
 
@@ -71,9 +74,9 @@ draft before #241 lands.
 - The same ADR, "Options considered" and "Not decided". It rejected a general refusal under
   `Unknown` (option 4: "loud, not blocking") and left "behaviour under `Unknown` beyond loudness"
   to the owner. The refusal here is narrower than option 4: opt-in through `extensions.strict`, and
-  only when a compactor is registered. The operator asked for it on 2026-10-08. The ADR text is
-  not edited; an amendment is drafted beside it and not applied
-  (`DRAFT-amendment-adr-001-strict-refusal-under-unknown.md`).
+  only when a compactor is registered. The operator asked for it on 2026-10-08, and accepted two
+  amendments recording it, which this PR applies to the ADR: one to option 4 with notes under Not
+  decided, one to D1 rule 2. The ADR's header is not touched.
 - `docs/configuration.md`, "Model identifiers": compaction for an uncatalogued model "is skipped
   rather than guessed". Unchanged, and the reason there is no fallback window here.
 - `.agent/meta-decisions/mutate-each-stated-rule-once-and-see-its-test-fail.md`: how the seven
@@ -247,11 +250,10 @@ Commit `f24dd1f3`. Confirmed first on a real wire: with the catalogue absent bot
 passed. There is now a test that runs the host headless and reads stderr. The first-task and
 resume calls are still without a gate arm, as "Not done here" says.
 
-**Opinion, taken as a draft:** record the strict-only refusal and the operator's decision as a
-short amendment to 013 ADR-001, since that document still describes non-blocking behaviour. The
-draft is in this branch,
-`.agent/projects/013_core_architecture_for_dst/DRAFT-amendment-adr-001-strict-refusal-under-unknown.md`.
-It is not applied to the ADR and waits for the operator's acceptance.
+**Opinion, taken:** record the strict-only refusal and the operator's decision as a short
+amendment to 013 ADR-001, since that document still described non-blocking behaviour. Two
+amendments were drafted, accepted by the operator on 2026-10-08 with two wording changes, and
+applied to the ADR in this branch.
 
 **Claims it re-ran and confirmed:** the six gate lines, the ten TUI tests then present, `tsc`,
 `verify_classify_check`, `new_contract_policy`, the warning directly after the record on a real
