@@ -6,6 +6,7 @@ import { createOhMyPiSession } from "./ohMyPi/session-adapter.js";
 import { dispatchOhMyPiTool } from "./ohMyPi/dispatcher.js";
 import { sessionStartMs, sessionIdentity, sessionResumeCount } from "./session-identity.js";
 import { exitManifestPath, rememberExitManifestPath } from "./exit-actions.js";
+import { ContextLimitSource, UnknownLimitWatch } from "./context-limit.js";
 import {
   defaultWakeWaiterFactory,
   type WaitDescriptor,
@@ -126,6 +127,10 @@ export type AgentEvent =
   // journal, immediately before it exits 3.
   | { type: "session_resume_view"; resume_count: number; from_id: string; boundary: string; boundary_detail: string; suspended: boolean; profile_from: string; profile_to: string; head_replaced: boolean; forced: boolean; dangling: string[]; ext_artifacts_digest: string; ext_artifacts_empty: boolean; messages: number; provider_calls_started: number; provider_calls_completed: number }
   | { type: "session_resume_refused"; journal: string; refusal: string; message: string }
+  // 013 ADR-001 D1's once-per-run record of how the context limit was resolved. `context_limit` is
+  // 0 on the `disabled` and `unknown` arms; `context-limit.ts` turns the `unknown` one into a
+  // `warning` (#237).
+  | { type: "context_limit_resolved"; run_id: string; context_limit: number; context_limit_source: ContextLimitSource }
   | { type: "error"; message: string }
   | { type: "warning"; message: string }
   | { type: "tool_calls"; request_id: string; tool_calls: DelegatedCall[] }
@@ -950,6 +955,7 @@ export class RuntimeProcess {
   private dead = false;
   private readonly workdir: string;
   private readonly onEvent: (e: AgentEvent) => void;
+  private readonly unknownLimit = new UnknownLimitWatch();
 
   constructor(
     task: string,
@@ -1071,6 +1077,9 @@ export class RuntimeProcess {
         (PARK_ENDING_EVENTS.has(event.type) && this.parkRequestId !== null);
       if (resolved) this.resolvePark();
       this.onEvent(event);
+      // #237: an `unknown` context limit is said to the operator, after the record it comes from.
+      const limitWarning = this.unknownLimit.observe(event);
+      if (limitWarning !== null) this.onEvent({ type: "warning", message: limitWarning });
       if (resolved) this.flushDeferredModel();
       if (event.type === "tool_calls") {
         setImmediate(() => {

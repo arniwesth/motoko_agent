@@ -2567,7 +2567,7 @@ conformance:
 # at runtime (e.g. matching Result constructors against an Option
 # value — see scripts/verify_extension_boot.ail header for full
 # rationale + history).
-check_core: verify_extensions verify_repetition_guard verify_herdr_gate verify_herdr_check_answer verify_herdr_delegate_wait verify_wait_descriptor_fixtures verify_herdr_owner_tag verify_herdr_dagr_pane verify_herdr_orchestrator verify_delegate_kind verify_dagr_producer verify_exit_intent verify_native_path_guard verify_strict_extensions
+check_core: verify_extensions verify_repetition_guard verify_herdr_gate verify_herdr_check_answer verify_herdr_delegate_wait verify_wait_descriptor_fixtures verify_herdr_owner_tag verify_herdr_dagr_pane verify_herdr_orchestrator verify_delegate_kind verify_dagr_producer verify_exit_intent verify_native_path_guard verify_strict_extensions verify_strict_context_limit
 	@ok=0; fail=0; \
 	for f in src/core/*.ail; do \
 		if ailang check "$$f" >/dev/null 2>&1; then \
@@ -2719,6 +2719,56 @@ verify_strict_extensions:
 	out=$$(run empty); rc=$$?; \
 	if [ $$rc -eq 0 ] && echo "$$out" | grep -q 'OK empty registration omitted (strict=false)' && echo "$$out" | grep -q 'registers no capability atom; omitted from the registry'; then echo "OK lax: an empty registration omitted with a warning"; \
 	else echo "FAIL lax/empty: rc=$$rc"; echo "$$out" | tail -3; echo "verify_strict_extensions: the non-strict path for an empty registration changed"; exit 1; fi
+
+# extensions.strict, the context-limit half (#237): a profile that registers a
+# compactor and runs a model whose context limit is unknown has a compactor that
+# passes through on every step, so strict must refuse to start it. Three runs on
+# throwaway profiles; the first two hand a built runtime to the refusal itself,
+# `rpc.reject_if_strict_and_limit_unknown`. The first admits three pairs and
+# refuses the fourth: a
+# catalogued model starts; an uncatalogued one starts under a profile that is
+# not strict, and under a strict one whose only extension is not a compactor
+# (repetition_guard, so the test is the capability and not an empty registry);
+# the same model under strict with a compactor exits 2 with the JSON error line
+# naming both misses and the compactor. The second starts the refused pair again
+# under a profile that declares `agent.context_limit: "disabled"`. The limit is
+# resolved as a live run resolves it, from MOTOKO_PROFILE_DIR and
+# MOTOKO_MODELS_FILE, which is one profile directory per run and the reason for
+# the second. A numeric `agent.context_limit` is not a third: it is `Bounded`
+# like the catalogued model, and which of the two produced the window is the
+# resolver's concern. The third run is the launcher itself, `supervisor.ail`
+# with a task and the refused pair: it must exit 2 on the same error line
+# before `v2_mode`, which is what shows `run_with_config` asks the question at
+# boot. The same launcher on a catalogued model runs a one-step stub session and
+# exits 0, so a launcher that stopped asking fails this arm instead of hanging.
+# AILANG_FS_SANDBOX is cleared for the reason given above.
+.PHONY: verify_strict_context_limit
+verify_strict_context_limit:
+	@d=$$(mktemp -d); trap 'rm -rf "$$d"' EXIT; c="$$d/.motoko/config"; \
+	mkdir -p "$$c/strict_compactor" "$$c/lax_compactor" "$$c/strict_plain" "$$c/strict_disabled"; \
+	printf '{"context_limits":{"stub-known":200000}}\n' > "$$d/catalog.json"; \
+	printf '{"agent":{"model":"stub","max_steps":1},"backend":{"mode":"none"},"extensions":{"order":["compaction_structural"],"strict":true}}\n' > "$$c/strict_compactor/config.json"; \
+	printf '{"agent":{"model":"stub"},"extensions":{"order":["compaction_structural"],"strict":false}}\n' > "$$c/lax_compactor/config.json"; \
+	printf '{"agent":{"model":"stub"},"extensions":{"order":["repetition_guard"],"strict":true}}\n' > "$$c/strict_plain/config.json"; \
+	printf '{"agent":{"model":"stub","context_limit":"disabled"},"extensions":{"order":["compaction_structural"],"strict":true}}\n' > "$$c/strict_disabled/config.json"; \
+	run() { p="$$1"; shift; env -u AILANG_FS_SANDBOX AILANG_RELAX_MODULES=1 MOTOKO_PROFILE_DIR="$$c/$$p" MOTOKO_MODELS_FILE="$$d/catalog.json" \
+	    ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry main scripts/verify_strict_context_limit.ail -- "$$d" "$$@" 2>/dev/null; }; \
+	out=$$(run strict_compactor strict_compactor stub-known lax_compactor stub-unknown strict_plain stub-unknown strict_compactor stub-unknown); rc=$$?; \
+	if echo "$$out" | grep -q 'OK started profile=strict_compactor model=stub-known strict=true loaded=\[compaction_structural\]'; then echo "OK strict: a catalogued model started"; \
+	else echo "FAIL strict/bounded: rc=$$rc"; echo "$$out" | tail -3; echo "verify_strict_context_limit: a strict profile with a known context limit did not start"; exit 1; fi; \
+	if echo "$$out" | grep -q 'OK started profile=lax_compactor model=stub-unknown strict=false loaded=\[compaction_structural\]'; then echo "OK lax: an unknown context limit started"; \
+	else echo "FAIL lax/unknown: rc=$$rc"; echo "$$out" | tail -3; echo "verify_strict_context_limit: the non-strict path changed"; exit 1; fi; \
+	if echo "$$out" | grep -q 'OK started profile=strict_plain model=stub-unknown strict=true loaded=\[repetition_guard\]'; then echo "OK strict: an unknown context limit started with no compactor registered"; \
+	else echo "FAIL strict/no-compactor: rc=$$rc"; echo "$$out" | tail -3; echo "verify_strict_context_limit: a strict profile with no compactor was refused"; exit 1; fi; \
+	if [ $$rc -eq 2 ] && echo "$$out" | grep -q "extensions.strict: the context limit for 'stub-unknown' is unknown (model_not_in_catalogue, profile_key_absent), so compaction_structural would never compact; refusing to start"; then echo "OK strict: an unknown context limit with a compactor refused to start (exit 2)"; \
+	else echo "FAIL strict/unknown: rc=$$rc"; echo "$$out" | tail -3; echo "verify_strict_context_limit: a strict profile started a compactor that could never run"; exit 1; fi; \
+	out=$$(run strict_disabled strict_disabled stub-unknown); rc=$$?; \
+	if [ $$rc -eq 0 ] && echo "$$out" | grep -q 'OK started profile=strict_disabled model=stub-unknown strict=true loaded=\[compaction_structural\]'; then echo "OK strict: a declared disabled context limit started"; \
+	else echo "FAIL strict/disabled: rc=$$rc"; echo "$$out" | tail -3; echo "verify_strict_context_limit: a declared disabled context limit was refused"; exit 1; fi; \
+	out=$$(env -u AILANG_FS_SANDBOX AILANG_RELAX_MODULES=1 MOTOKO_HEADLESS=1 MOTOKO_PROFILE_DIR="$$c/strict_compactor" MOTOKO_MODELS_FILE="$$d/catalog.json" \
+	    ailang run --caps $(HERDR_GATE_CAPS),Trace --ai-stub --entry main src/core/supervisor.ail -- --profile strict_compactor --model stub-unknown --workdir "$$d" hi 2>/dev/null); rc=$$?; \
+	if [ $$rc -eq 2 ] && echo "$$out" | grep -q '"error_code":"strict_context_limit_unknown"' && ! echo "$$out" | grep -q '"type":"v2_mode"'; then echo "OK strict: the launcher refused at boot, before a session (exit 2)"; \
+	else echo "FAIL strict/launcher: rc=$$rc"; echo "$$out" | grep '^{' | tail -3 | cut -c1-200; echo "verify_strict_context_limit: run_with_config started a session the refusal should have stopped"; exit 1; fi
 
 # 037 ADR-001 A3, A1 and A2: a broken skill tree refuses startup. One fixture
 # workdir per rule of D1 (R1 three ways, V1-V8 with V4's four cases, one with
@@ -3135,6 +3185,16 @@ verify_profile_dir_agreement:
 .PHONY: dst_l2
 dst_l2:
 	cd src/tui && bun test src/harness-dst.test.ts
+
+# The host tests that hold the unknown-context-limit warning (#237): the
+# message, the once-per-resolution rule, the same through a real RuntimeProcess
+# whose runtime is a shell script, and one run of the host itself, headless,
+# for the plain logger's stderr line. Needs bun and the TUI's dependencies and
+# no AILANG, so CI runs it in the dst_l2 job. Until this target nothing in CI
+# ran them: no job runs the TUI's jest suite.
+.PHONY: tui_context_limit
+tui_context_limit:
+	cd src/tui && bun test src/context-limit.test.ts
 
 # Run all core runtime module tests
 test_core:
