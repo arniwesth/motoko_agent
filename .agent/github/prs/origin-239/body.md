@@ -32,8 +32,8 @@ two lines AILANG writes on every start (`CACHE_WRITE_FAILED …`, `models regist
 …`), which the TUI and the JSONL wire already carried.
 
 **`check_core` gets slower.** The new gate is three runs that each compile the session modules,
-3 min 28 s of CPU here. The CI job that runs `check_core` took 10 min 27 s of its 20-minute limit
-on `main`'s last run.
+3 min 28 s of CPU here. The CI job that runs `check_core` took 12 min 15 s on this pull request,
+against 10 min 27 s on `main`'s last run and a 20-minute limit.
 
 Not in it: a fallback window (suggestion 2) and a fixed token threshold (suggestion 3). See "Not
 done here".
@@ -136,8 +136,9 @@ table before any mutant ran and the gate list before any gate ran on the core ch
    one `main`'s CI printed.
 3. `make verify_classify_check` exits 0. The one I was least sure of. **Held.**
 4. `make new_contract_policy` exits 0 and reports no pure func added. **Held.**
-5. `make dst` exits 0 with no target changed, because nothing it runs reaches `rpc.ail`. **Not
-   known yet**: the sweep was running when this was written.
+5. `make dst` exits 0 with no target changed, because nothing it runs reaches `rpc.ail`.
+   **Held.** The sweep finished after this pull request was opened, and this line and its row
+   below were filled in then.
 6. Each mutant turns the arm named for it red, and no arm before it. **Held**, seven of seven.
 
 After this lands: a session on an uncatalogued model shows one yellow warning in the TUI and one
@@ -160,7 +161,7 @@ README-only merge (#236). The machine was shared with other sessions, so the tim
 | TUI `tsc --noEmit` | exit 0 |
 | TUI jest (`src/.*\.test\.ts`) | 440 tests pass in 44 suites, 10 of them new. 5 suites fail to load; see "Not done here" |
 | `make dst_l2` | 9 pass, 0 fail |
-| `make dst` | running when this was written |
+| `make dst` | exit 0, "all targets passed", 2,981 s at `-j8`. Started on `4bab6bd2`; the record commit landed while it ran |
 
 Seven mutants of `src/core/rpc.ail`, one at a time and restored, each confirmed to compile before
 its run. The arm was named before the run:
