@@ -3098,6 +3098,40 @@ deepseekv4_flash_compaction_heavy_headless: build
 install:
 	./scripts/install-prerequisites.sh	
 
+# MOTOKO_PROFILE_DIR names the directory the runtime's config loader reads.
+#
+# The host tells the runtime where the profile is twice: `--workdir`/`--profile`
+# to the loader (`config.ail`, `resolve_profile_dir`), and MOTOKO_PROFILE_DIR to
+# everything that reads the profile without the loaded config (the context-limit
+# resolver, six extensions). `loaderProfileDir` in runtime-process.ts restates
+# the loader's rules on the host, including what AILANG_FS_SANDBOX lets the
+# loader see. dst_l2 holds that restatement against a shell script standing in
+# for the runtime, which cannot tell whether the two agree.
+#
+# This asks both for real, and through the spawn itself. For each of fourteen
+# layouts it constructs a real RuntimeProcess, so the mirrors run and the
+# environment and arguments are a launch's own; the "ailang" it spawns is a
+# wrapper that runs the runtime's loader with the `--workdir` and `--profile` it
+# was handed, in the environment it was handed. A layout passes when the loader
+# exited 0, its directory is the MOTOKO_PROFILE_DIR the child was given, and
+# that is the directory the layout should give. The layouts: per-profile, the
+# legacy flat config, both, neither, symlinked configs in either place, a
+# symlinked workdir, a profile directory named with leading dots, and
+# MOTOKO_REPO outside and inside the workdir.
+#
+# A control runs first: with MOTOKO_PROFILE_DIR pointing nowhere the loader must
+# still name the real directory, which a stand-in that echoes the variable back
+# does not. The runtime half imports only `config`, so the whole gate is about
+# a second.
+#
+# It needs bun AND ailang, which no other target does. CI runs it as a step of
+# the core job, which is given bun for it; it is not in check_core or
+# DST_TARGETS. Not covered: a workdir beneath the host's cwd, where the loader
+# finds no profile at all (#242).
+.PHONY: verify_profile_dir_agreement
+verify_profile_dir_agreement:
+	@bun src/tui/scripts/verify-profile-dir-agreement.ts
+
 .PHONY: dst_l2
 dst_l2:
 	cd src/tui && bun test src/harness-dst.test.ts

@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { systemPromptForWorkspace, materializeSystemPromptArg } from "./system-prompt.js";
-import { buildChildEnv, buildSupervisorArgs } from "./runtime-process.js";
+import { buildChildEnv, buildSupervisorArgs, loaderProfileDir, RuntimeProcess, type AgentEvent } from "./runtime-process.js";
 
 let workdir: string;
 let savedEnv: string | undefined;
@@ -152,5 +152,228 @@ describe("resume.supervisor_args_and_workdir", () => {
     // Extensions read MOTOKO_WORKDIR with "." as the default and compare what they derive from
     // it against the relative `--workdir`; setting it absolute refused every herdr Delegate.
     expect(env.MOTOKO_WORKDIR).toBeUndefined();
+  });
+});
+
+// The child reads the profile through MOTOKO_PROFILE_DIR in places the loaded config does not
+// reach: `context_usage.ail` for `agent.context_limit`, and six extensions for their own JSON. So
+// the variable has to name the directory `config.ail`'s `resolve_profile_dir` loads: the
+// per-profile directory when it holds a config.json, else the legacy flat .motoko/, else the
+// per-profile path. It used to be the per-profile path always, and a flat config's
+// `agent.context_limit` was loaded and never took effect (review of #239).
+describe("profile_dir.child_env_names_the_directory_the_loader_reads", () => {
+  let savedRepo: string | undefined;
+  let savedBin: string | undefined;
+  const extra: string[] = [];
+
+  beforeEach(() => {
+    savedRepo = process.env.MOTOKO_REPO;
+    savedBin = process.env.AILANG_BIN;
+    delete process.env.MOTOKO_REPO;
+  });
+
+  afterEach(() => {
+    if (savedRepo === undefined) delete process.env.MOTOKO_REPO;
+    else process.env.MOTOKO_REPO = savedRepo;
+    if (savedBin === undefined) delete process.env.AILANG_BIN;
+    else process.env.AILANG_BIN = savedBin;
+    for (const dir of extra.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const writeConfig = (dir: string) => {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "config.json"), "{}\n", "utf8");
+  };
+  const perProfile = (profile: string) => path.resolve(workdir, ".motoko", "config", profile);
+  const flat = () => path.resolve(workdir, ".motoko");
+
+  it("is the per-profile directory when that holds a config.json, with or without a flat one", () => {
+    writeConfig(perProfile("p"));
+    expect(buildChildEnv(workdir, "p", "", "").MOTOKO_PROFILE_DIR).toBe(perProfile("p"));
+    writeConfig(flat());
+    expect(buildChildEnv(workdir, "p", "", "").MOTOKO_PROFILE_DIR).toBe(perProfile("p"));
+  });
+
+  it("is the flat .motoko directory when only the flat config exists", () => {
+    writeConfig(flat());
+    expect(buildChildEnv(workdir, "p", "", "").MOTOKO_PROFILE_DIR).toBe(flat());
+    expect(loaderProfileDir(workdir, "p")).toBe(flat());
+  });
+
+  it("is the per-profile path when neither exists, as it was", () => {
+    expect(buildChildEnv(workdir, "p", "", "").MOTOKO_PROFILE_DIR).toBe(perProfile("p"));
+  });
+
+  // The child's reads are pinned to the workdir, and the runtime refuses a path that goes through
+  // any symlink below it, wherever the link points (its sandbox log says "escapes sandbox" for all
+  // three shapes here). So for the loader such a per-profile config.json does not exist and the
+  // flat one is taken. Seen on real launches: the host, following the link, exported the
+  // per-profile directory, and the limit resolved `unknown`.
+  const outsideFile = () => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "harness-dst-outside-"));
+    extra.push(outside);
+    writeConfig(outside);
+    return path.join(outside, "config.json");
+  };
+  const insideFile = () => {
+    writeConfig(path.join(workdir, "elsewhere"));
+    return path.join(workdir, "elsewhere", "config.json");
+  };
+  const flatThenNot = () => {
+    // Without a flat config there is nothing else to name, so the per-profile path stands.
+    expect(buildChildEnv(workdir, "p", "", "").MOTOKO_PROFILE_DIR).toBe(perProfile("p"));
+    writeConfig(flat());
+    expect(buildChildEnv(workdir, "p", "", "").MOTOKO_PROFILE_DIR).toBe(flat());
+  };
+
+  it("does not count a config.json that is a symlink to a file outside the workdir", () => {
+    fs.mkdirSync(perProfile("p"), { recursive: true });
+    fs.symlinkSync(outsideFile(), path.join(perProfile("p"), "config.json"));
+    flatThenNot();
+  });
+
+  it("does not count a config.json that is a symlink to a file inside the workdir", () => {
+    fs.mkdirSync(perProfile("p"), { recursive: true });
+    fs.symlinkSync(insideFile(), path.join(perProfile("p"), "config.json"));
+    flatThenNot();
+  });
+
+  it("does not count a regular config.json in a per-profile directory that is a symlink", () => {
+    fs.mkdirSync(path.dirname(perProfile("p")), { recursive: true });
+    fs.symlinkSync(path.dirname(insideFile()), perProfile("p"));
+    flatThenNot();
+  });
+
+  // The same rule holds for the flat config: a link there does not exist for the loader either,
+  // and with nothing else to name the per-profile path stands. The three shapes above all put the
+  // link in the per-profile place, so a rule applied to that place alone passed them.
+  it("does not count a flat config.json that is a symlink", () => {
+    fs.mkdirSync(flat(), { recursive: true });
+    fs.symlinkSync(insideFile(), path.join(flat(), "config.json"));
+    expect(buildChildEnv(workdir, "p", "", "").MOTOKO_PROFILE_DIR).toBe(perProfile("p"));
+  });
+
+  // "Outside the workdir" is a first path component of exactly "..". A profile given as
+  // "../../..personal" resolves to <workdir>/..personal, which is inside it and is what the
+  // loader reads; a test on the prefix alone sent it to the flat config.
+  it("counts a profile directory whose name merely starts with two dots", () => {
+    writeConfig(path.join(workdir, "..personal"));
+    writeConfig(flat());
+    expect(buildChildEnv(workdir, "../../..personal", "", "").MOTOKO_PROFILE_DIR).toBe(path.resolve(workdir, "..personal"));
+  });
+
+  // The loader's third place. It is usually outside the workdir and unreadable, but a MOTOKO_REPO
+  // inside the workdir is not, and then the loader takes its profile when nothing nearer is
+  // readable. Nearer still wins, and a repo outside the workdir is not counted.
+  it("is MOTOKO_REPO's profile when that is inside the workdir and nothing nearer is readable", () => {
+    const repo = path.join(workdir, "repo");
+    const fromRepo = path.resolve(repo, ".motoko", "config", "p");
+    writeConfig(fromRepo);
+    expect(loaderProfileDir(workdir, "p", repo)).toBe(fromRepo);
+    expect(loaderProfileDir(workdir, "p", "repo")).toBe(fromRepo);
+    expect(loaderProfileDir(workdir, "p", "")).toBe(perProfile("p"));
+    writeConfig(flat());
+    expect(loaderProfileDir(workdir, "p", repo)).toBe(flat());
+  });
+
+  it("does not count MOTOKO_REPO's profile when the repo is outside the workdir", () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "harness-dst-repo-"));
+    extra.push(repo);
+    writeConfig(path.join(repo, ".motoko", "config", "p"));
+    expect(loaderProfileDir(workdir, "p", repo)).toBe(perProfile("p"));
+  });
+
+  // The sandbox is about what lies below the workdir: a workdir that is itself reached through a
+  // symlink reads its files normally (checked on the runtime). The flat config is the one asked
+  // about because the per-profile path is also the fallback, and a test that expected it would
+  // pass with this rule broken.
+  it("counts a config reached through a workdir that is itself a symlink", () => {
+    const link = path.join(os.tmpdir(), `harness-dst-link-${process.pid}`);
+    fs.symlinkSync(workdir, link);
+    try {
+      writeConfig(path.join(link, ".motoko"));
+      expect(loaderProfileDir(link, "p")).toBe(path.resolve(link, ".motoko"));
+    } finally {
+      fs.rmSync(link, { force: true });
+    }
+  });
+
+  /**
+   * What a spawned child is actually given: its MOTOKO_PROFILE_DIR, and the `--profile` among its
+   * arguments. A shell script stands in for the runtime and prints both.
+   */
+  function spawned(profile: string): Promise<{ dir: string; profileArg: string }> {
+    const bin = path.join(workdir, "fake-ailang.sh");
+    const script = [
+      "#!/bin/sh",
+      'profile=""',
+      'while [ $# -gt 0 ]; do if [ "$1" = "--profile" ]; then profile="$2"; fi; shift; done',
+      `printf '{"type":"warning","message":"%s|%s"}\\n' "$MOTOKO_PROFILE_DIR" "$profile"`,
+    ].join("\n");
+    fs.writeFileSync(bin, `${script}\n`, { mode: 0o755 });
+    process.env.AILANG_BIN = bin;
+    const events: AgentEvent[] = [];
+    return new Promise((resolve) => {
+      new RuntimeProcess(
+        "task", "http://127.0.0.1:1", "test-model", workdir, profile, 1, "", "", "",
+        (e) => events.push(e),
+        () => {
+          const said = (events.find((e) => e.type === "warning") as { message: string } | undefined)?.message ?? "|";
+          const [dir, profileArg] = said.split("|");
+          resolve({ dir, profileArg });
+        },
+      );
+    });
+  }
+  const spawnedProfileDir = async (profile: string) => (await spawned(profile)).dir;
+
+  it("reaches the spawned child as the flat directory", async () => {
+    writeConfig(flat());
+    expect(await spawnedProfileDir("p")).toBe(flat());
+  });
+
+  // The spawn mirrors MOTOKO_REPO's profile into the workdir first, and the loader prefers the
+  // per-profile directory that mirror creates. The variable is asked for again after the mirrors;
+  // taken before them it would still say "flat" here.
+  it("is the mirrored per-profile directory once the spawn has mirrored the repo's profile", async () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "harness-dst-repo-"));
+    extra.push(repo);
+    writeConfig(path.join(repo, ".motoko", "config", "p"));
+    writeConfig(flat());
+    process.env.MOTOKO_REPO = repo;
+    expect(buildChildEnv(workdir, "p", "", "").MOTOKO_PROFILE_DIR).toBe(flat());
+    expect(await spawnedProfileDir("p")).toBe(perProfile("p"));
+  });
+
+  // The directory and the `--profile` the loader is given are two statements of one thing: the
+  // loader builds its per-profile path from the argument. A constructor that exported the right
+  // directory and passed some other profile name would have the loader read somewhere else.
+  it("is the mirror of an absolute profile, under its basename, and the --profile says the same", async () => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "harness-dst-abs-"));
+    extra.push(outside);
+    const absolute = path.join(outside, "personal");
+    writeConfig(absolute);
+    const child = await spawned(absolute);
+    expect(child.dir).toBe(perProfile("personal"));
+    expect(child.profileArg).toBe("personal");
+  });
+
+  it("passes the profile it was given as --profile when nothing is mirrored", async () => {
+    writeConfig(perProfile("p"));
+    const child = await spawned("p");
+    expect(child.dir).toBe(perProfile("p"));
+    expect(child.profileArg).toBe("p");
+  });
+
+  // The mirror asks `fs.existsSync`, which follows a link, so it does not run when the workdir's
+  // own per-profile config is a symlink. The loader cannot follow that link and, with no flat
+  // config, takes the profile of a MOTOKO_REPO it can read.
+  it("reaches the spawned child as MOTOKO_REPO's profile when the local config is an unreadable symlink", async () => {
+    const repo = path.join(workdir, "repo");
+    writeConfig(path.join(repo, ".motoko", "config", "p"));
+    fs.mkdirSync(perProfile("p"), { recursive: true });
+    fs.symlinkSync(insideFile(), path.join(perProfile("p"), "config.json"));
+    process.env.MOTOKO_REPO = repo;
+    expect(await spawnedProfileDir("p")).toBe(path.resolve(repo, ".motoko", "config", "p"));
   });
 });

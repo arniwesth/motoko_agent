@@ -1,0 +1,28 @@
+-- verify_profile_dir_agreement — the runtime half of `make verify_profile_dir_agreement`.
+--
+-- Usage (driven by src/tui/scripts/verify-profile-dir-agreement.ts):
+--   ailang run ... scripts/verify_profile_dir_agreement.ail -- <workdir> <profile>
+-- It loads the configuration exactly as `supervisor.ail` does, through
+-- `config.load_config_from_cli`, and prints the profile directory the loader
+-- settled on. That value is what a real start reports as `config_dir` in
+-- `session_start` (`rpc.ail`). The driver runs this under the AILANG_FS_SANDBOX
+-- the host gives a child and compares the answer with the directory the host
+-- exports as MOTOKO_PROFILE_DIR.
+--
+-- It imports `config` and nothing above it, so a run is seconds, not the minute
+-- a script that imports the session modules costs.
+module scripts/verify_profile_dir_agreement
+
+import std/io (println)
+import std/env (getArgs)
+import src/core/config (load_config_from_cli)
+
+export func main() -> () ! {Env, FS, IO} {
+  match getArgs() {
+    [workdir, profile] => {
+      let cfg = load_config_from_cli(["--workdir", workdir, "--profile", profile]);
+      println("PROFILE_DIR ${cfg.profile_dir}")
+    },
+    _ => println("FAIL usage: verify_profile_dir_agreement.ail -- <workdir> <profile>")
+  }
+}
