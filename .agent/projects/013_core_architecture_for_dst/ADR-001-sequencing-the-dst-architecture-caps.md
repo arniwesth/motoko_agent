@@ -261,9 +261,10 @@ and exits 2. It differs from option 4 in three ways. The first removes the groun
 4 was rejected, the second changes which rule is being applied, and the third is a limit of scope.
 
 - **It is opt-in.** Option 4 was rejected because it would have stopped runs that work today.
-  `extensions.strict` is `false` in 16 of 16 shipped profiles, so no run that starts today is
-  stopped. Re-measured the same day: 2 of 16 profiles set an override and the catalogue has 29
-  rows.
+  `extensions.strict` is `false` in 16 of 16 shipped profiles, so no shipped profile is stopped.
+  A profile of someone's own that is already strict, registers a compactor and runs a model with
+  no window does start today and is stopped by this; that is the refusal doing what it is for.
+  Re-measured the same day: 2 of 16 profiles set an override and the catalogue has 29 rows.
 - **It is conditional on a compactor.** It is not 028's rule about measurement. It is the existing
   meaning of `extensions.strict`, "a profile may not run with less than it declares"
   (`registry_generated.ail`: an uninstalled name, an empty registration), applied to a compactor
@@ -285,9 +286,14 @@ resume one, have no arm.
 
 One limitation is recorded with it. The refusal is decided on the limit the session will use,
 which the resolver reads from `$MOTOKO_PROFILE_DIR/config.json`, and not on the configuration the
-loader loaded. Since PR #241 the host exports the directory the loader reads, so a normal launch
-does not make the two differ. A hand-run `supervisor.ail` with no `MOTOKO_PROFILE_DIR` still can:
-there the decision is right, because the run would not compact, and the stated reason is wrong.
+loader loaded. PR #241 makes the host export the directory the loader reads in the layouts found
+so far: the legacy flat `.motoko/config.json`, and a per-profile config reached through a symlink,
+which the sandboxed loader refuses. It does not make the two agree by construction, and no gate
+compares them. A hand-run `supervisor.ail` with no `MOTOKO_PROFILE_DIR` still makes them differ:
+there the decision is right, because the run would not compact, and the stated reason can be
+wrong. A launch with `WORKDIR` beneath the repository is a different failure, older than both
+PRs: the loader loads no profile at all, so neither `extensions.strict` nor a compactor is in
+effect and this refusal does not arise.
 
 **For the ordinal (D2).** 1. The count inside the world — vacuous (C1). 2. A same-record
 high-water mark — rejected (kF1). 3. **The successor's ordinal witnessed onto the stdout
