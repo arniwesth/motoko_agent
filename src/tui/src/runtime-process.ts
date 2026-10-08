@@ -384,6 +384,32 @@ export function mirrorModelCatalogFromRepo(workdir: string, repoPath: string): v
   fs.copyFileSync(src, dst);
 }
 
+// The directory the core's config loader will read this profile from, which is
+// what MOTOKO_PROFILE_DIR has to name.
+//
+// `config.ail`'s `resolve_profile_dir` looks in three places, in this order:
+// <workdir>/.motoko/config/<profile>/, then the legacy flat <workdir>/.motoko/,
+// then <MOTOKO_REPO>/.motoko/config/<profile>/. The child cannot read the
+// third under AILANG_FS_SANDBOX, which is why `mirrorProfileFromRepo` copies it
+// into the first before the spawn. So the first two are the whole rule here,
+// and the caller asks again after the mirrors have run.
+//
+// The variable used to be the per-profile path unconditionally. With the flat
+// layout that directory does not exist, and everything in the child that reads
+// the profile through the variable instead of through the loaded config looked
+// at nothing: `context_usage.ail` for `agent.context_limit`, and the extensions
+// that read `${MOTOKO_PROFILE_DIR}/<ext>.json` (compaction_ai, mcp, a2a,
+// compose, agentcli, ailang_tools). A flat config's `agent.context_limit` was
+// loaded and never took effect: the run's limit resolved `unknown` with
+// `profile_config_absent` (found in the review of #239).
+export function loaderProfileDir(workdir: string, profile: string): string {
+  const perProfile = path.resolve(workdir, ".motoko", "config", profile);
+  if (fs.existsSync(path.join(perProfile, "config.json"))) return perProfile;
+  const flat = path.resolve(workdir, ".motoko");
+  if (fs.existsSync(path.join(flat, "config.json"))) return flat;
+  return perProfile;
+}
+
 // 2026-05-14: if MOTOKO_CONFIG points to an absolute path OUTSIDE the workdir
 // (e.g. ~/.motoko/config/mark — a personal profile that shouldn't live in
 // motoko_agent's tree), the AILANG runtime can't read it: FS_SANDBOX is
@@ -481,7 +507,7 @@ export function buildChildEnv(
     MOTOKO_PERSIST_RETRIES: process.env.MOTOKO_PERSIST_RETRIES ?? "",
     MOTOKO_REPO: process.env.MOTOKO_REPO ?? "",
     MOTOKO_CAPTURE_FAILED_PAYLOAD: process.env.MOTOKO_CAPTURE_FAILED_PAYLOAD ?? "",
-    MOTOKO_PROFILE_DIR: path.resolve(workdir, ".motoko", "config", profile),
+    MOTOKO_PROFILE_DIR: loaderProfileDir(workdir, profile),
     // THE RUN IDENTITY FOR F-5 OWNERSHIP, minted here and nowhere else.
     //
     // `motoko-ext-herdr` tags every delegate pane it spawns with `<pane>:<session ms>` so that an
@@ -929,17 +955,12 @@ export class RuntimeProcess {
     // basename so the AILANG runtime can read it through FS_SANDBOX.
     // Returns the original profile unchanged when not applicable.
     const resolvedProfile = mirrorAbsoluteProfile(workdir, profile);
-    // Update MOTOKO_PROFILE_DIR to the mirrored location too, so
+    // Ask for MOTOKO_PROFILE_DIR again now that the mirrors have run, so
     // standalone extension packages reading ${MOTOKO_PROFILE_DIR}/<ext>.json
-    // find the right files.
-    if (resolvedProfile !== profile) {
-      childEnv.MOTOKO_PROFILE_DIR = path.resolve(
-        workdir,
-        ".motoko",
-        "config",
-        resolvedProfile,
-      );
-    }
+    // and the core's limit resolver find the files the loader will load:
+    // either mirror can have just created the per-profile directory, and
+    // `resolvedProfile` is the name the supervisor is given.
+    childEnv.MOTOKO_PROFILE_DIR = loaderProfileDir(workdir, resolvedProfile);
 
     const supervisorArgs = buildSupervisorArgs(resolvedProfile, model, workdir, port, systemPrompt, task, resume);
 

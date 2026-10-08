@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { systemPromptForWorkspace, materializeSystemPromptArg } from "./system-prompt.js";
-import { buildChildEnv, buildSupervisorArgs } from "./runtime-process.js";
+import { buildChildEnv, buildSupervisorArgs, loaderProfileDir, RuntimeProcess, type AgentEvent } from "./runtime-process.js";
 
 let workdir: string;
 let savedEnv: string | undefined;
@@ -152,5 +152,96 @@ describe("resume.supervisor_args_and_workdir", () => {
     // Extensions read MOTOKO_WORKDIR with "." as the default and compare what they derive from
     // it against the relative `--workdir`; setting it absolute refused every herdr Delegate.
     expect(env.MOTOKO_WORKDIR).toBeUndefined();
+  });
+});
+
+// The child reads the profile through MOTOKO_PROFILE_DIR in places the loaded config does not
+// reach: `context_usage.ail` for `agent.context_limit`, and six extensions for their own JSON. So
+// the variable has to name the directory `config.ail`'s `resolve_profile_dir` loads: the
+// per-profile directory when it holds a config.json, else the legacy flat .motoko/, else the
+// per-profile path. It used to be the per-profile path always, and a flat config's
+// `agent.context_limit` was loaded and never took effect (review of #239).
+describe("profile_dir.child_env_names_the_directory_the_loader_reads", () => {
+  let savedRepo: string | undefined;
+  let savedBin: string | undefined;
+  const extra: string[] = [];
+
+  beforeEach(() => {
+    savedRepo = process.env.MOTOKO_REPO;
+    savedBin = process.env.AILANG_BIN;
+    delete process.env.MOTOKO_REPO;
+  });
+
+  afterEach(() => {
+    if (savedRepo === undefined) delete process.env.MOTOKO_REPO;
+    else process.env.MOTOKO_REPO = savedRepo;
+    if (savedBin === undefined) delete process.env.AILANG_BIN;
+    else process.env.AILANG_BIN = savedBin;
+    for (const dir of extra.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const writeConfig = (dir: string) => {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "config.json"), "{}\n", "utf8");
+  };
+  const perProfile = (profile: string) => path.resolve(workdir, ".motoko", "config", profile);
+  const flat = () => path.resolve(workdir, ".motoko");
+
+  it("is the per-profile directory when that holds a config.json, with or without a flat one", () => {
+    writeConfig(perProfile("p"));
+    expect(buildChildEnv(workdir, "p", "", "").MOTOKO_PROFILE_DIR).toBe(perProfile("p"));
+    writeConfig(flat());
+    expect(buildChildEnv(workdir, "p", "", "").MOTOKO_PROFILE_DIR).toBe(perProfile("p"));
+  });
+
+  it("is the flat .motoko directory when only the flat config exists", () => {
+    writeConfig(flat());
+    expect(buildChildEnv(workdir, "p", "", "").MOTOKO_PROFILE_DIR).toBe(flat());
+    expect(loaderProfileDir(workdir, "p")).toBe(flat());
+  });
+
+  it("is the per-profile path when neither exists, as it was", () => {
+    expect(buildChildEnv(workdir, "p", "", "").MOTOKO_PROFILE_DIR).toBe(perProfile("p"));
+  });
+
+  /** The MOTOKO_PROFILE_DIR a spawned child actually has: a shell script stands in for the runtime. */
+  function spawnedProfileDir(profile: string): Promise<string> {
+    const bin = path.join(workdir, "fake-ailang.sh");
+    fs.writeFileSync(bin, `#!/bin/sh\nprintf '{"type":"warning","message":"%s"}\\n' "$MOTOKO_PROFILE_DIR"\n`, { mode: 0o755 });
+    process.env.AILANG_BIN = bin;
+    const events: AgentEvent[] = [];
+    return new Promise((resolve) => {
+      new RuntimeProcess(
+        "task", "http://127.0.0.1:1", "test-model", workdir, profile, 1, "", "", "",
+        (e) => events.push(e),
+        () => resolve((events.find((e) => e.type === "warning") as { message: string } | undefined)?.message ?? ""),
+      );
+    });
+  }
+
+  it("reaches the spawned child as the flat directory", async () => {
+    writeConfig(flat());
+    expect(await spawnedProfileDir("p")).toBe(flat());
+  });
+
+  // The spawn mirrors MOTOKO_REPO's profile into the workdir first, and the loader prefers the
+  // per-profile directory that mirror creates. The variable is asked for again after the mirrors;
+  // taken before them it would still say "flat" here.
+  it("is the mirrored per-profile directory once the spawn has mirrored the repo's profile", async () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "harness-dst-repo-"));
+    extra.push(repo);
+    writeConfig(path.join(repo, ".motoko", "config", "p"));
+    writeConfig(flat());
+    process.env.MOTOKO_REPO = repo;
+    expect(buildChildEnv(workdir, "p", "", "").MOTOKO_PROFILE_DIR).toBe(flat());
+    expect(await spawnedProfileDir("p")).toBe(perProfile("p"));
+  });
+
+  it("is the mirror of an absolute profile, under its basename", async () => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "harness-dst-abs-"));
+    extra.push(outside);
+    const absolute = path.join(outside, "personal");
+    writeConfig(absolute);
+    expect(await spawnedProfileDir(absolute)).toBe(perProfile("personal"));
   });
 });
