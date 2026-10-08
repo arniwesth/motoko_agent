@@ -389,10 +389,14 @@ export function mirrorModelCatalogFromRepo(workdir: string, repoPath: string): v
 //
 // `config.ail`'s `resolve_profile_dir` looks in three places, in this order:
 // <workdir>/.motoko/config/<profile>/, then the legacy flat <workdir>/.motoko/,
-// then <MOTOKO_REPO>/.motoko/config/<profile>/. The child cannot read the
-// third under AILANG_FS_SANDBOX, which is why `mirrorProfileFromRepo` copies it
-// into the first before the spawn. So the first two are the whole rule here,
-// and the caller asks again after the mirrors have run.
+// then <MOTOKO_REPO>/.motoko/config/<profile>/. The same three are asked here.
+// The third is usually outside the workdir, where AILANG_FS_SANDBOX stops the
+// child reading it, and `mirrorProfileFromRepo` copies it into the first before
+// the spawn; so the caller asks again after the mirrors have run. But a
+// MOTOKO_REPO inside the workdir is readable, and the mirror does not run when
+// the workdir's own per-profile config "exists" as a symlink the child cannot
+// follow. The loader then takes the repo's profile, and so must this (found in
+// the third review, on a real launch).
 //
 // The variable used to be the per-profile path unconditionally. With the flat
 // layout that directory does not exist, and everything in the child that reads
@@ -413,17 +417,30 @@ export function mirrorModelCatalogFromRepo(workdir: string, repoPath: string): v
 // the link and says the per-profile one exists (found in the second review of
 // #239, on a real launch). Symlinks above the workdir are not the sandbox's
 // business, so the workdir's own real path is the base.
-export function loaderProfileDir(workdir: string, profile: string): string {
+export function loaderProfileDir(
+  workdir: string,
+  profile: string,
+  repoPath: string = process.env.MOTOKO_REPO ?? "",
+): string {
   const perProfile = path.resolve(workdir, ".motoko", "config", profile);
   if (readableInWorkdir(workdir, path.join(perProfile, "config.json"))) return perProfile;
   const flat = path.resolve(workdir, ".motoko");
   if (readableInWorkdir(workdir, path.join(flat, "config.json"))) return flat;
+  const repo = repoPath.trim();
+  if (repo !== "") {
+    // Under the sandbox a relative path is relative to the workdir, so that is the base here.
+    const fromRepo = path.resolve(workdir, repo, ".motoko", "config", profile);
+    if (readableInWorkdir(workdir, path.join(fromRepo, "config.json"))) return fromRepo;
+  }
   return perProfile;
 }
 
 function readableInWorkdir(workdir: string, file: string): boolean {
   const below = path.relative(path.resolve(workdir), path.resolve(file));
-  if (below === "" || below.startsWith("..") || path.isAbsolute(below)) return false;
+  // Outside the workdir is a first component of exactly "..": a directory NAMED "..personal" is
+  // inside it, and a profile given as "../../..personal" lands in one.
+  const outside = below === ".." || below.startsWith(`..${path.sep}`) || path.isAbsolute(below);
+  if (below === "" || outside) return false;
   try {
     return fs.realpathSync(file) === path.join(fs.realpathSync(workdir), below);
   } catch {
@@ -981,7 +998,7 @@ export class RuntimeProcess {
     // and the core's limit resolver find the files the loader will load:
     // either mirror can have just created the per-profile directory, and
     // `resolvedProfile` is the name the supervisor is given.
-    childEnv.MOTOKO_PROFILE_DIR = loaderProfileDir(workdir, resolvedProfile);
+    childEnv.MOTOKO_PROFILE_DIR = loaderProfileDir(workdir, resolvedProfile, childEnv.MOTOKO_REPO ?? "");
 
     const supervisorArgs = buildSupervisorArgs(resolvedProfile, model, workdir, port, systemPrompt, task, resume);
 
