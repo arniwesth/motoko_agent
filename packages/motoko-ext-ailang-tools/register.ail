@@ -31,6 +31,7 @@ import std/fs (readFileResult, writeFileResult, mkdirAllResult, isDir)
 import std/bytes (toString)
 import std/json (Json, get, asString, asArray, asBool, jo, decode)
 import std/env (getEnvOr)
+import pkg/sunholo/motoko_ext_abi/path_guard (path_guard_script)
 import pkg/sunholo/motoko_ext_abi/types (ProviderCtx, ExtRegistration, ToolProvider, ToolHandleDecision, ToolHandleOutcome, ToolCallEnvelope, ToolResultEnvelope, Delegate, Handled)
 import pkg/sunholo/motoko_ext_ailang_tools/edits (apply_edit)
 
@@ -64,8 +65,7 @@ func inside_workdir(workdir: string, path: string) -> bool ! {Process} {
   if any(\seg. seg == "..", split(path, "/")) then false
   else {
     let dir = if workdir == "" then "." else workdir;
-    let guard = "set -eu\nwd=$(realpath \"$1\")\ncase \"$2\" in /*) joined=\"$2\" ;; *) joined=\"$wd/$2\" ;; esac\ntarget=$(realpath -m \"$joined\")\ncase \"$target\" in \"$wd\"/*) ;; *) exit 43 ;; esac\n";
-    match exec("bash", ["-c", guard, "ailang_tools_path_guard", dir, path]) {
+    match exec("bash", ["-c", path_guard_script(), "ailang_tools_path_guard", dir, path]) {
       Err(_) => false,
       Ok(out) => out.exitCode == 0
     }

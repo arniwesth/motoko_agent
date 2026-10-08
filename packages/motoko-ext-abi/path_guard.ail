@@ -1,0 +1,25 @@
+module sunholo/motoko_ext_abi/path_guard
+
+-- The ONE path guard, shared by motoko's native file tools
+-- (src/core/tool_runtime validate_path_common) and any extension that must
+-- judge a path before acting on it (motoko_ext_ailang_tools inside_workdir).
+-- Two copies disagreed: on a missing GNU `realpath -m` the native one let
+-- every path through and the extension's refused every path (#209).
+--
+-- Run it as: bash -c <path_guard_script()> <name> <workdir> <path>
+-- <path> may be relative to <workdir> or absolute. Exit codes:
+--   0  inside the workdir (or the workdir itself)
+--   43 resolves outside the workdir
+--   44 cannot be resolved, e.g. a dangling symlink on the way (refused: a
+--      write through one creates the file at the link's target)
+--   45 the workdir itself cannot be resolved
+-- Callers treat every non-zero exit as a refusal (fail closed).
+--
+-- Portable: only plain `realpath`, `basename` and `dirname`. The deepest
+-- EXISTING ancestor is resolved and the missing tail re-appended; the tail
+-- has no `..` (callers reject that lexically first), so re-appending it is
+-- exact. The walk stops at a symlink (`-L`), dangling or not, so a link is
+-- always resolved rather than walked past.
+export pure func path_guard_script() -> string {
+  "wd=$(realpath \"$1\") || exit 45\ncase \"$2\" in /*) p=\"$2\" ;; *) p=\"$wd/$2\" ;; esac\ntail=\"\"\nwhile [ ! -e \"$p\" ] && [ ! -L \"$p\" ]; do\n  tail=\"/$(basename \"$p\")$tail\"\n  p=$(dirname \"$p\")\ndone\nbase=$(realpath \"$p\" 2>/dev/null) || exit 44\ncase \"$base\" in /) target=\"$tail\" ;; *) target=\"$base$tail\" ;; esac\ncase \"$target\" in \"$wd\"|\"$wd\"/*) ;; *) exit 43 ;; esac\n"
+}
