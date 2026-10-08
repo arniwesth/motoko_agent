@@ -38,10 +38,11 @@ against 10 min 27 s on `main`'s last run and a 20-minute limit.
 Not in it: a fallback window (suggestion 2) and a fixed token threshold (suggestion 3, now #240).
 See "Not done here".
 
-**Reviewed by Codex Sol on 2026-10-08.** Its main finding is fixed at the cause in #241: the
-refusal and the warning report what the runtime's limit resolver sees, and with the legacy flat
-config layout that was not the profile the loader loaded. See "Review". This should not leave
-draft before #241 lands; the ADR amendment in it says "since PR #241".
+**Reviewed twice by Codex Sol on 2026-10-08; it says to keep this in draft.** Its main finding is
+that the refusal and the warning report what the runtime's limit resolver sees, which is not
+always the profile the loader loaded. #241 addresses the layouts found so far and does not close
+it. See "Review". This should not leave draft before #241 lands; the ADR amendment in it
+describes #241.
 
 ## Changes
 
@@ -218,8 +219,8 @@ Codex Sol (`gpt-6.1-sol`) reviewed head `3c529b40` on 2026-10-08 in its own deta
 from a brief that asked it to read the diff before this body. Its verdict was to keep this in
 draft. Each finding was checked against the code before it was acted on.
 
-**1. Fixed at the cause in #241: the refusal and the warning can describe a different profile from
-the one loaded.**
+**1. Addressed in #241 for the layouts found, not closed: the refusal and the warning can describe
+a different profile from the one loaded.**
 
 - **What.** `reject_if_strict_and_limit_unknown` takes the loaded `cfg`, but the limit is resolved
   the way the session resolves it: from `$MOTOKO_PROFILE_DIR/config.json`. The host always exports
@@ -237,10 +238,14 @@ the one loaded.**
 - **So the decision is right and the reason is wrong.** The run really would not compact. What the
   message says about why, and how to fix it, is misleading in these two layouts.
 - **Not fixed here, by the operator's choice.** #241 makes the host export the directory the
-  loader will use, so the flat layout resolves its own `agent.context_limit` and the refusal no
-  longer fires on it. What remains after #241 is a hand-run `supervisor.ail` with no
-  `MOTOKO_PROFILE_DIR`: closing that means the resolver reads the profile that was loaded, which
-  moves env reads that five DST fixtures pin.
+  loader will use. Checked on the two branches merged: a flat strict profile with an override
+  starts with `bounded`, `200000`, and the same profile without one is refused with
+  `profile_key_absent`, which is now the true reason.
+- **What remains after #241.** A hand-run `supervisor.ail` with no `MOTOKO_PROFILE_DIR`: closing
+  that means the resolver reads the profile that was loaded, which moves env reads that five DST
+  fixtures pin. And nothing compares the host's directory with the core's, so another layout can
+  still differ unnoticed; the second review found one more (a symlinked per-profile config, since
+  fixed in #241) by trying.
 
 **2. Fixed: with no catalogue the warning named no model, and a second model got no warning.**
 Commit `f24dd1f3`. Confirmed first on a real wire: with the catalogue absent both records carry
@@ -259,6 +264,21 @@ applied to the ADR in this branch.
 `verify_classify_check`, `new_contract_policy`, the warning directly after the record on a real
 JSONL run, and the warning on plain stderr and in the transcript.
 
+**Second review, head `89a7d091`, with #241 and with the two merged.**
+
+- **Finding 2: resolved.** It re-ran the 14 tests and a real two-model session with an undecodable
+  catalogue, which named both models.
+- **Finding 3: partly resolved.** The plain logger's arm is now held by a test. The first-task and
+  resume calls still have no gate arm. It also pointed out that CI does not run these tests; see
+  "Not done here".
+- **Finding 1: partly resolved**, as above.
+- **Two statements in the ADR amendment claimed too much, and are narrowed.** "No run that starts
+  today is stopped" was true of shipped profiles only: a strict profile of someone's own can be
+  stopped, which is the point. "Since PR #241 a normal launch does not make the two differ" was
+  false for two layouts it tried. The amendment now says what #241 covers and what it does not.
+- **It found that `WORKDIR` beneath the repository loads no profile at all.** Reproduced, with and
+  without either PR. Recorded in #241; it has no issue yet.
+
 ## Not done here
 
 - **No fallback window** (suggestion 2). A guessed window is what `docs/configuration.md` says
@@ -270,6 +290,8 @@ JSONL run, and the warning on plain stderr and in the transcript.
   also reads the window for its relief check and its fold cap.
 - **Two of the three calls have no gate arm.** The first-task call was checked by hand (above).
   The resume call was not exercised at all.
+- **CI does not run the 14 new TUI tests.** No job runs the TUI jest suite; `dst_l2` runs
+  `harness-dst.test.ts` only. They hold the warning locally and nowhere else.
 - **The TUI status-bar context counter is not touched, and is dead.** It reads a `context_usage`
   event the runtime has not emitted since `6350b7ad`. ADR-001 D1 names "rendering unmeasured in
   the TUI counter" as a follow-up; there is no live counter to render it in.
