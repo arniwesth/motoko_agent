@@ -540,6 +540,11 @@ class PlainLogger {
         process.stdout.write(`[done] ${event.step} step(s)\n${event.output}\n`);
         process.exit(this.outcome.doneExitCode);
         break;
+      // #237: the plain logger had no arm for `warning`, so a headless run dropped every one of
+      // them — the runtime's own and the unknown-context-limit one `runtime-process.ts` raises.
+      case "warning":
+        process.stderr.write(`[warning] ${event.message}\n`);
+        break;
       case "error":
         process.stderr.write(`[error] ${event.message}\n`);
         process.exit(1);
