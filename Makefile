@@ -515,7 +515,8 @@ DST_TARGETS := test_coverage declared_vs_performed terminal_trace smoke_parity \
   execution_program attribution_table profile_coverage compose_live_exec \
   ledger_parity dst_seeded hook_guard dst_l2 predicate_anchors depth_canary \
   registry_multiplicity driver_leaf_inventory driver_leaf_inventory_selftest \
-  herdr_graded journal_resume world_framed_wire park_wake park_resume
+  herdr_graded journal_resume world_framed_wire park_wake park_resume \
+  tool_catalog_registry
 
 # The graded session for a herdr DST profile (021 step 2's demonstration half).
 #
@@ -855,6 +856,27 @@ registry_gen_check:
 registry_multiplicity:
 	@ailang run --caps IO --entry main scripts/dst/registry_multiplicity_dst.ail < /dev/null
 	@ailang test src/core/ext/registry_normalize.ail > /dev/null && echo "  ✓ src/core/ext/registry_normalize.ail"
+
+# #204: the tool catalog the model is sent, built from the REAL registrations.
+#
+# No scripted provider receives the catalog -- only `live_ports` calls
+# `tools_with_extensions` -- so no DST profile can see what is in it. Measured
+# 2026-10-04 on cf54dff9 with the catalog emptied: `check_core` green and
+# `make dst` red in `test_coverage` alone, through tool_catalog.ail's own inline
+# tests, which build their entries by hand. This target runs the registrations
+# themselves: every name once, native schemas unchanged, for microrag and
+# ailang_tools in both orders and for every installable extension at once.
+#
+# THE ALL-EXTENSIONS LIST IS DERIVED, from the generated registry's own name
+# table, so an extension added to ailang.toml is covered without an edit here.
+# An empty derivation is a failure: a `sed` that stops matching would otherwise
+# drop the row and leave the target green.
+.PHONY: tool_catalog_registry
+tool_catalog_registry:
+	@set -eu; \
+	all=$$(sed -n 's/.*name == "\([a-z0-9_]*\)" then Some(.*/\1/p' src/core/ext/registry_generated.ail | paste -sd, -); \
+	[ -n "$$all" ] || { echo "FAIL: derived no extension names from src/core/ext/registry_generated.ail"; exit 1; }; \
+	TOOL_CATALOG_ALL="$$all" ailang run --caps IO,Env,FS --entry main scripts/dst/tool_catalog_registry_dst.ail < /dev/null
 
 # D5's profile-DEFINITION and EXECUTION-MANIFEST machinery (WI-A10). Three
 # checks, and the third exists because this is composition work:
