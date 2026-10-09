@@ -3,35 +3,44 @@ repo: arniwesth/motoko_agent
 pr: 249
 branch: docs/005-adr001-amendment-dp7-to-extension
 ticket: null
-title: "docs(005): propose Amendment 1 to ADR-001 — pre-finalize verification (DP7) moves to an extension"
+title: "docs(005): propose Amendment 1 to ADR-001 — pre-finalize verification (DP7) leaves core"
 ---
 
 ## Summary
 
 Proposes Amendment 1 to 005 ADR-001 (the harness policy boundary). Core's DP7 verifier runs a
 profile's shell command after every non-blank final answer and rejects the answer when the command
-fails, with no limit on how often. The amendment says that is finalize policy and moves it to a
-bounded guard extension, together with the persist nudge.
+fails, with no limit on how often. The amendment says that is finalize policy and removes it from
+core. The persist nudge moves to a guard extension in the same plan.
 
 Two sessions forced it. On 2026-10-08 and 2026-10-09 the verifier's command could not pass inside
 a session, so it rejected every final answer, 320 and 57 times. The repetition guard was never
 called, because a rejected candidate does not reach the extension judges.
 
-**The amendment is a proposal. Merging this records it and does not accept it.** Six positions in
-it are the operator's to confirm, and it lists six open questions. The two most likely to change:
+**Rewritten on 2026-10-09 to the operator's ruling.** The first draft moved the verifier into a
+guard extension and asked which profiles should ship it. The ruling: none, and nothing should
+trigger Motoko's own `make check_core` automatically. So the verifier is removed and no guard
+replaces it. The amendment keeps only the rules a verifier guard would have to respect if one
+were ever written. #251 turns the verifier off in the eight profiles that enabled it.
+
+**The amendment is a proposal. Merging this records it and does not accept it.** One open question
+remains, about a field of the extension ABI that 031 ADR-001 defines. The two positions most
+likely to change:
 
 - **No new core ceiling on finalize feedback (A6).** The amendment leaves the step budget, the cost
   cap and context exhaustion as the only ceilings in core.
 - **Merge precedence is unchanged (A3).** `ContinueWithFeedback` still outranks `Accept`, so what
   ends a run is each continuing guard reaching its own bound.
 
-On acceptance it supersedes text in 013 ADR-002 D2, 031 ADR-001 D4 and the DP7 design doc. The
-amendment has a table naming each passage and what replaces it. None of those files is edited
-here.
+On acceptance it supersedes text in 013 ADR-002 D2, 028 ADR-001, 031 ADR-001 D4 and the DP7
+design doc. The amendment has a table naming each passage and what replaces it. None of those
+files is edited here.
 
 ## Changes
 
 - docs(005): propose Amendment 1 to ADR-001 — pre-finalize verification (DP7) moves to an extension
+- docs(005): Amendment 1 names #250 as the Makefile fix, in place of the unpushed commit
+- docs(005): Amendment 1 follows the operator's ruling — the verifier is removed, not moved
 
 1 file changed.
 
@@ -45,11 +54,11 @@ here.
   ADR and this pull request's own record, and nothing else.
 - **The ADR carries a proposed amendment the operator can accept, edit or reject.** Acceptance is
   a later edit to the amendment's status line, not this merge.
-- **If accepted, one plan follows.** `PLAN-finalize-policy-migration.md` covers the verifier
-  guard, the persist-nudge guard, the removals from core, the migration of the eight profiles that
-  enable verification, and the edits to 013 ADR-002 and 031 ADR-001.
-- **The loop itself is not fixed by this.** The trigger is fixed by #250. The unbounded rejection
-  stays in core until the plan lands.
+- **If accepted, one plan follows.** `PLAN-finalize-policy-migration.md` covers the removals from
+  core, the persist-nudge guard, a startup refusal for a profile that still sets
+  `verification.enabled`, and the edits to 013 ADR-002, 028 ADR-001 and 031 ADR-001.
+- **The loop itself is not fixed by this.** #250 fixes the trigger and #251 turns the verifier off
+  in every tracked profile. Its code stays in core until the plan lands.
 
 ## Test evidence
 
@@ -68,6 +77,9 @@ Checked on 2026-10-09 at `36a96b1e`, AILANG v0.52.5.
 - [x] **Every `file:line` reference in the amendment was read at `36a96b1e`.**
 - [x] **Before `a2113e85` an accepted candidate still went to the verifier.**
   `git show a2113e85^:src/core/session.ail` has `Accept(output) => c2_after_dp7(…)` at `:3723`.
+- [x] **028 ADR-001's finalization item and item 1 of its PLAN-001 were read at `36a96b1e`.**
+  The ADR is Proposed, and `run_dp7_verifier` still has `Err(_) => Approve`, so the item was not
+  built.
 - [x] **One file changed besides this record.** `git diff --name-only origin/main...HEAD`.
 - [ ] The two session logs are not committed. They are in the shared checkout's gitignored
   `.motoko/logfile/`.
