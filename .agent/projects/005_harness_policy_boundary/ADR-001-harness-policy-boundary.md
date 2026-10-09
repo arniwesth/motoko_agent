@@ -454,8 +454,9 @@ Costs:
   `Makefile:2458`), the four `w2_dp7_*` scenarios in `scripts/dst/phase_c2_wiring_scenarios.ail`,
   and the `decide` tests that name the three reasons (`step_machine.ail:348-397`, `:534-610`).
 - **The corpus gate loses the branch one of its controls walks.** 011 ADR-003 ruling 18 added a
-  `verifier-rejection` control run (`scripts/dst/corpus_judge_dst.ail:881-990`). The plan replaces
-  it with a control on the solver-feedback branch, or drops it, on the operator's word.
+  `verifier-rejection` control run (`scripts/dst/corpus_judge_dst.ail:881-990`). The operator
+  decided on 2026-10-09 that the plan replaces it with a control on the solver-feedback branch,
+  which the gate does not walk today.
 - **Old wire logs still carry `dp7_verifier_rejected`.** The session journal never held it, so
   resume is unaffected, and nothing in the tree reads an old wire log against the event
   vocabulary. The variant can be deleted outright.
@@ -476,7 +477,7 @@ itself. The other guards' feedback is as invisible to the operator. That is a se
 | 031 ADR-001 D4 `:628-629` | "Host permissions and deterministic verification remain authoritative" | Host permissions are untouched. Verification is no longer a host stage, and nothing ships one. |
 | 028 ADR-001 `:28-31`, and item 1 of its PLAN-001 | `run_dp7_verifier` fails closed, and "make the gate non-configurable for shipped profiles" | A1 and the ruling. There is no gate left to make fail-closed. 028's other two boundaries are untouched. |
 | 031 ADR-001 freeze evidence, item 6 `:1154` | "Composition with DP7" | Dropped. There is nothing to compose with. |
-| 011 ADR-003 ruling 18 (`:484`) | The `verifier-rejection` control run | A control on the solver-feedback branch, or nothing. The plan's decision 1. |
+| 011 ADR-003 ruling 18 (`:484`) | The `verifier-rejection` control run | A `solver-feedback` control on the branch that survives (decided 2026-10-09), recorded as ruling 19 there. |
 | `SYSTEM.md:128` | "The runtime will not catch this for you — that gate is on the roadmap" | The runtime does not check this. The rule above it, that the model runs the check when it has modified AILANG source, stays. |
 
 #### Non-goals

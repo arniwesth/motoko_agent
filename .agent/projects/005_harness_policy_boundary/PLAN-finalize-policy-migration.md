@@ -24,17 +24,17 @@ Two workstreams. They share no code and W1 does not wait for W2.
    guard in its place. The operator decided that on 2026-10-09. It follows W1, because both edit
    `classify_candidate` and `decide`.
 
-### Decisions this plan needs from the operator
+### The one decision this plan still needs from the operator
 
 | # | Blocks | Question | This plan's recommendation |
 |---|---|---|---|
-| 1 | W1, WI-8 | 011 ADR-003's `verifier-rejection` control run exists to walk the DP7 branch. Replace it with a control on the solver-feedback branch, or drop it? | Replace. The gate keeps a control for "a final answer is bounced and the model is called again". |
 | 2 | W1, WI-6 | A profile that still sets `verification.enabled: true`: refuse to start, or start with a warning? | Refuse. Someone who believes a gate runs has to find out that it does not. |
 
 Decided on 2026-10-09:
 
 | # | Question | The operator's answer |
 |---|---|---|
+| 1 | 011 ADR-003's `verifier-rejection` control run exists to walk the DP7 branch. Replace it with a control on the solver-feedback branch, or drop it? | Replace it with the solver-feedback control. |
 | 3 | Build a persist-nudge guard extension (ADR-001 D4), or delete the persist nudge? | Delete it. It is off by default, so it has not run for a long time. |
 | 4 | Keep reading `MOTOKO_PERSIST_RETRIES` as a dead value, or remove the read too? | Remove it in full, the read included. The operator confirmed that after seeing what the read touches. |
 
@@ -204,29 +204,43 @@ eight tracked profiles that set the key.
 
 **Gate:** `make smoke_driver smoke_parity ledger_parity park_wake phase_c_l1`.
 
-### WI-8 — the corpus gate's `verifier-rejection` control (decision 1)
+### WI-8 — the corpus gate's control moves to the solver-feedback branch
 
 `scripts/dst/corpus_judge_dst.ail`, `scripts/dst/corpus_pr_dst.ail`,
 `.agent/projects/011_improve_test_axises/ADR-003-judge-recoveries-on-real-runs.md`.
 
-011 ADR-003 ruling 18 gave the gate a control run named `verifier-rejection`
-(`corpus_judge_dst.ail:881-990`). It runs the rig with a verifier that rejects
-(`run_recording_verified_at`, `corpus_pr_dst.ail:410-415`) and checks that the rejection branch
-was walked. That branch will not exist.
+**What is there.** 011 ADR-003 ruling 18 gave the gate a control run named `verifier-rejection`
+(`corpus_judge_dst.ail:876-990`). It exists because a reviewer's mutant survived the gate: in
+the state built after a DP7 rejection, `step_idx + 1` changed to `step_idx`
+(`session.ail:2985`). No bank member ran with verification on, so none walked that branch. The
+control runs the rig with a verifier that always rejects (`run_recording_verified_at`,
+`corpus_pr_dst.ail:410-415`), and under the mutant `driver-step-repeated` and
+`steps-not-contiguous` go red.
 
-Recommended, if decision 1 is "replace":
+**Why it cannot stay.** W1 deletes the branch and the mutated line with it.
 
-- Give the rig a `SolverJudge` that returns `ContinueWithFeedback` for the first two candidates
-  and replace `run_recording_verified_at` with a function that uses it.
-- Rename the control `solver-feedback`. It asserts the same shape through the surviving branch:
-  the answer is bounced, the model is called again under the same step, and the run ends on
-  `max_steps`.
-- Re-run the control's mutant from ruling 18 against the new control and record whether it is
-  still killed. If the mutated line was DP7's own, name the equivalent line on the feedback path.
-- Add a ruling to 011 ADR-003 that records the swap and why.
+**What replaces it (decided 2026-10-09).** A control named `solver-feedback`, on the branch that
+survives: when a judge returns `ContinueWithFeedback`, the loop also resumes with `step_idx + 1`
+(`session.ail:4146`). No bank member or control uses a judge that continues, so this branch is
+not walked by the gate today. After W1 and W2 it is the only way a final answer is sent back.
 
-If decision 1 is "drop": delete the control and `run_recording_verified_at`, and record that in
-the same place.
+- `corpus_pr_dst.ail`: replace `run_recording_verified_at` with a function that runs the rig with
+  one `SolverJudge` atom that returns `ContinueWithFeedback` for every candidate. The judge is
+  pure and takes no input from the world.
+- `corpus_judge_dst.ail`: rename the control. It asserts what the old one did, through the new
+  branch: the run ends `Err` on `max_steps` with a step budget of 2; `ext_solver_feedback` at
+  steps 0 and 1; prepared steps 0 and 1; two provider interactions logged; the third scripted
+  entry never asked for. Delete `rejected_steps` and `rejecting_verifier`.
+- Keep the script's last entry a provider error that is not retried. The old control needed it
+  so that a defect ends as a red row and not as a hang, and the same holds here.
+- **Run the mutant.** Change `step_idx + 1` to `step_idx` at `session.ail:4146` and confirm the
+  control is red on `driver-step-repeated` and `steps-not-contiguous`. Then run the unmutated
+  gate without the new control and confirm the same mutant is green there. That second run is
+  the evidence that the control is what catches it.
+- **Check ruling 18's premise.** It rests on the control being the bank's rig with one part
+  changed, so that D5's three premises hold. A continuing judge takes the place of a neutral
+  hook. Confirm the recording adapter and the delta over the starting log are untouched.
+- Add ruling 19 to 011 ADR-003: the control changed branch, why, and the two mutant runs.
 
 **Gate:** `make corpus_judge corpus_pr`. Run `corpus_pr` by itself.
 
