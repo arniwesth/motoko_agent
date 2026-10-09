@@ -509,5 +509,6 @@ Closed on 2026-10-09:
 
 - [`PLAN-finalize-policy-migration.md`](PLAN-finalize-policy-migration.md), written with this
   amendment. Workstream W1 removes the verifier: the removals in A4, the system prompt's
-  sentence, and the edits to the records in the table above. Workstream W2 deletes the persist nudge and its environment read. The plan
-  replaces the unwritten `PLAN-persist-nudge-migration.md` listed above.
+  sentence, and the edits to the records in the table above. Workstream W2 deletes the persist
+  nudge and its environment read. The plan replaces the unwritten
+  `PLAN-persist-nudge-migration.md` listed above.
