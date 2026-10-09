@@ -108,13 +108,18 @@ rules, and the same mutant passed with the control removed.
 - docs(005): re-wrap one line in Amendment 1's follow-on
 - docs(005): the plan takes Codex Sol's review — eight findings, all reproduced and fixed
 - docs(005): old traces are read by a pinned runner — the operator's decision
+- docs(005): two diagrams of the finalize pipeline — with the DP7 verifier, and after W1 removes it
 
-2 files changed.
+6 files changed: the amendment, the plan, and two diagrams as Mermaid source and SVG.
 
 ## Governing docs
 
 - `.agent/projects/005_harness_policy_boundary/ADR-001-harness-policy-boundary.md`
 - `.agent/projects/005_harness_policy_boundary/PLAN-finalize-policy-migration.md`
+- `.agent/projects/005_harness_policy_boundary/mmd/dp7-finalize-gate.svg`: the pipeline as
+  built, with the verifier.
+- `.agent/projects/005_harness_policy_boundary/mmd/dp7-finalize-gate-end-state.svg`: the pipeline
+  after W1. It is the planned state, not what `main` does.
 
 ## Predicted outcome
 
@@ -159,7 +164,10 @@ Checked on 2026-10-09 at `36a96b1e`, AILANG v0.52.5.
 - [x] **Nothing sets `MOTOKO_PERSIST_RETRIES` outside tests.** `git grep` over the `Makefile`,
   `.github`, `.motoko`, `tools`, and the evaluation's scripts finds only DST scripts and a
   fixture generator.
-- [x] **Two files changed besides this record.** `git diff --name-only origin/main...HEAD`.
+- [x] **Both diagrams match their sources.** Each SVG is byte-identical to a fresh render of its
+  `.mmd` with `tools/mmd2svg` and `--theme tokyo-night`, and each was looked at in a browser
+  screenshot.
+- [x] **Six files changed besides this record.** `git diff --name-only origin/main...HEAD`.
 - [x] **Nothing stored records the persist-nudge budget.** The 2026-10-09 journal's header has no
   such field, `journal.ail:2288-2290` recomputes the count from history, and no stored execution
   program is committed. Six evidence logs name the key; they are records.
