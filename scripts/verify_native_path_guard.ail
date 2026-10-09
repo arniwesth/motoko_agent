@@ -9,6 +9,12 @@
 -- the only thing stopping them. This runs without that variable, so the guard
 -- is the only thing under test.
 --
+-- The guard (motoko_ext_abi/path_guard) needs only plain `realpath`, so every
+-- check runs on every platform: no SKIP. It used GNU-only `realpath -m`, and on
+-- stock macOS let these escapes through. EditFile on an existing file goes
+-- through atomic_write's mode copy, which used GNU-only `chmod --reference` and
+-- failed every edit on macOS.
+--
 -- Usage:
 --   AILANG_RELAX_MODULES=1 ailang run --caps IO,FS,Process,Env,Clock \
 --     --entry main scripts/verify_native_path_guard.ail
@@ -49,6 +55,7 @@ export func main() -> () ! {IO, FS, Process, Env, Clock} {
     let _ = exec("ln", ["-s", outside, "${workdir}/link"]);
     let _ = writeFileResult("${outside}/secret.txt", "secret\n");
     let _ = writeFileResult("${workdir}/inside.txt", "inside\n");
+    let _ = exec("ln", ["-s", "${outside}/ghost.txt", "${workdir}/ghost"]);
 
     let read_esc = call(workdir, "r1", "ReadFile",
       encode(jo([kv("path", js("link/secret.txt")), kv("start", jnum(1.0)), kv("end", jnum(5.0))])));
@@ -57,17 +64,33 @@ export func main() -> () ! {IO, FS, Process, Env, Clock} {
     let edit_esc = call(workdir, "e1", "EditFile",
       encode(jo([kv("path", js("link/secret.txt")),
         kv("edits", ja([jo([kv("old", js("secret")), kv("new", js("changed"))])]))])));
+    let write_dangling = call(workdir, "w2", "WriteFile",
+      encode(jo([kv("path", js("ghost")), kv("content", js("planted"))])));
     let read_in = call(workdir, "r2", "ReadFile",
       encode(jo([kv("path", js("inside.txt")), kv("start", jnum(1.0)), kv("end", jnum(5.0))])));
+    let _ = exec("chmod", ["640", "${workdir}/inside.txt"]);
+    let edit_in = call(workdir, "e2", "EditFile",
+      encode(jo([kv("path", js("inside.txt")),
+        kv("edits", ja([jo([kv("old", js("inside")), kv("new", js("edited"))])]))])));
+    let mode_in = match exec("bash", ["-c", "stat -c %a \"$1\" 2>/dev/null || stat -f %Lp \"$1\"", "mode", "${workdir}/inside.txt"]) {
+      Ok(out) => trim(toString(out.stdout)), Err(_) => ""
+    };
 
-    let results = [
+    let inside = [
+      check("ReadFile inside the workdir still works", not contains(read_in, "\"error\":true"), read_in),
+      check("EditFile on an existing file inside the workdir works", not contains(edit_in, "\"error\":true") && file_text("${workdir}/inside.txt") == "edited\n", edit_in),
+      check("...and keeps the file's mode bits", mode_in == "640", "mode is ${mode_in}")
+    ];
+    let escapes = [
       check("ReadFile through a symlink out of the workdir is refused", refused(read_esc), read_esc),
       check("WriteFile through a symlink out of the workdir is refused", refused(write_esc), write_esc),
       check("...and nothing was written outside", not fileExists("${outside}/planted.txt"), "planted.txt exists"),
       check("EditFile through a symlink out of the workdir is refused", refused(edit_esc), edit_esc),
       check("...and the outside file is unchanged", file_text("${outside}/secret.txt") == "secret\n", file_text("${outside}/secret.txt")),
-      check("ReadFile inside the workdir still works", not contains(read_in, "\"error\":true"), read_in)
+      check("WriteFile through a dangling symlink out of the workdir is refused", refused(write_dangling), write_dangling),
+      check("...and nothing was created outside", not fileExists("${outside}/ghost.txt"), "ghost.txt exists")
     ];
+    let results = inside ++ escapes;
     let _ = exec("rm", ["-rf", root]);
     if all_true(results) then () else exit(1)
   }
