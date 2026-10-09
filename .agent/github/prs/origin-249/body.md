@@ -3,7 +3,7 @@ repo: arniwesth/motoko_agent
 pr: 249
 branch: docs/005-adr001-amendment-dp7-to-extension
 ticket: null
-title: "docs(005): Amendment 1 to ADR-001 and its plan — pre-finalize verification (DP7) leaves core"
+title: "docs(005): two amendments to ADR-001 and their plan — the DP7 verifier, the persist nudge and hybrid mode leave core"
 ---
 
 ## Summary
@@ -23,7 +23,15 @@ trigger Motoko's own `make check_core` automatically. So the verifier is removed
 replaces it. The amendment keeps only the rules a verifier guard would have to respect if one
 were ever written. #251 turns the verifier off in the eight profiles that enabled it.
 
-**The plan is here too.** `PLAN-finalize-policy-migration.md` has two workstreams:
+**Amendment 2 was added on 2026-10-09, on a second ruling: hybrid mode (DP6) is removed too.**
+With it on, core searches a response that has no tool call for a fenced shell block, or failing
+that for a line of prose that starts like a shell command, and runs it instead of treating the
+answer as final. It was on in all sixteen profiles; #252 switches it off there. Of 1,103 session
+logs, 28 had an extraction, 26 of them in sessions where the model was also making typed tool
+calls. Nothing replaces it. The journal header, the extension ABI and the evaluator keep the
+name `hybrid_tools`, for journals already recorded.
+
+**The plan is here too.** `PLAN-finalize-policy-migration.md` has three workstreams:
 
 - **W1 removes the verifier from core** in nine work items. It is ready to start: #250 and #251
   merged on 2026-10-09.
@@ -32,15 +40,21 @@ were ever written. #251 turns the verifier off in the eight profiles that enable
   long time. Planning found that the read still runs in every session and that DST tables and
   the evaluation's fixtures count it. Nothing stored depends on it, so the removal is safe and
   wide. W2 follows W1.
+- **W3 removes hybrid mode.** It is the widest: `hybrid_tools` is a positional parameter of ten
+  entry points, passed at 82 call sites in 40 files. **W3 was written after the review below and
+  has not been reviewed.** Its first item removes only the branch and its event in a scratch tree
+  and lists what breaks.
 
-No decision is left open. The operator answered all five on 2026-10-09 and the plan records
-them:
+One decision is open, and only W3's wide edit waits on it: whether the journal header keeps
+`boot.hybrid_tools`, written as `false`, or drops it and moves the journal's schema. The plan
+recommends keeping it. The operator answered six others on 2026-10-09 and the plan records them:
 
 - The corpus gate's `verifier-rejection` control is replaced by a `solver-feedback` control.
 - The persist nudge is deleted in full, its environment read included.
 - A profile that still sets `verification.enabled` is not handled here. After W1 the key is read
   and ignored. What the host does with config entries it does not use gets its own pull request.
 - Deleting a wire event moves the vocabulary's version. Old traces are read by a pinned runner.
+- Hybrid mode is removed as well.
 
 **The amendment is a proposal. Merging this records it and does not accept it.** One open question
 remains, about a field of the extension ABI that 031 ADR-001 defines. The two positions most
@@ -110,6 +124,7 @@ rules, and the same mutant passed with the control removed.
 - docs(005): old traces are read by a pinned runner — the operator's decision
 - docs(005): two diagrams of the finalize pipeline — with the DP7 verifier, and after W1 removes it
 - docs(005): the plan's dagr document — 17 tasks, structure only
+- docs(005): Amendment 2 and W3 — hybrid mode (DP6) is removed from core
 
 7 files changed: the amendment, the plan, the plan's dagr document, and two diagrams as Mermaid
 source and SVG.
@@ -174,8 +189,14 @@ Checked on 2026-10-09 at `36a96b1e`, AILANG v0.52.5.
   screenshot.
 - [x] **The dagr document is contract-valid.** `dagr check
   PLAN-finalize-policy-migration.dagr.json --strict --json` prints `[]` and exits 0 at dagr 0.3.1.
-  It has 17 tasks, 16 `queued` and one `canceled`; every dependency names a task in it; every
-  task id appears in the markdown plan.
+  It has 24 tasks, 23 `queued` and one `canceled`; every dependency names a task in it; every
+  work item's id appears in the markdown plan. The open decision is a `question` task, `Q7`.
+- [x] **The hybrid figures were computed from the session logs and the tree.** 1,103 logs
+  scanned, 28 with a `hybrid_bash_extracted` event, 2 of those with no native tool call at all;
+  `git grep` for the entry points' call sites gives 82 in 40 files at `38068013`.
+- [x] **The hybrid path is the only producer of a replacing history entry.**
+  `pending_tool_batched: false` occurs once in `session.ail`, at `:4106`.
+- [ ] W3 has not been reviewed, and none of its work items was tried.
 - [x] **Seven files changed besides this record.** `git diff --name-only origin/main...HEAD`.
 - [x] **Nothing stored records the persist-nudge budget.** The 2026-10-09 journal's header has no
   such field, `journal.ail:2288-2290` recomputes the count from history, and no stored execution
