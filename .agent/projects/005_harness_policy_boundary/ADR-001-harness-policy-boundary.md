@@ -465,7 +465,8 @@ Costs:
   resume is unaffected, and nothing in the tree reads an old wire log against the event
   vocabulary. But the vocabulary is versioned: under 009 ADR-001 D6, deleting a variant moves
   `event-vocabulary/1` to `/2`, and old traces are either still decoded or read by a pinned
-  runner. The plan pins a runner, since the tree has no decoder for wire events.
+  runner. The operator chose the pinned runner on 2026-10-09: the tree has no decoder for wire
+  events, and the pin is one recorded commit.
 - **`ExtRuntime.verification` is exported by the ABI package** (`types.ail:2033-2037`). Core stops
   reading it at once. Whether the field can be dropped within 8.x or waits for 9.0 is for the plan
   to establish under the ABI header's rule.

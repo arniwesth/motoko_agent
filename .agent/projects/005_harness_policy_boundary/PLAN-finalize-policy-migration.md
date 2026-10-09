@@ -26,7 +26,7 @@ Two workstreams. W1 does not wait for W2.
 
 ### The operator's decisions
 
-All four were answered on 2026-10-09. Nothing in this plan waits on a decision.
+All five were answered on 2026-10-09. Nothing in this plan waits on a decision.
 
 | # | Question | The operator's answer |
 |---|---|---|
@@ -34,6 +34,7 @@ All four were answered on 2026-10-09. Nothing in this plan waits on a decision.
 | 2 | A profile that still sets `verification.enabled: true`: refuse to start, or warn? | Neither, here. Profile config entries the host does not use are dealt with in a separate pull request. WI-6 is withdrawn. |
 | 3 | Build a persist-nudge guard extension (ADR-001 D4), or delete the persist nudge? | Delete it. It is off by default, so it has not run for a long time. |
 | 4 | Keep reading `MOTOKO_PERSIST_RETRIES` as a dead value, or remove the read too? | Remove it in full, the read included. The operator confirmed that after seeing what the read touches. |
+| 5 | Deleting a wire event changes the vocabulary's version (review finding 4). For old traces: pin a runner, build a decoder, or keep the event as an entry nothing emits? | Pin a runner. |
 
 ---
 
@@ -158,10 +159,17 @@ Each item names the files, the change, and the `make` target that proves it.
   `/1` and change with it: `driver_only_dst.ail:262`, `driver_plus_compose_dst.ail:1105`,
   `driver_plus_no_ops_dst.ail:469`, `hook_guard_dst.ail:132`, and `profile_definition_dst.ail:171`
   and `:536`. So does the comment at `dst_interaction.ail:105`.
-- **Old traces.** 009 ADR-001 D6 offers two ways: keep decoding them, or pin a runner. The tree
-  has no decoder for wire events, so this plan pins a runner: a trace recorded under `/1` is read
-  by a checkout at or before the last commit that has `/1`. Say that in the comment above
-  `event_vocabulary_version()`.
+- **Old traces: a pinned runner (decision 5).** 009 ADR-001 D6 offers two ways: keep decoding
+  old traces, or pin a runner. The tree has no decoder for wire events. So a trace recorded
+  under `/1` is read by a build that still has `/1`, and the new build refuses it: a manifest
+  whose vocabulary version differs is already rejected with `ManifestVersionDrifted`
+  (`dst_profile.ail:1525-1527`).
+  - Record the pin in the comment above `event_vocabulary_version()` and in the commit message:
+    `event-vocabulary/1` is read by the commit this branch is cut from, named by its hash. Any
+    later commit that still has `/1` reads it too.
+  - Nothing is built. What the pin covers in practice is the corpus artifacts CI keeps for 14
+    days (`.github/workflows/dst-corpora.yml:168-176`) and anything on a developer's disk. No
+    recorded trace is committed.
 - `dst_invariants.ail:753` names the variant in a comment about the final-record rule. Reword it.
 - `scripts/dst/event_vocabulary_dst.ail`: remove it from the import and the sample (`:39`, `:96`),
   and change the row count at `:367` from 45 to 44.
@@ -409,7 +417,7 @@ removing it is safe for stored data and wide in tests.
   - Inline tests: `recovery.ail:86-118` and `test_decide_persist_nudge` (`step_machine.ail:403`).
   - The vocabulary: `dst_event_vocabulary.ail` loses its four mentions (`:109`, `:180`, `:240`,
     `:430`), its two counting tests go from 44 to 43, and the version moves again, to
-    `event-vocabulary/3`, by the same rule as WI-4.
+    `event-vocabulary/3`, by the same rule as WI-4, with a second pin for `/2`.
   - `event_vocabulary_dst.ail`: the import and sample (`:43`, `:118`) and the count at `:367`.
   - `scripts/phase_b_inventory_baseline.txt:23`, and the rule at
     `tools/code-graph/overlay/event_subjects.py:135-136` with its three pinned counts again.
@@ -476,8 +484,8 @@ It also offered four opinions, all taken: land the variant's deletion with the s
 "they share no code", make the attribution re-baseline explicit, and add the targets only CI
 runs.
 
-One choice in the fixes is this plan's and not the reviewer's: for old traces, **pin a runner**
-and do not build a decoder (WI-4).
+One choice in the fixes was not the reviewer's: for old traces, **pin a runner** and do not
+build a decoder (WI-4). The operator confirmed it on 2026-10-09, as decision 5.
 
 Not reviewed: neither workstream was implemented in full, and `make dst`, `eval_matrix`,
 `check_core`, the contract gates, `corpus_pr` and a live session were not run.
