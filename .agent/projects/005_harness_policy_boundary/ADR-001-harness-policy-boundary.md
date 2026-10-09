@@ -272,7 +272,8 @@ pipeline in [013 ADR-002](../013_core_architecture_for_dst/ADR-002-park-and-wake
 [031 ADR-001](../031_system_one_decisions/ADR-001-extension-owned-structured-decisions.md) D4
 (`:628-629`), the finalization item of
 [028 ADR-001](../028_verified_runtime_closing_the_loop/ADR-001-fail-closed-verification-everywhere.md)
-(`:28-31`), one control run of 011 ADR-003's gate (ruling 18), and the premise of the
+(`:28-31`), one control run of 011 ADR-003's gate (ruling 18), two settings rows of 013 ADR-004,
+and the premise of the
 [DP7 design doc](../../../design_docs/planned/m-motoko-dp7-verifier-gate.md) (`:31`).
 
 **Ruling, 2026-10-09 (operator).** The first draft of this amendment moved the verifier into a
@@ -462,7 +463,9 @@ Costs:
   which the gate does not walk today.
 - **Old wire logs still carry `dp7_verifier_rejected`.** The session journal never held it, so
   resume is unaffected, and nothing in the tree reads an old wire log against the event
-  vocabulary. The variant can be deleted outright.
+  vocabulary. But the vocabulary is versioned: under 009 ADR-001 D6, deleting a variant moves
+  `event-vocabulary/1` to `/2`, and old traces are either still decoded or read by a pinned
+  runner. The plan pins a runner, since the tree has no decoder for wire events.
 - **`ExtRuntime.verification` is exported by the ABI package** (`types.ail:2033-2037`). Core stops
   reading it at once. Whether the field can be dropped within 8.x or waits for 9.0 is for the plan
   to establish under the ABI header's rule.
@@ -480,6 +483,7 @@ itself. The other guards' feedback is as invisible to the operator. That is a se
 | 031 ADR-001 D4 `:628-629` | "Host permissions and deterministic verification remain authoritative" | Host permissions are untouched. Verification is no longer a host stage, and nothing ships one. |
 | 028 ADR-001 `:28-31`, and item 1 of its PLAN-001 | `run_dp7_verifier` fails closed, and "make the gate non-configurable for shipped profiles" | A1 and the ruling. There is no gate left to make fail-closed. 028's other two boundaries are untouched. |
 | 031 ADR-001 freeze evidence, item 6 `:1154` | "Composition with DP7" | Dropped. There is nothing to compose with. |
+| 013 ADR-004 T0 settings (`:610-611`) and read counts (`:966`) | `rt.verification` pinned to `{ enabled: false }` because of `run_dp7_verifier`; `MOTOKO_PERSIST_RETRIES` served as `"0"` and read once | Neither setting exists any more. Both rows go, by a numbered change in that record. |
 | 011 ADR-003 ruling 18 (`:484`) | The `verifier-rejection` control run | A `solver-feedback` control on the branch that survives (decided 2026-10-09), recorded as ruling 19 there. |
 | `SYSTEM.md:128` | "The runtime will not catch this for you — that gate is on the roadmap" | The runtime does not check this. The rule above it, that the model runs the check when it has modified AILANG source, stays. |
 
