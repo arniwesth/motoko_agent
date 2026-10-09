@@ -54,6 +54,44 @@ On acceptance it supersedes text in 011 ADR-003 (one control run), 013 ADR-002 D
 031 ADR-001 D4, the DP7 design doc and one sentence of `SYSTEM.md`. The amendment has a table
 naming each passage and what replaces it. None of those files is edited here.
 
+## Review
+
+Codex Sol (GPT-6.1-Sol) reviewed the plan on 2026-10-09 at `f9a7c89c`, in a detached checkout,
+from a brief that gave it none of the author's conclusions. It ran for 17 minutes and restored
+its checkout. **Its verdict: revise before implementing.** Followed literally, the plan left
+compile failures, failing gates and a vocabulary change with no version change.
+
+Each finding was reproduced against the code before anything was changed. All eight hold, and
+all eight are fixed in the plan.
+
+| # | Finding | How it was reproduced | What changed |
+|---|---|---|---|
+| 1 | WI-7 removed a block holding six scenarios but only four list entries, and left `f6`/`r6` and two imports behind | Read `phase_c2_wiring_scenarios.ail:1141-1391` and `ledger_parity_dst.ail:632-638` | WI-7 deletes five scenarios and keeps one, fixes the final checks and counts, and names two wrapper scripts that pin nine |
+| 2 | Two inline tests in `dst_event_vocabulary.ail` still asserted 45 rows | Read `:863` and `:929` | WI-4 |
+| 3 | W2's checklist missed the `ledger_parity` order strings and the depth canary's record pins | Read `ledger_parity_dst.ail:616`, `:619` and `run_depth_canary.sh:172`. The reviewer ran both targets red. | W2-1 and W2-4 |
+| 4 | Deleting a wire variant is a vocabulary version change, and the plan made none | Read `dst_event_vocabulary.ail:117-121`, 009 ADR-001 D6 and `dst_profile.ail:1568` | WI-4 moves the version to `event-vocabulary/2` and W2-2 to `/3`; six pinned strings follow |
+| 5 | Deleting the code-graph rule breaks three pinned counts that no gate runs | Read `test_event_subjects.py:38` and `validate_overlay.py:45`; found no `make` target or CI job for them | WI-4 moves the pins; WI-10 runs the test by hand |
+| 6 | W2 did not name the `CandidateNudge` arm, an exported session helper, three local helpers, several tests and three inventory entries | Read each cited line | W2-2 |
+| 7 | 013 ADR-004's settings and read-count tables still require the removed behaviour | Read `:604-611` and `:966` | WI-9, W2-6, and the amendment's table |
+| 8 | The driver has twelve environment keys, not eleven; the vocabulary's callers were misnamed | Counted `dst_discovery.ail:224-236`; listed callers with `git grep` | *Verified state* and W2 |
+
+Its four opinions were also taken: land the variant's deletion in one commit with the script
+edits, drop "they share no code", make the attribution re-baseline explicit (six files and three
+re-issued DST profiles), and add the targets only CI runs.
+
+**One choice in the fixes is the author's, not the reviewer's.** 009 ADR-001 D6 says old traces
+are either still decoded or read by a pinned runner. The plan pins a runner, because the tree has
+no decoder for wire events. That is the operator's to overrule.
+
+**What the review confirmed.** The verifier's structure and ordering; that the journal holds no
+rejection, environment read or nudge count; the two sessions' rejection counts; that no contract
+register entry is affected; and that every `make` target the plan names exists. It also built
+the `solver-feedback` control: it passed `make corpus_judge`, its mutant went red on both named
+rules, and the same mutant passed with the control removed.
+
+**What the review did not do.** It implemented neither workstream in full and did not run
+`make dst`, `eval_matrix`, `check_core`, the contract gates, `corpus_pr` or a live session.
+
 ## Changes
 
 - docs(005): propose Amendment 1 to ADR-001 — pre-finalize verification (DP7) moves to an extension
@@ -65,6 +103,8 @@ naming each passage and what replaces it. None of those files is edited here.
 - docs(005): the plan records the operator's confirmation — the persist nudge goes in full, its read included
 - docs(005): the corpus gate's control moves to the solver-feedback branch — the operator's decision
 - docs(005): W1 does not handle a leftover verification.enabled — unused config entries get their own PR
+- docs(005): re-wrap one line in Amendment 1's follow-on
+- docs(005): the plan takes Codex Sol's review — eight findings, all reproduced and fixed
 
 2 files changed.
 
@@ -121,10 +161,12 @@ Checked on 2026-10-09 at `36a96b1e`, AILANG v0.52.5.
   such field, `journal.ail:2288-2290` recomputes the count from history, and no stored execution
   program is committed. Six evidence logs name the key; they are records.
 - [ ] What goes red when the read is removed was not run. It is W2's first work item.
-- [ ] The plan was not reviewed by a second reader, and no work item was tried.
+- [ ] No work item was implemented in full. The reviewer tried parts of WI-4, WI-7 and WI-8 and
+  the read removal in W2, in a scratch checkout.
 - [ ] The two session logs are not committed. They are in the shared checkout's gitignored
   `.motoko/logfile/`.
-- [ ] No second reviewer has read the amendment.
+- [x] **A second reader reviewed the plan.** Codex Sol, see *Review*. The amendment itself was in
+  its reading but was not the subject of the review.
 - [ ] No code changed, so no gate was run. CI was not awaited.
 - [ ] Why the delegate this session spawned (`session_1791533296010-1695c0abcc275cc3`) finished
   with no rejection under the same profile was not determined.
