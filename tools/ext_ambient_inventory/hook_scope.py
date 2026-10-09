@@ -95,10 +95,13 @@ in any delegated body on the path.  Resolution is locals and parameters first,
 then the HOME module's imports, then the home module's own declarations --
 never another closure module's, and never a closure-wide table keyed by bare
 name, which resolved a clean `body` to an effectful `body` in another module.
-This is stricter than the pinned compiler in one direction the ADR takes by
-design: v0.33.0 resolves an IMPORTED name over a local of the same name (fact
-6, N62), so a local that shadows an import is over-rejected here, and P0.2
-scores those rows as a fourth, compiler-clean class.  A computed list, a
+Up to AILANG v0.47.2 this was stricter than the compiler in one direction the
+ADR took by design: the compiler resolved an IMPORTED name over a local of the
+same name (fact 6, N62), so a local that shadows an import was over-rejected
+here, and P0.2 scored those rows as a fourth, compiler-clean class.  From
+v0.52.0 a local binder outranks an import, the order above is the compiler's
+for that shadow, and the rows are escapes in P0.2's group 3 (ADR-001 Amendment
+6).  A computed list, a
 `match`-selected list, an unknown list, an inline lambda, a `let`-bound
 lambda, a partial application and every other expression fail closed.
 
@@ -322,8 +325,10 @@ SHAPE_REASONS = {
                             "on the path (fact 6, `delegate_shadow`): a local `let make_hooks` "
                             "over a top-level `func make_hooks` registers the LOCAL, and a "
                             "reader that resolves the name to the declaration certifies a "
-                            "callback that never runs. Over an IMPORTED `make_hooks` the pinned "
-                            "compiler runs the import (N62); the rule rejects the local anyway",
+                            "callback that never runs. Over an IMPORTED `make_hooks` the local "
+                            "runs too from AILANG v0.52.0 (ADR-001 Amendment 6); up to v0.47.2 "
+                            "the compiler ran the import (N62) and the rule rejected the local "
+                            "anyway",
     "delegation-parameter-bound": "the delegated callee that returns `caps` is a PARAMETER of a "
                                   "body on the path (`v7_delegate_param`): whatever the caller "
                                   "passed runs, and a reader that never read a signature "
@@ -343,8 +348,9 @@ SHAPE_REASONS = {
     "payload-let-bound": "a function payload is a bare name that is `let`-bound in the "
                          "producing body or a delegated body on the path (fact 5, "
                          "`q_named_shadow`): a local `let body = func(…)` over a top-level "
-                         "`func body` registers the lambda. Over an IMPORTED `body` the pinned "
-                         "compiler runs the import (N62); the rule rejects the local anyway",
+                         "`func body` registers the lambda. Over an IMPORTED `body` the local "
+                         "runs too from AILANG v0.52.0 (ADR-001 Amendment 6); up to v0.47.2 the "
+                         "compiler ran the import (N62) and the rule rejected the local anyway",
     "payload-parameter-bound": "a function payload is a bare name that is a PARAMETER of a "
                                "body on the path (`v7_param_shadow`): `make_hooks(body: (Ctx) "
                                "-> int)` binds whatever its caller passed under the name of a "
@@ -1133,9 +1139,10 @@ class Scope:
             also.append(f"shadows the top-level `func {name}` of `{self._rel(hop.module)}`")
         imp = self.imports.get(hop.module, {}).get(name)
         if imp is not None:
-            also.append(f"shadows the import of `{imp[1]}` from `{imp[0]}` -- the pinned "
-                        f"compiler (v0.33.0) resolves the IMPORT over the local (N62); the "
-                        f"rule takes the local, which is the fail-closed direction")
+            also.append(f"shadows the import of `{imp[1]}` from `{imp[0]}` -- from AILANG "
+                        f"v0.52.0 the compiler resolves the LOCAL over the import, as the "
+                        f"rule does (ADR-001 Amendment 6); up to v0.47.2 it resolved the "
+                        f"import (N62)")
         bound = (f"is `let`-bound in `{hop.name}`" if kind == "let"
                  else f"is a parameter of `{hop.name}`")
         return f"`{name}` {role} and {bound}" + (" -- " + "; ".join(also) if also else "")
@@ -1784,8 +1791,9 @@ def gate_fixture_suite(repo: Path, gate_dir: Path, producer=None, builtins=None,
     matters: walk residue (`show`) and a PASSING shape, side by side, which is
     the ADR's "distinct from and never hidden by" made checkable.  With
     `ailang_check` the pinned compiler's verdict is asserted where a fixture
-    pins one: the import-shadow rows are compiler-CLEAN and gate-rejected, by
-    design (P0.2's group 4).
+    pins one: the import-shadow rows are compiler-CLEAN and gate-rejected, as
+    every escape here is (P0.2's group 3 since ADR-001 Amendment 6; its group 4,
+    over-rejected by design, while the compiler still ran the import).
 
     Returns `(failures, lines)`; a failure is a pin that did not hold.
     """

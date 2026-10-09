@@ -5,16 +5,21 @@
     "(no producer, no cache; add --ailang-check to assert `compiler`) and by",
     "`make ext_hook_scope_selftest`, which also runs the walk and asserts `verdict` where pinned.",
     "",
-    "Every fixture is SYNTHETIC. The escapes are P0.2's group-3 and group-4 constructions re-cast",
+    "Every fixture is SYNTHETIC. The escapes are P0.2's group-3 constructions -- the two import",
+    "shadows among them, which were its group 4 until ADR-001 Amendment 6 -- re-cast",
     "onto the 8.0 `{ config, caps }` head (scripts/dst/fixtures/adr001_boundary/ holds the sources",
     "the reviews quoted, on the 7.4 head); nothing here is from a session.",
     "",
     "GROUPS. `pass`: the positive controls -- a reader that resolves nothing passes every fail row,",
     "so these carry the suite. `fail`: one per rejection reason in `SHAPE_REASONS`; the self-test",
-    "refuses a reason no fixture reaches. `fail-compiler-clean`: P0.2's group 4 -- the import shadow",
-    "the pinned compiler resolves the OTHER way (N62); the rule over-rejects it by design and the",
-    "`compiler: clean` pin is what says so. `form`: one per in-tree registration form at HEAD, on",
-    "the 7.4 head; P1.2 rewrites each to the migrated form and flips its pin to pass, batch by batch.",
+    "refuses a reason no fixture reaches. The two import-shadow rows are `fail` rows as well, a",
+    "second fixture each for `payload-let-bound` and `delegation-let-bound`. Until the v0.52.5 pin",
+    "they were a group of their own, `fail-compiler-clean` (P0.2's group 4): up to AILANG v0.47.2 the",
+    "compiler ran the IMPORT (N62), so the rule over-rejected them by design. From v0.52.0 the local",
+    "outranks the import and both perform, as every other escape here does (ADR-001 Amendment 6).",
+    "Their `compiler: clean` pin still holds: `ailang check` accepts them. `form`: one per in-tree",
+    "registration form at HEAD, on the 7.4 head; P1.2 rewrites each to the migrated form and flips",
+    "its pin to pass, batch by batch.",
     "",
     "`fx_residue` is the row that shows the two results are distinct: its walk verdict is",
     "HOOK-UNRESOLVED (`show`, door 3) and its shape result is PASS. `fx_delegated_record` records a",
@@ -176,8 +181,8 @@
       "reasons": [
         "payload-let-bound"
       ],
-      "group": "fail-compiler-clean",
-      "form": "v7_import_shadow: local `let body` over an IMPORTED `body`; the pinned compiler runs the import (N62)",
+      "group": "fail",
+      "form": "v7_import_shadow: local `let body` over an IMPORTED `body`; the local runs from AILANG v0.52.0 (the import ran before, N62)",
       "atoms": 1,
       "compiler": "clean"
     },
@@ -187,8 +192,8 @@
       "reasons": [
         "delegation-let-bound"
       ],
-      "group": "fail-compiler-clean",
-      "form": "v7_delegate_import_shadow: local `let make_hooks` over an IMPORTED `make_hooks`; the import runs (N62)",
+      "group": "fail",
+      "form": "v7_delegate_import_shadow: local `let make_hooks` over an IMPORTED `make_hooks`; the local runs from AILANG v0.52.0 (the import ran before, N62)",
       "compiler": "clean"
     },
     "fx_delegate_unresolved": {

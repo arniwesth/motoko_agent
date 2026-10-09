@@ -1,0 +1,43 @@
+  ok  fx_computed                    fail  caps-computed                                        computed_list: `caps: if .. then [ToolPolicy(..)] else []`  compiler=clean
+  ok  fx_delegate_import_shadow      fail  delegation-let-bound                                 v7_delegate_import_shadow: local `let make_hooks` over an IMPORTED `make_hooks`; the local runs from AILANG v0.52.0 (the import ran before, N62)  compiler=clean
+  ok  fx_delegate_param              fail  delegation-parameter-bound                           v7_delegate_param: `build_with(mk: ..)` delegates to its PARAMETER under a top-level func's name  compiler=clean
+  ok  fx_delegate_shadow             fail  delegation-let-bound                                 fact 6 / delegate_shadow: local `let make_hooks` over top-level `func make_hooks`  compiler=clean
+  ok  fx_delegate_unresolved         fail  delegation-unresolved                                `caps: make_hooks(cfg)` with no such function anywhere  compiler=rejected
+  ok  fx_delegated_record            fail  return-shape-unsupported                             `register_with_config(cfg) = make_reg(cfg)` -- the record only BEHIND a delegation; the rule admits delegation at `caps`  compiler=clean
+  ok  fx_empty                       pass  -                                                    8.0 head; `caps: []` -- a recognised empty list passes (ADR D2 'The gate')  compiler=clean
+  ok  fx_form_delegated_let          fail  payload-let-bound, return-shape-unsupported          IN-TREE FORM (a2a, agentcli, ailang-docs, exa-search, mcp, scratchpad, compose, herdr): `make_hooks(cfg)` let-binding its payloads  compiler=clean
+  ok  fx_form_describe_inline        fail  payload-inline-lambda, return-shape-unsupported      IN-TREE FORM (a2a, agentcli, ailang-docs, scratchpad): `DescribeTools(\_ . schemas)` capturing discovered schemas  compiler=clean
+  ok  fx_form_inline_backslash       fail  payload-inline-lambda, return-shape-unsupported      IN-TREE FORM (context-mode, omnigraph, scratchpad PromptShaper; test-dummy): 7.4 list, `\ctx. f(captured, ctx)`  compiler=clean
+  ok  fx_form_inline_func            fail  payload-inline-lambda, return-shape-unsupported      IN-TREE FORM (progress-contract-guard, omnigraph ToolProvider, compaction-ai): 7.4 list, inline `func(..) { .. }`  compiler=clean
+  ok  fx_form_let_lambda             fail  payload-let-bound, return-shape-unsupported          IN-TREE FORM (repetition-guard, context-mode): 7.4 list, `let policy = func(..)` capturing a registration value  compiler=clean
+  ok  fx_form_named_list             fail  return-shape-unsupported                             IN-TREE FORM (batch A: compaction-structural, decision-framework, empty-stop-guard, microrag): 7.4 bare list, named payload -- the head alone fails  compiler=clean
+  ok  fx_import_ok                   pass  -                                                    8.0 head; the payload resolves through the home module's IMPORT to a sibling's top-level func  compiler=clean
+  ok  fx_import_shadow               fail  payload-let-bound                                    v7_import_shadow: local `let body` over an IMPORTED `body`; the local runs from AILANG v0.52.0 (the import ran before, N62)  compiler=clean
+  ok  fx_inline_lambda               fail  payload-inline-lambda                                8.0 head; `ToolPolicy(func(ctx) { apply(ctx, w) })` -- facts 1 and 4's construction  compiler=clean
+  ok  fx_list_not_enumerable         fail  list-not-enumerable                                  `[ToolPolicy(body), Judge(body)]` -- an unknown constructor; the list cannot be enumerated atom by atom  compiler=rejected
+  ok  fx_match                       fail  caps-match-selected                                  `caps: match cfg { 0 => [], _ => [ToolPolicy(..)] }`  compiler=clean
+  ok  fx_named_delegated_ok          pass  -                                                    8.0 head; `caps: make_hooks(cfg)` delegated to a named top-level function returning a literal list  compiler=clean
+  ok  fx_named_ok                    pass  -                                                    8.0 head; three named top-level payloads, DescribeTools taking Json (N49)  compiler=clean
+  ok  fx_no_register                 fail  registration-missing                                 a module with no `register_with_config` at all  compiler=clean
+  ok  fx_not_a_name                  fail  payload-not-a-name                                   `ToolPolicy(w.f)` -- a field read is neither a bare name nor an inline function  compiler=clean
+  ok  fx_param_shadow                fail  payload-parameter-bound                              v7_param_shadow: `make_hooks(body: (Ctx) -> int)` binds its PARAMETER under a top-level func's name  compiler=clean
+  ok  fx_partial                     fail  payload-partial-application                          q_named_partial: `ToolPolicy(apply_w(w))` -- a function value built at registration  compiler=clean
+  ok  fx_payload_unresolved          fail  payload-unresolved                                   `ToolPolicy(nowhere)` -- a bare name that resolves to nothing  compiler=rejected
+  ok  fx_record_extra_field          fail  return-shape-unsupported                             `{ config, caps, extra }` -- the head is exactly two fields  compiler=rejected
+  ok  fx_residue                     pass  -                                                    named callback applying `show` -- door-3 walk residue beside a PASSING shape: distinct, never hidden  compiler=clean
+  ok  fx_shadow                      fail  payload-let-bound                                    fact 5 / q_named_shadow: local `let body = func(..)` over top-level `func body`  compiler=clean
+  ok  fx_unknown                     fail  caps-unknown                                         `let hooks = [..]; caps: hooks` -- a list the reader cannot resolve to a literal or a named func  compiler=clean
+  ok  arity BudgetShaper           1 arg(s), binding(s) at [0]
+  ok  arity Compactor              1 arg(s), binding(s) at [0]
+  ok  arity DecisionSolverJudge    3 arg(s), binding(s) at [1, 2]
+  ok  arity DecisionToolPolicy     3 arg(s), binding(s) at [1, 2]
+  ok  arity DescribeTools          1 arg(s), binding(s) at [0]
+  ok  arity ExitIntent             3 arg(s), binding(s) at [2]
+  ok  arity PromptShaper           1 arg(s), binding(s) at [0]
+  ok  arity ResponseInterceptor    1 arg(s), binding(s) at [0]
+  ok  arity SolverJudge            1 arg(s), binding(s) at [0]
+  ok  arity ToolPolicy             1 arg(s), binding(s) at [0]
+  ok  arity ToolProvider           2 arg(s), binding(s) at [1]
+  ok  arity WorkInFlight           2 arg(s), binding(s) at [1]
+
+registration-shape gate fixtures: 29 ok, 0 failure(s)

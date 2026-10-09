@@ -1109,19 +1109,29 @@ rm -f "$LIMMOD"
 # than left for a reader to discover, because for those two the escape is
 # evidence in the weaker position.
 #
-# THE FOUR GROUPS (ADR freeze 2(b)), each with its own expected result:
+# THE GROUPS (ADR freeze 2(b)), each with its own expected result:
 #   1  compiler-rejected controls      the compiler itself rejects, by its own mechanism
 #   2  compiler-accepted ordinary      legitimate registrations that must keep compiling
 #   3  compiler-accepted escapes       accepted bare; the BOUNDARY must reject them
-#   4  compiler-clean, boundary-rejected  the import shadow the rule over-rejects BY DESIGN
 # and, kept separate because ADR item 2 says the three classes never substitute
 # for one another (N23):
 #   2(a) missing authority            accepted; dies AT INVOCATION on a missing field
 #
+# THERE WAS A FOURTH GROUP UNTIL THE v0.52.5 PIN, AND IT HELD ONE ROW (ADR-001
+# Amendment 6): compiler-clean and boundary-rejected, the import shadow. Up to
+# v0.47.2 an IMPORTED name outranked a local `let` of the same name (ADR fact 6,
+# N62), so the import ran, NO effect was performed, and D2's locals-first order
+# over-rejected the row by design. AILANG v0.52.0 reversed the order: the local
+# wins and the row performs. It is LIMITATION 18 in group 3 now, D2's order is
+# the compiler's for this shadow, and no construction is known that is
+# compiler-clean and boundary-rejected.
+#
 # A GROUP'S DENOMINATOR IS FIXED BY ITS MEMBERSHIP. A new case is a NEW ROW. No
 # case is moved between groups to make a count come out, and the class-2(a) rows
 # are NOT folded into any 2(b) group -- a runtime missing-field failure is not an
-# ambient-effect escape and cannot stand in for one.
+# ambient-effect escape and cannot stand in for one. LIMITATION 18 is the one
+# row that has changed class, and it did so because its MEASURED RESULT changed
+# at a pin bump: its own row went red and named the class it belongs in.
 #
 # THE ROW IDIOM is the file's own two-sided one (`:751-771`): where the row
 # measures something the pinned compiler ACCEPTS, an upstream fix must turn the
@@ -1248,7 +1258,6 @@ adr_rg1() {   # $1 case, $2 table reason (app | eff:X | letann), $3 what it esta
 g1_n=0; g1_held=0
 g2_n=0; g2_held=0
 g3_n=0; g3_held=0
-g4_n=0; g4_held=0
 ga_n=0; ga_held=0
 
 # GROUP 1 -- compiler-rejected controls. The expected result is a REJECTION, and
@@ -1311,38 +1320,6 @@ adr_g3() {   # $1 limitation number, $2 case, $3 effect-evidence regex, $4 what 
     g3_held=$((g3_held+1))
   else
     bad "LIMITATION $1 ($2): accepted and ran, but the escape evidence /$3/ is ABSENT from the output, so this row no longer witnesses an effect performed and must not be counted as an escape"
-  fi
-}
-
-# GROUP 4 -- compiler-clean, boundary-rejected BY DESIGN. The pinned compiler
-# resolves an IMPORTED name over a local `let` of the same name (ADR fact 6,
-# N62), so the import runs and NO effect is performed. D2's rule resolves locals
-# first and therefore OVER-REJECTS this row. That is the safe direction, taken
-# deliberately, and it is scored as its own class so the over-rejection is
-# visible rather than hidden inside group 3's denominator.
-#
-# THE TICKET NAMED HERE IS DELIBERATE AND IT IS NOT THIS ROW'S MECHANISM. This
-# is import precedence, not the effect-inference gap; `fb_30e82f6bdc5fc8c3` is
-# named because PLAN-001 §0 item 10 makes both equally properties of the v0.33.0
-# pin and NOTE-001 §7 re-reads them together at a bump.
-adr_g4() {   # $1 limitation number, $2 case, $3 expected output regex, $4 escape line that must be ABSENT, $5 what still holds
-  g4_n=$((g4_n+1))
-  local out rout
-  if ! out=$(adr_chk "$2"); then
-    bad "LIMITATION $1 IS FIXED UPSTREAM: $2 no longer compiles, so the pinned import-precedence fact (ADR fact 6, N62) has changed. D2's rule was written to OVER-REJECT this case on purpose; re-read the fourth class and the gate's import-shadow fixtures: $(adr_err "$out")"
-    return
-  fi
-  if ! rout=$(adr_run "$2"); then
-    bad "LIMITATION $1 ($2): compiles but fails at invocation — the import-precedence measurement is gone: $(echo "$rout" | grep -E '^Error' | head -1)"
-    return
-  fi
-  if adr_flat "$rout" | grep -qF "$4"; then
-    bad "LIMITATION $1 IS FIXED UPSTREAM — IN THE DANGEROUS DIRECTION: $2 now performs the effect (/$4/ appeared), so v0.33.0's import precedence has REVERSED and the local shadow wins. This is no longer a compiler-clean row: it is an ESCAPE, it belongs in group 3, and ADR fact 6 and the fourth class must be re-read before anything else in this suite is trusted"
-  elif adr_flat "$rout" | grep -qE "$3"; then
-    ok "LIMITATION $1 still holds: $5 — a property of the v0.33.0 pin alongside fb_30e82f6bdc5fc8c3, though NOT that ticket: this is import precedence (ADR fact 6, N62), re-read with it at any bump (NOTE-001 §7)"
-    g4_held=$((g4_held+1))
-  else
-    bad "LIMITATION $1 ($2): ran without the effect, but the output is not /$3/, so which binding ran is no longer established and the row states nothing about import precedence"
   fi
 }
 
@@ -1534,12 +1511,14 @@ adr_g3 16 computed_list "NAMED RULE ESCAPE" \
 adr_g3 17 fs_smuggle "IO OUTSIDE FS VIEW" \
   "a record-FIELD payload bound straight into the capability, Fs(w.f), performs out-of-row IO from FsCtx — the 017 record-field hole in payload position, and the oldest escape in this suite (third review)" \
   "record-field payload rows are checked upstream; LIMITATION 1 above must have gone red with it, and control_env/control_fs — built through that same door — can no longer be constructed"
-
-echo ""
-echo "   group 4 — COMPILER-CLEAN, BOUNDARY-REJECTED BY DESIGN: the import shadow D2 over-rejects"
-
-adr_g4 18 v7_delegate_import_shadow "result=2" "NAMED RULE ESCAPE" \
-  "on v0.33.0 an IMPORTED make_hooks outranks a local let make_hooks of the same name: the import runs, the result is 2 and NO effect is performed — so D2's stricter locals-first order OVER-REJECTS a compiler-clean registration, deliberately and in the safe direction"
+# LIMITATION 18 WAS THE FOURTH GROUP'S ONLY ROW (see THE GROUPS above; ADR-001
+# Amendment 6). Up to v0.47.2 the IMPORTED make_hooks ran: the result was 2 and
+# no effect was performed. From v0.52.0 the local `let` outranks the import, so
+# this is `delegate_shadow` (LIMITATION 13) with the shadowed callee imported
+# instead of declared, and it performs the same way.
+adr_g3 18 v7_delegate_import_shadow "NAMED RULE ESCAPE" \
+  "a local let make_hooks shadowing an IMPORTED make_hooks performs, because from AILANG v0.52.0 a local binder outranks an import of the same name — up to v0.47.2 the import ran and D2's locals-first order over-rejected this row; now that order is the compiler's and its rejection is what stops the row (ADR-001 Amendment 6)" \
+  "the import shadow is rejected by the compiler; Amendment 6's measurement must be taken again, and the gate's fx_import_shadow and fx_delegate_import_shadow, which pin compiler: clean, go red with it"
 
 # ============================================================================
 # THE SCORE. Each group's denominator is its MEMBERSHIP, printed here so that a
@@ -1552,8 +1531,7 @@ printf '      %-46s %s\n' "class 2(a) missing authority (accepted, dies at call)
 printf '      %-46s %s\n' "group 1  compiler-rejected controls"                   "$g1_held/$g1_n"
 printf '      %-46s %s\n' "group 2  compiler-accepted ordinary controls"          "$g2_held/$g2_n"
 printf '      %-46s %s\n' "group 3  compiler-accepted escapes (boundary must reject)" "$g3_held/$g3_n"
-printf '      %-46s %s\n' "group 4  compiler-clean, boundary-rejected by design"  "$g4_held/$g4_n"
-adr_scored=$((ga_n + g1_n + g2_n + g3_n + g4_n))
+adr_scored=$((ga_n + g1_n + g2_n + g3_n))
 # P0.2b: the reconstructions are scored in groups 1 and 2, so they count as cases.
 # A reconstruction without a row turns this red, and so does a row without a fixture.
 if [ "$rc_n" -eq "$adr_n_recon" ]; then

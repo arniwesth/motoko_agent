@@ -141,7 +141,8 @@ SHAPES = {
 #: exists to clear, calls `_list_length` at `compaction_structural.ail:251`.
 #: Their effects come from the same producer: a builtin is provably effect-free
 #: only when some `std/*` export whose body calls it carries a CLOSED EMPTY
-#: cached row, and no such export carries labels or a row variable.
+#: cached row, and no such export carries labels.  A caller that carries a row
+#: VARIABLE does not count against it (`builtin_effects` says why).
 BUILTIN_CALL = re.compile(rf"\b(_[a-z][A-Za-z0-9_]*)\s*\(")
 
 STDLIB_ENV = "AILANG_STDLIB_PATH"
@@ -342,6 +343,24 @@ def builtin_effects(stdlib: Path, producer: Producer) -> dict[str, str]:
     reason that row is evidence.  Any builtin reached only from private helpers,
     from effect-variable exports, or from a module with no cached interface is
     unresolved and therefore a rejection.
+
+    ONLY, and the order below is that word.  A closed-row caller is the proof,
+    and an effect-variable caller of the same builtin takes nothing from it: the
+    variable is the caller's callback's, not the builtin's.  Until AILANG v0.52
+    no builtin had both kinds of caller, so the order was never exercised, and
+    this function put `effect-variable` first.  v0.52.0's `std/list` made `mapE`,
+    `filterE`, `foldlE` and `flatMapE` call `_list_length` directly, beside
+    `length`, which proves it pure -- and the old order rejected the builtin
+    `control_pure_builtin.ail` says must not be rejected, and with it every
+    extension that calls it.  Ruled by the operator on PR #243, 2026-10-08.
+
+    WHAT THIS GIVES UP: a builtin that took an EFFECTFUL CALLBACK would be pure
+    in a pure caller and effectful in a polymorphic one, and would read PURE
+    here.  No builtin can take one (`std/list.ail` says so beside `mapE`).  If
+    that changes, this order is the first thing to re-read.
+
+    A caller that carries LABELS still decides the other way, as before: that
+    half is over-cautious by the same argument and is left alone on purpose.
     """
     evidence: dict[str, set[str]] = {}
     for f in sorted(stdlib.glob("*.ail")):
@@ -358,13 +377,67 @@ def builtin_effects(stdlib: Path, producer: Producer) -> dict[str, str]:
         eff = sorted(k for k in kinds if k == "EFFECTFUL")
         if eff:
             out[b] = "EFFECTFUL"
-        elif "effect-variable" in kinds:
-            out[b] = "effect-variable"
         elif "PURE" in kinds:
             out[b] = "PURE"
+        elif "effect-variable" in kinds:
+            out[b] = "effect-variable"
         else:
             out[b] = "no-cached-interface"
     return out
+
+
+def builtin_rule_failures() -> list[str]:
+    """`builtin_effects`' order, asserted on a SYNTHETIC stdlib.
+
+    The fixtures run against the installed stdlib, and which builtins have which
+    callers is a property of its version: on v0.47.2 no builtin has both a
+    closed-row and an effect-variable caller, and on v0.52.5 none has an
+    effect-variable caller alone.  So neither side of the order can be pinned on
+    the real one.  Four builtins, one per case, each with the callers that make
+    the case.
+    """
+    import tempfile
+
+    class Rows:
+        """Stands in for the producer: the row each synthetic export would cache."""
+        kinds = {"closed": "PURE", "closed_too": "PURE", "closed_beside_labels": "PURE",
+                 "polymorphic": "effect-variable", "labelled": "EFFECTFUL"}
+
+        def classify(self, mod: str, sym: str) -> tuple[str, object]:
+            return self.kinds.get(sym, "symbol-not-in-interface"), None
+
+    source = (
+        "module std/synthetic\n"
+        "export func closed(xs) { _syn_both_callers(xs) }\n"
+        "export func closed_too(xs) { _syn_closed_only(xs) }\n"
+        "export func closed_beside_labels(xs) { _syn_labelled_too(xs) }\n"
+        "export func polymorphic(f, xs) { g(f, _syn_both_callers(xs), _syn_variable_only(xs)) }\n"
+        "export func labelled(xs) { _syn_labelled_too(xs) }\n"
+        "func private_helper(xs) { _syn_private_only(xs) }\n"
+    )
+    want = {
+        "_syn_both_callers": ("PURE", "a closed-row caller proves it, whatever an "
+                                      "effect-variable caller beside it carries"),
+        "_syn_closed_only": ("PURE", "the plain case"),
+        "_syn_variable_only": ("effect-variable", "reached ONLY from an effect-variable "
+                                                  "export: still a rejection"),
+        "_syn_labelled_too": ("EFFECTFUL", "a labelled caller still decides, closed-row "
+                                           "caller or not"),
+        "_syn_private_only": ("no-cached-interface", "reached only from a private helper: "
+                                                     "still a rejection"),
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+        (Path(tmp) / "synthetic.ail").write_text(source)
+        got = builtin_effects(Path(tmp), Rows())      # type: ignore[arg-type]
+    fails = []
+    for b, (kind, why) in want.items():
+        if got.get(b) != kind:
+            fails.append(f"BUILTIN RULE: `{b}` classed {got.get(b)}, expected {kind} -- {why}")
+    extra = sorted(set(got) - set(want))
+    if extra:
+        fails.append(f"BUILTIN RULE: the synthetic stdlib yielded builtins it does not "
+                     f"declare: {extra}")
+    return fails
 
 
 # --------------------------------------------------------------------------
@@ -825,6 +898,14 @@ def self_test(repo: Path) -> int:
     if "unknown-builtin" not in covered:
         fails.append("SHAPE COVERAGE: no fixture exercises `unknown-builtin`; builtins need "
                      "no import, so an import-only inventory misses them silently")
+
+    # The order `builtin_effects` gives mixed evidence, which no installed stdlib
+    # can pin on both sides (see `builtin_rule_failures`).
+    rule_fails = builtin_rule_failures()
+    fails.extend(rule_fails)
+    if not rule_fails:
+        print("  ok  builtin rule             closed-row caller proves; variable-only, "
+              "labelled and private-only still reject")
 
     # POSITIVE CONTROL for the suite as a whole.  Without it, a classifier that
     # resolved NOTHING would still report every rejection fixture correctly.
