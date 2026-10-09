@@ -45,13 +45,7 @@ sixteen profiles; the sixteenth loads the Compose extension, which reads the sam
   functions, threaded through private helpers, and a grep finds 82 call sites in 40 files. It
   had its own review, below.
 
-**One decision is open, from the review of W3.** The Compose extension reads the context views'
-`hybrid_tools`, and when it is false it turns its subagent mode into inline mode and denies its
-tool. So either Compose stops reading the flag and the host writes `false`, or Compose is left
-alone and the host writes `true`. The plan recommends changing Compose. Only two of W3's items
-wait on the answer.
-
-The operator answered seven others on 2026-10-09 and the plan records them:
+No decision is left open. The operator answered eight on 2026-10-09 and the plan records them:
 
 - The corpus gate's `verifier-rejection` control is replaced by a `solver-feedback` control.
 - The persist nudge is deleted in full, its environment read included.
@@ -60,6 +54,9 @@ The operator answered seven others on 2026-10-09 and the plan records them:
 - Deleting a wire event moves the vocabulary's version. Old traces are read by a pinned runner.
 - Hybrid mode is removed as well.
 - The journal header keeps `boot.hybrid_tools`, written as `false`. Its schema does not move.
+- The Compose extension stops reading the flag, and the host writes `false` into the extension
+  context too. Compose's check dates from the loop before this one, which had a legacy step with
+  no tool calls; that step was deleted in May.
 
 **The amendment is a proposal. Merging this records it and does not accept it.** One open question
 remains, about a field of the extension ABI that 031 ADR-001 defines. The two positions most
@@ -122,7 +119,7 @@ changed. All six hold.
 
 | # | Finding | How it was reproduced | What changed |
 |---|---|---|---|
-| 1 | Writing `false` into the context views also disables Compose's subagent mode | Read `compose.ail:102-122`; read every profile's extension order, and only `ailang` loads `compose` | A new open decision and work item W3-7. **#252 was changed before it merged**: it no longer touches `ailang`. |
+| 1 | Writing `false` into the context views also disables Compose's subagent mode | Read `compose.ail:102-122`; read every profile's extension order, and only `ailang` loads `compose` | Decision 8 (Compose changes) and work item W3-7. **#252 was changed before it merged**: it no longer touches `ailang`. |
 | 2 | W3-3 missed the evaluator's census size, its twin count and two matrix rows | Read `witness_live_test.ail:192`, `:452` and `MATRIX.expected.tsv:348`, `:395` | W3-3 |
 | 3 | A journal started before the removal keeps `hybrid_tools: true` in its header, and editing `SYSTEM.md` makes a same-profile resume refuse | Read `session-journal.ts:310`, `:431`, `journal.ail:1807-1808`, `:2293`, `:2306` and `stopping.ail:662` | A section on recorded journals in W3; a note under WI-5, since W1 edits `SYSTEM.md` too |
 | 4 | Deleting `parse_test.ail` breaks `make test`, and no gate runs the TUI config test | Read `Makefile:3203-3204`, `:3194` | W3-2, W3-4, and `make test` added to WI-10 |
@@ -158,6 +155,7 @@ live session, or replay real journals. Its `eval_matrix` run was stopped before 
 - docs(005): the journal header keeps boot.hybrid_tools, written as false — the operator's decision
 - docs(005): a diagram of the other numbered decision points, and who decides at each
 - docs(005): W3 takes Codex Sol's review — six findings, all reproduced; one decision is open
+- docs(005): Compose stops reading the hybrid flag — the operator's decision
 
 9 files changed: the ADR with its two amendments, the plan, the plan's dagr document, and three
 diagrams as Mermaid source and SVG.
@@ -226,8 +224,8 @@ Checked on 2026-10-09 at `36a96b1e`, AILANG v0.52.5.
   screenshot.
 - [x] **The dagr document is contract-valid.** `dagr check
   PLAN-finalize-policy-migration.dagr.json --strict --json` prints `[]` and exits 0 at dagr 0.3.1.
-  It has 25 tasks, 24 `queued` and one `canceled`; every dependency names a task in it; every
-  work item's id appears in the markdown plan. The open decision is a `question` task, `Q8`.
+  It has 24 tasks, 23 `queued` and one `canceled`; every dependency names a task in it; every
+  task id appears in the markdown plan.
 - [x] **The hybrid figures were computed from the session logs and the tree.** 1,103 logs
   scanned, 28 with a `hybrid_bash_extracted` event, 2 of those with no native tool call at all;
   `git grep` for the entry points' call sites gives 82 in 40 files at `38068013`.
