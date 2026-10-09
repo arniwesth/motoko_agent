@@ -4,7 +4,7 @@
     "id": "005-PLAN-finalize-policy-migration",
     "title": "005 · policy leaves core: remove the DP7 verifier, the persist nudge and hybrid mode"
   },
-  "generated_at": "2026-10-09T16:09:51Z",
+  "generated_at": "2026-10-09T17:28:06Z",
   "plan": {
     "project": "005_harness_policy_boundary",
     "address": "005/PLAN-finalize-policy-migration",
@@ -342,31 +342,14 @@
       ]
     },
     {
-      "id": "Q8",
-      "title": "question: does Compose stop reading hybrid_tools, or does the host write true there?",
-      "kind": "question",
-      "project": "W3",
-      "state": "queued",
-      "deps": [],
-      "owner": "operator",
-      "criteria": "The operator's answer, recorded in the plan's decision table.",
-      "note": "The Compose extension turns subagent mode into inline and denies its tool when the flag is false. The plan recommends changing Compose.",
-      "refs": [
-        "PLAN-finalize-policy-migration.md § decision 8"
-      ]
-    },
-    {
       "id": "W3-7",
       "title": "impl: the Compose extension stops reading hybrid_tools",
       "kind": "impl",
       "project": "W3",
       "state": "queued",
-      "deps": [
-        "W3-1",
-        "Q8"
-      ],
+      "deps": [],
       "criteria": "current_composition_mode in packages/motoko-ext-compose/compose.ail no longer falls back to inline when hybrid_tools is false, and its tests follow. The Compose tool is allowed in subagent mode whatever the flag says.",
-      "note": "Only if decision 8 goes as recommended. Otherwise this task is canceled and W3-4 writes true into the context views.",
+      "note": "Decision 8. Depends on nothing else in the plan, so it can land at any time before W3-4, as its own small pull request. Once it has, the ailang profile can have its flag switched off.",
       "refs": [
         "PLAN-finalize-policy-migration.md § W3-7"
       ]
@@ -383,7 +366,7 @@
         "W3-7"
       ],
       "criteria": "No exported or private function in session.ail takes hybrid_tools, the two forwarding modules do not pass it, and no call site does. The journal header's boot, the continuation, the exit manifest and the context views carry a constant. config.ail no longer reads tools.hybrid; the TUI's HYBRID_TOOLS mapping and template line are gone. make check_core and make test_coverage pass, and src/tui/src/config.test.ts passes.",
-      "note": "The wide edit: eight exported functions once W2 has landed, private helpers, two forwarding modules, three record writers in session.ail and five in rpc.ail. The header keeps boot.hybrid_tools, written as false (decision 7). What the context views carry follows decision 8.",
+      "note": "The wide edit: eight exported functions once W2 has landed, private helpers, two forwarding modules, three record writers in session.ail and five in rpc.ail. The header keeps boot.hybrid_tools, written as false (decision 7). The context views carry false too, which is safe once W3-7 has landed (decision 8).",
       "refs": [
         "PLAN-finalize-policy-migration.md § W3-4"
       ]
@@ -412,7 +395,7 @@
         "W3-4",
         "W3-5"
       ],
-      "criteria": "Everything in WI-10, plus make eval_matrix and the TUI config test. One live session on the default profile, asked a question whose natural answer is a fenced shell example, ends with a done event, runs nothing, and has no hybrid_bash_extracted in its log. If decision 8 went as recommended, Compose is called once on the ailang profile and is allowed.",
+      "criteria": "Everything in WI-10, plus make eval_matrix and the TUI config test. One live session on the default profile, asked a question whose natural answer is a fenced shell example, ends with a done event, runs nothing, and has no hybrid_bash_extracted in its log. Compose is called once on the ailang profile and is allowed.",
       "refs": [
         "PLAN-finalize-policy-migration.md § W3-6"
       ]

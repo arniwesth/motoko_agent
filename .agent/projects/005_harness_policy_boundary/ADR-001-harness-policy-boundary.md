@@ -588,8 +588,8 @@ where core's built call went through the tool phase.
   (`src/core/journal.ail:755-757`) and by the evaluator's reader
   (`src/eval/journal/reader.ail:618-620`). It keeps being written, as `false`.
 - The extension ABI's context views carry `hybrid_tools` (`packages/motoko-ext-abi/types.ail:713`,
-  `:876-1008`). The package is frozen at 8.0, so the field stays. What the host writes there is
-  open, because one extension branches on it: see OQ-B2.
+  `:876-1008`). The package is frozen at 8.0, so the field stays, and the host writes `false`.
+  One extension branched on it; that extension changes first (OQ-B2, closed below).
 - The evaluator keeps its two hybrid rules, because journals recorded before the removal still
   need them: a `hybrid-step-` result is a cutoff, and a journal recorded with `hybrid_tools` true
   is admitted only if a native call preceded its stop call
@@ -602,8 +602,9 @@ where core's built call went through the tool phase.
   If that run ends on a stop with no native call before it, the evaluator refuses the journal
   with `HybridPredicate` (`stopping.ail:662`). The refusal is conservative and is left as it is.
 
-**B4. It is off in fifteen of the sixteen tracked profiles now.** #252. `ailang` waits for
-OQ-B2. The code default and the TUI's profile template, both true, go with the mechanism.
+**B4. It is off in fifteen of the sixteen tracked profiles now.** #252. `ailang` waits for the
+change to Compose. The code default and the TUI's profile template, both true, go with the
+mechanism.
 
 #### Consequences
 
@@ -640,17 +641,16 @@ OQ-B2. The code default and the TUI's profile template, both true, go with the m
 | 013 ADR-004 `:1020` | The census row "hybrid extractions: `HybridBashExtracted` in the trace" | Removed with the variant, by the same numbered change. |
 | 004 ADR-001 `:260-262` (Proposed) | "hybrid-bash synthesis → response interpreter" | Superseded. There is no synthesis to place. |
 | 003 ADR-001 `:88-94` (Proposed) | Tool dispatch is replaced at both the native site and the hybrid site | Superseded for the hybrid site. |
-| `.agent/plans/AILANG_Composition_Subagent.md:892-898` | Compose falls back to inline when hybrid is disabled | Overtaken, if OQ-B2 goes as recommended. |
+| `.agent/plans/AILANG_Composition_Subagent.md:892-898` | Compose falls back to inline when hybrid is disabled | Overtaken. Compose stops reading the flag (OQ-B2). |
 
-#### Open questions
+#### Open questions, closed
 
 - **OQ-B2 (what the context views carry, and Compose).** Found by the review of the plan's W3.
-  Either Compose stops reading the flag and the host writes `false`, or Compose is left alone
-  and the host writes `true`. Leaning: change Compose. A constant `true` in a field named
-  `hybrid_tools`, in a loop that has no hybrid mode, would mislead the next reader.
-
-Closed:
-
+  Decided by the operator on 2026-10-09: Compose changes so that it stops reading the flag, and
+  the host writes `false`. Compose's check dates from the loop before this one, where the flag
+  chose between a step with JSON tool calls and a legacy step without them. That legacy step
+  was deleted on 2026-05-06 (`6350b7ad`), so the condition the check was written for has not
+  existed since.
 - **OQ-B1 (the journal header).** Decided by the operator on 2026-10-09: keep `boot.hybrid_tools`
   and write it as `false`. Dropping the field would be a journal schema change under 013
   ADR-003, and old readers would refuse the new header.

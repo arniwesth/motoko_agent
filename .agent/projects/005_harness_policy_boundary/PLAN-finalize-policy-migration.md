@@ -34,17 +34,11 @@ and the event vocabulary, so they do not run in parallel.
    `classify_candidate` and `decide`.
 3. **W3 removes hybrid mode (DP6)**: core no longer turns a prose answer into a shell command.
    The operator decided that on 2026-10-09 too. It is the widest of the three. It had its own
-   review, recorded below, and one decision from that review is open.
+   review, recorded below.
 
 ### The operator's decisions
 
-Seven were answered on 2026-10-09. One is open, from the review of W3, and W3-4 waits on it.
-
-| # | Blocks | Question | This plan's recommendation |
-|---|---|---|---|
-| 8 | W3-7, W3-4 | The Compose extension reads the context views' `hybrid_tools`. When it is false, Compose turns its subagent mode into inline mode and denies its tool. After the removal: change Compose so it stops reading the flag, or leave Compose alone and have the host write `true` there? | Change Compose. In this loop typed tool calls always exist, which is all the flag ever told it. |
-
-Answered:
+All eight were answered on 2026-10-09. Nothing in this plan waits on a decision.
 
 | # | Question | The operator's answer |
 |---|---|---|
@@ -55,6 +49,7 @@ Answered:
 | 5 | Deleting a wire event changes the vocabulary's version (review finding 4). For old traces: pin a runner, build a decoder, or keep the event as an entry nothing emits? | Pin a runner. |
 | 6 | Hybrid mode (DP6): keep it, move it to an extension, or remove it? | Remove it as well. |
 | 7 | The journal header's `boot.hybrid_tools` is required on decode. Keep writing it as `false`, or drop it and move the journal's schema? | Keep writing it as `false`. |
+| 8 | The Compose extension reads the context views' `hybrid_tools` and denies its tool when it is false (review of W3, finding 1). Change Compose so it stops reading the flag, or leave it and have the host write `true`? | Change Compose. |
 
 ---
 
@@ -506,6 +501,11 @@ Amendment 2 has the mechanism and the evidence. This section is the work.
   (`packages/motoko-ext-compose/compose.ail:108`, `:120`). To Compose the flag meant "typed tool
   calls exist here". Every other extension only copies the field. `ailang` is the one tracked
   profile that loads `compose`, which is why #252 leaves that profile's flag on.
+- **Compose's check is from the loop before this one.** In the first release the flag chose
+  between a step that parsed JSON tool calls and a legacy step that had none, and Compose could
+  not offer a tool in the second. That legacy step was deleted on 2026-05-06 (`6350b7ad`). Typed
+  tool calls have existed in every session since, and the flag came to mean only "prose
+  extraction is on".
 - **Three things hold the name and are not this plan's to change** (Amendment 2, B3): the
   journal header's `boot.hybrid_tools`, the ABI's context views, and the evaluator's two hybrid
   rules for journals recorded before the removal.
@@ -579,11 +579,12 @@ The review checked these, and the plan relies on them.
     `:395`), which are deleted. Do not leave those rows: `scripts/eval/candidate.py:1684-1700`
     credits a row from its test's aggregate result, so a stale row would be credited for
     coverage that no longer exists. These are evaluator paths under 013 ADR-004 D5.
-- **W3-7 — Compose stops reading the flag** (decision 8, if it goes as recommended).
+- **W3-7 — Compose stops reading the flag** (decision 8).
   `packages/motoko-ext-compose/compose.ail:108`: `current_composition_mode` no longer falls back
-  to inline when `hybrid_tools` is false. Its tests follow. This lands before W3-4 changes what
-  the host writes. If decision 8 goes the other way, this item is canceled and W3-4 writes
-  `true` into the context views.
+  to inline when `hybrid_tools` is false. Its tests follow. It has to land before W3-4 changes
+  what the host writes. It depends on nothing else in this plan, so it can land at any time
+  before that, as its own small pull request. Once it has, `ailang` can have its flag switched
+  off like the other fifteen profiles.
 - **W3-4 — the parameter.** The wide edit, after W3-7.
   - Remove `hybrid_tools` from the eight exported functions, from `c2_loop` and the private
     helpers that thread it, from the two forwarding modules, and from every call site W3-1
@@ -612,8 +613,8 @@ The review checked these, and the plan relies on them.
 - **W3-6 — the full gate.** W1's WI-10 in full, plus `make eval_matrix` and
   `cd src/tui && bun test src/config.test.ts`. And one live session: on the `default` profile,
   ask a question whose natural answer is a fenced shell example. The run ends with a `done`
-  event, nothing is executed, and the log has no `hybrid_bash_extracted`. If decision 8 went as
-  recommended, also call `Compose` once on the `ailang` profile and see it allowed.
+  event, nothing is executed, and the log has no `hybrid_bash_extracted`. Also call `Compose`
+  once on the `ailang` profile and see it allowed.
 
 W3 is its own pull request, after W2 has merged.
 
@@ -667,7 +668,7 @@ findings. Each was reproduced against the code, and all six are folded in above.
 
 | # | Finding | Where it is fixed |
 |---|---|---|
-| 1 | Writing `false` into the context views also disables Compose's subagent mode | Decision 8, W3-7; #252 no longer changes the `ailang` profile |
+| 1 | Writing `false` into the context views also disables Compose's subagent mode | Decision 8 (change Compose), W3-7; #252 no longer changes the `ailang` profile |
 | 2 | W3-3 missed the evaluator's census and twin counts and two matrix rows | W3-3 |
 | 3 | A journal started before the removal keeps `hybrid_tools: true` in its header; editing `SYSTEM.md` makes a same-profile resume refuse | *What happens to journals already recorded*, WI-5 |
 | 4 | Deleting `parse_test.ail` breaks `make test`, and no gate runs the TUI config test | W3-2, W3-4, WI-10 |
