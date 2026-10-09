@@ -8,7 +8,9 @@ Written against: Amendment 1 as proposed in #249. The amendment is not accepted 
 operator's ruling of 2026-10-09 that it records.
 Pinned toolchain: AILANG **v0.52.5** (`ailang.lock`)
 Grounded at: `origin/main` **`36a96b1e`**. Every `file:line` below was read at that commit.
-`session.ail` drifts quickly, so re-anchor before editing.
+`session.ail` drifts quickly, so re-anchor before editing. `main` has since moved to `38068013`
+(#247, #250, #251). Of the files cited by line here, only the `Makefile` changed, by five lines
+after `:2819`.
 
 ---
 
@@ -178,7 +180,8 @@ condition DP7 never had.
 
 **Gate:** `make verify_no_finalize_verifier check_core`.
 
-**Depends on #251.** Until the eight tracked profiles are emptied, this refuses all of them.
+**Depended on #251**, which merged on 2026-10-09. Before it, this refusal would have stopped all
+eight tracked profiles that set the key.
 
 ### WI-7 — delete the tests that test only DP7
 
@@ -250,7 +253,8 @@ the same place.
 
 ### Sequencing
 
-1. #251 merges (profiles), then #250 (the Makefile target). Neither is part of this plan.
+1. #250 (the Makefile target) and #251 (profiles) merged on 2026-10-09. Nothing else has to land
+   first.
 2. WI-1, WI-2 and WI-3 are one commit. The tree does not type-check between them.
 3. WI-4, then WI-7 and WI-8, which need the variant gone to compile.
 4. WI-6 and WI-5 are independent of the rest and of each other.

@@ -25,8 +25,8 @@ were ever written. #251 turns the verifier off in the eight profiles that enable
 
 **The plan is here too.** `PLAN-finalize-policy-migration.md` has two workstreams:
 
-- **W1 removes the verifier from core** in ten work items. It is ready to start once #251 has
-  merged.
+- **W1 removes the verifier from core** in ten work items. It is ready to start: #250 and #251
+  merged on 2026-10-09.
 - **W2 is the persist nudge, and it is not ready.** Planning found that its budget is an
   environment read that recorded runs and the evaluation's fixtures count, and that nothing
   outside tests sets it. The plan recommends deleting it instead of migrating it, and asks.
@@ -66,11 +66,11 @@ naming each passage and what replaces it. None of those files is edited here.
   ADR and this pull request's own record, and nothing else.
 - **The ADR carries a proposed amendment the operator can accept, edit or reject.** Acceptance is
   a later edit to the amendment's status line, not this merge.
-- **W1 of the plan can start from `main` once this and #251 have merged.** It is one pull request
-  touching `src/core`, seven DST scripts, the `Makefile`, `SYSTEM.md` and five records.
+- **W1 of the plan can start from `main` once this has merged.** It is one pull request touching
+  `src/core`, seven DST scripts, the `Makefile`, `SYSTEM.md` and five records.
 - **W2 does not start until the operator answers the plan's decisions 3 and 4.**
-- **The loop itself is not fixed by this.** #250 fixes the trigger and #251 turns the verifier off
-  in every tracked profile. Its code stays in core until the plan lands.
+- **The loop itself is not fixed by this.** #250 fixed the trigger and #251 turned the verifier
+  off in every tracked profile; both are merged. Its code stays in core until W1 lands.
 
 ## Test evidence
 
