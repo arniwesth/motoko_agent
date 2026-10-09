@@ -36,7 +36,7 @@ Decided on 2026-10-09:
 | # | Question | The operator's answer |
 |---|---|---|
 | 3 | Build a persist-nudge guard extension (ADR-001 D4), or delete the persist nudge? | Delete it. It is off by default, so it has not run for a long time. |
-| 4 | Keep reading `MOTOKO_PERSIST_RETRIES` as a dead value, or remove the read too? | Remove it completely. This plan reads that as the read too; W2-1 confirms nothing stored depends on it before the wide edit. |
+| 4 | Keep reading `MOTOKO_PERSIST_RETRIES` as a dead value, or remove the read too? | Remove it in full, the read included. The operator confirmed that after seeing what the read touches. |
 
 ---
 
