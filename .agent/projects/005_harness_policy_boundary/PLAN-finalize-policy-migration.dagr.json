@@ -1,0 +1,291 @@
+{
+  "dagr": 3,
+  "run": {
+    "id": "005-PLAN-finalize-policy-migration",
+    "title": "005 · finalize policy leaves core: remove the DP7 verifier, then the persist nudge"
+  },
+  "generated_at": "2026-10-09T13:42:10Z",
+  "plan": {
+    "project": "005_harness_policy_boundary",
+    "address": "005/PLAN-finalize-policy-migration",
+    "markdown": "PLAN-finalize-policy-migration.md",
+    "implements": "ADR-001-harness-policy-boundary.md, Amendment 1 (A1, A4, A5, A6)",
+    "grounded_at": "36a96b1e",
+    "governed_by": "008 ADR-001 D2: structure only; no attempts, events or pane ids"
+  },
+  "projects": [
+    {
+      "id": "W1",
+      "title": "W1 · remove the DP7 verifier"
+    },
+    {
+      "id": "W1-DRIVER",
+      "title": "one commit · the driver",
+      "parent": "W1"
+    },
+    {
+      "id": "W1-EVENT",
+      "title": "one commit · the wire event and what imports it",
+      "parent": "W1"
+    },
+    {
+      "id": "W2",
+      "title": "W2 · remove the persist nudge"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "WI-1",
+      "title": "impl: classify_candidate loses its verification stages",
+      "kind": "impl",
+      "project": "W1-DRIVER",
+      "state": "queued",
+      "deps": [],
+      "criteria": "Stages 2 and 5's verifier run, CandidateRejected and its arm are gone; the stage comment is rewritten. make check_core passes with WI-1, WI-2 and WI-3 applied together.",
+      "note": "Lands in one commit with WI-2 and WI-3: the tree does not type-check between them.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § WI-1"
+      ]
+    },
+    {
+      "id": "WI-2",
+      "title": "impl: delete the verifier",
+      "kind": "impl",
+      "project": "W1-DRIVER",
+      "state": "queued",
+      "deps": [],
+      "criteria": "session.ail:2218-2299 and c2_dp7_rejected_state are deleted; the Dp7VerifierRejected import is gone. make check_core passes with WI-1, WI-2 and WI-3 applied together.",
+      "note": "Changes session.ail's import region, a protected span of the evaluation's manifest, which already refuses main.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § WI-2"
+      ]
+    },
+    {
+      "id": "WI-3",
+      "title": "impl: one neutral name for an approved candidate",
+      "kind": "impl",
+      "project": "W1-DRIVER",
+      "state": "queued",
+      "deps": [],
+      "criteria": "c2_candidate_approved_state sets \"candidate_approved\"; decide has no dp7_* reason; the step_machine tests are updated. make test_coverage passes.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § WI-3"
+      ]
+    },
+    {
+      "id": "WI-4",
+      "title": "impl: the wire event goes, the vocabulary version moves to event-vocabulary/2",
+      "kind": "impl",
+      "project": "W1-EVENT",
+      "state": "queued",
+      "deps": [
+        "WI-1",
+        "WI-2",
+        "WI-3"
+      ],
+      "criteria": "Dp7VerifierRejected is gone from phase_vocab and the vocabulary; the two counting tests say 44; the version is event-vocabulary/2 in the function and in six pinned strings; the pin for /1 names a commit; the code-graph rule and its three pinned counts are updated. make event_vocabulary invariants test_coverage passes, and python3 -m pytest tools/code-graph/tests/test_event_subjects.py passes.",
+      "note": "Lands in one commit with WI-7 and WI-8: their imports need the variant until they are removed. Old traces are read by a pinned runner (decision 5).",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § WI-4"
+      ]
+    },
+    {
+      "id": "WI-5",
+      "title": "docs: the system prompt says what is true",
+      "kind": "docs",
+      "project": "W1",
+      "state": "queued",
+      "deps": [],
+      "criteria": "SYSTEM.md's verification section ends by saying the runtime does not check this; the rest of the section is unchanged.",
+      "note": "Independent of every other item.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § WI-5"
+      ]
+    },
+    {
+      "id": "WI-6",
+      "title": "withdrawn: a profile that still asks for the gate does not start",
+      "kind": "impl",
+      "project": "W1",
+      "state": "canceled",
+      "deps": [],
+      "criteria": "None. Withdrawn by the operator's decision 2 on 2026-10-09.",
+      "note": "Profile config entries the host does not use are dealt with in a separate pull request. After W1 verification.enabled is read and ignored.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § WI-6"
+      ]
+    },
+    {
+      "id": "WI-7",
+      "title": "test: delete the tests that test only DP7",
+      "kind": "test",
+      "project": "W1-EVENT",
+      "state": "queued",
+      "deps": [
+        "WI-1",
+        "WI-2",
+        "WI-3"
+      ],
+      "criteria": "The DP7 smoke and its setup script are deleted; ledger parity has eight frames and its two wrappers agree; five of the six scenarios in phase_c2_wiring_scenarios.ail:1141-1360 are deleted and the blank-answer one is kept without its verifier checks. make smoke_driver smoke_parity ledger_parity world_framed_wire park_wake phase_c_l1 passes.",
+      "note": "Lands in one commit with WI-4 and WI-8.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § WI-7"
+      ]
+    },
+    {
+      "id": "WI-8",
+      "title": "test: the corpus gate's control moves to the solver-feedback branch",
+      "kind": "test",
+      "project": "W1-EVENT",
+      "state": "queued",
+      "deps": [
+        "WI-1",
+        "WI-2",
+        "WI-3"
+      ],
+      "criteria": "A solver-feedback control replaces verifier-rejection. With step_idx + 1 changed to step_idx at session.ail:4146 the control is red on driver-step-repeated and steps-not-contiguous; without the control the same mutant is green. Ruling 19 is added to 011 ADR-003. make corpus_judge and make corpus_pr pass.",
+      "note": "Decision 1. Lands in one commit with WI-4 and WI-7. Run corpus_pr by itself.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § WI-8"
+      ]
+    },
+    {
+      "id": "WI-9",
+      "title": "docs: records and the attribution anchors",
+      "kind": "docs",
+      "project": "W1",
+      "state": "queued",
+      "deps": [
+        "WI-4",
+        "WI-7",
+        "WI-8"
+      ],
+      "criteria": "013 ADR-002, 013 ADR-004, 028 ADR-001, 031 ADR-001 and the DP7 design doc are marked or amended; the attribution anchors are re-baselined in the six-file form with three DST profiles re-issued. make anchors attribution_table passes.",
+      "note": "Last of the edits, when session.ail's line numbers have stopped moving.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § WI-9"
+      ]
+    },
+    {
+      "id": "WI-10",
+      "title": "gate: W1's full gate and one live session",
+      "kind": "gate",
+      "project": "W1",
+      "state": "queued",
+      "deps": [
+        "WI-5",
+        "WI-9"
+      ],
+      "criteria": "make check_core; make test_coverage_selftest test_coverage; make smoke_parity; make dst; make verify_core verify_mutations verify_classify_check; make new_contract_policy BASE=origin/main after committing; the targets only CI runs (verify_skills_tests verify_skills_refusal smoke_no_delegated_storm verify_profile_dir_agreement tui_context_limit dst_l2); the code-graph pytest. One live session on the default profile ends with a done event and no dp7_verifier_rejected.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § WI-10"
+      ]
+    },
+    {
+      "id": "W2-1",
+      "title": "test: remove only the read in a scratch tree and list what goes red",
+      "kind": "test",
+      "project": "W2",
+      "state": "queued",
+      "deps": [
+        "WI-10"
+      ],
+      "criteria": "A list of every red target and the file behind it, from make discovery strict_replay program_persistence run_report seeded_generator driver_plus_compose herdr_graded ledger_parity depth_canary eval_matrix. Anything red that the plan does not name is reported before W2-2 starts.",
+      "note": "W2 is its own pull request and follows W1: both edit classify_candidate and decide.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § W2-1"
+      ]
+    },
+    {
+      "id": "W2-2",
+      "title": "impl: remove the persist-nudge policy from core",
+      "kind": "impl",
+      "project": "W2",
+      "state": "queued",
+      "deps": [
+        "W2-1"
+      ],
+      "criteria": "No nudge arm, CandidateNudge, persist_nudge reason, PersistNudge event or persist_retries policy field remains; the helpers and tests the plan lists are gone; the vocabulary's counting tests say 43 and its version is event-vocabulary/3 with a pin for /2.",
+      "note": "Decision 3: delete, no guard extension.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § W2-2"
+      ]
+    },
+    {
+      "id": "W2-3",
+      "title": "impl: remove the nudges_used counter",
+      "kind": "impl",
+      "project": "W2",
+      "state": "queued",
+      "deps": [
+        "W2-2"
+      ],
+      "criteria": "nudges_used is gone from StepState, StepDelta, C2LoopState and Continuation, and count_persist_nudges with it. make check_core and make test_coverage pass.",
+      "note": "The wide edit: every loop literal.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § W2-3"
+      ]
+    },
+    {
+      "id": "W2-4",
+      "title": "impl: remove the MOTOKO_PERSIST_RETRIES read",
+      "kind": "impl",
+      "project": "W2",
+      "state": "queued",
+      "deps": [
+        "W2-1",
+        "W2-2"
+      ],
+      "criteria": "session_policy_init makes three reads; driver_env_keys has eleven keys; the six count tables, the ledger-parity order strings, the depth canary's pins and the evaluator's configuration, witness and regenerated fixtures agree. Every target W2-1 found red is green.",
+      "note": "Decision 4: in full, the read included. The evaluator paths are an evaluator change under 013 ADR-004 D5.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § W2-4"
+      ]
+    },
+    {
+      "id": "W2-5",
+      "title": "impl: the host stops passing the variable",
+      "kind": "impl",
+      "project": "W2",
+      "state": "queued",
+      "deps": [
+        "W2-4"
+      ],
+      "criteria": "src/tui/src/runtime-process.ts no longer sets MOTOKO_PERSIST_RETRIES for the runtime.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § W2-5"
+      ]
+    },
+    {
+      "id": "W2-6",
+      "title": "docs: records",
+      "kind": "docs",
+      "project": "W2",
+      "state": "queued",
+      "deps": [
+        "W2-2",
+        "W2-4"
+      ],
+      "criteria": "ADR-001 D4 and the persist-nudge handoff are marked superseded; 013 ADR-004's persist-retries settings row and read-count row are removed by a numbered change in that record.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § W2-6"
+      ]
+    },
+    {
+      "id": "W2-7",
+      "title": "gate: W2's full gate",
+      "kind": "gate",
+      "project": "W2",
+      "state": "queued",
+      "deps": [
+        "W2-3",
+        "W2-5",
+        "W2-6"
+      ],
+      "criteria": "Everything in WI-10, plus make eval_matrix and the targets named in W2-1.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § W2-7"
+      ]
+    }
+  ]
+}

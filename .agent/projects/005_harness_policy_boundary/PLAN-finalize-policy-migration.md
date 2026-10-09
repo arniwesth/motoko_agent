@@ -13,6 +13,10 @@ Grounded at: `origin/main` **`36a96b1e`**. Every `file:line` below was read at t
 after `:2819`.
 Diagrams: [the pipeline as built](mmd/dp7-finalize-gate.svg), with the verifier, and
 [the pipeline after W1](mmd/dp7-finalize-gate-end-state.svg). Sources are beside them.
+Structure: [`PLAN-finalize-policy-migration.dagr.json`](PLAN-finalize-policy-migration.dagr.json)
+holds the tasks and their dependencies, and is the only place they are stated (008 ADR-001 D2
+and D3, accepted 2026-10-04, in #215). A task's address is
+`005/PLAN-finalize-policy-migration/<task id>`.
 
 ---
 
@@ -314,16 +318,20 @@ without calling the model. The implementer repeats both runs on the real change.
   tool call, and confirm the log has a `done` event and no `dp7_verifier_rejected`. This is the
   one thing the gates cannot show.
 
-### Sequencing
+### Why the order is what it is
 
-1. #250 (the Makefile target) and #251 (profiles) merged on 2026-10-09. Nothing else has to land
-   first.
-2. WI-1, WI-2 and WI-3 are one commit. The tree does not type-check between them.
-3. WI-4's deletion of the variant lands in one commit with the script edits in WI-7 and WI-8
-   that stop importing it. The scripts' imports need the variant until they are removed, so
-   neither side compiles alone.
-4. WI-5 is independent of the rest.
-5. WI-9 last, when line numbers have stopped moving. WI-10 before the pull request.
+The order and the dependencies are in the dagr document, not here. What a graph cannot say is
+why:
+
+- **Nothing has to land first.** #250 (the Makefile target) and #251 (profiles) merged on
+  2026-10-09.
+- **WI-1, WI-2 and WI-3 are one commit** (`W1-DRIVER` in the graph). The tree does not
+  type-check between them.
+- **WI-4, WI-7 and WI-8 are one commit** (`W1-EVENT`). The scripts' imports need the variant
+  until they are removed, so neither side compiles alone.
+- **WI-9 waits for those three** because it re-baselines line anchors, and the lines move until
+  the edits stop.
+- **WI-6 is `canceled` in the graph.** Its id is kept and not reused.
 
 ---
 
@@ -446,9 +454,10 @@ removing it is safe for stored data and wide in tests.
   013 ADR-004 serves `MOTOKO_PERSIST_RETRIES` as `"0"` in its T0 settings (`:611`) and counts one
   read of it (`:966`). Both rows go, by a numbered change in that record.
 
-**Gate:** W1's WI-10 in full, plus `make eval_matrix` and the targets named in W2-1.
+- **W2-7 — the full gate.** W1's WI-10 in full, plus `make eval_matrix` and the targets named in
+  W2-1.
 
-W2 is its own pull request, after W1 has merged.
+W2 is its own pull request, after W1 has merged. Its order is in the dagr document.
 
 ---
 
