@@ -3,6 +3,7 @@
 Date: 2026-07-10
 Status: Proposed
 Amended by: Amendment 1 (2026-10-09, proposed): pre-finalize verification (DP7) leaves core.
+Amendment 2 (2026-10-09, proposed): hybrid mode (DP6) is removed from core.
 See [Amendments](#amendments).
 Pinned toolchain: AILANG **v0.26.0**; `ailang.lock` → `ailang_version: "v0.26.0"`
 Grounded at: branch `arniwesth/mot-35-fix-context-size-estimation`, HEAD `66a4ecb`
@@ -517,3 +518,116 @@ Closed on 2026-10-09:
   sentence, and the edits to the records in the table above. Workstream W2 deletes the persist
   nudge and its environment read. The plan replaces the unwritten
   `PLAN-persist-nudge-migration.md` listed above.
+
+### Amendment 2 (2026-10-09, proposed) — hybrid mode (DP6) is response policy and is removed from core
+
+Status: Proposed. Grounded at `origin/main` `38068013`, AILANG v0.52.5. Line references below are
+to that commit.
+
+**Amends** the Decision, which already names response intercept among the points where policy
+belongs to extensions. **On acceptance it also supersedes** the non-goal "do not remove hybrid
+mode" of `.agent/issues/hybrid-bash-extracts-prose-examples-in-native-tool-mode.md` and the
+section of `SYSTEM.md` that describes hybrid mode (`:92-97`).
+
+**Ruling, 2026-10-09 (operator).** After the mechanism was laid out: "this needs to be removed as
+well". #252 switches it off in the sixteen tracked profiles. The plan's third workstream removes
+it from core.
+
+#### The artifact
+
+**A live run executed examples meant for a person.** On 2026-09-05 the operator asked how to
+start tasks with the herdr extension. The model answered in prose with copy-paste examples, and
+the runtime ran the first fence of each answer: three stray panes, then a command with a
+placeholder pane id. By its fourth answer the model was prefixing its examples with `text:` to
+stop its own runtime running them (`src/core/session.ail:2086-2095`, and the issue named above).
+
+**What the logs show.** Of 1,103 session logs on the operator's machine, 28 contain a
+`hybrid_bash_extracted` event.
+
+- In 26, the model was also making typed tool calls.
+- In 2, it was the session's only way to run a tool: `ibm-granite/granite-4.1-8b` on 2026-05-11
+  and a local `gemma-4-26B` on 2026-06-07.
+- None since 2026-09-06, when extraction was limited to sessions with no native call yet.
+
+The logs are in the shared checkout's `.motoko/logfile/`, which is gitignored.
+
+#### What core does today
+
+| What | Where |
+|---|---|
+| Reads `tools.hybrid`, which defaults to true, and starts the loop with it | `src/core/config.ail:372`, `src/core/rpc.ail:280` |
+| On a response with no tool call that no extension intercepted, when hybrid is on and the session has made no native call, searches the text | `session.ail:4064-4067` |
+| Takes the first ` ```bash `, ` ```sh ` or ` ```shell ` fence, then a bare fence whose body looks like shell, then the first line of prose that does | `extract_bash`, `src/core/parse.ail:118-135` |
+| "Looks like shell" is one of 21 prefixes, `git `, `make ` and `rm ` among them | `parse.ail:77-101` |
+| Builds a `BashExec` call with the id `hybrid-step-N`, emits `hybrid_bash_extracted`, and runs it through the tool phase | `session.ail:2069`, `:4070`, `src/core/step_machine.ail:123` |
+| Replaces the journaled assistant message with one that carries the built call | `replaces_previous`, `session.ail:2854`, `:4106` |
+
+The extension judges never see such a response. It is not a final answer.
+
+#### Why this is policy on the wrong side of the boundary
+
+What a prose answer means is the response-intercept decision. The ADR's Decision puts it on the
+extension side, and the seam for it, `ResponseInterceptor`, is called immediately before this
+code (`session.ail:3958`). Core then makes the same kind of decision again, alone, with a list of
+command prefixes.
+
+#### Decision
+
+**B1. Core does not turn prose into a tool call.** The hybrid branch, `extract_bash` with its
+helpers, the built call and the wire event leave core. A response with no tool call that no
+extension intercepts is a candidate final answer.
+
+**B2. Nothing replaces it.** No extension is shipped. A profile for a model that writes shell
+blocks instead of typed calls can register a `ResponseInterceptor`. One difference to know: an
+interceptor runs the command itself and returns the result, so tool policies do not see it,
+where core's built call went through the tool phase.
+
+**B3. The name stays where a recorded format or the frozen ABI holds it.**
+
+- The journal header's `boot.hybrid_tools` is required on decode by core
+  (`src/core/journal.ail:755-757`) and by the evaluator's reader
+  (`src/eval/journal/reader.ail:618-620`). It keeps being written, as `false`.
+- The extension ABI's context views carry `hybrid_tools` (`packages/motoko-ext-abi/types.ail:713`,
+  `:876-1008`). The package is frozen at 8.0. The host passes `false`.
+- The evaluator keeps its two hybrid rules, because journals recorded before the removal still
+  need them: a `hybrid-step-` result is a cutoff, and a journal recorded with `hybrid_tools` true
+  is admitted only if a native call preceded its stop call
+  (`src/eval/journal/stopping.ail:16-21`, `:90-95`). Those rules are what make an admitted old
+  journal replay the same on a driver with no hybrid branch.
+- `replaces_previous` stays in the journal format. The hybrid path is its only producer
+  (`session.ail:4106`), so no new journal sets it, and old ones are still folded.
+
+**B4. It is off in every tracked profile now.** #252. The code default and the TUI's profile
+template, both true, go with the mechanism.
+
+#### Consequences
+
+- **A model that writes shell blocks instead of typed tool calls cannot act.** Two recorded
+  sessions worked that way, the last on 2026-06-07.
+- **A session's first response is no longer at risk.** Before, it could be executed if it held a
+  fence or a shell-looking line.
+- **The vocabulary's version moves a third time**, by the rule in Amendment 1's costs, with a
+  pinned runner for the version before it.
+- **The loop's entry points lose a parameter.** `hybrid_tools` is a positional argument of ten
+  exported functions in `session.ail` and is passed at 82 call sites in 40 files.
+- **The evaluator changes in one place.** Its witness table counts `HybridBashExtracted` records
+  (`src/eval/journal/witness.ail:276-277`) and loses that row with the variant.
+
+#### Records this touches
+
+| Record | Text | What happens to it |
+|---|---|---|
+| The issue file named above, *Non-goals* | "Do not remove hybrid mode. Its original consumers (models without typed tool calls) still exist." | Superseded by the ruling. Its fix, the 2026-09-06 gate, is removed with the mechanism. |
+| `SYSTEM.md:92-97` | "Hybrid Mode (Optional, Off By Default)" | Removed. |
+| 013 ADR-003 `:267` | The journal header's `boot` lists `hybrid_tools` | Stays (B3). A note that it is always `false` from here on. |
+| 013 ADR-004 `:287-292`, `:613` | The stopping contract's hybrid rules, and the T0 setting "`hybrid_tools`: recorded" | Stay (B3). A numbered change in that record notes that new journals record `false`. |
+
+#### Open question
+
+- **OQ-B1 (the journal header).** B3 keeps `boot.hybrid_tools` and writes `false`. Dropping the
+  field instead is a journal schema change under 013 ADR-003, and old readers would refuse the
+  new header. Leaning: keep it until the journal's schema moves for another reason.
+
+#### Follow-on
+
+- Workstream W3 of [`PLAN-finalize-policy-migration.md`](PLAN-finalize-policy-migration.md).

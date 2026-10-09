@@ -1,7 +1,7 @@
-# PLAN: finalize policy leaves core — remove the DP7 verifier, then the persist nudge
+# PLAN: policy leaves core — remove the DP7 verifier, the persist nudge and hybrid mode
 
 Implements **Amendment 1** to [ADR-001](ADR-001-harness-policy-boundary.md) (this dir): A1, A4 and
-A6 in workstream W1, A5 in workstream W2.
+A6 in workstream W1, A5 in workstream W2. Implements **Amendment 2** (B1 to B4) in workstream W3.
 
 Status: Proposed
 Written against: Amendment 1 as proposed in #249. The amendment is not accepted yet. W1 follows the
@@ -22,17 +22,27 @@ and D3, accepted 2026-10-04, in #215). A task's address is
 
 ## TL;DR
 
-Two workstreams. W1 does not wait for W2.
+Three workstreams, each its own pull request, in this order. All three edit the loop, `decide`
+and the event vocabulary, so they do not run in parallel.
 
 1. **W1 removes the DP7 verifier from core.** Nothing replaces it. Nine work items, one pull
    request. It is ready to start.
 2. **W2 removes the persist nudge completely**, its environment read included, and builds no
    guard in its place. The operator decided that on 2026-10-09. It follows W1, because both edit
    `classify_candidate` and `decide`.
+3. **W3 removes hybrid mode (DP6)**: core no longer turns a prose answer into a shell command.
+   The operator decided that on 2026-10-09 too. It is the widest of the three, and **it has not
+   been reviewed**: W1 and W2 went through the review recorded below, W3 was written after it.
 
 ### The operator's decisions
 
-All five were answered on 2026-10-09. Nothing in this plan waits on a decision.
+Six were answered on 2026-10-09. One is open, and only W3-4 waits on it.
+
+| # | Blocks | Question | This plan's recommendation |
+|---|---|---|---|
+| 7 | W3-4 | The journal header's `boot.hybrid_tools` is required on decode. Keep writing it as `false`, or drop it and move the journal's schema? | Keep it. Dropping it makes old readers refuse new journals, for a field that costs nothing. |
+
+Answered:
 
 | # | Question | The operator's answer |
 |---|---|---|
@@ -41,6 +51,7 @@ All five were answered on 2026-10-09. Nothing in this plan waits on a decision.
 | 3 | Build a persist-nudge guard extension (ADR-001 D4), or delete the persist nudge? | Delete it. It is off by default, so it has not run for a long time. |
 | 4 | Keep reading `MOTOKO_PERSIST_RETRIES` as a dead value, or remove the read too? | Remove it in full, the read included. The operator confirmed that after seeing what the read touches. |
 | 5 | Deleting a wire event changes the vocabulary's version (review finding 4). For old traces: pin a runner, build a decoder, or keep the event as an entry nothing emits? | Pin a runner. |
+| 6 | Hybrid mode (DP6): keep it, move it to an extension, or remove it? | Remove it as well. |
 
 ---
 
@@ -458,6 +469,85 @@ removing it is safe for stored data and wide in tests.
   W2-1.
 
 W2 is its own pull request, after W1 has merged. Its order is in the dagr document.
+
+---
+
+## W3 — remove hybrid mode (DP6)
+
+Amendment 2 has the mechanism and the evidence. This section is the work.
+
+**This workstream was not in the review.** Its first item exists to do for W3 what the review
+did for W1 and W2: find what the lists below miss before the wide edit starts.
+
+### What the research found
+
+- **The behaviour is small.** One branch of the loop (`session.ail:4058-4121`), three helpers
+  above it (`:2067-2168`), `extract_bash` and its helpers in `src/core/parse.ail`, one arm of
+  `decide` (`step_machine.ail:123`) and one wire event.
+- **The name is everywhere.** `hybrid_tools` is a positional parameter of ten exported entry
+  points in `session.ail` (`:4423` to `:5660`) and is passed at 82 call sites in 40 files. It is
+  mentioned in 90 tracked files.
+- **Three things hold the name and are not this plan's to change** (Amendment 2, B3): the
+  journal header's `boot.hybrid_tools`, the ABI's context views, and the evaluator's two hybrid
+  rules for journals recorded before the removal.
+- **The hybrid path is the only producer of a replacing history entry.** `pending_tool_batched`
+  is false in one place (`session.ail:4106`). After W3 no new journal sets `replaces_previous`.
+  The fold for it stays, for old journals.
+- **No other code uses the extraction helpers.** `scripts/smoke_v2_hybrid.ail` and
+  `src/core/parse_test.ail` test them. `packages/motoko-ext-compose` has its own `extract_fence`.
+- **The system prompt describes it wrongly.** `SYSTEM.md:92-97` calls hybrid mode "Optional, Off
+  By Default". The code default is true (`config.ail:372`).
+
+### Work items
+
+- **W3-1 — enumerate before editing.** In a scratch tree, delete the hybrid branch and the
+  `HybridBashExtracted` variant, and nothing else. Record every compile error, then run
+  `make check_core test_coverage event_vocabulary invariants smoke_parity ledger_parity
+  world_framed_wire depth_canary eval_matrix` and the code-graph pytest, and record every red
+  target with the file behind it. Compare with the lists in W3-2 to W3-4. Anything they do not
+  name is reported before the next item starts.
+- **W3-2 — the behaviour.** One commit.
+  - `session.ail`: the hybrid branch (`:4058-4121`), so that a response with no tool call that no
+    extension intercepted goes to `classify_candidate`; `synthesize_hybrid_bash_call`,
+    `any_native_call`, `session_emitted_native_tool_call` and its test (`:2067-2168`); the
+    imports at `:43` and `:112`.
+  - `step_machine.ail:123`: the `hybrid_bash` arm of `decide`, and any test that names it.
+  - `src/core/parse.ail`: `extract_bash`, `first_shell_line`, `looks_like_shell`, and
+    `extract_fence` if nothing else in the file uses it. `src/core/parse_test.ail` with them.
+  - `scripts/smoke_v2_hybrid.ail`, and its run in `scripts/dst/phase_a_event_parity.sh:184`.
+  - `SYSTEM.md:92-97`: the section goes.
+- **W3-3 — the wire event.** Same commit as W3-2, since the branch is the event's only emitter.
+  - `phase_vocab.ail`: `HybridBashInfo` (`:1003`), the variant (`:1310`), its encoding (`:1493`),
+    its golden (`:1950`), and the comments at `:862` and `:1111`.
+  - `dst_event_vocabulary.ail`: its four mentions (`:107`, `:175`, `:235`, `:397`), the two
+    counting tests, and the version, which moves again with a pinned runner for the one before.
+  - `scripts/dst/event_vocabulary_dst.ail` (`:41`, `:112`, and the count),
+    `scripts/phase_b_inventory_baseline.txt`, and the rule at
+    `tools/code-graph/overlay/event_subjects.py:125` with its test at
+    `tests/test_event_subjects.py:93` and the three pinned counts.
+  - The evaluator's witness table: the `hybrid_extractions` row
+    (`src/eval/journal/witness.ail:63`, `:96`, `:206`, `:276-277`, `:523`, `:540`) and the same
+    string in `witness_live_test.ail`. This is an evaluator path under 013 ADR-004 D5.
+- **W3-4 — the parameter.** The wide edit. Waits on decision 7.
+  - Remove `hybrid_tools` from the ten entry points and from `c2_loop`'s own signature, and from
+    every call site W3-1 lists.
+  - `src/core/rpc.ail`: `hybrid_enabled` goes (`:115`, `:280` and its uses). The journal header's
+    `boot.hybrid_tools` (`:427`) and the context views' `hybrid_tools` (`:137`, `:376`, `:485`,
+    `:576`) are written as `false`.
+  - `src/core/config.ail`: stop reading `tools.hybrid` (`:46`, `:372`, `:652`).
+    `src/tui/src/config.ts`: the `HYBRID_TOOLS` mapping (`:34`) and the template's line (`:109`,
+    `:167`), with `config.test.ts`.
+  - A profile that still sets `tools.hybrid` is not handled here, by decision 2: unused config
+    entries get their own pull request.
+  - Decision 7 is the task `Q7` in the dagr document, and W3-4 depends on it.
+- **W3-5 — records.** The issue file's status; a note in 013 ADR-003 beside `:267`; a numbered
+  change in 013 ADR-004 for `:287-292` and `:613`; and the attribution anchors, re-baselined
+  again in the six-file form.
+- **W3-6 — the full gate.** W1's WI-10 in full, plus `make eval_matrix`. And one live session: on
+  the `default` profile, ask a question whose natural answer is a fenced shell example. The run
+  ends with a `done` event, nothing is executed, and the log has no `hybrid_bash_extracted`.
+
+W3 is its own pull request, after W2 has merged.
 
 ---
 

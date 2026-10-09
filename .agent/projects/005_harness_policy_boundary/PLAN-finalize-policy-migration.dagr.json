@@ -2,14 +2,14 @@
   "dagr": 3,
   "run": {
     "id": "005-PLAN-finalize-policy-migration",
-    "title": "005 · finalize policy leaves core: remove the DP7 verifier, then the persist nudge"
+    "title": "005 · policy leaves core: remove the DP7 verifier, the persist nudge and hybrid mode"
   },
-  "generated_at": "2026-10-09T13:42:10Z",
+  "generated_at": "2026-10-09T14:32:21Z",
   "plan": {
     "project": "005_harness_policy_boundary",
     "address": "005/PLAN-finalize-policy-migration",
     "markdown": "PLAN-finalize-policy-migration.md",
-    "implements": "ADR-001-harness-policy-boundary.md, Amendment 1 (A1, A4, A5, A6)",
+    "implements": "ADR-001-harness-policy-boundary.md, Amendment 1 (A1, A4, A5, A6) and Amendment 2 (B1 to B4)",
     "grounded_at": "36a96b1e",
     "governed_by": "008 ADR-001 D2: structure only; no attempts, events or pane ids"
   },
@@ -31,6 +31,15 @@
     {
       "id": "W2",
       "title": "W2 · remove the persist nudge"
+    },
+    {
+      "id": "W3",
+      "title": "W3 · remove hybrid mode (DP6)"
+    },
+    {
+      "id": "W3-BRANCH",
+      "title": "one commit · the hybrid branch and its wire event",
+      "parent": "W3"
     }
   ],
   "tasks": [
@@ -285,6 +294,111 @@
       "criteria": "Everything in WI-10, plus make eval_matrix and the targets named in W2-1.",
       "refs": [
         "PLAN-finalize-policy-migration.md § W2-7"
+      ]
+    },
+    {
+      "id": "W3-1",
+      "title": "test: delete only the hybrid branch and its event in a scratch tree, and list what breaks",
+      "kind": "test",
+      "project": "W3",
+      "state": "queued",
+      "deps": [
+        "W2-7"
+      ],
+      "criteria": "A list of every compile error and every red target, with the file behind each, from make check_core test_coverage event_vocabulary invariants smoke_parity ledger_parity world_framed_wire depth_canary eval_matrix and the code-graph pytest. Anything the plan's W3-2 to W3-4 do not name is reported before W3-2 starts.",
+      "note": "W3 was written after the review of W1 and W2 and has not been reviewed. This item is its check. W3 follows W2: all three workstreams edit the loop, decide and the event vocabulary.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § W3-1"
+      ]
+    },
+    {
+      "id": "W3-2",
+      "title": "impl: core stops turning prose into a tool call",
+      "kind": "impl",
+      "project": "W3-BRANCH",
+      "state": "queued",
+      "deps": [
+        "W3-1"
+      ],
+      "criteria": "The hybrid branch, synthesize_hybrid_bash_call, any_native_call, session_emitted_native_tool_call, the hybrid_bash arm of decide, extract_bash with its helpers and tests, the hybrid smoke and SYSTEM.md's hybrid section are gone. A response with no tool call that no extension intercepted goes to classify_candidate.",
+      "note": "Lands in one commit with W3-3: the branch is the event's only emitter.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § W3-2"
+      ]
+    },
+    {
+      "id": "W3-3",
+      "title": "impl: the hybrid_bash_extracted event goes, the vocabulary version moves again",
+      "kind": "impl",
+      "project": "W3-BRANCH",
+      "state": "queued",
+      "deps": [
+        "W3-1"
+      ],
+      "criteria": "HybridBashExtracted is gone from phase_vocab and the vocabulary; the counting tests, the script's count, the inventory baseline and the code-graph rule with its pinned counts agree; the version has moved with a pin for the one before; the evaluator's witness table has no hybrid_extractions row.",
+      "note": "Lands in one commit with W3-2. The witness table is an evaluator path under 013 ADR-004 D5.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § W3-3"
+      ]
+    },
+    {
+      "id": "Q7",
+      "title": "question: keep writing boot.hybrid_tools as false, or drop it and move the journal schema?",
+      "kind": "question",
+      "project": "W3",
+      "state": "queued",
+      "deps": [],
+      "criteria": "The operator's answer, recorded in the plan's decision table.",
+      "owner": "operator",
+      "note": "The plan recommends keeping it: the field is required on decode by core and by the evaluator's reader, and dropping it makes old readers refuse new journals.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § Q7"
+      ]
+    },
+    {
+      "id": "W3-4",
+      "title": "impl: the hybrid_tools parameter leaves the loop's entry points",
+      "kind": "impl",
+      "project": "W3",
+      "state": "queued",
+      "deps": [
+        "W3-2",
+        "W3-3",
+        "Q7"
+      ],
+      "criteria": "No exported entry point in session.ail takes hybrid_tools, and no call site passes it. rpc.ail writes false into the journal header's boot and into the context views. config.ail no longer reads tools.hybrid; the TUI's HYBRID_TOOLS mapping and template line are gone. make check_core and make test_coverage pass.",
+      "note": "The wide edit: ten entry points, 82 call sites in 40 files at 38068013. The journal header and the ABI's context views keep the name (Amendment 2, B3).",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § W3-4"
+      ]
+    },
+    {
+      "id": "W3-5",
+      "title": "docs: records and the attribution anchors",
+      "kind": "docs",
+      "project": "W3",
+      "state": "queued",
+      "deps": [
+        "W3-4"
+      ],
+      "criteria": "The hybrid issue file's status, a note in 013 ADR-003, a numbered change in 013 ADR-004, and the attribution anchors re-baselined in the six-file form. make anchors attribution_table passes.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § W3-5"
+      ]
+    },
+    {
+      "id": "W3-6",
+      "title": "gate: W3's full gate and one live session",
+      "kind": "gate",
+      "project": "W3",
+      "state": "queued",
+      "deps": [
+        "W3-4",
+        "W3-5"
+      ],
+      "criteria": "Everything in WI-10, plus make eval_matrix. One live session on the default profile, asked a question whose natural answer is a fenced shell example, ends with a done event, runs nothing, and has no hybrid_bash_extracted in its log.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § W3-6"
       ]
     }
   ]
