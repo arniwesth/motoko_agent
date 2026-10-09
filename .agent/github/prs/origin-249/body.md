@@ -109,13 +109,18 @@ rules, and the same mutant passed with the control removed.
 - docs(005): the plan takes Codex Sol's review — eight findings, all reproduced and fixed
 - docs(005): old traces are read by a pinned runner — the operator's decision
 - docs(005): two diagrams of the finalize pipeline — with the DP7 verifier, and after W1 removes it
+- docs(005): the plan's dagr document — 17 tasks, structure only
 
-6 files changed: the amendment, the plan, and two diagrams as Mermaid source and SVG.
+7 files changed: the amendment, the plan, the plan's dagr document, and two diagrams as Mermaid
+source and SVG.
 
 ## Governing docs
 
 - `.agent/projects/005_harness_policy_boundary/ADR-001-harness-policy-boundary.md`
 - `.agent/projects/005_harness_policy_boundary/PLAN-finalize-policy-migration.md`
+- `.agent/projects/005_harness_policy_boundary/PLAN-finalize-policy-migration.dagr.json`: the
+  plan's tasks and dependencies, as 008 ADR-001 D2 asks (that record is accepted and still in
+  #215). Structure only: no attempts, events or pane ids. WI-6 is `canceled`.
 - `.agent/projects/005_harness_policy_boundary/mmd/dp7-finalize-gate.svg`: the pipeline as
   built, with the verifier.
 - `.agent/projects/005_harness_policy_boundary/mmd/dp7-finalize-gate-end-state.svg`: the pipeline
@@ -167,7 +172,11 @@ Checked on 2026-10-09 at `36a96b1e`, AILANG v0.52.5.
 - [x] **Both diagrams match their sources.** Each SVG is byte-identical to a fresh render of its
   `.mmd` with `tools/mmd2svg` and `--theme tokyo-night`, and each was looked at in a browser
   screenshot.
-- [x] **Six files changed besides this record.** `git diff --name-only origin/main...HEAD`.
+- [x] **The dagr document is contract-valid.** `dagr check
+  PLAN-finalize-policy-migration.dagr.json --strict --json` prints `[]` and exits 0 at dagr 0.3.1.
+  It has 17 tasks, 16 `queued` and one `canceled`; every dependency names a task in it; every
+  task id appears in the markdown plan.
+- [x] **Seven files changed besides this record.** `git diff --name-only origin/main...HEAD`.
 - [x] **Nothing stored records the persist-nudge budget.** The 2026-10-09 journal's header has no
   such field, `journal.ail:2288-2290` recomputes the count from history, and no stored execution
   program is committed. Six evidence logs name the key; they are records.
