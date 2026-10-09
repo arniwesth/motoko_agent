@@ -33,12 +33,18 @@ and the event vocabulary, so they do not run in parallel.
    guard in its place. The operator decided that on 2026-10-09. It follows W1, because both edit
    `classify_candidate` and `decide`.
 3. **W3 removes hybrid mode (DP6)**: core no longer turns a prose answer into a shell command.
-   The operator decided that on 2026-10-09 too. It is the widest of the three, and **it has not
-   been reviewed**: W1 and W2 went through the review recorded below, W3 was written after it.
+   The operator decided that on 2026-10-09 too. It is the widest of the three. It had its own
+   review, recorded below, and one decision from that review is open.
 
 ### The operator's decisions
 
-All seven were answered on 2026-10-09. Nothing in this plan waits on a decision.
+Seven were answered on 2026-10-09. One is open, from the review of W3, and W3-4 waits on it.
+
+| # | Blocks | Question | This plan's recommendation |
+|---|---|---|---|
+| 8 | W3-7, W3-4 | The Compose extension reads the context views' `hybrid_tools`. When it is false, Compose turns its subagent mode into inline mode and denies its tool. After the removal: change Compose so it stops reading the flag, or leave Compose alone and have the host write `true` there? | Change Compose. In this loop typed tool calls always exist, which is all the flag ever told it. |
+
+Answered:
 
 | # | Question | The operator's answer |
 |---|---|---|
@@ -208,6 +214,11 @@ check this, so the check is the model's to run. Keep the rest of the section. It
 home for this rule: it applies only when the session modified AILANG source, which is the
 condition DP7 never had.
 
+**A consequence for sessions in progress.** Editing `SYSTEM.md` changes the system prompt's
+digest. A session started before the edit and resumed after it under the same profile is refused
+as `Prompt` unless the resume is forced (`src/core/journal.ail:1807-1808`). That is the journal
+working as designed. Say so in the pull request, so that nobody is surprised by the refusal.
+
 **Gate:** none mechanical. Read the section once it is edited.
 
 ### WI-6 — withdrawn
@@ -316,6 +327,7 @@ without calling the model. The implementer repeats both runs on the real change.
 
 - `make check_core`, `make test_coverage_selftest test_coverage`, `make smoke_parity`.
 - `make dst`. On v0.52.5 the sweep is about 20 minutes cold.
+- `make test`. CI's jobs do not run it, and W3 deletes a file it names.
 - `make verify_core verify_mutations verify_classify_check`, then commit, then
   `make new_contract_policy BASE=origin/main`. That last gate reads commits only. This plan adds
   no `pure func` to `src/core`.
@@ -473,17 +485,27 @@ W2 is its own pull request, after W1 has merged. Its order is in the dagr docume
 
 Amendment 2 has the mechanism and the evidence. This section is the work.
 
-**This workstream was not in the review.** Its first item exists to do for W3 what the review
-did for W1 and W2: find what the lists below miss before the wide edit starts.
-
 ### What the research found
 
 - **The behaviour is small.** One branch of the loop (`session.ail:4058-4121`), three helpers
   above it (`:2067-2168`), `extract_bash` and its helpers in `src/core/parse.ail`, one arm of
   `decide` (`step_machine.ail:123`) and one wire event.
-- **The name is everywhere.** `hybrid_tools` is a positional parameter of ten exported entry
-  points in `session.ail` (`:4423` to `:5660`) and is passed at 82 call sites in 40 files. It is
-  mentioned in 90 tracked files.
+- **The name is everywhere.** `hybrid_tools` is a parameter of nine exported functions in
+  `session.ail`: `run_v2_session_traced`, `run_v2_session_traced_with_persist_retries`, `run_v2`,
+  `run_v2_from_messages`, `conversation_loop_v2`, `run_v2_with_conversation`,
+  `run_v2_resume_with_conversation`, `run_v2_with_stub` and `run_v2_with_stub_port_adapter`. W2
+  removes the second, so eight remain when W3 starts. A grep for those names finds 82 call sites
+  in 40 files. The name is mentioned in 90 tracked files.
+- **It is also threaded through private helpers, and written into three records inside
+  `session.ail`**: the extension context (`mk_v2_ext_ctx`, `:1941`), the continuation
+  (`c2_continuation`, `:2524`) and the turn's exit manifest (`publish_turn_exit_manifest`,
+  `:5073`). Two forwarding modules pass it on: `src/core/agent_loop_v2.ail:19` and
+  `src/core/test/scripted_ports.ail:78`.
+- **One extension branches on it.** The Compose extension turns its subagent mode into inline
+  mode and denies the `Compose` tool when the flag is false
+  (`packages/motoko-ext-compose/compose.ail:108`, `:120`). To Compose the flag meant "typed tool
+  calls exist here". Every other extension only copies the field. `ailang` is the one tracked
+  profile that loads `compose`, which is why #252 leaves that profile's flag on.
 - **Three things hold the name and are not this plan's to change** (Amendment 2, B3): the
   journal header's `boot.hybrid_tools`, the ABI's context views, and the evaluator's two hybrid
   rules for journals recorded before the removal.
@@ -495,22 +517,50 @@ did for W1 and W2: find what the lists below miss before the wide edit starts.
 - **The system prompt describes it wrongly.** `SYSTEM.md:92-97` calls hybrid mode "Optional, Off
   By Default". The code default is true (`config.ail:372`).
 
+### What happens to journals already recorded
+
+The review checked these, and the plan relies on them.
+
+- **An admitted old journal replays the same.** The evaluator cuts any result whose id starts
+  `hybrid-step-`, and admits a stop under a header that says `hybrid_tools: true` only if a
+  native call came before it. No admitted journal was found that would replay differently
+  without the branch.
+- **A journal that ends in the middle of a hybrid step resumes between turns.** The unanswered
+  built call is dropped and reported as dangling, and it is not run again. Removing the
+  `hybrid_bash` arm of `decide` does not change that.
+- **A journal's header is written once.** A session started before the removal keeps
+  `boot.hybrid_tools: true` for good (`src/tui/src/session-journal.ts:310`, `:431`), while a run
+  resumed after the removal takes its inputs from the invocation (`journal.ail:2293`, `:2306`)
+  and has no hybrid branch. If such a run ends on a stop with no native call before it, the
+  evaluator refuses that journal with `HybridPredicate` (`src/eval/journal/stopping.ail:662`),
+  although nothing could have been extracted. The refusal is conservative, not wrong, and this
+  plan leaves it.
+- **Removing the section from `SYSTEM.md` changes the prompt's digest**, with the consequence
+  described under WI-5.
+
 ### Work items
 
-- **W3-1 — enumerate before editing.** In a scratch tree, delete the hybrid branch and the
-  `HybridBashExtracted` variant, and nothing else. Record every compile error, then run
-  `make check_core test_coverage event_vocabulary invariants smoke_parity ledger_parity
-  world_framed_wire depth_canary eval_matrix` and the code-graph pytest, and record every red
-  target with the file behind it. Compare with the lists in W3-2 to W3-4. Anything they do not
-  name is reported before the next item starts.
-- **W3-2 — the behaviour.** One commit.
+- **W3-1 — two inventories before any edit lands.**
+  - *By reading.* List every signature that carries `hybrid_tools`, exported and private, every
+    call site that passes it, and every place that writes it into a record. A signature scan
+    and `git grep` do this; deleting a constructor does not, because the compile stops at the
+    first cascade.
+  - *By running.* In a scratch tree apply W3-2 and W3-3 as written, get the tree to compile, and
+    run `make check_core test test_coverage event_vocabulary invariants smoke_parity
+    ledger_parity world_framed_wire depth_canary eval_matrix`, the code-graph pytest and
+    `src/eval/journal/witness_live_test.ail`. Record every red target with the file behind it.
+  - Anything either inventory finds that W3-2 to W3-4 do not name is reported before W3-2
+    starts.
+- **W3-2 — the behaviour.** One commit with W3-3.
   - `session.ail`: the hybrid branch (`:4058-4121`), so that a response with no tool call that no
     extension intercepted goes to `classify_candidate`; `synthesize_hybrid_bash_call`,
     `any_native_call`, `session_emitted_native_tool_call` and its test (`:2067-2168`); the
     imports at `:43` and `:112`.
   - `step_machine.ail:123`: the `hybrid_bash` arm of `decide`, and any test that names it.
   - `src/core/parse.ail`: `extract_bash`, `first_shell_line`, `looks_like_shell`, and
-    `extract_fence` if nothing else in the file uses it. `src/core/parse_test.ail` with them.
+    `extract_fence` if nothing else in the file uses it.
+  - `src/core/parse_test.ail` goes with them, and so does its line in `make test`
+    (`Makefile:3203-3204`). Without that, `make test` fails on a missing file.
   - `scripts/smoke_v2_hybrid.ail`, and its run in `scripts/dst/phase_a_event_parity.sh:184`.
   - `SYSTEM.md:92-97`: the section goes.
 - **W3-3 — the wire event.** Same commit as W3-2, since the branch is the event's only emitter.
@@ -522,27 +572,48 @@ did for W1 and W2: find what the lists below miss before the wide edit starts.
     `scripts/phase_b_inventory_baseline.txt`, and the rule at
     `tools/code-graph/overlay/event_subjects.py:125` with its test at
     `tests/test_event_subjects.py:93` and the three pinned counts.
-  - The evaluator's witness table: the `hybrid_extractions` row
-    (`src/eval/journal/witness.ail:63`, `:96`, `:206`, `:276-277`, `:523`, `:540`) and the same
-    string in `witness_live_test.ail`. This is an evaluator path under 013 ADR-004 D5.
-- **W3-4 — the parameter.** The wide edit.
-  - Remove `hybrid_tools` from the ten entry points and from `c2_loop`'s own signature, and from
-    every call site W3-1 lists.
-  - `src/core/rpc.ail`: `hybrid_enabled` goes (`:115`, `:280` and its uses). The journal header's
-    `boot.hybrid_tools` (`:427`) and the context views' `hybrid_tools` (`:137`, `:376`, `:485`,
-    `:576`) are written as `false`. For the header that is decision 7: the field stays in the
-    journal's schema.
+  - The evaluator's witness table loses its `hybrid_extractions` row
+    (`src/eval/journal/witness.ail:63`, `:96`, `:206`, `:276-277`, `:523`, `:540`). Three pins
+    move with it: the census size, 13 to 12 (`witness_live_test.ail:192`); the twin count, 19 to
+    18 (`:452`); and two rows of `src/eval/journal/testdata/MATRIX.expected.tsv` (`:348`,
+    `:395`), which are deleted. Do not leave those rows: `scripts/eval/candidate.py:1684-1700`
+    credits a row from its test's aggregate result, so a stale row would be credited for
+    coverage that no longer exists. These are evaluator paths under 013 ADR-004 D5.
+- **W3-7 — Compose stops reading the flag** (decision 8, if it goes as recommended).
+  `packages/motoko-ext-compose/compose.ail:108`: `current_composition_mode` no longer falls back
+  to inline when `hybrid_tools` is false. Its tests follow. This lands before W3-4 changes what
+  the host writes. If decision 8 goes the other way, this item is canceled and W3-4 writes
+  `true` into the context views.
+- **W3-4 — the parameter.** The wide edit, after W3-7.
+  - Remove `hybrid_tools` from the eight exported functions, from `c2_loop` and the private
+    helpers that thread it, from the two forwarding modules, and from every call site W3-1
+    lists.
+  - The three writers inside `session.ail` and the ones in `src/core/rpc.ail` (`:137`, `:376`,
+    `:427`, `:485`, `:576`) write `false`: into the journal header's `boot.hybrid_tools`
+    (decision 7), the continuation, the exit manifest and the context views. `hybrid_enabled`
+    goes from `rpc.ail` (`:115`, `:280` and its uses).
   - `src/core/config.ail`: stop reading `tools.hybrid` (`:46`, `:372`, `:652`).
     `src/tui/src/config.ts`: the `HYBRID_TOOLS` mapping (`:34`) and the template's line (`:109`,
-    `:167`), with `config.test.ts`.
+    `:167`), with `config.test.ts`. No gate runs the TUI's jest suite (`Makefile:3194`), so run
+    `cd src/tui && bun test src/config.test.ts` by hand.
   - A profile that still sets `tools.hybrid` is not handled here, by decision 2: unused config
-    entries get their own pull request.
-- **W3-5 — records.** The issue file's status; a note in 013 ADR-003 beside `:267`; a numbered
-  change in 013 ADR-004 for `:287-292` and `:613`; and the attribution anchors, re-baselined
-  again in the six-file form.
-- **W3-6 — the full gate.** W1's WI-10 in full, plus `make eval_matrix`. And one live session: on
-  the `default` profile, ask a question whose natural answer is a fenced shell example. The run
-  ends with a `done` event, nothing is executed, and the log has no `hybrid_bash_extracted`.
+    entries get their own pull request. That includes `ailang`, which #252 left on.
+- **W3-5 — records.**
+  - The hybrid issue file's status.
+  - 013 ADR-003: a note beside `:267`.
+  - 013 ADR-004: a numbered change for `:287-292` and `:613`, and for the census row at `:1020`,
+    which W3-3 deletes.
+  - 004 ADR-001 `:260-262` and 003 ADR-001 `:88-94`, both Proposed, assign hybrid synthesis to
+    the response interpreter and require tool dispatch at the hybrid site. Mark both passages
+    superseded.
+  - `.agent/plans/AILANG_Composition_Subagent.md:892-898` describes Compose's fallback when the
+    flag is false. Mark it as overtaken by W3-7.
+  - The attribution anchors, re-baselined again in the six-file form.
+- **W3-6 — the full gate.** W1's WI-10 in full, plus `make eval_matrix` and
+  `cd src/tui && bun test src/config.test.ts`. And one live session: on the `default` profile,
+  ask a question whose natural answer is a fenced shell example. The run ends with a `done`
+  event, nothing is executed, and the log has no `hybrid_bash_extracted`. If decision 8 went as
+  recommended, also call `Compose` once on the `ailang` profile and see it allowed.
 
 W3 is its own pull request, after W2 has merged.
 
@@ -587,6 +658,31 @@ build a decoder (WI-4). The operator confirmed it on 2026-10-09, as decision 5.
 
 Not reviewed: neither workstream was implemented in full, and `make dst`, `eval_matrix`,
 `check_core`, the contract gates, `corpus_pr` and a live session were not run.
+
+### The review of W3
+
+Codex Sol reviewed W3 and Amendment 2 on 2026-10-09 at `86718a3e`, from the brief in
+`tmp/review-249/BRIEF-sol-w3.md`. Its verdict: revise before implementing. It reported six
+findings. Each was reproduced against the code, and all six are folded in above.
+
+| # | Finding | Where it is fixed |
+|---|---|---|
+| 1 | Writing `false` into the context views also disables Compose's subagent mode | Decision 8, W3-7; #252 no longer changes the `ailang` profile |
+| 2 | W3-3 missed the evaluator's census and twin counts and two matrix rows | W3-3 |
+| 3 | A journal started before the removal keeps `hybrid_tools: true` in its header; editing `SYSTEM.md` makes a same-profile resume refuse | *What happens to journals already recorded*, WI-5 |
+| 4 | Deleting `parse_test.ail` breaks `make test`, and no gate runs the TUI config test | W3-2, W3-4, WI-10 |
+| 5 | Nine exported functions take the flag, not ten; forwarding modules, private helpers and three writers were not named; W3-1 could not have produced the call-site list | *What the research found*, W3-1, W3-4 |
+| 6 | Four records describe hybrid mode and were not listed | W3-5, Amendment 2 |
+
+Its opinion on W3-1 was taken: the item is now a read inventory and a run after the removal
+compiles.
+
+What it confirmed: the extraction's scope, that the branch is the event's only emitter and the
+only producer of a replacing history entry, that both decoders require `boot.hybrid_tools`, the
+replay claim, the resume behaviour for a journal that ends mid-step, and the log figures.
+
+Not reviewed: W3 was not implemented, and `make dst`, the contract gates, a live session and a
+replay of real journals were not run. Its `eval_matrix` run was stopped before a verdict.
 
 ## Out of scope
 

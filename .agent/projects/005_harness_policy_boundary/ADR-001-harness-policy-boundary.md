@@ -530,8 +530,8 @@ mode" of `.agent/issues/hybrid-bash-extracts-prose-examples-in-native-tool-mode.
 section of `SYSTEM.md` that describes hybrid mode (`:92-97`).
 
 **Ruling, 2026-10-09 (operator).** After the mechanism was laid out: "this needs to be removed as
-well". #252 switches it off in the sixteen tracked profiles. The plan's third workstream removes
-it from core.
+well". #252 switches it off in fifteen of the sixteen tracked profiles; the sixteenth loads the
+Compose extension, which reads the same flag. The plan's third workstream removes it from core.
 
 #### The artifact
 
@@ -588,7 +588,8 @@ where core's built call went through the tool phase.
   (`src/core/journal.ail:755-757`) and by the evaluator's reader
   (`src/eval/journal/reader.ail:618-620`). It keeps being written, as `false`.
 - The extension ABI's context views carry `hybrid_tools` (`packages/motoko-ext-abi/types.ail:713`,
-  `:876-1008`). The package is frozen at 8.0. The host passes `false`.
+  `:876-1008`). The package is frozen at 8.0, so the field stays. What the host writes there is
+  open, because one extension branches on it: see OQ-B2.
 - The evaluator keeps its two hybrid rules, because journals recorded before the removal still
   need them: a `hybrid-step-` result is a cutoff, and a journal recorded with `hybrid_tools` true
   is admitted only if a native call preceded its stop call
@@ -596,9 +597,13 @@ where core's built call went through the tool phase.
   journal replay the same on a driver with no hybrid branch.
 - `replaces_previous` stays in the journal format. The hybrid path is its only producer
   (`session.ail:4106`), so no new journal sets it, and old ones are still folded.
+- A journal's header is written once. A session started before the removal keeps
+  `hybrid_tools: true` in its header, and a run resumed after the removal has no hybrid branch.
+  If that run ends on a stop with no native call before it, the evaluator refuses the journal
+  with `HybridPredicate` (`stopping.ail:662`). The refusal is conservative and is left as it is.
 
-**B4. It is off in every tracked profile now.** #252. The code default and the TUI's profile
-template, both true, go with the mechanism.
+**B4. It is off in fifteen of the sixteen tracked profiles now.** #252. `ailang` waits for
+OQ-B2. The code default and the TUI's profile template, both true, go with the mechanism.
 
 #### Consequences
 
@@ -608,10 +613,21 @@ template, both true, go with the mechanism.
   fence or a shell-looking line.
 - **The vocabulary's version moves a third time**, by the rule in Amendment 1's costs, with a
   pinned runner for the version before it.
-- **The loop's entry points lose a parameter.** `hybrid_tools` is a positional argument of ten
-  exported functions in `session.ail` and is passed at 82 call sites in 40 files.
+- **The loop's entry points lose a parameter.** `hybrid_tools` is a positional argument of nine
+  exported functions in `session.ail`, eight once the persist nudge's helper is gone, and a grep
+  for their names finds 82 call sites in 40 files.
 - **The evaluator changes in one place.** Its witness table counts `HybridBashExtracted` records
-  (`src/eval/journal/witness.ail:276-277`) and loses that row with the variant.
+  (`src/eval/journal/witness.ail:276-277`) and loses that row with the variant, along with two
+  pinned counts and two rows of its expected matrix.
+- **Compose depends on the flag.** The Compose extension turns its subagent mode into inline
+  mode and denies the `Compose` tool when `hybrid_tools` is false
+  (`packages/motoko-ext-compose/compose.ail:108`, `:120`). To Compose the flag meant "typed tool
+  calls exist here", which is always so in this loop. `ailang` is the one tracked profile that
+  loads `compose`, so #252 leaves that profile's flag on.
+- **Removing the section from `SYSTEM.md` changes the prompt's digest.** A session started
+  before the edit and resumed after it under the same profile is refused as `Prompt` unless the
+  resume is forced (`journal.ail:1807-1808`). Amendment 1's edit to `SYSTEM.md` has the same
+  consequence.
 
 #### Records this touches
 
@@ -621,8 +637,19 @@ template, both true, go with the mechanism.
 | `SYSTEM.md:92-97` | "Hybrid Mode (Optional, Off By Default)" | Removed. |
 | 013 ADR-003 `:267` | The journal header's `boot` lists `hybrid_tools` | Stays (B3). A note that it is always `false` from here on. |
 | 013 ADR-004 `:287-292`, `:613` | The stopping contract's hybrid rules, and the T0 setting "`hybrid_tools`: recorded" | Stay (B3). A numbered change in that record notes that new journals record `false`. |
+| 013 ADR-004 `:1020` | The census row "hybrid extractions: `HybridBashExtracted` in the trace" | Removed with the variant, by the same numbered change. |
+| 004 ADR-001 `:260-262` (Proposed) | "hybrid-bash synthesis → response interpreter" | Superseded. There is no synthesis to place. |
+| 003 ADR-001 `:88-94` (Proposed) | Tool dispatch is replaced at both the native site and the hybrid site | Superseded for the hybrid site. |
+| `.agent/plans/AILANG_Composition_Subagent.md:892-898` | Compose falls back to inline when hybrid is disabled | Overtaken, if OQ-B2 goes as recommended. |
 
-#### Open question, closed
+#### Open questions
+
+- **OQ-B2 (what the context views carry, and Compose).** Found by the review of the plan's W3.
+  Either Compose stops reading the flag and the host writes `false`, or Compose is left alone
+  and the host writes `true`. Leaning: change Compose. A constant `true` in a field named
+  `hybrid_tools`, in a loop that has no hybrid mode, would mislead the next reader.
+
+Closed:
 
 - **OQ-B1 (the journal header).** Decided by the operator on 2026-10-09: keep `boot.hybrid_tools`
   and write it as `false`. Dropping the field would be a journal schema change under 013
