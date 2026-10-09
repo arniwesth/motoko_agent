@@ -125,9 +125,10 @@ rules, and the same mutant passed with the control removed.
 - docs(005): the plan's dagr document — 17 tasks, structure only
 - docs(005): Amendment 2 and W3 — hybrid mode (DP6) is removed from core
 - docs(005): the journal header keeps boot.hybrid_tools, written as false — the operator's decision
+- docs(005): a diagram of the other numbered decision points, and who decides at each
 
-7 files changed: the amendment, the plan, the plan's dagr document, and two diagrams as Mermaid
-source and SVG.
+9 files changed: the ADR with its two amendments, the plan, the plan's dagr document, and three
+diagrams as Mermaid source and SVG.
 
 ## Governing docs
 
@@ -140,6 +141,10 @@ source and SVG.
   built, with the verifier.
 - `.agent/projects/005_harness_policy_boundary/mmd/dp7-finalize-gate-end-state.svg`: the pipeline
   after W1. It is the planned state, not what `main` does.
+- `.agent/projects/005_harness_policy_boundary/mmd/decision-points.svg`: the other numbered
+  decision points as built (DP0, DP1, DP3, DP4, DP5, DP6 and the multi-turn loop), coloured by
+  who decides. Its source records where the numbers came from: a May migration plan that is no
+  longer in the tree, which had no DP2, and later documents that reuse the numbers differently.
 
 ## Predicted outcome
 
@@ -184,7 +189,7 @@ Checked on 2026-10-09 at `36a96b1e`, AILANG v0.52.5.
 - [x] **Nothing sets `MOTOKO_PERSIST_RETRIES` outside tests.** `git grep` over the `Makefile`,
   `.github`, `.motoko`, `tools`, and the evaluation's scripts finds only DST scripts and a
   fixture generator.
-- [x] **Both diagrams match their sources.** Each SVG is byte-identical to a fresh render of its
+- [x] **All three diagrams match their sources.** Each SVG is byte-identical to a fresh render of its
   `.mmd` with `tools/mmd2svg` and `--theme tokyo-night`, and each was looked at in a browser
   screenshot.
 - [x] **The dagr document is contract-valid.** `dagr check
@@ -197,7 +202,7 @@ Checked on 2026-10-09 at `36a96b1e`, AILANG v0.52.5.
 - [x] **The hybrid path is the only producer of a replacing history entry.**
   `pending_tool_batched: false` occurs once in `session.ail`, at `:4106`.
 - [ ] W3 has not been reviewed, and none of its work items was tried.
-- [x] **Seven files changed besides this record.** `git diff --name-only origin/main...HEAD`.
+- [x] **Nine files changed besides this record.** `git diff --name-only origin/main...HEAD`.
 - [x] **Nothing stored records the persist-nudge budget.** The 2026-10-09 journal's header has no
   such field, `journal.ail:2288-2290` recomputes the count from history, and no stored execution
   program is committed. Six evidence logs name the key; they are records.
