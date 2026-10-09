@@ -18,23 +18,20 @@ after `:2819`.
 
 Two workstreams. They share no code and W1 does not wait for W2.
 
-1. **W1 removes the DP7 verifier from core.** Nothing replaces it. Ten work items, one pull
+1. **W1 removes the DP7 verifier from core.** Nothing replaces it. Nine work items, one pull
    request. It is ready to start.
 2. **W2 removes the persist nudge completely**, its environment read included, and builds no
    guard in its place. The operator decided that on 2026-10-09. It follows W1, because both edit
    `classify_candidate` and `decide`.
 
-### The one decision this plan still needs from the operator
+### The operator's decisions
 
-| # | Blocks | Question | This plan's recommendation |
-|---|---|---|---|
-| 2 | W1, WI-6 | A profile that still sets `verification.enabled: true`: refuse to start, or start with a warning? | Refuse. Someone who believes a gate runs has to find out that it does not. |
-
-Decided on 2026-10-09:
+All four were answered on 2026-10-09. Nothing in this plan waits on a decision.
 
 | # | Question | The operator's answer |
 |---|---|---|
 | 1 | 011 ADR-003's `verifier-rejection` control run exists to walk the DP7 branch. Replace it with a control on the solver-feedback branch, or drop it? | Replace it with the solver-feedback control. |
+| 2 | A profile that still sets `verification.enabled: true`: refuse to start, or warn? | Neither, here. Profile config entries the host does not use are dealt with in a separate pull request. WI-6 is withdrawn. |
 | 3 | Build a persist-nudge guard extension (ADR-001 D4), or delete the persist nudge? | Delete it. It is off by default, so it has not run for a long time. |
 | 4 | Keep reading `MOTOKO_PERSIST_RETRIES` as a dead value, or remove the read too? | Remove it in full, the read included. The operator confirmed that after seeing what the read touches. |
 
@@ -168,25 +165,15 @@ condition DP7 never had.
 
 **Gate:** none mechanical. Read the section once it is edited.
 
-### WI-6 — a profile that still asks for the gate does not start
+### WI-6 — withdrawn
 
-`src/core/rpc.ail`, `Makefile`, `docs/configuration.md`.
+This item made a profile that still sets `verification.enabled: true` refuse to start. The
+operator decided on 2026-10-09 that W1 does not handle the key: what the host does with a profile
+config entry it does not use is a question about every such entry, and gets its own pull
+request. The number is kept so the other items do not move.
 
-- At host startup, if the loaded profile has `verification.enabled` true, emit a
-  `session_start_error` with its own `error_code` and exit 2, as the `ohmy_pi_unsupported`
-  refusal does (`rpc.ail:175-182`). The message names the key, says the gate was removed, and
-  says what to delete.
-- It is unconditional. It does not depend on `extensions.strict`.
-- New target `verify_no_finalize_verifier`, modelled on `verify_strict_context_limit`
-  (`Makefile:2746-2770`): one temporary profile with the key set exits 2 with the message; one
-  with `"verification": {}` starts. **Clear `AILANG_FS_SANDBOX` in its recipe**, as its siblings
-  do. Add it to `check_core`'s prerequisites.
-- `docs/configuration.md` gains two sentences: the key is refused, and why.
-
-**Gate:** `make verify_no_finalize_verifier check_core`.
-
-**Depended on #251**, which merged on 2026-10-09. Before it, this refusal would have stopped all
-eight tracked profiles that set the key.
+What that leaves, stated plainly: after W1 the key is read into the config and then ignored. A
+profile that sets it starts as usual and nothing is verified. No tracked profile sets it (#251).
 
 ### WI-7 — delete the tests that test only DP7
 
@@ -264,8 +251,7 @@ not walked by the gate today. After W1 and W2 it is the only way a final answer 
 - `make dst`. On v0.52.5 the sweep is about 20 minutes cold.
 - `make verify_core verify_mutations verify_classify_check`, then commit, then
   `make new_contract_policy BASE=origin/main`. That last gate reads commits only. This plan adds
-  no `pure func` to `src/core` unless WI-6 needs one; if it does, give it a contract or a checked
-  `-- contracts:` line.
+  no `pure func` to `src/core`.
 - **One live session.** Start a session on the `default` profile, ask a question that needs no
   tool call, and confirm the log has a `done` event and no `dp7_verifier_rejected`. This is the
   one thing the gates cannot show.
@@ -276,7 +262,7 @@ not walked by the gate today. After W1 and W2 it is the only way a final answer 
    first.
 2. WI-1, WI-2 and WI-3 are one commit. The tree does not type-check between them.
 3. WI-4, then WI-7 and WI-8, which need the variant gone to compile.
-4. WI-6 and WI-5 are independent of the rest and of each other.
+4. WI-5 is independent of the rest.
 5. WI-9 last, when line numbers have stopped moving. WI-10 before the pull request.
 
 ---
@@ -287,9 +273,8 @@ not walked by the gate today. After W1 and W2 it is the only way a final answer 
 |---|---|---|
 | Driver | `src/core/session.ail`, `src/core/step_machine.ail` | Logic removed, one rename |
 | Vocabulary | `src/core/phase_vocab.ail`, `src/core/dst_event_vocabulary.ail`, `src/core/dst_invariants.ail` | One variant removed |
-| Host startup | `src/core/rpc.ail` | One refusal added |
-| Prompt and docs | `SYSTEM.md`, `docs/configuration.md` | Text |
-| Build | `Makefile` | One target added, `smoke_driver` trimmed |
+| Prompt | `SYSTEM.md` | One sentence |
+| Build | `Makefile` | `smoke_driver` trimmed |
 | Smokes | `scripts/smoke_v2_dp7_gate.ail`, `scripts/setup_dp7_smoke_workdirs.sh` | Deleted |
 | DST scripts | `ledger_parity_dst`, `park_wake_dst`, `phase_c2_wiring_scenarios`, `event_vocabulary_dst`, `invariants_dst`, `corpus_judge_dst`, `corpus_pr_dst` | Scenarios removed or replaced |
 | Tools | `tools/code-graph/overlay/event_subjects.py`, `tools/predicate-anchors/anchors.sh` | One rule removed, anchors re-baselined |
@@ -400,6 +385,8 @@ Fixed in the amendment in the same change as this plan:
 
 ## Out of scope
 
+- What the host does with a profile config entry it does not use, `verification.enabled` among
+  them. The operator's decision 2: a separate pull request.
 - The TUI shows no guard feedback at all (`src/tui/src` has no handler for `ext_solver_feedback`).
 - Near-duplicate matching in the repetition guard.
 - Removing `ExtRuntime.verification` and `VerificationConfig` from the ABI package.

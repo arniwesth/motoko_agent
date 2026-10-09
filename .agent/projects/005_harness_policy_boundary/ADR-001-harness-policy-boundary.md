@@ -448,8 +448,11 @@ Costs:
   `ailang`, `default`, `demo_dst`, `dogfood`, `mark`, `observability`, `omnigraph` and `skills`.
   #251 turns it off in all eight. A model that should verify its work has to run the check
   itself.
-- **A leftover `verification.enabled: true` must not be ignored silently.** Once core stops
-  reading the block, the plan makes a profile that still sets it fail loudly at startup.
+- **A leftover `verification.enabled: true` is ignored.** Once core stops reading the block, a
+  profile that still sets it starts as usual and nothing is verified. The operator decided on
+  2026-10-09 not to handle the key here: what the host does with a profile config entry it does
+  not use is a question about every such entry, and gets its own pull request. No tracked
+  profile sets it (#251).
 - **Tests go.** `scripts/smoke_v2_dp7_gate.ail` (the only executable coverage of this path,
   `Makefile:2458`), the four `w2_dp7_*` scenarios in `scripts/dst/phase_c2_wiring_scenarios.ail`,
   and the `decide` tests that name the three reasons (`step_machine.ail:348-397`, `:534-610`).
@@ -505,7 +508,6 @@ Closed on 2026-10-09:
 #### Follow-on
 
 - [`PLAN-finalize-policy-migration.md`](PLAN-finalize-policy-migration.md), written with this
-  amendment. Workstream W1 removes the verifier: the removals in A4, the startup refusal for a
-  leftover `verification.enabled`, the system prompt's sentence, and the edits to the records in
-  the table above. Workstream W2 deletes the persist nudge and its environment read. The plan
+  amendment. Workstream W1 removes the verifier: the removals in A4, the system prompt's
+  sentence, and the edits to the records in the table above. Workstream W2 deletes the persist nudge and its environment read. The plan
   replaces the unwritten `PLAN-persist-nudge-migration.md` listed above.
