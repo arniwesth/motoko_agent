@@ -2,8 +2,8 @@
 
 Date: 2026-07-10
 Status: Proposed
-Amended by: Amendment 1 (2026-10-09, proposed): pre-finalize verification (DP7) moves to an
-extension. See [Amendments](#amendments).
+Amended by: Amendment 1 (2026-10-09, proposed): pre-finalize verification (DP7) leaves core.
+See [Amendments](#amendments).
 Pinned toolchain: AILANG **v0.26.0**; `ailang.lock` → `ailang_version: "v0.26.0"`
 Grounded at: branch `arniwesth/mot-35-fix-context-size-estimation`, HEAD `66a4ecb`
 
@@ -261,7 +261,7 @@ process boundary.
 
 Each amendment cites the artifact that forced it and supersedes the cited text without revising it.
 
-### Amendment 1 (2026-10-09, proposed) — pre-finalize verification (DP7) is finalize policy and moves to an extension
+### Amendment 1 (2026-10-09, proposed) — pre-finalize verification (DP7) is finalize policy and leaves core
 
 Status: Proposed. Grounded at `origin/main` `36a96b1e`, AILANG v0.52.5. Line references below are
 to that commit.
@@ -270,8 +270,17 @@ to that commit.
 pipeline in [013 ADR-002](../013_core_architecture_for_dst/ADR-002-park-and-wake.md) D2
 (`:337-366`), one sentence of
 [031 ADR-001](../031_system_one_decisions/ADR-001-extension-owned-structured-decisions.md) D4
-(`:628-629`), and the premise of the
+(`:628-629`), the finalization item of
+[028 ADR-001](../028_verified_runtime_closing_the_loop/ADR-001-fail-closed-verification-everywhere.md)
+(`:28-31`), and the premise of the
 [DP7 design doc](../../../design_docs/planned/m-motoko-dp7-verifier-gate.md) (`:31`).
+
+**Ruling, 2026-10-09 (operator).** The first draft of this amendment moved the verifier into a
+guard extension and asked which profiles should ship it (OQ-A6). The operator's answer: none.
+There is no scenario in which Motoko's own `make check_core` should be triggered automatically
+on a final answer. So the verifier is removed and nothing replaces it. #251 empties the
+`verification` block of the eight profiles that enabled it. A1, the consequences, the open
+questions and the follow-on below are written to that ruling.
 
 #### The artifact: two sessions that could not finish
 
@@ -341,38 +350,42 @@ The ADR as written in July named only the persist nudge as misplaced policy. It 
 
 In this amendment a *continuing guard* is an atom that can return `ContinueWithFeedback`.
 
-**A1. Verification before finalize is finalize policy (extends D1).** It is implemented as a
-guard extension: a `SolverJudge` atom that runs its configured command and returns
-`ContinueWithFeedback` with the output when the command fails. Core runs no command at finalize.
+**A1. Verification before finalize is finalize policy, and core stops doing it (extends D1).**
+Core runs no command at finalize. By the ruling above nothing replaces it: no shipped profile
+verifies at finalize, and no verifier guard is built.
 
-- No ABI change is needed. `SolverJudge` already carries `{Process}`
+If one is ever wanted, it is a guard extension and not a core stage: a `SolverJudge` atom that
+runs its configured command and returns `ContinueWithFeedback` with the output when the command
+fails. Such a guard has to respect four things:
+
+- It needs no ABI change. `SolverJudge` already carries `{Process}`
   (`packages/motoko-ext-abi/types.ail:1956`).
 - A pass returns `NoDecision`, never `Accept`. A passing verifier has no opinion on whether the
   answer is complete.
-- The command and the budget are the extension's registration config.
+- The command and the bound are its registration config.
 - The feedback states what ran and how it exited, and carries the guard's marker as the other
   guards' feedback does. Core's current text asserts a type error for any non-zero exit, and in
   the 2026-10-09 session the model answered it as if the operator had written it.
 
-**A2. Every continuing guard is bounded, the verifier included (strengthens D2).** The bound is
-derived from the guard's own markers in history, as `empty_stop_guard` does
-(`packages/motoko-ext-empty-stop-guard/empty_stop_guard.ail:43-47`). When the bound is reached the
-guard abstains. D2 described one guard; it is now a rule: a continuing guard ships a test showing
-that it stops continuing. Both shipped continuing guards already have one
-(`empty_stop_guard.ail:124`, `progress_contract_guard.ail:434`).
+**A2. Every continuing guard is bounded (strengthens D2).** A verifier guard, if one is ever
+written, is no exception. The bound is derived from the guard's own markers in history, as
+`empty_stop_guard` does (`packages/motoko-ext-empty-stop-guard/empty_stop_guard.ail:43-47`). When
+the bound is reached the guard abstains. D2 described one guard; it is now a rule: a continuing
+guard ships a test showing that it stops continuing. Both shipped continuing guards already have
+one (`empty_stop_guard.ail:124`, `progress_contract_guard.ail:434`).
 
 **A3. Merge precedence is unchanged, and that is why A2 is required.** `ContinueWithFeedback`
 still outranks `Accept` (`src/core/ext/runtime.ail:919-925`; frozen at ABI 8.0 by 031 ADR-001 D4,
 `:626`). So the repetition guard's `Accept` cannot end a run while another guard is still
-continuing. What ends it is that every continuing guard runs out. With a verifier bound of N, the
-2026-10-09 run receives at most N consecutive verifier rejections where it received 37.
+continuing. What ends it is that every continuing guard runs out. Core's verifier never did,
+which is how the 2026-10-09 run received 37 consecutive rejections.
 
 **A4. Core's candidate pipeline has no verification stage.** `classify_candidate` becomes
 pending, then waits, then completion policy, then finalize. The following leave core:
 
 - `FinalizeVerification`, `is_missing_infrastructure`, `run_dp7_verifier`, `dp7_gate`,
   `Dp7Rejection` and `dp7_rejection_errors` (`session.ail:2218-2299`). The fail-open heuristic
-  becomes the extension's to keep or replace.
+  goes with them.
 - Stage 2, the verifier run in stage 5, `CandidateRejected` and `c2_dp7_rejected_state`
   (`session.ail:2964`, `:3219`, `:3268-3271`, `:3298-3305`).
 - `dp7_rejection_message` and the `dp7_rejected` arm of `decide`.
@@ -384,11 +397,11 @@ Two behaviours change and are intended:
 
 - Every non-blank candidate reaches the extension judges. Under 013 ADR-002 D2 a rejected one
   never did.
-- A candidate with open waits parks before any judge runs, so it is verified only once its waits
-  are closed. Today it is rejected first (013 ADR-002 `:364`).
+- A candidate with open waits parks. Today, with verification enabled and failing, it is
+  rejected first (013 ADR-002 `:364`).
 
 **A5. The persist nudge moves in the same plan (restates D4).** It is the other finalize policy
-in `classify_candidate` (`src/core/recovery.ail:40-63`, `session.ail:3288`). After both moves,
+in `classify_candidate` (`src/core/recovery.ail:40-63`, `session.ail:3288`). After both changes,
 stage 4 is `dispatch_solver_candidate` alone and `NoDecision` finalizes.
 
 **A6. D3's floor does not grow.** Core gains no counter and no cap for finalize feedback. The step
@@ -399,6 +412,8 @@ either.
 
 #### Alternatives considered
 
+- **Move DP7 into a shipped verifier guard.** This amendment's first draft. Dropped on the
+  ruling: no profile would load it.
 - **Keep DP7 in core and cap its rejections.** Rejected. It fixes the loop and leaves the command,
   the timing, the wording and the cap as core policy that no profile can swap.
 - **Keep DP7 in core and run the judges first.** Rejected. It restores the order before
@@ -416,32 +431,31 @@ either.
 Positive:
 
 - The repetition guard and every other judge see every candidate.
-- A profile chooses its verifier, its command and its bound, or loads none.
-- A verifier continue appears in the journal as `ext_solver_feedback`, like every other guard's.
+- A final answer no longer waits for a command. Once `make check_core` could pass inside a
+  session it took 164 s and 183 s on cold caches (#250).
 - `session.ail` and `step_machine.ail` lose a stage, three finish reasons and a message.
 
 Costs:
 
-- **Profiles lose verification unless migrated.** Eight tracked profiles enable it: `ailang`,
-  `default`, `demo_dst`, `dogfood`, `mark`, `observability`, `omnigraph` and `skills`. The plan
-  migrates them in the same change and makes a leftover `verification.enabled: true` fail loudly
-  at startup.
-- **Order decides whose feedback is injected.** When two guards continue on one candidate, the
-  first in registry order wins. The verifier's place in `extensions.order` is part of its design.
-- **Tests move.** `scripts/smoke_v2_dp7_gate.ail` (the only executable coverage of this path,
+- **Nothing checks the tree before a run ends.** DP7 was added in May after a model shipped three
+  hallucinated stdlib names and said it was done (`052d4c2f`). Eight tracked profiles enabled it:
+  `ailang`, `default`, `demo_dst`, `dogfood`, `mark`, `observability`, `omnigraph` and `skills`.
+  #251 turns it off in all eight. A model that should verify its work has to run the check
+  itself.
+- **A leftover `verification.enabled: true` must not be ignored silently.** Once core stops
+  reading the block, the plan makes a profile that still sets it fail loudly at startup.
+- **Tests go.** `scripts/smoke_v2_dp7_gate.ail` (the only executable coverage of this path,
   `Makefile:2458`), the four `w2_dp7_*` scenarios in `scripts/dst/phase_c2_wiring_scenarios.ail`,
   and the `decide` tests that name the three reasons (`step_machine.ail:348-397`, `:534-610`).
 - **Old journals still carry `dp7_verifier_rejected`.** The event vocabulary
   (`src/core/dst_event_vocabulary.ail:325`) must keep reading them.
-- **Attribution in the journal gets weaker.** `ext_solver_feedback` carries `step` and `feedback`
-  only (`phase_vocab.ail:1497`). Which guard continued is recoverable only from its marker.
 - **`ExtRuntime.verification` is exported by the ABI package** (`types.ail:2033-2037`). Core stops
   reading it at once. Whether the field can be dropped within 8.x or waits for 9.0 is for the plan
   to establish under the ABI header's rule.
 
-The operator's view does not improve by itself. `src/tui/src` has no handler for
-`dp7_verifier_rejected` or `ext_solver_feedback`, which is why the 2026-10-09 transcript shows
-only the model repeating itself. That is a separate change.
+One gap outlives the verifier. `src/tui/src` has no handler for `dp7_verifier_rejected` or for
+`ext_solver_feedback`, which is why the 2026-10-09 transcript shows only the model repeating
+itself. The other guards' feedback is as invisible to the operator. That is a separate change.
 
 #### Text superseded in other records, on acceptance
 
@@ -449,8 +463,9 @@ only the model repeating itself. That is a separate change.
 |---|---|---|
 | DP7 design doc `:31` | "correctness invariants belong in the runtime, not in the extension system" | A1 |
 | 013 ADR-002 D2 `:337-366` | Stage 2, "moves DP7 ahead of solver dispatch", and the cross-product cases that name a DP7 rejection | A4 |
-| 031 ADR-001 D4 `:628-629` | "Host permissions and deterministic verification remain authoritative" | Host permissions are untouched. Verification is no longer a host stage. It keeps priority over a learned `Accept` through merge precedence, for as long as its bound lasts (A3). |
-| 031 ADR-001 freeze evidence, item 6 `:1154` | "Composition with DP7" | Composition with a verifier guard |
+| 031 ADR-001 D4 `:628-629` | "Host permissions and deterministic verification remain authoritative" | Host permissions are untouched. Verification is no longer a host stage, and nothing ships one. |
+| 028 ADR-001 `:28-31`, and item 1 of its PLAN-001 | `run_dp7_verifier` fails closed, and "make the gate non-configurable for shipped profiles" | A1 and the ruling. There is no gate left to make fail-closed. 028's other two boundaries are untouched. |
+| 031 ADR-001 freeze evidence, item 6 `:1154` | "Composition with DP7" | Dropped. There is nothing to compose with. |
 
 #### Non-goals
 
@@ -462,30 +477,20 @@ only the model repeating itself. That is a separate change.
 
 #### Open questions
 
-- **OQ-A1 (shape of the verifier's bound).** All rejections in the run, or rejections since the
-  last tool call? The first stops a model that is still fixing things. The second lets a model
-  that keeps editing be rejected indefinitely. In the 2026-10-09 session the first 10 rejections
-  were separated by tool calls. The last 37 of the first run were consecutive, and so were the 10
-  after the interruption.
-- **OQ-A2 (finalizing with verification still failing).** When the bound is reached the run ends
-  on the model's answer, and `done` reads as an ordinary completion. `FinalizeDecision` has no way
-  to say "finalize, and mark it unverified". Leaning: the guard's last feedback tells the model to
-  report the failure in its answer, and a typed outcome is proposed separately as an ABI addition.
-- **OQ-A3 (when the verifier runs).** On every candidate, or only when the run has written files?
-  The production call sites pass empty tool evidence (`session.ail:1955`), so today a guard would
-  have to read the history for write calls, as `any_writefile_attempt` does.
-- **OQ-A4 (the command's environment).** The command inherits the session's environment, which is
-  how `AILANG_FS_SANDBOX` reached the fixture. Is scrubbing it the guard's job or the command's?
 - **OQ-A5 (`VerificationEvidence`).** 031 ADR-001 D3 defines it as the host's report of its
   verifier run (`types.ail:631-646`). No production call site fills it; `session.ail:1955` and
   `:5089` pass `NotReached`. After this amendment the host has no verifier run to report. Whether
-  the field stays `NotReached`, becomes `Disabled`, or is fed by the guard through a new channel
-  is 031's to settle.
-- **OQ-A6 (which profiles ship the guard).** `default` runs Motoko's own `make check_core` on
-  every final answer since `501ba64a`. Is that right for a profile used for any task?
+  the field stays `NotReached`, becomes `Disabled` or is retired is 031's to settle.
+
+Closed on 2026-10-09:
+
+- **OQ-A6 (which profiles ship a verifier).** None, by the ruling. #251.
+- **OQ-A1 to OQ-A4 (a verifier guard's bound, its outcome when the bound is spent, when it runs,
+  and its command's environment).** Not answered. They were questions about a guard that is not
+  being built, and return only if one is written.
 
 #### Follow-on
 
-- `PLAN-finalize-policy-migration.md`: the verifier guard, the persist-nudge guard, the removals
-  in A4, the profile migration, and the edits to 013 ADR-002 and 031 ADR-001. It replaces the
-  unwritten `PLAN-persist-nudge-migration.md` listed above.
+- `PLAN-finalize-policy-migration.md`: the removals in A4, the persist-nudge guard, the startup
+  refusal for a leftover `verification` block, and the edits to 013 ADR-002, 028 ADR-001 and
+  031 ADR-001. It replaces the unwritten `PLAN-persist-nudge-migration.md` listed above.
