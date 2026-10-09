@@ -1,0 +1,268 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1584.2439999999995 2237.665" width="1584.2439999999995" height="2237.665" style="--bg:#1a1b26;--fg:#a9b1d6;--line:#3d59a1;--accent:#7aa2f7;--muted:#565f89;background:var(--bg)">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          var(--fg);
+    --_text-sec:      var(--muted, color-mix(in srgb, var(--fg) 60%, var(--bg)));
+    --_text-muted:    var(--muted, color-mix(in srgb, var(--fg) 40%, var(--bg)));
+    --_text-faint:    color-mix(in srgb, var(--fg) 25%, var(--bg));
+    --_line:          var(--line, color-mix(in srgb, var(--fg) 50%, var(--bg)));
+    --_arrow:         var(--accent, color-mix(in srgb, var(--fg) 85%, var(--bg)));
+    --_node-fill:     var(--surface, color-mix(in srgb, var(--fg) 3%, var(--bg)));
+    --_node-stroke:   var(--border, color-mix(in srgb, var(--fg) 20%, var(--bg)));
+    --_group-fill:    var(--bg);
+    --_group-hdr:     color-mix(in srgb, var(--fg) 5%, var(--bg));
+    --_inner-stroke:  color-mix(in srgb, var(--fg) 12%, var(--bg));
+    --_key-badge:     color-mix(in srgb, var(--fg) 10%, var(--bg));
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="TOOLS" data-label="Tool phase · once for each tool call">
+  <rect x="490.97199999999987" y="792.765" width="1053.2719999999997" height="878.7" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="490.97199999999987" y="792.765" width="1053.2719999999997" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="502.97199999999987" y="806.765" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Tool phase · once for each tool call</text>
+</g>
+<polyline class="edge" data-from="start" data-to="ceil" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="583.8920416666666,110.7 583.8920416666666,146.7 385.6772916666665,146.7 385.6772916666665,158.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="start" data-to="legend" data-style="dotted" data-arrow-start="false" data-arrow-end="true" points="691.6357916666665,110.7 691.6357916666665,210.10000000000002" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="start" data-to="numnote" data-style="dotted" data-arrow-start="false" data-arrow-end="true" points="799.3795416666665,110.7 799.3795416666665,198.10000000000002 1093.1832916666665,198.10000000000002 1093.1832916666663,588.865" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="ceil" data-to="stop" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="344.72312499999987,212.5 344.72312499999987,316.8 255.4757083333331,316.8 255.4757083333331,714.965" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="ceil" data-to="dp0" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="426.63145833333317,212.5 426.63145833333317,248.5 511.93304166666644,248.5 511.93304166666644,328.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="dp0" data-to="model" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="582.2802083333331,399.5 582.2802083333331,435.5 622.0280416666665,435.5 622.0280416666665,447.5" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="dp0" data-to="stop" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="still too large after every compactor" points="441.58587499999976,399.5 441.58587499999976,634.6650000000001 401.8380416666664,634.6650000000001 401.8380416666664,702.965 366.0360416666664,702.965 366.0360416666664,714.965" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="model" data-to="qtools" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="622.0280416666665,501.3 622.0280416666665,549.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="qtools" data-to="dp1" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="596.8338749999998,675.2708333333333 596.8338749999998,780.765 282.6819999999999,780.765 282.6819999999999,1532.465" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="dp1" data-to="intercepted" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="222.58533333333327,1603.165 222.58533333333327,1656.065 137.66849999999997,1656.065 137.6685,1727.915" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="dp1" data-to="dp6" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="342.77866666666654,1603.165 342.77866666666654,1639.165 427.6954999999998,1639.165 427.6954999999999,1727.915" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="dp6" data-to="synth" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="372.9093333333333,1798.615 372.9093333333333,1826.165 258.59950000000003,1826.165 258.59950000000003,1906.465" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="dp6" data-to="final" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="482.48166666666657,1798.615 482.48166666666657,1826.165 596.7914999999998,1826.165 596.7914999999999,1906.465" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="final" data-to="done" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="596.7914999999999,1977.165 596.7914999999998,2025.165" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="done" data-to="multi" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="596.7914999999998,2078.965 596.7914999999999,2126.965" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="qtools" data-to="dp3" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="647.2222083333331,675.2708333333333 647.2222083333331,712.465 961.3740833333329,712.465 961.374083333333,792.765 961.374083333333,836.765" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="denied" data-to="back1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="625.7589999999998,1267.3816666666664 625.7589999999998,1685.3525 994.8222499999996,1685.3525 994.8222499999996,1727.915" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="exttool" data-to="back1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1363.8854999999996,1455.79 1363.8854999999996,1685.3525 994.8222499999996,1685.3525 994.8222499999996,1727.915" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="native" data-to="back1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1140.8695833333331,1642.79 1140.8695833333331,1685.3525 994.8222499999996,1685.3525 994.8222499999996,1727.915" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="dp3" data-to="denied" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Deny" points="899.0165833333331,907.465 899.0165833333331,919.465 591.7646666666665,919.465 591.7646666666665,1174.7649999999999 586.1633333333332,1174.7649999999999 586.1633333333332,1213.5816666666665" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="dp3" data-to="approval" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Pending" points="961.374083333333,907.465 961.374083333333,1023.765" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="dp3" data-to="dp4" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Allow, or no opinion" points="1023.7315833333331,907.465 1023.7315833333331,919.465 1161.0757499999995,919.465 1161.0757499999995,1213.5816666666665" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="approval" data-to="dp4" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="approved" points="999.3642499999996,1094.465 999.3642499999996,1106.465 1039.0559166666662,1106.465 1039.0559166666662,1174.7649999999999 1071.0164166666664,1174.7649999999999 1071.0164166666664,1213.5816666666665" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="approval" data-to="denied" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="refused" points="923.3839166666663,1094.465 923.3839166666663,1106.465 686.2981666666665,1106.465 686.2981666666665,1174.7649999999999 665.3546666666665,1174.7649999999999 665.3546666666665,1213.5816666666665" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="dp4" data-to="exttool" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="1161.0757499999995,1284.2816666666665 1161.0757499999995,1293.465 1363.8854999999994,1293.465 1363.8854999999994,1401.99" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="dp4" data-to="dp5" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="1071.0164166666664,1284.2816666666665 1071.0164166666664,1293.465 970.662083333333,1293.465 970.662083333333,1401.99" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="dp5" data-to="native" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="native" points="1003.4652499999997,1472.6900000000003 1003.4652499999997,1480.4650000000001 1140.8695833333331,1480.4650000000001 1140.8695833333331,1588.99" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="dp5" data-to="dead" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="delegated" points="937.8589166666663,1472.6900000000003 937.8589166666663,1480.4650000000001 800.4545833333332,1480.4650000000001 800.4545833333332,1588.99" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="ceil" data-to="stop" data-label="yes">
+  <rect x="237.4757083333331" y="641.6650000000001" width="35.47" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="255.21070833333312" y="656.815" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes</text>
+</g>
+<g class="edge-label" data-from="ceil" data-to="dp0" data-label="no">
+  <rect x="496.93304166666644" y="255.49999999999997" width="29.53" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="511.6980416666664" y="270.65" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no</text>
+</g>
+<g class="edge-label" data-from="dp0" data-to="stop" data-label="still too large after every compactor">
+  <rect x="310.8380416666664" y="641.6650000000001" width="181.00000000000003" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="401.3380416666664" y="656.815" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">still too large after every compactor</text>
+</g>
+<g class="edge-label" data-from="qtools" data-to="dp1" data-label="no">
+  <rect x="267.6819999999999" y="1459.165" width="29.53" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="282.4469999999999" y="1474.315" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no</text>
+</g>
+<g class="edge-label" data-from="dp1" data-to="intercepted" data-label="yes">
+  <rect x="119.66849999999995" y="1663.065" width="35.47" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="137.40349999999995" y="1678.2150000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes</text>
+</g>
+<g class="edge-label" data-from="dp1" data-to="dp6" data-label="no">
+  <rect x="412.6954999999998" y="1646.165" width="29.53" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="427.4604999999998" y="1661.315" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no</text>
+</g>
+<g class="edge-label" data-from="dp6" data-to="synth" data-label="yes">
+  <rect x="240.59950000000003" y="1833.165" width="35.47" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="258.33450000000005" y="1848.315" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes</text>
+</g>
+<g class="edge-label" data-from="dp6" data-to="final" data-label="no">
+  <rect x="581.7914999999998" y="1833.165" width="29.53" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="596.5564999999998" y="1848.315" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no</text>
+</g>
+<g class="edge-label" data-from="qtools" data-to="dp3" data-label="yes">
+  <rect x="943.3740833333329" y="719.465" width="35.47" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="961.1090833333329" y="734.615" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes</text>
+</g>
+<g class="edge-label" data-from="dp3" data-to="denied" data-label="Deny">
+  <rect x="570.2646666666665" y="1043.965" width="42.598" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="591.5636666666664" y="1059.115" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Deny</text>
+</g>
+<g class="edge-label" data-from="dp3" data-to="approval" data-label="Pending">
+  <rect x="932.874083333333" y="950.465" width="56.854000000000006" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="961.301083333333" y="965.615" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Pending</text>
+</g>
+<g class="edge-label" data-from="dp3" data-to="dp4" data-label="Allow, or no opinion">
+  <rect x="1107.0757499999995" y="1043.965" width="107.34400000000002" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1160.7477499999995" y="1059.115" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Allow, or no opinion</text>
+</g>
+<g class="edge-label" data-from="approval" data-to="dp4" data-label="approved">
+  <rect x="1007.0559166666662" y="1137.465" width="63.982" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1039.0469166666662" y="1152.615" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">approved</text>
+</g>
+<g class="edge-label" data-from="approval" data-to="denied" data-label="refused">
+  <rect x="658.7981666666665" y="1137.465" width="54.478" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="686.0371666666665" y="1152.615" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">refused</text>
+</g>
+<g class="edge-label" data-from="dp4" data-to="exttool" data-label="yes">
+  <rect x="1345.8854999999996" y="1324.465" width="35.47" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1363.6204999999995" y="1339.615" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes</text>
+</g>
+<g class="edge-label" data-from="dp4" data-to="dp5" data-label="no">
+  <rect x="955.662083333333" y="1324.465" width="29.53" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="970.427083333333" y="1339.615" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no</text>
+</g>
+<g class="edge-label" data-from="dp5" data-to="native" data-label="native">
+  <rect x="1117.3695833333331" y="1511.465" width="46.162" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="1140.450583333333" y="1526.615" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">native</text>
+</g>
+<g class="edge-label" data-from="dp5" data-to="dead" data-label="delegated">
+  <rect x="768.4545833333332" y="1511.465" width="63.982000000000006" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="800.4455833333332" y="1526.615" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">delegated</text>
+</g>
+<g class="node" data-id="legend" data-label="&lt;b&gt;how to read this&lt;/b&gt;
+green: extensions decide · blue: core decides
+grey: a note, or a branch nothing reaches" data-shape="rectangle">
+  <rect x="536.5397916666665" y="210.10000000000002" width="310.19199999999995" height="70.7" rx="0" ry="0" fill="#262a30" stroke="#9aa4b0" stroke-width="0.75" />
+  <text x="691.6357916666665" y="245.45000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#d6dbe2"><tspan x="691.6357916666665" dy="-12.350000000000001"><tspan font-weight="bold">how to read this</tspan></tspan><tspan x="691.6357916666665" dy="16.900000000000002">green: extensions decide · blue: core decides</tspan><tspan x="691.6357916666665" dy="16.900000000000002">grey: a note, or a branch nothing reaches</tspan></text>
+</g>
+<g class="node" data-id="start" data-label="&lt;b&gt;Before the loop&lt;/b&gt; · not numbered
+extensions shape the system prompt, the budget plan and the tool list
+PromptShaper · BudgetShaper · DescribeTools" data-shape="rectangle">
+  <rect x="476.14829166666664" y="40" width="430.97499999999974" height="70.7" rx="0" ry="0" fill="#143d24" stroke="#56d364" stroke-width="0.75" />
+  <text x="691.6357916666665" y="75.35" text-anchor="middle" font-size="13" font-weight="500" fill="#c6f0cf"><tspan x="691.6357916666665" dy="-12.350000000000001"><tspan font-weight="bold">Before the loop</tspan> · not numbered</tspan><tspan x="691.6357916666665" dy="16.900000000000002">extensions shape the system prompt, the budget plan and the tool list</tspan><tspan x="691.6357916666665" dy="16.900000000000002">PromptShaper · BudgetShaper · DescribeTools</tspan></text>
+</g>
+<g class="node" data-id="numnote" data-label="&lt;b&gt;about the numbers&lt;/b&gt;
+DP1, DP3, DP4, DP5, DP6 and the multi-turn loop are the six
+the May migration plan kept from the old loop · there was never a DP2
+DP0 and DP7 were added later · later documents reuse the numbers" data-shape="rectangle">
+  <rect x="874.7317916666665" y="588.865" width="436.9029999999998" height="87.60000000000001" rx="0" ry="0" fill="#262a30" stroke="#9aa4b0" stroke-width="0.75" />
+  <text x="1093.1832916666663" y="632.665" text-anchor="middle" font-size="13" font-weight="500" fill="#d6dbe2"><tspan x="1093.1832916666663" dy="-20.8"><tspan font-weight="bold">about the numbers</tspan></tspan><tspan x="1093.1832916666663" dy="16.900000000000002">DP1, DP3, DP4, DP5, DP6 and the multi-turn loop are the six</tspan><tspan x="1093.1832916666663" dy="16.900000000000002">the May migration plan kept from the old loop · there was never a DP2</tspan><tspan x="1093.1832916666663" dy="16.900000000000002">DP0 and DP7 were added later · later documents reuse the numbers</tspan></text>
+</g>
+<g class="node" data-id="ceil" data-label="&lt;b&gt;core's own ceilings&lt;/b&gt; · not numbered
+step budget or cost cap reached?" data-shape="rectangle">
+  <rect x="262.81479166666657" y="158.7" width="245.72499999999997" height="53.800000000000004" rx="0" ry="0" fill="#1e2a4a" stroke="#7aa2f7" stroke-width="2.5px" />
+  <text x="385.6772916666665" y="185.6" text-anchor="middle" font-size="13" font-weight="500" fill="#c8d3f5"><tspan x="385.6772916666665" dy="-3.9000000000000012"><tspan font-weight="bold">core&#39;s own ceilings</tspan> · not numbered</tspan><tspan x="385.6772916666665" dy="16.900000000000002">step budget or cost cap reached?</tspan></text>
+</g>
+<g class="node" data-id="stop" data-label="&lt;b&gt;The run stops&lt;/b&gt;
+max_steps · cost_exhausted · context exhausted" data-shape="rectangle">
+  <rect x="144.91537499999976" y="714.965" width="331.681" height="53.800000000000004" rx="0" ry="0" fill="#1e2a4a" stroke="#7aa2f7" stroke-width="0.75" />
+  <text x="310.7558749999997" y="741.865" text-anchor="middle" font-size="13" font-weight="500" fill="#c8d3f5"><tspan x="310.7558749999997" dy="-3.9000000000000012"><tspan font-weight="bold">The run stops</tspan></tspan><tspan x="310.7558749999997" dy="16.900000000000002">max_steps · cost_exhausted · context exhausted</tspan></text>
+</g>
+<g class="node" data-id="dp0" data-label="&lt;b&gt;DP0 · before each model call&lt;/b&gt; · seam: Compactor
+each compactor, in profile order, may shrink what the model is sent
+for this step only · compaction_ai, compaction_structural" data-shape="rectangle">
+  <rect x="300.8915416666665" y="328.8" width="422.0829999999998" height="70.7" rx="0" ry="0" fill="#143d24" stroke="#56d364" stroke-width="0.75" />
+  <text x="511.93304166666644" y="364.15000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#c6f0cf"><tspan x="511.93304166666644" dy="-12.350000000000001"><tspan font-weight="bold">DP0 · before each model call</tspan> · seam: Compactor</tspan><tspan x="511.93304166666644" dy="16.900000000000002">each compactor, in profile order, may shrink what the model is sent</tspan><tspan x="511.93304166666644" dy="16.900000000000002">for this step only · compaction_ai, compaction_structural</tspan></text>
+</g>
+<g class="node" data-id="model" data-label="&lt;b&gt;Model step&lt;/b&gt;
+the model returns a response" data-shape="rectangle">
+  <rect x="515.8380416666664" y="447.5" width="212.38" height="53.800000000000004" rx="0" ry="0" fill="#1e2a4a" stroke="#7aa2f7" stroke-width="0.75" />
+  <text x="622.0280416666665" y="474.4" text-anchor="middle" font-size="13" font-weight="500" fill="#c8d3f5"><tspan x="622.0280416666665" dy="-3.9000000000000012"><tspan font-weight="bold">Model step</tspan></tspan><tspan x="622.0280416666665" dy="16.900000000000002">the model returns a response</tspan></text>
+</g>
+<g class="node" data-id="qtools" data-label="tool calls in
+the response?" data-shape="diamond">
+  <polygon points="622.0280416666665,549.3 697.6105416666664,624.8824999999999 622.0280416666665,700.4649999999999 546.4455416666665,624.8824999999999" fill="#3a2f12" stroke="#e0af68" stroke-width="2.5px" />
+  <text x="622.0280416666665" y="624.8824999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#f2e2c2"><tspan x="622.0280416666665" dy="-3.9000000000000012">tool calls in</tspan><tspan x="622.0280416666665" dy="16.900000000000002">the response?</tspan></text>
+</g>
+<g class="node" data-id="back1" data-label="back to the model step
+with the tool results" data-shape="rectangle">
+  <rect x="910.8622499999996" y="1727.915" width="167.92" height="53.800000000000004" rx="0" ry="0" fill="#1e2a4a" stroke="#7aa2f7" stroke-width="0.75" />
+  <text x="994.8222499999996" y="1754.815" text-anchor="middle" font-size="13" font-weight="500" fill="#c8d3f5"><tspan x="994.8222499999996" dy="-3.9000000000000012">back to the model step</tspan><tspan x="994.8222499999996" dy="16.900000000000002">with the tool results</tspan></text>
+</g>
+<g class="node" data-id="dp1" data-label="&lt;b&gt;DP1 · response intercept&lt;/b&gt; · seam: ResponseInterceptor
+does an extension act on this prose?
+the first to handle it wins · only compose registers one" data-shape="rectangle">
+  <rect x="102.39199999999997" y="1532.465" width="360.57999999999987" height="70.7" rx="0" ry="0" fill="#143d24" stroke="#56d364" stroke-width="2.5px" />
+  <text x="282.6819999999999" y="1567.8149999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#c6f0cf"><tspan x="282.6819999999999" dy="-12.350000000000001"><tspan font-weight="bold">DP1 · response intercept</tspan> · seam: ResponseInterceptor</tspan><tspan x="282.6819999999999" dy="16.900000000000002">does an extension act on this prose?</tspan><tspan x="282.6819999999999" dy="16.900000000000002">the first to handle it wins · only compose registers one</tspan></text>
+</g>
+<g class="node" data-id="intercepted" data-label="&lt;b&gt;handled like a tool call&lt;/b&gt;
+then back to the model step" data-shape="rectangle">
+  <rect x="40" y="1727.915" width="195.33699999999996" height="53.800000000000004" rx="0" ry="0" fill="#1e2a4a" stroke="#7aa2f7" stroke-width="0.75" />
+  <text x="137.6685" y="1754.815" text-anchor="middle" font-size="13" font-weight="500" fill="#c8d3f5"><tspan x="137.6685" dy="-3.9000000000000012"><tspan font-weight="bold">handled like a tool call</tspan></tspan><tspan x="137.6685" dy="16.900000000000002">then back to the model step</tspan></text>
+</g>
+<g class="node" data-id="dp6" data-label="&lt;b&gt;DP6 · hybrid mode&lt;/b&gt; · core, when tools.hybrid is on
+does the prose hold
+a fenced shell block?" data-shape="rectangle">
+  <rect x="263.337" y="1727.915" width="328.71699999999987" height="70.7" rx="0" ry="0" fill="#1e2a4a" stroke="#7aa2f7" stroke-width="2.5px" />
+  <text x="427.6954999999999" y="1763.2649999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#c8d3f5"><tspan x="427.6954999999999" dy="-12.350000000000001"><tspan font-weight="bold">DP6 · hybrid mode</tspan> · core, when tools.hybrid is on</tspan><tspan x="427.6954999999999" dy="16.900000000000002">does the prose hold</tspan><tspan x="427.6954999999999" dy="16.900000000000002">a fenced shell block?</tspan></text>
+</g>
+<g class="node" data-id="synth" data-label="&lt;b&gt;core turns the block into a BashExec call&lt;/b&gt;
+which enters the tool phase like any other" data-shape="rectangle">
+  <rect x="118.69400000000002" y="1906.465" width="279.811" height="53.800000000000004" rx="0" ry="0" fill="#1e2a4a" stroke="#7aa2f7" stroke-width="0.75" />
+  <text x="258.59950000000003" y="1933.365" text-anchor="middle" font-size="13" font-weight="500" fill="#c8d3f5"><tspan x="258.59950000000003" dy="-3.9000000000000012"><tspan font-weight="bold">core turns the block into a BashExec call</tspan></tspan><tspan x="258.59950000000003" dy="16.900000000000002">which enters the tool phase like any other</tspan></text>
+</g>
+<g class="node" data-id="final" data-label="&lt;b&gt;A final answer&lt;/b&gt;
+open waits · DP7, the verifier · the extension judges
+drawn in dp7-finalize-gate" data-shape="rectangle">
+  <rect x="426.505" y="1906.465" width="340.5729999999999" height="70.7" rx="0" ry="0" fill="#2f2145" stroke="#bb9af7" stroke-width="0.75" />
+  <text x="596.7914999999999" y="1941.8149999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#e5d5fb"><tspan x="596.7914999999999" dy="-12.350000000000001"><tspan font-weight="bold">A final answer</tspan></tspan><tspan x="596.7914999999999" dy="16.900000000000002">open waits · DP7, the verifier · the extension judges</tspan><tspan x="596.7914999999999" dy="16.900000000000002">drawn in dp7-finalize-gate</tspan></text>
+</g>
+<g class="node" data-id="done" data-label="&lt;b&gt;Finalize&lt;/b&gt;
+done event · run_summary" data-shape="rectangle">
+  <rect x="496.89999999999986" y="2025.165" width="199.783" height="53.800000000000004" rx="0" ry="0" fill="#123038" stroke="#2ac3de" stroke-width="2.5px" />
+  <text x="596.7914999999998" y="2052.065" text-anchor="middle" font-size="13" font-weight="500" fill="#bdeef5"><tspan x="596.7914999999998" dy="-3.9000000000000012"><tspan font-weight="bold">Finalize</tspan></tspan><tspan x="596.7914999999998" dy="16.900000000000002">done event · run_summary</tspan></text>
+</g>
+<g class="node" data-id="multi" data-label="&lt;b&gt;the multi-turn loop&lt;/b&gt; · core, the unnumbered sixth
+the host waits for the next user message,
+a model change or exit" data-shape="rectangle">
+  <rect x="440.95449999999994" y="2126.965" width="311.6739999999999" height="70.7" rx="0" ry="0" fill="#1e2a4a" stroke="#7aa2f7" stroke-width="0.75" />
+  <text x="596.7914999999999" y="2162.315" text-anchor="middle" font-size="13" font-weight="500" fill="#c8d3f5"><tspan x="596.7914999999999" dy="-12.350000000000001"><tspan font-weight="bold">the multi-turn loop</tspan> · core, the unnumbered sixth</tspan><tspan x="596.7914999999999" dy="16.900000000000002">the host waits for the next user message,</tspan><tspan x="596.7914999999999" dy="16.900000000000002">a model change or exit</tspan></text>
+</g>
+<g class="node" data-id="dp3" data-label="&lt;b&gt;DP3 · tool policy&lt;/b&gt; · seam: ToolPolicy
+every policy is asked
+Deny beats Pending beats Allow" data-shape="rectangle">
+  <rect x="836.6590833333331" y="836.765" width="249.4299999999999" height="70.7" rx="0" ry="0" fill="#143d24" stroke="#56d364" stroke-width="2.5px" />
+  <text x="961.374083333333" y="872.115" text-anchor="middle" font-size="13" font-weight="500" fill="#c6f0cf"><tspan x="961.374083333333" dy="-12.350000000000001"><tspan font-weight="bold">DP3 · tool policy</tspan> · seam: ToolPolicy</tspan><tspan x="961.374083333333" dy="16.900000000000002">every policy is asked</tspan><tspan x="961.374083333333" dy="16.900000000000002">Deny beats Pending beats Allow</tspan></text>
+</g>
+<g class="node" data-id="approval" data-label="&lt;b&gt;Pending&lt;/b&gt; · core
+the run pauses and the operator
+approves or refuses" data-shape="rectangle">
+  <rect x="847.403583333333" y="1023.765" width="227.941" height="70.7" rx="0" ry="0" fill="#1e2a4a" stroke="#7aa2f7" stroke-width="2.5px" />
+  <text x="961.374083333333" y="1059.115" text-anchor="middle" font-size="13" font-weight="500" fill="#c8d3f5"><tspan x="961.374083333333" dy="-12.350000000000001"><tspan font-weight="bold">Pending</tspan> · core</tspan><tspan x="961.374083333333" dy="16.900000000000002">the run pauses and the operator</tspan><tspan x="961.374083333333" dy="16.900000000000002">approves or refuses</tspan></text>
+</g>
+<g class="node" data-id="denied" data-label="&lt;b&gt;the call does not run&lt;/b&gt;
+the reason goes back as its result" data-shape="rectangle">
+  <rect x="506.97199999999987" y="1213.5816666666665" width="237.57399999999996" height="53.800000000000004" rx="0" ry="0" fill="#1e2a4a" stroke="#7aa2f7" stroke-width="0.75" />
+  <text x="625.7589999999998" y="1240.4816666666666" text-anchor="middle" font-size="13" font-weight="500" fill="#c8d3f5"><tspan x="625.7589999999998" dy="-3.9000000000000012"><tspan font-weight="bold">the call does not run</tspan></tspan><tspan x="625.7589999999998" dy="16.900000000000002">the reason goes back as its result</tspan></text>
+</g>
+<g class="node" data-id="dp4" data-label="&lt;b&gt;DP4 · tool handle&lt;/b&gt; · seam: ToolProvider
+does an extension own this tool?
+the first to handle it wins" data-shape="rectangle">
+  <rect x="980.957083333333" y="1213.5816666666665" width="270.178" height="70.7" rx="0" ry="0" fill="#143d24" stroke="#56d364" stroke-width="2.5px" />
+  <text x="1116.046083333333" y="1248.9316666666664" text-anchor="middle" font-size="13" font-weight="500" fill="#c6f0cf"><tspan x="1116.046083333333" dy="-12.350000000000001"><tspan font-weight="bold">DP4 · tool handle</tspan> · seam: ToolProvider</tspan><tspan x="1116.046083333333" dy="16.900000000000002">does an extension own this tool?</tspan><tspan x="1116.046083333333" dy="16.900000000000002">the first to handle it wins</tspan></text>
+</g>
+<g class="node" data-id="exttool" data-label="&lt;b&gt;the extension runs it&lt;/b&gt;
+scratchpad · herdr · exa_search · mcp · skills …" data-shape="rectangle">
+  <rect x="1199.5269999999996" y="1401.99" width="328.7169999999999" height="53.800000000000004" rx="0" ry="0" fill="#143d24" stroke="#56d364" stroke-width="0.75" />
+  <text x="1363.8854999999996" y="1428.89" text-anchor="middle" font-size="13" font-weight="500" fill="#c6f0cf"><tspan x="1363.8854999999996" dy="-3.9000000000000012"><tspan font-weight="bold">the extension runs it</tspan></tspan><tspan x="1363.8854999999996" dy="16.900000000000002">scratchpad · herdr · exa_search · mcp · skills …</tspan></text>
+</g>
+<g class="node" data-id="dp5" data-label="&lt;b&gt;DP5 · backend split&lt;/b&gt; · core
+native, or delegated
+to an env-server?" data-shape="rectangle">
+  <rect x="872.2525833333331" y="1401.99" width="196.819" height="70.7" rx="0" ry="0" fill="#1e2a4a" stroke="#7aa2f7" stroke-width="2.5px" />
+  <text x="970.662083333333" y="1437.34" text-anchor="middle" font-size="13" font-weight="500" fill="#c8d3f5"><tspan x="970.662083333333" dy="-12.350000000000001"><tspan font-weight="bold">DP5 · backend split</tspan> · core</tspan><tspan x="970.662083333333" dy="16.900000000000002">native, or delegated</tspan><tspan x="970.662083333333" dy="16.900000000000002">to an env-server?</tspan></text>
+</g>
+<g class="node" data-id="native" data-label="&lt;b&gt;core's native tools run it&lt;/b&gt;
+BashExec · ReadFile · WriteFile · EditFile · Search …" data-shape="rectangle">
+  <rect x="962.8025833333331" y="1588.99" width="356.13399999999984" height="53.800000000000004" rx="0" ry="0" fill="#1e2a4a" stroke="#7aa2f7" stroke-width="0.75" />
+  <text x="1140.8695833333331" y="1615.89" text-anchor="middle" font-size="13" font-weight="500" fill="#c8d3f5"><tspan x="1140.8695833333331" dy="-3.9000000000000012"><tspan font-weight="bold">core&#39;s native tools run it</tspan></tspan><tspan x="1140.8695833333331" dy="16.900000000000002">BashExec · ReadFile · WriteFile · EditFile · Search …</tspan></text>
+</g>
+<g class="node" data-id="dead" data-label="&lt;b&gt;delegated&lt;/b&gt;
+nothing reaches this: a profile that turns
+it on is refused at startup" data-shape="rectangle">
+  <rect x="666.1065833333332" y="1588.99" width="268.6959999999999" height="70.7" rx="0" ry="0" fill="#262a30" stroke="#9aa4b0" stroke-width="0.75" />
+  <text x="800.4545833333332" y="1624.34" text-anchor="middle" font-size="13" font-weight="500" fill="#d6dbe2"><tspan x="800.4545833333332" dy="-12.350000000000001"><tspan font-weight="bold">delegated</tspan></tspan><tspan x="800.4545833333332" dy="16.900000000000002">nothing reaches this: a profile that turns</tspan><tspan x="800.4545833333332" dy="16.900000000000002">it on is refused at startup</tspan></text>
+</g>
+</svg>

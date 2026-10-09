@@ -1,0 +1,100 @@
+flowchart TB
+  %% The numbered decision points of the core loop other than DP7, as built, and who decides at each.
+  %% DP7 and the rest of the final-answer pipeline are in dp7-finalize-gate.mmd.
+  %% This is the loop AS BUILT. 005 ADR-001 Amendment 1 removes DP7 and Amendment 2 removes DP6;
+  %% both are planned in PLAN-finalize-policy-migration.md. DP5's delegated branch is already
+  %% unreachable and is in neither amendment.
+  %% Grounded 2026-10-09 at origin/main 38068013:
+  %%   src/core/step_machine.ail:102-120 (core's ceilings), src/core/session.ail:3773 (DP0),
+  %%   :3958 (DP1), :4066 (DP6), src/core/tool_phase.ail:567 (DP3), :436 (DP4), :452 (DP5),
+  %%   src/core/ext/runtime.ail:558-727 (the dispatchers and how answers merge),
+  %%   packages/motoko-ext-abi/types.ail:1942-1956 (the capability atoms), src/core/rpc.ail:246-265
+  %%   (the multi-turn loop), :175-182 (the refusal that makes DP5's other branch unreachable).
+  %% WHERE THE NUMBERS COME FROM. design_docs/planned/m-motoko-rpc-loop-full-migration.md, added
+  %% 2026-05-05 in a7e77bed and since removed from the tree, named six decision points to keep
+  %% from the old rpc_loop: DP1, DP3, DP4, DP5, DP6 and an unnumbered multi-turn loop. It had no
+  %% DP2. DP0 (compaction) and DP7 (the verifier) were added by later design docs. Later documents
+  %% reuse the numbers differently: the DP7 design doc calls tool policy DP1 and the judges DP6,
+  %% and the ACP design doc calls tool invocation DP3 and tool completion DP6.
+  %% The "back to the model step" boxes are the same place as the model step, drawn as ends
+  %% because this renderer lays a looping graph out upside down.
+  %% Renderer notes (beautiful-mermaid 1.1.3): no ";" after a class line, or it becomes a node.
+  %% A diamond grows with its text, so the decision points with three lines of text are boxes
+  %% with a heavier border, and only the short question is a diamond.
+
+  legend["<b>how to read this</b><br/>green: extensions decide · blue: core decides<br/>grey: a note, or a branch nothing reaches"]
+  start["<b>Before the loop</b> · not numbered<br/>extensions shape the system prompt, the budget plan and the tool list<br/>PromptShaper · BudgetShaper · DescribeTools"]
+  numnote["<b>about the numbers</b><br/>DP1, DP3, DP4, DP5, DP6 and the multi-turn loop are the six<br/>the May migration plan kept from the old loop · there was never a DP2<br/>DP0 and DP7 were added later · later documents reuse the numbers"]
+  ceil["<b>core's own ceilings</b> · not numbered<br/>step budget or cost cap reached?"]
+  stop["<b>The run stops</b><br/>max_steps · cost_exhausted · context exhausted"]
+  dp0["<b>DP0 · before each model call</b> · seam: Compactor<br/>each compactor, in profile order, may shrink what the model is sent<br/>for this step only · compaction_ai, compaction_structural"]
+  model["<b>Model step</b><br/>the model returns a response"]
+  qtools{"tool calls in<br/>the response?"}
+
+  subgraph TOOLS["Tool phase · once for each tool call"]
+    direction TB
+    dp3["<b>DP3 · tool policy</b> · seam: ToolPolicy<br/>every policy is asked<br/>Deny beats Pending beats Allow"]
+    approval["<b>Pending</b> · core<br/>the run pauses and the operator<br/>approves or refuses"]
+    denied["<b>the call does not run</b><br/>the reason goes back as its result"]
+    dp4["<b>DP4 · tool handle</b> · seam: ToolProvider<br/>does an extension own this tool?<br/>the first to handle it wins"]
+    exttool["<b>the extension runs it</b><br/>scratchpad · herdr · exa_search · mcp · skills …"]
+    dp5["<b>DP5 · backend split</b> · core<br/>native, or delegated<br/>to an env-server?"]
+    native["<b>core's native tools run it</b><br/>BashExec · ReadFile · WriteFile · EditFile · Search …"]
+    dead["<b>delegated</b><br/>nothing reaches this: a profile that turns<br/>it on is refused at startup"]
+  end
+
+  back1["back to the model step<br/>with the tool results"]
+  dp1["<b>DP1 · response intercept</b> · seam: ResponseInterceptor<br/>does an extension act on this prose?<br/>the first to handle it wins · only compose registers one"]
+  intercepted["<b>handled like a tool call</b><br/>then back to the model step"]
+  dp6["<b>DP6 · hybrid mode</b> · core, when tools.hybrid is on<br/>does the prose hold<br/>a fenced shell block?"]
+  synth["<b>core turns the block into a BashExec call</b><br/>which enters the tool phase like any other"]
+  final["<b>A final answer</b><br/>open waits · DP7, the verifier · the extension judges<br/>drawn in dp7-finalize-gate"]
+  done["<b>Finalize</b><br/>done event · run_summary"]
+  multi["<b>the multi-turn loop</b> · core, the unnumbered sixth<br/>the host waits for the next user message,<br/>a model change or exit"]
+
+  start --> ceil
+  start -.-> legend
+  start -.-> numnote
+  ceil -->|"yes"| stop
+  ceil -->|"no"| dp0
+  dp0 --> model
+  dp0 -.->|"still too large after every compactor"| stop
+  model --> qtools
+  qtools -->|"yes"| dp3
+  dp3 -->|"Deny"| denied
+  dp3 -->|"Pending"| approval
+  dp3 -->|"Allow, or no opinion"| dp4
+  approval -->|"approved"| dp4
+  approval -->|"refused"| denied
+  dp4 -->|"yes"| exttool
+  dp4 -->|"no"| dp5
+  dp5 -->|"native"| native
+  dp5 -.->|"delegated"| dead
+  denied --> back1
+  exttool --> back1
+  native --> back1
+  qtools -->|"no"| dp1
+  dp1 -->|"yes"| intercepted
+  dp1 -->|"no"| dp6
+  dp6 -->|"yes"| synth
+  dp6 -->|"no"| final
+  final --> done
+  done --> multi
+
+  classDef step fill:#1e2a4a,stroke:#7aa2f7,color:#c8d3f5
+  classDef coreq fill:#1e2a4a,stroke:#7aa2f7,color:#c8d3f5,stroke-width:2.5px
+  classDef ext fill:#143d24,stroke:#56d364,color:#c6f0cf
+  classDef extq fill:#143d24,stroke:#56d364,color:#c6f0cf,stroke-width:2.5px
+  classDef neutral fill:#3a2f12,stroke:#e0af68,color:#f2e2c2,stroke-width:2.5px
+  classDef dp7 fill:#2f2145,stroke:#bb9af7,color:#e5d5fb
+  classDef leaf fill:#123038,stroke:#2ac3de,color:#bdeef5,stroke-width:2.5px
+  classDef note fill:#262a30,stroke:#9aa4b0,color:#d6dbe2
+
+  class model,stop,denied,native,synth,back1,intercepted,multi step
+  class ceil,approval,dp5,dp6 coreq
+  class start,dp0,exttool ext
+  class dp3,dp4,dp1 extq
+  class qtools neutral
+  class final dp7
+  class done leaf
+  class legend,numnote,dead note

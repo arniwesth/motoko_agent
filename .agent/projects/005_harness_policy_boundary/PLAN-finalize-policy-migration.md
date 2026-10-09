@@ -11,8 +11,10 @@ Grounded at: `origin/main` **`36a96b1e`**. Every `file:line` below was read at t
 `session.ail` drifts quickly, so re-anchor before editing. `main` has since moved to `38068013`
 (#247, #250, #251). Of the files cited by line here, only the `Makefile` changed, by five lines
 after `:2819`.
-Diagrams: [the pipeline as built](mmd/dp7-finalize-gate.svg), with the verifier, and
-[the pipeline after W1](mmd/dp7-finalize-gate-end-state.svg). Sources are beside them.
+Diagrams: [the pipeline as built](mmd/dp7-finalize-gate.svg), with the verifier,
+[the pipeline after W1](mmd/dp7-finalize-gate-end-state.svg), and
+[the other numbered decision points](mmd/decision-points.svg) as built, with who decides at
+each. Sources are beside them.
 Structure: [`PLAN-finalize-policy-migration.dagr.json`](PLAN-finalize-policy-migration.dagr.json)
 holds the tasks and their dependencies, and is the only place they are stated (008 ADR-001 D2
 and D3, accepted 2026-10-04, in #215). A task's address is
