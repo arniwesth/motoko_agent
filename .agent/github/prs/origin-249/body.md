@@ -33,13 +33,14 @@ were ever written. #251 turns the verifier off in the eight profiles that enable
   the evaluation's fixtures count it. Nothing stored depends on it, so the removal is safe and
   wide. W2 follows W1.
 
-No decision is left open. The operator answered all four on 2026-10-09 and the plan records
+No decision is left open. The operator answered all five on 2026-10-09 and the plan records
 them:
 
 - The corpus gate's `verifier-rejection` control is replaced by a `solver-feedback` control.
 - The persist nudge is deleted in full, its environment read included.
 - A profile that still sets `verification.enabled` is not handled here. After W1 the key is read
   and ignored. What the host does with config entries it does not use gets its own pull request.
+- Deleting a wire event moves the vocabulary's version. Old traces are read by a pinned runner.
 
 **The amendment is a proposal. Merging this records it and does not accept it.** One open question
 remains, about a field of the extension ABI that 031 ADR-001 defines. The two positions most
@@ -79,9 +80,10 @@ Its four opinions were also taken: land the variant's deletion in one commit wit
 edits, drop "they share no code", make the attribution re-baseline explicit (six files and three
 re-issued DST profiles), and add the targets only CI runs.
 
-**One choice in the fixes is the author's, not the reviewer's.** 009 ADR-001 D6 says old traces
-are either still decoded or read by a pinned runner. The plan pins a runner, because the tree has
-no decoder for wire events. That is the operator's to overrule.
+**One choice in the fixes was not the reviewer's, and the operator has confirmed it.** 009
+ADR-001 D6 says old traces are either still decoded or read by a pinned runner. The plan pins a
+runner: `event-vocabulary/1` is read by a named commit that still has it, and the new build
+refuses it. The tree has no decoder for wire events, and nothing has to be built.
 
 **What the review confirmed.** The verifier's structure and ordering; that the journal holds no
 rejection, environment read or nudge count; the two sessions' rejection counts; that no contract
@@ -105,6 +107,7 @@ rules, and the same mutant passed with the control removed.
 - docs(005): W1 does not handle a leftover verification.enabled — unused config entries get their own PR
 - docs(005): re-wrap one line in Amendment 1's follow-on
 - docs(005): the plan takes Codex Sol's review — eight findings, all reproduced and fixed
+- docs(005): old traces are read by a pinned runner — the operator's decision
 
 2 files changed.
 
