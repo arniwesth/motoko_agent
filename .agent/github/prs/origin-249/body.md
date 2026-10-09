@@ -33,7 +33,11 @@ were ever written. #251 turns the verifier off in the eight profiles that enable
   the evaluation's fixtures count it. Nothing stored depends on it, so the removal is safe and
   wide. W2 follows W1.
 
-Two decisions remain for the operator, both in W1, listed in a table at the plan's top.
+One decision remains for the operator, in W1: whether a profile that still sets
+`verification.enabled` refuses to start or only warns. The plan recommends refusing. The other
+three were answered on 2026-10-09 and are recorded in the plan: the corpus gate's
+`verifier-rejection` control is replaced by a `solver-feedback` control, and the persist nudge is
+deleted in full.
 
 **The amendment is a proposal. Merging this records it and does not accept it.** One open question
 remains, about a field of the extension ABI that 031 ADR-001 defines. The two positions most
@@ -56,6 +60,8 @@ naming each passage and what replaces it. None of those files is edited here.
 - docs(005): plan for Amendment 1 — remove the DP7 verifier; the persist nudge waits on two decisions
 - docs(005): the plan and PR #249 record note that #250 and #251 have merged
 - docs(005): the persist nudge is deleted outright — the operator's decision, in the amendment and the plan
+- docs(005): the plan records the operator's confirmation — the persist nudge goes in full, its read included
+- docs(005): the corpus gate's control moves to the solver-feedback branch — the operator's decision
 
 2 files changed.
 
