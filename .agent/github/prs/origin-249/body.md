@@ -45,9 +45,7 @@ name `hybrid_tools`, for journals already recorded.
   has not been reviewed.** Its first item removes only the branch and its event in a scratch tree
   and lists what breaks.
 
-One decision is open, and only W3's wide edit waits on it: whether the journal header keeps
-`boot.hybrid_tools`, written as `false`, or drops it and moves the journal's schema. The plan
-recommends keeping it. The operator answered six others on 2026-10-09 and the plan records them:
+No decision is left open. The operator answered seven on 2026-10-09 and the plan records them:
 
 - The corpus gate's `verifier-rejection` control is replaced by a `solver-feedback` control.
 - The persist nudge is deleted in full, its environment read included.
@@ -55,6 +53,7 @@ recommends keeping it. The operator answered six others on 2026-10-09 and the pl
   and ignored. What the host does with config entries it does not use gets its own pull request.
 - Deleting a wire event moves the vocabulary's version. Old traces are read by a pinned runner.
 - Hybrid mode is removed as well.
+- The journal header keeps `boot.hybrid_tools`, written as `false`. Its schema does not move.
 
 **The amendment is a proposal. Merging this records it and does not accept it.** One open question
 remains, about a field of the extension ABI that 031 ADR-001 defines. The two positions most
@@ -125,6 +124,7 @@ rules, and the same mutant passed with the control removed.
 - docs(005): two diagrams of the finalize pipeline — with the DP7 verifier, and after W1 removes it
 - docs(005): the plan's dagr document — 17 tasks, structure only
 - docs(005): Amendment 2 and W3 — hybrid mode (DP6) is removed from core
+- docs(005): the journal header keeps boot.hybrid_tools, written as false — the operator's decision
 
 7 files changed: the amendment, the plan, the plan's dagr document, and two diagrams as Mermaid
 source and SVG.
@@ -189,8 +189,8 @@ Checked on 2026-10-09 at `36a96b1e`, AILANG v0.52.5.
   screenshot.
 - [x] **The dagr document is contract-valid.** `dagr check
   PLAN-finalize-policy-migration.dagr.json --strict --json` prints `[]` and exits 0 at dagr 0.3.1.
-  It has 24 tasks, 23 `queued` and one `canceled`; every dependency names a task in it; every
-  work item's id appears in the markdown plan. The open decision is a `question` task, `Q7`.
+  It has 23 tasks, 22 `queued` and one `canceled`; every dependency names a task in it; every
+  task id appears in the markdown plan.
 - [x] **The hybrid figures were computed from the session logs and the tree.** 1,103 logs
   scanned, 28 with a `hybrid_bash_extracted` event, 2 of those with no native tool call at all;
   `git grep` for the entry points' call sites gives 82 in 40 files at `38068013`.
