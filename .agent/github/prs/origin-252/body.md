@@ -3,13 +3,21 @@ repo: arniwesth/motoko_agent
 pr: 252
 branch: chore/profiles-hybrid-off
 ticket: null
-title: "chore(profiles): hybrid mode is off in every profile"
+title: "chore(profiles): hybrid mode is off in fifteen of the sixteen profiles"
 ---
 
 ## Summary
 
-All sixteen tracked profiles set `tools.hybrid` to true. Each now sets it to false, so core no
-longer turns a prose answer into a shell command on those profiles.
+All sixteen tracked profiles set `tools.hybrid` to true. Fifteen now set it to false, so core no
+longer turns a prose answer into a shell command on those profiles. **`ailang` keeps it on.**
+
+**Why `ailang` is left out.** The flag has a second reader. The Compose extension treats
+`hybrid_tools` false as "no typed tool calls here": it turns its subagent mode into inline mode
+and denies the `Compose` tool (`packages/motoko-ext-compose/compose.ail:108`, `:120`). `ailang`
+is the one tracked profile that loads `compose`, and it configures subagent mode. This pull
+request first flipped all sixteen; a review of the plan in #249 found the dependency before it
+merged, and the `ailang` change was taken back. That profile changes when the plan removes the
+mechanism, which now has to deal with Compose first.
 
 This is the operator's ruling of 2026-10-09: hybrid mode (the loop's "DP6") is to be removed.
 This pull request switches it off where a profile can. Removing the mechanism from core is
@@ -50,8 +58,9 @@ that way.
 ## Changes
 
 - chore(profiles): hybrid mode is off in every profile
+- chore(profiles): the ailang profile keeps hybrid on — the Compose extension reads the same flag
 
-16 files changed.
+15 files changed.
 
 ## Governing docs
 
@@ -62,8 +71,10 @@ that way.
 
 ## Predicted outcome
 
-- **No session on a tracked profile has a `hybrid_bash_extracted` event.** Checked by any session
-  log after this lands.
+- **No session on fifteen of the tracked profiles has a `hybrid_bash_extracted` event.** Checked
+  by any session log after this lands. On `ailang` nothing changes.
+- **Compose is unaffected.** `ailang` is the only tracked profile that loads it, and its flag is
+  unchanged.
 - **A prose answer is a final answer from the first response on.** Before, a session's first
   response could be executed if it held a fence or a shell-looking line.
 - **CI is unchanged.** No gate reads `tools.hybrid` from a tracked profile. Checked by this pull
@@ -77,9 +88,12 @@ Run on 2026-10-09 at `38068013` and at this branch's `a4f74c34`, AILANG v0.52.5.
   print_config_json src/core/config.ail` with `MOTOKO_CONFIG` set to `default`, `local`, `ollama`
   and `demo_dst`: `tools.hybrid` is `true` on `main` and `false` on this branch for all four.
   That value is what the loop is started with (`src/core/rpc.ail:280`).
-- [x] **Nothing else in the sixteen files changed.** Each was parsed before and after, and the
-  two values are equal once `tools.hybrid` is set to false in the first.
-- [x] **No tracked profile is left with hybrid on,** counting a missing key as on.
+- [x] **Nothing else in the fifteen files changed.** Each was parsed before and after, and the
+  two values are equal once `tools.hybrid` is set to false in the first. `ailang`'s file is
+  identical to `main`'s.
+- [x] **Only `compose` branches on the flag.** `git grep hybrid_tools -- packages`, leaving out
+  the ABI package and the lines that only copy the field, gives one line: `compose.ail:108`.
+- [x] **Only `ailang` loads `compose`.** Every tracked profile's `extensions.order` was read.
 - [x] **`make verify_extensions smoke_no_delegated_storm` passes on this branch.**
 - [x] **The usage figures were computed from the session logs** in the main checkout's
   `.motoko/logfile/`, which is gitignored: 1,103 logs scanned, 28 with the event, 2 of those with
