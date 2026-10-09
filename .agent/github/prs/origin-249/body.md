@@ -29,7 +29,8 @@ that for a line of prose that starts like a shell command, and runs it instead o
 answer as final. It was on in all sixteen profiles; #252 switches it off there. Of 1,103 session
 logs, 28 had an extraction, 26 of them in sessions where the model was also making typed tool
 calls. Nothing replaces it. The journal header, the extension ABI and the evaluator keep the
-name `hybrid_tools`, for journals already recorded.
+name `hybrid_tools`, for journals already recorded. #252 switches it off in fifteen of the
+sixteen profiles; the sixteenth loads the Compose extension, which reads the same flag.
 
 **The plan is here too.** `PLAN-finalize-policy-migration.md` has three workstreams:
 
@@ -40,12 +41,17 @@ name `hybrid_tools`, for journals already recorded.
   long time. Planning found that the read still runs in every session and that DST tables and
   the evaluation's fixtures count it. Nothing stored depends on it, so the removal is safe and
   wide. W2 follows W1.
-- **W3 removes hybrid mode.** It is the widest: `hybrid_tools` is a positional parameter of ten
-  entry points, passed at 82 call sites in 40 files. **W3 was written after the review below and
-  has not been reviewed.** Its first item removes only the branch and its event in a scratch tree
-  and lists what breaks.
+- **W3 removes hybrid mode.** It is the widest: `hybrid_tools` is a parameter of nine exported
+  functions, threaded through private helpers, and a grep finds 82 call sites in 40 files. It
+  had its own review, below.
 
-No decision is left open. The operator answered seven on 2026-10-09 and the plan records them:
+**One decision is open, from the review of W3.** The Compose extension reads the context views'
+`hybrid_tools`, and when it is false it turns its subagent mode into inline mode and denies its
+tool. So either Compose stops reading the flag and the host writes `false`, or Compose is left
+alone and the host writes `true`. The plan recommends changing Compose. Only two of W3's items
+wait on the answer.
+
+The operator answered seven others on 2026-10-09 and the plan records them:
 
 - The corpus gate's `verifier-rejection` control is replaced by a `solver-feedback` control.
 - The persist nudge is deleted in full, its environment read included.
@@ -107,6 +113,31 @@ rules, and the same mutant passed with the control removed.
 **What the review did not do.** It implemented neither workstream in full and did not run
 `make dst`, `eval_matrix`, `check_core`, the contract gates, `corpus_pr` or a live session.
 
+### The review of W3
+
+Codex Sol reviewed W3 and Amendment 2 on 2026-10-09 at `86718a3e`, in the same detached
+checkout, from a second brief. It ran for 16 minutes and restored its checkout. **Its verdict:
+revise before implementing.** Each finding was reproduced against the code before anything was
+changed. All six hold.
+
+| # | Finding | How it was reproduced | What changed |
+|---|---|---|---|
+| 1 | Writing `false` into the context views also disables Compose's subagent mode | Read `compose.ail:102-122`; read every profile's extension order, and only `ailang` loads `compose` | A new open decision and work item W3-7. **#252 was changed before it merged**: it no longer touches `ailang`. |
+| 2 | W3-3 missed the evaluator's census size, its twin count and two matrix rows | Read `witness_live_test.ail:192`, `:452` and `MATRIX.expected.tsv:348`, `:395` | W3-3 |
+| 3 | A journal started before the removal keeps `hybrid_tools: true` in its header, and editing `SYSTEM.md` makes a same-profile resume refuse | Read `session-journal.ts:310`, `:431`, `journal.ail:1807-1808`, `:2293`, `:2306` and `stopping.ail:662` | A section on recorded journals in W3; a note under WI-5, since W1 edits `SYSTEM.md` too |
+| 4 | Deleting `parse_test.ail` breaks `make test`, and no gate runs the TUI config test | Read `Makefile:3203-3204`, `:3194` | W3-2, W3-4, and `make test` added to WI-10 |
+| 5 | Nine exported functions take the flag, not ten; forwarding modules, private helpers and three writers were not named; W3-1 as written could not list the call sites | A signature scan of `session.ail` gives nine; read `agent_loop_v2.ail:19`, `scripted_ports.ail:78`, `session.ail:1941`, `:2524`, `:5073` | W3-1 rewritten as a read inventory and a run after the removal compiles; W3-4 |
+| 6 | Four records describe hybrid mode and were not listed | Read 013 ADR-004 `:1020`, 004 ADR-001 `:260-262`, 003 ADR-001 `:88-94`, and the Compose plan `:892-898` | W3-5 and Amendment 2's table |
+
+**What it confirmed.** No admitted journal was found that would replay differently without the
+hybrid branch; the evaluator's stopping tests pass, and its live witness suite passed with the
+branch, the helpers and the `decide` arm removed. A journal that ends in the middle of a hybrid
+step resumes between turns without running the unanswered call again. The log figures
+reproduce.
+
+**What it did not do.** It did not implement W3, run `make dst` or the contract gates, start a
+live session, or replay real journals. Its `eval_matrix` run was stopped before a verdict.
+
 ## Changes
 
 - docs(005): propose Amendment 1 to ADR-001 — pre-finalize verification (DP7) moves to an extension
@@ -126,6 +157,7 @@ rules, and the same mutant passed with the control removed.
 - docs(005): Amendment 2 and W3 — hybrid mode (DP6) is removed from core
 - docs(005): the journal header keeps boot.hybrid_tools, written as false — the operator's decision
 - docs(005): a diagram of the other numbered decision points, and who decides at each
+- docs(005): W3 takes Codex Sol's review — six findings, all reproduced; one decision is open
 
 9 files changed: the ADR with its two amendments, the plan, the plan's dagr document, and three
 diagrams as Mermaid source and SVG.
@@ -194,14 +226,17 @@ Checked on 2026-10-09 at `36a96b1e`, AILANG v0.52.5.
   screenshot.
 - [x] **The dagr document is contract-valid.** `dagr check
   PLAN-finalize-policy-migration.dagr.json --strict --json` prints `[]` and exits 0 at dagr 0.3.1.
-  It has 23 tasks, 22 `queued` and one `canceled`; every dependency names a task in it; every
-  task id appears in the markdown plan.
+  It has 25 tasks, 24 `queued` and one `canceled`; every dependency names a task in it; every
+  work item's id appears in the markdown plan. The open decision is a `question` task, `Q8`.
 - [x] **The hybrid figures were computed from the session logs and the tree.** 1,103 logs
   scanned, 28 with a `hybrid_bash_extracted` event, 2 of those with no native tool call at all;
   `git grep` for the entry points' call sites gives 82 in 40 files at `38068013`.
 - [x] **The hybrid path is the only producer of a replacing history entry.**
   `pending_tool_batched: false` occurs once in `session.ail`, at `:4106`.
-- [ ] W3 has not been reviewed, and none of its work items was tried.
+- [x] **Only one extension branches on the flag.** `git grep hybrid_tools -- packages`, leaving
+  out the ABI package and the lines that only copy the field, gives `compose.ail:108`.
+- [ ] No W3 work item was implemented. The reviewer tried parts of W3-2 and W3-3 in a scratch
+  checkout.
 - [x] **Nine files changed besides this record.** `git diff --name-only origin/main...HEAD`.
 - [x] **Nothing stored records the persist-nudge budget.** The 2026-10-09 journal's header has no
   such field, `journal.ail:2288-2290` recomputes the count from history, and no stored execution
