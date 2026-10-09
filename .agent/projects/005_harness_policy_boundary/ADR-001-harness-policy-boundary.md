@@ -272,7 +272,7 @@ pipeline in [013 ADR-002](../013_core_architecture_for_dst/ADR-002-park-and-wake
 [031 ADR-001](../031_system_one_decisions/ADR-001-extension-owned-structured-decisions.md) D4
 (`:628-629`), the finalization item of
 [028 ADR-001](../028_verified_runtime_closing_the_loop/ADR-001-fail-closed-verification-everywhere.md)
-(`:28-31`), and the premise of the
+(`:28-31`), one control run of 011 ADR-003's gate (ruling 18), and the premise of the
 [DP7 design doc](../../../design_docs/planned/m-motoko-dp7-verifier-gate.md) (`:31`).
 
 **Ruling, 2026-10-09 (operator).** The first draft of this amendment moved the verifier into a
@@ -400,9 +400,14 @@ Two behaviours change and are intended:
 - A candidate with open waits parks. Today, with verification enabled and failing, it is
   rejected first (013 ADR-002 `:364`).
 
-**A5. The persist nudge moves in the same plan (restates D4).** It is the other finalize policy
-in `classify_candidate` (`src/core/recovery.ail:40-63`, `session.ail:3288`). After both changes,
+**A5. The persist nudge leaves core too (restates D4).** It is the other finalize policy in
+`classify_candidate` (`src/core/recovery.ail:40-63`, `session.ail:3288`). After both changes,
 stage 4 is `dispatch_solver_candidate` alone and `NoDecision` finalizes.
+
+The plan found that it is not a small move. Its budget is an environment read that recorded
+runs and the evaluation's fixtures count, and its counter is threaded through the loop and
+resume. Nothing outside tests sets the budget. So the plan makes it a separate workstream and
+asks first whether to migrate it, as D4 says, or delete it.
 
 **A6. D3's floor does not grow.** Core gains no counter and no cap for finalize feedback. The step
 budget, the cost cap and context exhaustion remain the ceilings against a guard that breaks A2.
@@ -447,8 +452,12 @@ Costs:
 - **Tests go.** `scripts/smoke_v2_dp7_gate.ail` (the only executable coverage of this path,
   `Makefile:2458`), the four `w2_dp7_*` scenarios in `scripts/dst/phase_c2_wiring_scenarios.ail`,
   and the `decide` tests that name the three reasons (`step_machine.ail:348-397`, `:534-610`).
-- **Old journals still carry `dp7_verifier_rejected`.** The event vocabulary
-  (`src/core/dst_event_vocabulary.ail:325`) must keep reading them.
+- **The corpus gate loses the branch one of its controls walks.** 011 ADR-003 ruling 18 added a
+  `verifier-rejection` control run (`scripts/dst/corpus_judge_dst.ail:881-990`). The plan replaces
+  it with a control on the solver-feedback branch, or drops it, on the operator's word.
+- **Old wire logs still carry `dp7_verifier_rejected`.** The session journal never held it, so
+  resume is unaffected, and nothing in the tree reads an old wire log against the event
+  vocabulary. The variant can be deleted outright.
 - **`ExtRuntime.verification` is exported by the ABI package** (`types.ail:2033-2037`). Core stops
   reading it at once. Whether the field can be dropped within 8.x or waits for 9.0 is for the plan
   to establish under the ABI header's rule.
@@ -466,6 +475,8 @@ itself. The other guards' feedback is as invisible to the operator. That is a se
 | 031 ADR-001 D4 `:628-629` | "Host permissions and deterministic verification remain authoritative" | Host permissions are untouched. Verification is no longer a host stage, and nothing ships one. |
 | 028 ADR-001 `:28-31`, and item 1 of its PLAN-001 | `run_dp7_verifier` fails closed, and "make the gate non-configurable for shipped profiles" | A1 and the ruling. There is no gate left to make fail-closed. 028's other two boundaries are untouched. |
 | 031 ADR-001 freeze evidence, item 6 `:1154` | "Composition with DP7" | Dropped. There is nothing to compose with. |
+| 011 ADR-003 ruling 18 (`:484`) | The `verifier-rejection` control run | A control on the solver-feedback branch, or nothing. The plan's decision 1. |
+| `SYSTEM.md:128` | "The runtime will not catch this for you — that gate is on the roadmap" | The runtime does not check this. The rule above it, that the model runs the check when it has modified AILANG source, stays. |
 
 #### Non-goals
 
@@ -491,6 +502,8 @@ Closed on 2026-10-09:
 
 #### Follow-on
 
-- `PLAN-finalize-policy-migration.md`: the removals in A4, the persist-nudge guard, the startup
-  refusal for a leftover `verification` block, and the edits to 013 ADR-002, 028 ADR-001 and
-  031 ADR-001. It replaces the unwritten `PLAN-persist-nudge-migration.md` listed above.
+- [`PLAN-finalize-policy-migration.md`](PLAN-finalize-policy-migration.md), written with this
+  amendment. Workstream W1 removes the verifier: the removals in A4, the startup refusal for a
+  leftover `verification.enabled`, the system prompt's sentence, and the edits to the records in
+  the table above. Workstream W2 is the persist nudge and waits on two decisions. The plan
+  replaces the unwritten `PLAN-persist-nudge-migration.md` listed above.
