@@ -8,7 +8,7 @@ title: "Preregister Motoko CI experiment for LLM-written unit tests"
 
 ## Summary
 
-The linked post measures coding-task success when agents can or cannot write tests; it does not measure whether their tests protect future CI changes. This PR preregisters a paired Motoko experiment comparing existing CI, LLM-written unit tests, and LLM-written unit tests guided by development mutants against independently adjudicated held-out faults.
+The post and its follow-up question the value of tests agents write on their own initiative, including after mutation feedback. This PR preregisters a paired Motoko experiment: agents implement the same task with tests forbidden, normally allowed, or mutation feedback available; spontaneous test diffs are then applied to a fixed correct revision and tested against independently adjudicated held-out faults.
 
 ## Changes
 
@@ -23,7 +23,7 @@ The linked post measures coding-task success when agents can or cannot write tes
 
 ## Predicted outcome
 
-The protocol fixes prompts, fault blinding, adjudication, sample size and decision thresholds before trial results exist. The scorer produces task-weighted detection estimates and an exact upper bound that prevents a zero-catch bootstrap interval from being read as proof of no value. A six-task calibration pilot can then be run, followed by a 60-task confirmatory sample if feasible; this PR reports no trial result.
+The protocol fixes prompts, fault blinding, adjudication, sample size and decision thresholds before trial results exist. It measures immediate task success separately from later CI fault detection, and keeps the evaluator's behavior contract hidden from coding agents. The scorer produces task-weighted detection estimates and an exact upper bound that prevents a zero-catch bootstrap interval from being read as proof of no value. A six-task calibration pilot can then be run, followed by a 60-task confirmatory sample if feasible; this PR reports no trial result.
 
 ## Test evidence
 

@@ -98,6 +98,7 @@ def score(tasks: dict[str, list[dict[str, str]]], *, seed: int, draws: int) -> d
     task_scores: list[dict] = []
     excluded: dict[str, str] = {}
     controls = {arm: {"pass": 0, "fail": 0, "inconclusive": 0} for arm in ARMS}
+    baseline_catches_lost = {arm: 0 for arm in ("plain", "mutguided")}
     valid_faults = baseline_caught = paired_faults = incomplete_faults = 0
     invalid_faults = uncertain_faults = 0
 
@@ -118,6 +119,11 @@ def score(tasks: dict[str, list[dict[str, str]]], *, seed: int, draws: int) -> d
         if clean["baseline"] != "pass":
             excluded[task] = "baseline does not pass on clean revision"
             continue
+        for row in valid:
+            if row["baseline"] == "caught":
+                for arm in ("plain", "mutguided"):
+                    if clean[arm] == "pass" and row[arm] == "missed":
+                        baseline_catches_lost[arm] += 1
         eligible = [row for row in valid if row["baseline"] == "missed"]
         paired = [
             row for row in eligible
@@ -158,6 +164,7 @@ def score(tasks: dict[str, list[dict[str, str]]], *, seed: int, draws: int) -> d
         "invalid_faults": invalid_faults,
         "uncertain_faults": uncertain_faults,
         "baseline_caught_valid_faults": baseline_caught,
+        "baseline_catches_lost_by_arm": baseline_catches_lost,
         "paired_baseline_missed_faults": paired_faults,
         "eligible_faults_without_pair": incomplete_faults,
         "control_verdicts": controls,

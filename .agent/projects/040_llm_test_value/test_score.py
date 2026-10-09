@@ -36,6 +36,8 @@ class ScoreTest(unittest.TestCase):
         self.assertEqual(result["tasks_scored"], 2)
         self.assertEqual(result["paired_baseline_missed_faults"], 3)
         self.assertEqual(result["baseline_caught_valid_faults"], 1)
+        self.assertEqual(result["baseline_catches_lost_by_arm"],
+                         {"plain": 1, "mutguided": 1})
         self.assertEqual(result["invalid_faults"], 1)
         self.assertEqual(result["tasks_excluded"]["c"],
                          "no paired, valid, baseline-missed faults")

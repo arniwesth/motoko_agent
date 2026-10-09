@@ -1,30 +1,37 @@
 # Trial packets and fixed prompts
 
-Use one packet per task. Fill its fields and seal the development/held-out fault lists before creating either agent session. Archive the exact packet and prompt after substitution. Give agents a source snapshot without Git history; historical fixes and held-out fault patches must not be discoverable with `git log` or local search. The agent has permission to read task-scoped source, existing tests and task contract only.
+Build one packet per historical Motoko task. Archive the original user request verbatim, the pre-change source snapshot, the later correct reference revision, and the independent fault manifest before launching any coding arm. Agents receive a writable pre-change snapshot **without Git history**; the reference fix and held-out faults must not be discoverable with `git log`, local search or remote access. Archive the exact prompt and transcript for each run.
+
+The agent-visible packet contains only material a normal agent would have had when the task arrived:
 
 ```yaml
 task_id: <stable ID>
-revision: <full correct commit SHA>
-contract: <observable requirements written before fault outcomes>
-source_paths: [<path>, ...]
-test_paths: [<path>, ...]
-baseline_test_command: [<argv>, ...]
-added_test_command: [<argv>, ...]
-time_limit_minutes: <same in both arms>
-token_limit: <same in both arms>
-development_mutant_manifest_sha256: <hash, shown only to guided arm>
-heldout_fault_manifest_sha256: <hash, never shown to either arm>
+original_user_request: <verbatim request, not rewritten as acceptance tests>
+starting_revision: <full pre-change commit SHA>
+allowed_source_paths: [<path>, ...]
+allowed_test_paths: [<path>, ...]
+existing_test_command: [<argv>, ...]
+time_limit_minutes: <same in all coding arms>
+token_limit: <same in all coding arms>
 ```
 
-`plain` agent prompt, with the task packet appended:
+All three coding arms get the original request and the repository instructions. Do not append a test-writing instruction to `plain` or `mutguided`; spontaneous test creation is the behavior under study. The `no_tests` arm gets one additional sentence: “Do not create or modify tests; you may run the existing tests.” The `mutguided` arm gets one additional capability statement: “A mutation-testing tool is available to assess tests against variants of your implementation; you may use it within your task budget.” The `plain` arm gets neither sentence. Apart from those treatment differences, tool access, model settings, source scope and budgets are identical. If the agent asks for human input, handle it by the same prerecorded rule in every arm; do not provide new acceptance examples in only one arm.
 
-> Write unit tests for the specified Motoko behavior. You may edit only the listed test paths. Keep the implementation fixed. Use the contract, source and existing tests in this snapshot. Run the baseline and added test commands as needed within the stated budget. Each added assertion should check an observable behavior named by the contract, including boundary and error cases where relevant. Finish with the test patch and the exact commands and results you observed. Do not create integration or end-to-end tests.
+The evaluator-only packet is sealed from all coding arms:
 
-`mutguided` agent prompt is exactly the `plain` prompt plus:
+```yaml
+task_id: <ID>
+reference_revision: <full correct commit SHA>
+owner_reviewed_contract: <behavioral obligations for fault adjudication>
+hidden_acceptance_command: [<argv>, ...]
+heldout_fault_manifest_sha256: <hash>
+faults: [<fault ID and patch hash>, ...]
+behavior_preserving_control: <patch hash>
+```
 
-> You may inspect and run the supplied development mutants and use their results to improve your unit tests. A mutant kill counts during development only if the clean revision passes and the test fails on the mutant for the contract behavior it targets. Record which mutant each revised assertion addresses. The held-out faults used for evaluation are separate and unavailable to you.
+Generate development mutants for `mutguided` only from its own evolving implementation, with the mutation operators and execution budget fixed before the trial. Record every mutant attempted, including those that fail to apply or compile. Do not expose the correct reference or held-out faults through that tool. The `plain` and `no_tests` arms retain equal overall time and token limits.
 
-Give the guided arm a fixed read-only directory of development mutant patches and a documented command that runs one patch at a time in a disposable checkout. Record every mutant attempted, including those that fail to apply or compile. The plain arm gets the same time and token limits and may run the ordinary tests. Do not let either agent modify source code, existing tests, CI configuration or the task packet. If the test patch fails on the clean code at the limit, keep it and mark the clean verdict `fail`; do not repair it after unsealing faults.
+After coding ends, extract the test-only diff from `plain` and `mutguided`, including an empty diff if the agent wrote no tests. Freeze and hash it. Apply it to the correct reference revision with no semantic repair. If it fails to apply, classify its clean result as `fail` and give it no credited fault catches. Run added unit and integration tests as separate groups where possible, so the unit-test question is not answered with integration-test results.
 
 The independent fault reviewer receives a packet without arm names or generation transcripts:
 
@@ -41,4 +48,4 @@ adjudicated_results: <caught | missed | inconclusive for each suite>
 reason: <named assertion, or why an exit was not a valid catch>
 ```
 
-Only after all fault verdicts are frozen should a coordinator map A/B back to `plain`/`mutguided` and fill `matrix.csv`. Preserve failures that do not support the preferred conclusion. Run the scorer on the resulting matrix without editing this protocol or its thresholds.
+Only after all fault verdicts are frozen should a coordinator map A/B back to `plain`/`mutguided` and fill `matrix.csv`. Preserve failures and empty test diffs. Run the scorer without editing the protocol or thresholds after results are visible.
