@@ -11,6 +11,8 @@ Grounded at: `origin/main` **`36a96b1e`**. Every `file:line` below was read at t
 `session.ail` drifts quickly, so re-anchor before editing. `main` has since moved to `38068013`
 (#247, #250, #251). Of the files cited by line here, only the `Makefile` changed, by five lines
 after `:2819`.
+Diagrams: [the pipeline as built](mmd/dp7-finalize-gate.svg), with the verifier, and
+[the pipeline after W1](mmd/dp7-finalize-gate-end-state.svg). Sources are beside them.
 
 ---
 

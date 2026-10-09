@@ -1,0 +1,61 @@
+flowchart TB
+  %% The same pipeline after the DP7 verifier is removed. Compare with dp7-finalize-gate.mmd.
+  %% This is the END STATE of workstream W1 in PLAN-finalize-policy-migration.md (005 ADR-001
+  %% Amendment 1, A1 and A4). It is planned, not built: at origin/main 38068013 the verifier's
+  %% code is still in core, switched off in every tracked profile by #251.
+  %% A profile that still sets verification.enabled is not handled by W1: the key is read and
+  %% ignored. Unused profile config entries get their own pull request (the plan's decision 2).
+  %% The "back to the model step" boxes are the same place as the model step, drawn as ends
+  %% because this renderer lays a looping graph out upside down.
+  %% Left out, as in the first diagram: the persist nudge (off by default, W2 of the plan), and
+  %% response intercept and hybrid bash.
+  %% Renderer note (beautiful-mermaid 1.1.3): no ";" after a class line, or it becomes a node.
+
+  model["<b>Model step</b><br/>the model returns a response"]
+  qtools{"tool calls in<br/>the response?"}
+  tools["<b>Tool phase</b><br/>each call passes the extensions' ToolPolicy, then runs<br/>repetition_guard's other half sits here: it refuses a call<br/>repeated with the same result, or carried by repeated prose"]
+  checknote["<b>where the check lives now</b><br/>SYSTEM.md tells the model to run make check_core<br/>itself, as a tool call, when it has modified AILANG source"]
+  back1["back to the model step<br/>with the tool results"]
+  cand["<b>A final answer</b> · a response with no tool calls<br/>classify_candidate"]
+  gone["<b>removed: DP7, the verifier</b><br/>core runs no command on a final answer<br/>and nothing in core rejects one<br/>a blank answer takes the same path as any other"]
+
+  qwaits{"open waits?<br/>a delegate still running"}
+  park["<b>Park</b><br/>until a wake arrives"]
+
+  subgraph JUDGES["Extension judges · now see every final answer"]
+    direction TB
+    judges["<b>every SolverJudge, in profile order</b><br/>empty_stop_guard · progress_contract_guard · repetition_guard<br/>merge: ContinueWithFeedback beats Accept beats NoDecision"]
+  end
+
+  feedback["<b>Inject the guard's feedback</b><br/>each guard counts its own and stops"]
+  back3["back to the model step"]
+  boundnote["<b>the only way a final answer is sent back</b><br/>and it is bounded: a guard that can continue a run must<br/>carry its own limit and a test that it stops (Amendment A2)"]
+  done["<b>Finalize</b><br/>done event · run_summary"]
+
+  model --> qtools
+  qtools -->|"yes"| tools
+  tools --> back1
+  tools -.-> checknote
+  qtools -->|"no"| cand
+  cand -.-> gone
+  cand --> qwaits
+  qwaits -->|"yes"| park
+  qwaits -->|"no"| judges
+  judges -->|"a guard continues"| feedback
+  feedback --> back3
+  back3 -.-> boundnote
+  judges -->|"Accept or NoDecision"| done
+
+  classDef step fill:#1e2a4a,stroke:#7aa2f7,color:#c8d3f5
+  classDef decision fill:#3a2f12,stroke:#e0af68,color:#f2e2c2,stroke-width:2.5px
+  classDef ext fill:#143d24,stroke:#56d364,color:#c6f0cf
+  classDef leaf fill:#123038,stroke:#2ac3de,color:#bdeef5,stroke-width:2.5px
+  classDef note fill:#262a30,stroke:#9aa4b0,color:#d6dbe2
+  classDef removed fill:#1f1a24,stroke:#bb9af7,color:#b9a8d8
+
+  class model,tools,cand,park,feedback,back1,back3 step
+  class qtools,qwaits decision
+  class judges ext
+  class done leaf
+  class checknote,boundnote note
+  class gone removed
