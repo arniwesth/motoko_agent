@@ -25,7 +25,7 @@ were ever written. #251 turns the verifier off in the eight profiles that enable
 
 **The plan is here too.** `PLAN-finalize-policy-migration.md` has two workstreams:
 
-- **W1 removes the verifier from core** in ten work items. It is ready to start: #250 and #251
+- **W1 removes the verifier from core** in nine work items. It is ready to start: #250 and #251
   merged on 2026-10-09.
 - **W2 deletes the persist nudge completely**, its environment read included, and builds no
   guard. The operator decided that on 2026-10-09: it is off by default, so it has not run for a
@@ -33,11 +33,13 @@ were ever written. #251 turns the verifier off in the eight profiles that enable
   the evaluation's fixtures count it. Nothing stored depends on it, so the removal is safe and
   wide. W2 follows W1.
 
-One decision remains for the operator, in W1: whether a profile that still sets
-`verification.enabled` refuses to start or only warns. The plan recommends refusing. The other
-three were answered on 2026-10-09 and are recorded in the plan: the corpus gate's
-`verifier-rejection` control is replaced by a `solver-feedback` control, and the persist nudge is
-deleted in full.
+No decision is left open. The operator answered all four on 2026-10-09 and the plan records
+them:
+
+- The corpus gate's `verifier-rejection` control is replaced by a `solver-feedback` control.
+- The persist nudge is deleted in full, its environment read included.
+- A profile that still sets `verification.enabled` is not handled here. After W1 the key is read
+  and ignored. What the host does with config entries it does not use gets its own pull request.
 
 **The amendment is a proposal. Merging this records it and does not accept it.** One open question
 remains, about a field of the extension ABI that 031 ADR-001 defines. The two positions most
@@ -62,6 +64,7 @@ naming each passage and what replaces it. None of those files is edited here.
 - docs(005): the persist nudge is deleted outright — the operator's decision, in the amendment and the plan
 - docs(005): the plan records the operator's confirmation — the persist nudge goes in full, its read included
 - docs(005): the corpus gate's control moves to the solver-feedback branch — the operator's decision
+- docs(005): W1 does not handle a leftover verification.enabled — unused config entries get their own PR
 
 2 files changed.
 
