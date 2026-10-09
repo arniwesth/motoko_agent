@@ -27,11 +27,13 @@ were ever written. #251 turns the verifier off in the eight profiles that enable
 
 - **W1 removes the verifier from core** in ten work items. It is ready to start: #250 and #251
   merged on 2026-10-09.
-- **W2 is the persist nudge, and it is not ready.** Planning found that its budget is an
-  environment read that recorded runs and the evaluation's fixtures count, and that nothing
-  outside tests sets it. The plan recommends deleting it instead of migrating it, and asks.
+- **W2 deletes the persist nudge completely**, its environment read included, and builds no
+  guard. The operator decided that on 2026-10-09: it is off by default, so it has not run for a
+  long time. Planning found that the read still runs in every session and that DST tables and
+  the evaluation's fixtures count it. Nothing stored depends on it, so the removal is safe and
+  wide. W2 follows W1.
 
-The plan needs four decisions from the operator, listed in a table at its top.
+Two decisions remain for the operator, both in W1, listed in a table at the plan's top.
 
 **The amendment is a proposal. Merging this records it and does not accept it.** One open question
 remains, about a field of the extension ABI that 031 ADR-001 defines. The two positions most
@@ -52,6 +54,8 @@ naming each passage and what replaces it. None of those files is edited here.
 - docs(005): Amendment 1 names #250 as the Makefile fix, in place of the unpushed commit
 - docs(005): Amendment 1 follows the operator's ruling — the verifier is removed, not moved
 - docs(005): plan for Amendment 1 — remove the DP7 verifier; the persist nudge waits on two decisions
+- docs(005): the plan and PR #249 record note that #250 and #251 have merged
+- docs(005): the persist nudge is deleted outright — the operator's decision, in the amendment and the plan
 
 2 files changed.
 
@@ -68,7 +72,8 @@ naming each passage and what replaces it. None of those files is edited here.
   a later edit to the amendment's status line, not this merge.
 - **W1 of the plan can start from `main` once this has merged.** It is one pull request touching
   `src/core`, seven DST scripts, the `Makefile`, `SYSTEM.md` and five records.
-- **W2 does not start until the operator answers the plan's decisions 3 and 4.**
+- **W2 follows W1 as its own pull request.** Its first item removes only the read in a scratch
+  tree and lists what goes red, before the wide edit.
 - **The loop itself is not fixed by this.** #250 fixed the trigger and #251 turned the verifier
   off in every tracked profile; both are merged. Its code stays in core until W1 lands.
 
@@ -103,8 +108,10 @@ Checked on 2026-10-09 at `36a96b1e`, AILANG v0.52.5.
   `.github`, `.motoko`, `tools`, and the evaluation's scripts finds only DST scripts and a
   fixture generator.
 - [x] **Two files changed besides this record.** `git diff --name-only origin/main...HEAD`.
-- [ ] The plan's W2 replay question (what a stored program does when the driver makes one read
-  fewer) was not measured. It is W2's first work item.
+- [x] **Nothing stored records the persist-nudge budget.** The 2026-10-09 journal's header has no
+  such field, `journal.ail:2288-2290` recomputes the count from history, and no stored execution
+  program is committed. Six evidence logs name the key; they are records.
+- [ ] What goes red when the read is removed was not run. It is W2's first work item.
 - [ ] The plan was not reviewed by a second reader, and no work item was tried.
 - [ ] The two session logs are not committed. They are in the shared checkout's gitignored
   `.motoko/logfile/`.
