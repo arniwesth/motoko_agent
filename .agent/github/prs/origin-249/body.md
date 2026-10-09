@@ -48,9 +48,8 @@ here.
 - **If accepted, one plan follows.** `PLAN-finalize-policy-migration.md` covers the verifier
   guard, the persist-nudge guard, the removals from core, the migration of the eight profiles that
   enable verification, and the edits to 013 ADR-002 and 031 ADR-001.
-- **The loop itself is not fixed by this.** The trigger is fixed by `69f7353a` on
-  `fix/verify-native-path-guard-strip-sandbox`, a local branch that is not pushed and has no pull
-  request. The unbounded rejection stays in core until the plan lands.
+- **The loop itself is not fixed by this.** The trigger is fixed by #250. The unbounded rejection
+  stays in core until the plan lands.
 
 ## Test evidence
 
