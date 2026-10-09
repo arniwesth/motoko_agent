@@ -36,13 +36,7 @@ and the event vocabulary, so they do not run in parallel.
 
 ### The operator's decisions
 
-Six were answered on 2026-10-09. One is open, and only W3-4 waits on it.
-
-| # | Blocks | Question | This plan's recommendation |
-|---|---|---|---|
-| 7 | W3-4 | The journal header's `boot.hybrid_tools` is required on decode. Keep writing it as `false`, or drop it and move the journal's schema? | Keep it. Dropping it makes old readers refuse new journals, for a field that costs nothing. |
-
-Answered:
+All seven were answered on 2026-10-09. Nothing in this plan waits on a decision.
 
 | # | Question | The operator's answer |
 |---|---|---|
@@ -52,6 +46,7 @@ Answered:
 | 4 | Keep reading `MOTOKO_PERSIST_RETRIES` as a dead value, or remove the read too? | Remove it in full, the read included. The operator confirmed that after seeing what the read touches. |
 | 5 | Deleting a wire event changes the vocabulary's version (review finding 4). For old traces: pin a runner, build a decoder, or keep the event as an entry nothing emits? | Pin a runner. |
 | 6 | Hybrid mode (DP6): keep it, move it to an extension, or remove it? | Remove it as well. |
+| 7 | The journal header's `boot.hybrid_tools` is required on decode. Keep writing it as `false`, or drop it and move the journal's schema? | Keep writing it as `false`. |
 
 ---
 
@@ -528,18 +523,18 @@ did for W1 and W2: find what the lists below miss before the wide edit starts.
   - The evaluator's witness table: the `hybrid_extractions` row
     (`src/eval/journal/witness.ail:63`, `:96`, `:206`, `:276-277`, `:523`, `:540`) and the same
     string in `witness_live_test.ail`. This is an evaluator path under 013 ADR-004 D5.
-- **W3-4 — the parameter.** The wide edit. Waits on decision 7.
+- **W3-4 — the parameter.** The wide edit.
   - Remove `hybrid_tools` from the ten entry points and from `c2_loop`'s own signature, and from
     every call site W3-1 lists.
   - `src/core/rpc.ail`: `hybrid_enabled` goes (`:115`, `:280` and its uses). The journal header's
     `boot.hybrid_tools` (`:427`) and the context views' `hybrid_tools` (`:137`, `:376`, `:485`,
-    `:576`) are written as `false`.
+    `:576`) are written as `false`. For the header that is decision 7: the field stays in the
+    journal's schema.
   - `src/core/config.ail`: stop reading `tools.hybrid` (`:46`, `:372`, `:652`).
     `src/tui/src/config.ts`: the `HYBRID_TOOLS` mapping (`:34`) and the template's line (`:109`,
     `:167`), with `config.test.ts`.
   - A profile that still sets `tools.hybrid` is not handled here, by decision 2: unused config
     entries get their own pull request.
-  - Decision 7 is the task `Q7` in the dagr document, and W3-4 depends on it.
 - **W3-5 — records.** The issue file's status; a note in 013 ADR-003 beside `:267`; a numbered
   change in 013 ADR-004 for `:287-292` and `:613`; and the attribution anchors, re-baselined
   again in the six-file form.

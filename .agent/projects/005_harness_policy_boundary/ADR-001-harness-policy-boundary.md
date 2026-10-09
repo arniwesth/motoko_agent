@@ -622,11 +622,11 @@ template, both true, go with the mechanism.
 | 013 ADR-003 `:267` | The journal header's `boot` lists `hybrid_tools` | Stays (B3). A note that it is always `false` from here on. |
 | 013 ADR-004 `:287-292`, `:613` | The stopping contract's hybrid rules, and the T0 setting "`hybrid_tools`: recorded" | Stay (B3). A numbered change in that record notes that new journals record `false`. |
 
-#### Open question
+#### Open question, closed
 
-- **OQ-B1 (the journal header).** B3 keeps `boot.hybrid_tools` and writes `false`. Dropping the
-  field instead is a journal schema change under 013 ADR-003, and old readers would refuse the
-  new header. Leaning: keep it until the journal's schema moves for another reason.
+- **OQ-B1 (the journal header).** Decided by the operator on 2026-10-09: keep `boot.hybrid_tools`
+  and write it as `false`. Dropping the field would be a journal schema change under 013
+  ADR-003, and old readers would refuse the new header.
 
 #### Follow-on
 

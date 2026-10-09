@@ -4,7 +4,7 @@
     "id": "005-PLAN-finalize-policy-migration",
     "title": "005 · policy leaves core: remove the DP7 verifier, the persist nudge and hybrid mode"
   },
-  "generated_at": "2026-10-09T14:32:21Z",
+  "generated_at": "2026-10-09T15:45:22Z",
   "plan": {
     "project": "005_harness_policy_boundary",
     "address": "005/PLAN-finalize-policy-migration",
@@ -342,20 +342,6 @@
       ]
     },
     {
-      "id": "Q7",
-      "title": "question: keep writing boot.hybrid_tools as false, or drop it and move the journal schema?",
-      "kind": "question",
-      "project": "W3",
-      "state": "queued",
-      "deps": [],
-      "criteria": "The operator's answer, recorded in the plan's decision table.",
-      "owner": "operator",
-      "note": "The plan recommends keeping it: the field is required on decode by core and by the evaluator's reader, and dropping it makes old readers refuse new journals.",
-      "refs": [
-        "PLAN-finalize-policy-migration.md § Q7"
-      ]
-    },
-    {
       "id": "W3-4",
       "title": "impl: the hybrid_tools parameter leaves the loop's entry points",
       "kind": "impl",
@@ -363,11 +349,10 @@
       "state": "queued",
       "deps": [
         "W3-2",
-        "W3-3",
-        "Q7"
+        "W3-3"
       ],
       "criteria": "No exported entry point in session.ail takes hybrid_tools, and no call site passes it. rpc.ail writes false into the journal header's boot and into the context views. config.ail no longer reads tools.hybrid; the TUI's HYBRID_TOOLS mapping and template line are gone. make check_core and make test_coverage pass.",
-      "note": "The wide edit: ten entry points, 82 call sites in 40 files at 38068013. The journal header and the ABI's context views keep the name (Amendment 2, B3).",
+      "note": "The wide edit: ten entry points, 82 call sites in 40 files at 38068013. The journal header and the ABI's context views keep the name (Amendment 2, B3). The header keeps boot.hybrid_tools, written as false (decision 7).",
       "refs": [
         "PLAN-finalize-policy-migration.md § W3-4"
       ]
