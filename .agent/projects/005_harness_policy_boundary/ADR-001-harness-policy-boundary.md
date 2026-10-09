@@ -454,8 +454,8 @@ only the model repeating itself. That is a separate change.
 
 #### Non-goals
 
-- **The Makefile fix.** Commit `69f7353a` on `fix/verify-native-path-guard-strip-sandbox` clears
-  the variable in the recipe. It is independent of this amendment and can merge first.
+- **The Makefile fix.** #250 clears the variable in the recipe. It is independent of this
+  amendment and can merge first.
 - **Near-duplicate matching in the repetition guard.** Its exact-text rule would not have matched
   the 30 answers that differed only in a count. That is guard strategy and PLAN-level.
 - **The unknown context limit** that kept compaction off in the 2026-10-09 session.
