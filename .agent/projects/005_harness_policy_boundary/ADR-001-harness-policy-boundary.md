@@ -400,14 +400,15 @@ Two behaviours change and are intended:
 - A candidate with open waits parks. Today, with verification enabled and failing, it is
   rejected first (013 ADR-002 `:364`).
 
-**A5. The persist nudge leaves core too (restates D4).** It is the other finalize policy in
-`classify_candidate` (`src/core/recovery.ail:40-63`, `session.ail:3288`). After both changes,
-stage 4 is `dispatch_solver_candidate` alone and `NoDecision` finalizes.
+**A5. The persist nudge is deleted (replaces D4).** It is the other finalize policy in
+`classify_candidate` (`src/core/recovery.ail:40-63`, `session.ail:3288`). D4 said it migrates to a
+guard extension. The operator ruled on 2026-10-09 that it is removed completely and no guard is
+built: it is off by default, so it has not run for a long time. After both removals, stage 4 is
+`dispatch_solver_candidate` alone and `NoDecision` finalizes.
 
-The plan found that it is not a small move. Its budget is an environment read that recorded
-runs and the evaluation's fixtures count, and its counter is threaded through the loop and
-resume. Nothing outside tests sets the budget. So the plan makes it a separate workstream and
-asks first whether to migrate it, as D4 says, or delete it.
+The plan found the one part that is not dead. The budget is an environment read that every
+session performs, and DST tables and the evaluation's fixtures count it. Nothing stored depends
+on it, so removing the read is safe and wide. It is the plan's second workstream.
 
 **A6. D3's floor does not grow.** Core gains no counter and no cap for finalize feedback. The step
 budget, the cost cap and context exhaustion remain the ceilings against a guard that breaks A2.
@@ -505,5 +506,5 @@ Closed on 2026-10-09:
 - [`PLAN-finalize-policy-migration.md`](PLAN-finalize-policy-migration.md), written with this
   amendment. Workstream W1 removes the verifier: the removals in A4, the startup refusal for a
   leftover `verification.enabled`, the system prompt's sentence, and the edits to the records in
-  the table above. Workstream W2 is the persist nudge and waits on two decisions. The plan
+  the table above. Workstream W2 deletes the persist nudge and its environment read. The plan
   replaces the unwritten `PLAN-persist-nudge-migration.md` listed above.

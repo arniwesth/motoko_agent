@@ -1,4 +1,4 @@
-# PLAN: finalize policy leaves core — remove the DP7 verifier, then settle the persist nudge
+# PLAN: finalize policy leaves core — remove the DP7 verifier, then the persist nudge
 
 Implements **Amendment 1** to [ADR-001](ADR-001-harness-policy-boundary.md) (this dir): A1, A4 and
 A6 in workstream W1, A5 in workstream W2.
@@ -20,9 +20,9 @@ Two workstreams. They share no code and W1 does not wait for W2.
 
 1. **W1 removes the DP7 verifier from core.** Nothing replaces it. Ten work items, one pull
    request. It is ready to start.
-2. **W2 deals with the persist nudge.** It is **not ready to start**. The persist nudge turned out
-   to be part of what a recorded run contains, which Amendment 1 did not know. Two decisions come
-   first (below).
+2. **W2 removes the persist nudge completely**, its environment read included, and builds no
+   guard in its place. The operator decided that on 2026-10-09. It follows W1, because both edit
+   `classify_candidate` and `decide`.
 
 ### Decisions this plan needs from the operator
 
@@ -30,8 +30,13 @@ Two workstreams. They share no code and W1 does not wait for W2.
 |---|---|---|---|
 | 1 | W1, WI-8 | 011 ADR-003's `verifier-rejection` control run exists to walk the DP7 branch. Replace it with a control on the solver-feedback branch, or drop it? | Replace. The gate keeps a control for "a final answer is bounced and the model is called again". |
 | 2 | W1, WI-6 | A profile that still sets `verification.enabled: true`: refuse to start, or start with a warning? | Refuse. Someone who believes a gate runs has to find out that it does not. |
-| 3 | W2 | Build a persist-nudge guard extension (ADR-001 D4, Amendment A5), or delete the persist nudge? | Delete. Nothing sets its budget outside tests, and the default is off. |
-| 4 | W2 | Keep reading `MOTOKO_PERSIST_RETRIES` as a dead value so recorded runs replay unchanged, or remove the read and change what a recorded run contains? | Decide after W2's first item measures the cost. |
+
+Decided on 2026-10-09:
+
+| # | Question | The operator's answer |
+|---|---|---|
+| 3 | Build a persist-nudge guard extension (ADR-001 D4), or delete the persist nudge? | Delete it. It is off by default, so it has not run for a long time. |
+| 4 | Keep reading `MOTOKO_PERSIST_RETRIES` as a dead value, or remove the read too? | Remove it completely. This plan reads that as the read too; W2-1 confirms nothing stored depends on it before the wide edit. |
 
 ---
 
@@ -289,76 +294,81 @@ extension package, any profile.
 
 ---
 
-## W2 — the persist nudge
+## W2 — remove the persist nudge
 
 ### What the research found
 
-Amendment 1's A5 says the persist nudge "moves in the same plan". It is a much larger thing than
-DP7, in a different way.
+Amendment 1's first draft said the persist nudge "moves in the same plan". It is a wider thing
+than DP7, in a different way.
 
-- **Its budget is an environment read the driver records.** `session_policy_init` reads
-  `MOTOKO_PERSIST_RETRIES` first of four reads (`session.ail:2352`), and each later read is
-  threaded from the one before. The key is one of the driver's eleven
-  (`dst_discovery.ail:229`).
-- **Recorded runs and their checkers count that read.** Six DST scripts carry a table with
+- **The nudge itself is dead code in practice.** No `Makefile` target, CI job, profile or
+  evaluation script sets `MOTOKO_PERSIST_RETRIES`. The default is `0`, which is off. The only
+  setters are DST scripts that test it.
+- **Its budget read is not dead.** `session_policy_init` reads `MOTOKO_PERSIST_RETRIES` in every
+  session, first of four reads (`session.ail:2352`), and each later read is threaded from the one
+  before. The key is one of the driver's eleven (`dst_discovery.ail:229`).
+- **Tests count that read.** Six DST scripts carry a table with
   `{ key: "MOTOKO_PERSIST_RETRIES", count: 1 }` (`discovery_dst`, `driver_plus_compose_dst`,
   `herdr_graded_dst`, `run_report_dst`, `seeded_generator_dst`, `strict_replay_dst`), and
   `program_persistence_dst.ail:154` serves it a value.
 - **The evaluation names it.** `src/eval/journal/configuration.ail:186` serves it as `"0"`,
-  `stopping.ail:1089` checks that, `witness.ail` classifies it in three tables, and two fixture
-  files name it 31 times each.
+  `stopping.ail:1089` checks that, `witness.ail` classifies it in three tables, and three fixture
+  files name it 70 times between them.
 - **Its counter is threaded through the loop and resume.** `nudges_used` is a field of
   `StepState` and `StepDelta` (`phase_vocab.ail:692`, `:705`), of every `C2LoopState` literal, and
-  of the journal's `Continuation` (`journal.ail:143`), where resume recomputes it from history
-  (`journal.ail:2290`).
-- **Nobody uses it.** No `Makefile` target, CI job, profile or evaluation script sets
-  `MOTOKO_PERSIST_RETRIES`. The default is `0`, which is off. The only setters are DST scripts
-  that test it.
+  of the journal's `Continuation` (`journal.ail:143`).
+- **Nothing stored depends on any of it.** The session journal records no environment read and
+  no nudge count; resume recomputes the count from history (`journal.ail:2288-2290`), and the
+  header of the 2026-10-09 journal has no such field. No stored execution program is committed.
+  The key also appears in six evidence logs under `.agent/projects/*/evidence` and `evidence/`,
+  which are records and are not replayed.
 
-### Decision 3: migrate or delete
+So the operator's reasoning holds for the nudge. The read is the part that still runs, and
+removing it is safe for stored data and wide in tests.
 
-ADR-001 D4 and Amendment A5 say migrate to a guard extension. The handoff
-(`HANDOFF-write-persist-nudge-migration-plan.md`) asks for a behaviour-preserving move.
+### The decisions, as made
 
-This plan recommends **deleting it and building no guard**, for the reason the operator gave for
-the verifier: nothing triggers it. A guard that no profile loads is code to maintain and a second
-finalize guard to reason about. If a coding profile wants the nudge later, it is a small guard on
-the existing seam, bounded as A2 requires, and Amendment 1 already says so.
+- **Delete, do not migrate.** ADR-001 D4 said the nudge "migrates to this seam", and the handoff
+  `HANDOFF-write-persist-nudge-migration-plan.md` asked for a behaviour-preserving move. Both are
+  superseded. No guard is built. If a coding profile wants the nudge later, it is a small guard on
+  the existing seam, bounded as Amendment A2 requires.
+- **The read goes too.** The driver's key set goes from eleven to ten. The tables and fixtures
+  above change with it.
 
-One behaviour to know either way. Today the nudge fires only when every judge is silent. As a
-judge it would outrank another judge's `Accept`, because `ContinueWithFeedback` wins the merge.
+### Work items
 
-### Decision 4: the recorded environment read
+- **W2-1 — confirm before the wide edit.** In a scratch tree, remove only the read (W2-4's first
+  line) and run `make discovery strict_replay program_persistence run_report seeded_generator
+  driver_plus_compose herdr_graded eval_matrix`. List every red target and the file behind it.
+  That list is W2-4's checklist. If anything is red that this plan does not name, stop and report
+  it before going on.
+- **W2-2 — the policy.** Remove the nudge arm in `classify_candidate` (`session.ail:3288-3296`),
+  `CandidateNudge`, the `persist_nudge` arm of `decide` (`step_machine.ail:134-135`),
+  `PersistNudge` (`phase_vocab.ail:1004`, `:1315`, `:1498`, `:1956`),
+  `StepPolicy.persist_retries` (`phase_vocab.ail:414`), and `should_inject_persist_nudge`,
+  `persist_nudge_message` and `any_writefile_attempt` in `recovery.ail`. After it, a silent
+  merge of the judges finalizes. The row count in `event_vocabulary_dst.ail:367` drops by one
+  more, and `dst_event_vocabulary.ail` loses its four mentions (`:109`, `:180`, `:240`, `:430`).
+- **W2-3 — the counter.** Remove `nudges_used` from `StepState`, `StepDelta`, `C2LoopState` and
+  `Continuation`, and `count_persist_nudges` with it (`journal.ail:65`, `:143`, `:1758-1765`,
+  `:2290`, `:2585`, `:2619`; `model_phase.ail:21`). This is the wide edit: every loop literal.
+- **W2-4 — the read.**
+  - `session_policy_init` (`session.ail:2352`): drop the read and re-thread the three that follow.
+  - `dst_discovery.ail:229` and its comment at `:168`: ten keys. `dst_secrets.ail:32`: the comment.
+  - The six count tables, and `program_persistence_dst.ail:154`.
+  - The evaluator: `configuration.ail:28`, `:186`, `:296`; `stopping.ail:1089`; `witness.ail:32`,
+    `:124`, `:362-370`, `:391`; `witness_live_test.ail:171`. Regenerate the three fixture files
+    with `src/eval/journal/testdata/gen_fixtures.py` (`:1835`). These are evaluator paths under
+    013 ADR-004 D5, so this part is an evaluator change and is reviewed as one.
+  - `scripts/dst/phase_c2_wiring_scenarios.ail`, `phase_c_l1_scenarios.ail`,
+    `phase_c_seeded_dst.ail` and `scripts/phase_f_pipeline_wiring.ail` name the nudge in
+    scenarios. Delete or rewrite each.
+- **W2-5 — the host.** `src/tui/src/runtime-process.ts:550` stops passing the variable.
+- **W2-6 — records.** Mark ADR-001 D4 and the handoff superseded, with a pointer to Amendment A5.
 
-Whichever way decision 3 goes, core stops using the value. Two ways to do that:
+**Gate:** W1's WI-10 in full, plus `make eval_matrix` and the targets named in W2-1.
 
-- **Keep the read, ignore the value.** Nothing recorded changes. The six count tables, the
-  evaluation's served value and the fixtures stay as they are. The cost is one dead read with a
-  comment explaining it.
-- **Remove the read.** The driver's key set goes from eleven to ten. Every table above changes,
-  the fixtures are regenerated (`src/eval/journal/testdata/gen_fixtures.py`), and a run recorded
-  before the change has one more environment read than the driver now makes.
-
-### W2's work items, once decided
-
-- **W2-1 (first, and it informs decision 4).** Replay one stored program recorded at `36a96b1e`
-  against a tree with the read removed. Record what the cursor does with the extra read: refuse,
-  skip or misalign. Count the files the removal touches. Report both before anything else.
-- **W2-2.** Remove the policy from core: the nudge arm in `classify_candidate`
-  (`session.ail:3288-3296`), `CandidateNudge`, the `persist_nudge` arm of `decide`
-  (`step_machine.ail:134-135`), `PersistNudge` (`phase_vocab.ail:1004`, `:1315`, `:1498`,
-  `:1956`), `StepPolicy.persist_retries` (`phase_vocab.ail:414`), and
-  `should_inject_persist_nudge`, `persist_nudge_message` and `any_writefile_attempt` in
-  `recovery.ail`. The row count in `event_vocabulary_dst.ail:367` drops by one more.
-- **W2-3.** Remove `nudges_used` from `StepState`, `StepDelta`, `C2LoopState` and `Continuation`,
-  and `count_persist_nudges` with it. This is the wide edit: every loop literal.
-- **W2-4.** The read, as decision 4 says.
-- **W2-5.** Only if decision 3 is "migrate": the guard package, on the model of
-  `packages/motoko-ext-empty-stop-guard`, with its budget in registration config and a test that
-  it stops (A2).
-- **W2-6.** `src/tui/src/runtime-process.ts:550` stops passing the variable, if the read goes.
-
-W2 gets its own pull request and its own run of WI-10's gates.
+W2 is its own pull request, after W1 has merged.
 
 ---
 
@@ -368,8 +378,9 @@ Fixed in the amendment in the same change as this plan:
 
 - **"Old journals still carry `dp7_verifier_rejected`" was wrong.** The session journal never
   held it. Only wire logs do, and nothing reads an old wire log against the vocabulary.
-- **A5 understated the persist nudge.** It is in recorded runs and the evaluation's fixtures.
-  A5 now points here.
+- **A5 understated the persist nudge.** Its budget read runs in every session and is counted by
+  DST tables and the evaluation's fixtures. A5 now says so, and records the operator's decision
+  to delete it.
 - **Two records were missing from the superseded list:** 011 ADR-003 ruling 18 (the
   `verifier-rejection` control) and `SYSTEM.md:128`.
 
