@@ -8,10 +8,12 @@ title: "docs(005): two amendments to ADR-001 and their plan — the DP7 verifier
 
 ## Summary
 
-Proposes Amendment 1 to 005 ADR-001 (the harness policy boundary). Core's DP7 verifier runs a
+Adds Amendment 1 to 005 ADR-001 (the harness policy boundary). Core's DP7 verifier runs a
 profile's shell command after every non-blank final answer and rejects the answer when the command
 fails, with no limit on how often. The amendment says that is finalize policy and removes it from
-core. The persist nudge moves to a guard extension in the same plan.
+core. The persist nudge is deleted in the same plan.
+
+**Both amendments were accepted by the operator on 2026-10-10**, and their status lines say so.
 
 Two sessions forced it. On 2026-10-08 and 2026-10-09 the verifier's command could not pass inside
 a session, so it rejected every final answer, 320 and 57 times. The repetition guard was never
@@ -45,6 +47,19 @@ sixteen profiles; the sixteenth loads the Compose extension, which reads the sam
   functions, threaded through private helpers, and a grep finds 82 call sites in 40 files. It
   had its own review, below.
 
+**Each task is one commit, and the plan's graph is chains.** The graph first had three groups of
+tasks that were to land as one commit each. An orchestrator hands out one task at a time, so on
+2026-10-10 the operator had them made into chains. In W1 the tests go first (WI-7, WI-8), then
+the driver (WI-1, WI-2, WI-3), then the wire event (WI-4). Two of the plan's claims were wrong
+and are corrected: the tree does type-check between WI-1, WI-2 and WI-3, and the scripts compile
+before the event's variant is deleted. *Test evidence* has what was run.
+
+**A prompt for the orchestrator is here too.**
+`PROMPT-motoko-finalize-policy-migration-start.md` starts a fresh Motoko session that delegates
+the plan's tasks through the herdr extension: W3-7 first, as its own small pull request, then W1.
+It has four steps for the operator before the prompt, among them the local run file that names
+the pane.
+
 No decision is left open. The operator answered eight on 2026-10-09 and the plan records them:
 
 - The corpus gate's `verifier-rejection` control is replaced by a `solver-feedback` control.
@@ -58,18 +73,18 @@ No decision is left open. The operator answered eight on 2026-10-09 and the plan
   context too. Compose's check dates from the loop before this one, which had a legacy step with
   no tool calls; that step was deleted in May.
 
-**The amendment is a proposal. Merging this records it and does not accept it.** One open question
-remains, about a field of the extension ABI that 031 ADR-001 defines. The two positions most
-likely to change:
+One open question remains in Amendment 1, about a field of the extension ABI that 031 ADR-001
+defines. Two positions it takes that a reader may not expect:
 
 - **No new core ceiling on finalize feedback (A6).** The amendment leaves the step budget, the cost
   cap and context exhaustion as the only ceilings in core.
 - **Merge precedence is unchanged (A3).** `ContinueWithFeedback` still outranks `Accept`, so what
   ends a run is each continuing guard reaching its own bound.
 
-On acceptance it supersedes text in 011 ADR-003 (one control run), 013 ADR-002 D2, 028 ADR-001,
+Amendment 1 supersedes text in 011 ADR-003 (one control run), 013 ADR-002 D2, 028 ADR-001,
 031 ADR-001 D4, the DP7 design doc and one sentence of `SYSTEM.md`. The amendment has a table
-naming each passage and what replaces it. None of those files is edited here.
+naming each passage and what replaces it. None of those files is edited here: the plan's work
+items edit them.
 
 ## Review
 
@@ -94,7 +109,8 @@ all eight are fixed in the plan.
 
 Its four opinions were also taken: land the variant's deletion in one commit with the script
 edits, drop "they share no code", make the attribution re-baseline explicit (six files and three
-re-issued DST profiles), and add the targets only CI runs.
+re-issued DST profiles), and add the targets only CI runs. The first was changed on 2026-10-10:
+the script edits now come first, as their own commits, and the variant's deletion follows.
 
 **One choice in the fixes was not the reviewer's, and the operator has confirmed it.** 009
 ADR-001 D6 says old traces are either still decoded or read by a pinned runner. The plan pins a
@@ -156,9 +172,12 @@ live session, or replay real journals. Its `eval_matrix` run was stopped before 
 - docs(005): a diagram of the other numbered decision points, and who decides at each
 - docs(005): W3 takes Codex Sol's review — six findings, all reproduced; one decision is open
 - docs(005): Compose stops reading the hybrid flag — the operator's decision
+- docs(005): both amendments to ADR-001 are accepted — the operator's decision
+- docs(005): the plan's one-commit groups become chains — the operator's decision
+- docs(005): a prompt that starts Motoko as the plan's orchestrator
 
-9 files changed: the ADR with its two amendments, the plan, the plan's dagr document, and three
-diagrams as Mermaid source and SVG.
+10 files changed: the ADR with its two amendments, the plan, the plan's dagr document, the
+orchestrator's prompt, and three diagrams as Mermaid source and SVG.
 
 ## Governing docs
 
@@ -167,6 +186,8 @@ diagrams as Mermaid source and SVG.
 - `.agent/projects/005_harness_policy_boundary/PLAN-finalize-policy-migration.dagr.json`: the
   plan's tasks and dependencies, as 008 ADR-001 D2 asks (that record is accepted and still in
   #215). Structure only: no attempts, events or pane ids. WI-6 is `canceled`.
+- `.agent/projects/005_harness_policy_boundary/PROMPT-motoko-finalize-policy-migration-start.md`:
+  the prompt for a Motoko orchestrator, the operator's steps before it, and what was checked.
 - `.agent/projects/005_harness_policy_boundary/mmd/dp7-finalize-gate.svg`: the pipeline as
   built, with the verifier.
 - `.agent/projects/005_harness_policy_boundary/mmd/dp7-finalize-gate-end-state.svg`: the pipeline
@@ -180,10 +201,13 @@ diagrams as Mermaid source and SVG.
 
 - **Nothing a session does changes.** Checked: `git diff --name-only origin/main...HEAD` lists the
   ADR and this pull request's own record, and nothing else.
-- **The ADR carries a proposed amendment the operator can accept, edit or reject.** Acceptance is
-  a later edit to the amendment's status line, not this merge.
+- **The ADR carries two accepted amendments.** The base record's own status line still says
+  Proposed; this pull request does not change it.
 - **W1 of the plan can start from `main` once this has merged.** It is one pull request touching
   `src/core`, seven DST scripts, the `Makefile`, `SYSTEM.md` and five records.
+- **The first orchestrated session is W3-7 and then W1.** It needs this merged, a permission
+  mode for Claude delegates in `~/.claude/settings.json`, and the run file made in the pane.
+  Whether a Motoko session follows the prompt is not known until one is started.
 - **W2 follows W1 as its own pull request.** Its first item removes only the read in a scratch
   tree and lists what goes red, before the wide edit.
 - **The loop itself is not fixed by this.** #250 fixed the trigger and #251 turned the verifier
@@ -235,7 +259,7 @@ Checked on 2026-10-09 at `36a96b1e`, AILANG v0.52.5.
   out the ABI package and the lines that only copy the field, gives `compose.ail:108`.
 - [ ] No W3 work item was implemented. The reviewer tried parts of W3-2 and W3-3 in a scratch
   checkout.
-- [x] **Nine files changed besides this record.** `git diff --name-only origin/main...HEAD`.
+- [x] **Ten files changed besides this record.** `git diff --name-only origin/main...HEAD`.
 - [x] **Nothing stored records the persist-nudge budget.** The 2026-10-09 journal's header has no
   such field, `journal.ail:2288-2290` recomputes the count from history, and no stored execution
   program is committed. Six evidence logs name the key; they are records.
@@ -246,7 +270,33 @@ Checked on 2026-10-09 at `36a96b1e`, AILANG v0.52.5.
   `.motoko/logfile/`.
 - [x] **A second reader reviewed the plan.** Codex Sol, see *Review*. The amendment itself was in
   its reading but was not the subject of the review.
-- [ ] No code changed, so no gate was run. CI was not awaited.
+- [x] **The order of W1's chain was checked in a scratch tree at `38068013`.** With a scratch
+  form of WI-1 alone, `make check_core` exits 0. `make smoke_driver`, `ledger_parity`,
+  `world_framed_wire`, `park_wake`, `phase_c_l1` and `corpus_judge` each exit 2, and every red
+  row is one WI-7 or WI-8 names: the DP7 smoke, ledger parity's `dp7` row, the two
+  `dp7_rejected` rows, the five scenarios WI-7 deletes, and the `verifier-rejection` control.
+  `make anchors` exits 2 on `session.ail:4302` and `:4523`. With WI-1 and WI-2, `make
+  check_core` and `make test_coverage` exit 0 (619 of 624 inline tests passed, 5 skipped
+  against a record).
+- [ ] WI-7, WI-8, WI-3 and WI-4 were not written, so the rest of the chain's order rests on
+  reading. The plan says which parts.
+- [x] **W3-7's gate passes on an unchanged tree.** `make verify_extensions`,
+  `driver_plus_compose` and `compose_live_exec` each exit 0 at `38068013` with #252's profile
+  change.
+- [x] **The run-file step in the prompt file works as written.** Run in a copy of the layout
+  with a made-up pane id: it writes the file, `dagr check --strict` prints `[]`, and the file
+  names that pane with mode `delegate`. With no pane id it stops and writes nothing.
+- [x] **The run file does what the prompt says, through the extension's own functions.**
+  `mode_from_doc_str` gives `on` for the named pane and `off` for another. `tool_violation`
+  refuses `EditFile` on `SYSTEM.md` and `Makefile`, `WriteFile` under `.agent/` and `sed -i`
+  under `src/`, and allows a file under `tmp/`, `tools/worktree/new.sh`, the background gate
+  command and an edit in another worktree. `seed_from_plan` gives 24 tasks under three
+  projects, and the result passes `dagr check --strict`.
+- [x] **A delegate's pane has the bot token.** A pane split through herdr from a process with
+  no GitHub token had `GH_TOKEN` and `MOTOKO_BOT_GH_TOKEN`.
+- [ ] No Motoko session was started with the prompt, and no delegate was launched.
+- [ ] No code changed in this pull request. The gates above ran in scratch trees. CI was not
+  awaited.
 - [ ] Why the delegate this session spawned (`session_1791533296010-1695c0abcc275cc3`) finished
   with no rejection under the same profile was not determined.
 - [ ] The 2026-10-08 log was not checked for `ext_solver_feedback` events.
