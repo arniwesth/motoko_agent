@@ -50,16 +50,6 @@ pure func plan_native(calls: [ToolCall]) -> [ToolPlanEntry] {
   }
 }
 
-pure func dp7_rejection_message(text: string) -> Message {
-  {
-    role: "user",
-    content: "The code you just wrote does not type-check. Fix all errors before declaring done:\n\n${text}",
-    tool_calls: [],
-    tool_call_id: "",
-    images: []
-  }
-}
-
 pure func await_approval_from_calls(step_idx: int, calls: [ToolCall]) -> StepDecision {
   match calls {
     [] => Fail({ code: "Internal", message: "approval requested without pending call", retryable: false }),
@@ -127,8 +117,6 @@ export func decide(s: StepState, pol: StepPolicy) -> StepDecision {
     if s.last_finish_reason == "await_approval" then await_approval_from_calls(s.step_idx, s.pending_tool_calls)
     else RunTools({ entries: plan_native(s.pending_tool_calls) })
   }
-  else if s.last_finish_reason == "dp7_rejected"
-  then InjectUserMessage(dp7_rejection_message(s.last_response_text))
   else if s.last_finish_reason == "solver_feedback"
   then InjectUserMessage({ role: "user", content: s.last_response_text, tool_calls: [], tool_call_id: "", images: [] })
   else if s.last_finish_reason == "persist_nudge"
@@ -140,13 +128,13 @@ export func decide(s: StepState, pol: StepPolicy) -> StepDecision {
   -- and `Fail` record (R1): exhaustion suspends rather than parks.
   else if List.length(s.open_waits) > 0
        && (s.last_finish_reason == "await_wake" || s.last_finish_reason == "stop"
-           || s.last_finish_reason == "dp7_approved" || s.last_finish_reason == "dp7_fail_open")
+           || s.last_finish_reason == "candidate_approved")
   then {
     if pol.step_budget > 0 && s.step_idx >= pol.step_budget
     then Fail({ code: "StepBudgetExhausted", message: "step budget exhausted", retryable: false })
     else Park(s.open_waits)
   }
-  else if s.last_finish_reason == "stop" || s.last_finish_reason == "dp7_approved" || s.last_finish_reason == "dp7_fail_open"
+  else if s.last_finish_reason == "stop" || s.last_finish_reason == "candidate_approved"
   then Finalize({ reason: "model_stop", output: s.last_response_text })
   else if s.last_finish_reason == "stream_error"
   then call_model_or_fail(s, pol)
@@ -342,15 +330,6 @@ pure func test_decide_model_stop_finalize() -> bool
     }
   }
 
-pure func test_decide_dp7_reject_injects_user_message() -> bool
-  tests [((), true)]
-  {
-    match mk_state("dp7_rejected", "bad", [], 0, 0, 0) {
-      Ok(s) => is_inject(decide(s, mk_policy(fixture_unmeasured()))),
-      Err(_) => false
-    }
-  }
-
 pure func test_decide_solver_feedback_injects_user_message() -> bool
   tests [((), true)]
   {
@@ -382,19 +361,10 @@ pure func test_decide_intercept_handled_calls_model() -> bool
     }
   }
 
-pure func test_decide_dp7_approve_finalizes() -> bool
+pure func test_decide_candidate_approved_finalizes() -> bool
   tests [((), true)]
   {
-    match mk_state("dp7_approved", "done", [], 0, 0, 0) {
-      Ok(s) => is_finalize(decide(s, mk_policy(fixture_unmeasured())), "done"),
-      Err(_) => false
-    }
-  }
-
-pure func test_decide_dp7_fail_open_finalizes() -> bool
-  tests [((), true)]
-  {
-    match mk_state("dp7_fail_open", "done", [], 0, 0, 0) {
+    match mk_state("candidate_approved", "done", [], 0, 0, 0) {
       Ok(s) => is_finalize(decide(s, mk_policy(fixture_unmeasured())), "done"),
       Err(_) => false
     }
@@ -469,9 +439,9 @@ pure func test_enabled_policy_checkpoints_under_pressure() -> bool
   }
 
 -- ============================================================================
--- PLAN-002 W4 Part 1: the `Park` arm's cross product (ADR-002 D2). The fifteen
--- tests above are untouched; every case here adds open waits to a state one of
--- them already builds.
+-- PLAN-002 W4 Part 1: the `Park` arm's cross product (ADR-002 D2). The thirteen
+-- `decide` tests above are untouched; every case here adds open waits to a state
+-- one of them already builds.
 -- ============================================================================
 
 pure func w4_wait(id: string) -> WaitDescriptor {
@@ -531,7 +501,7 @@ func w4_parks(reason: string, response: string) -> bool {
 pure func test_w4_stop_class_with_waits_parks() -> bool
   tests [((), true)]
   {
-    w4_parks("stop", "done") && w4_parks("dp7_approved", "done") && w4_parks("dp7_fail_open", "done")
+    w4_parks("stop", "done") && w4_parks("candidate_approved", "done")
   }
 
 -- Empty stop (reason `stop`, no text) × waits → Park, never the empty floor.
@@ -554,7 +524,7 @@ pure func test_w4_await_wake_parks_only_with_waits() -> bool
     with_waits && without
   }
 
--- The three inject reasons × waits still inject.
+-- The two inject reasons × waits still inject.
 pure func test_w4_inject_reasons_with_waits_inject() -> bool
   tests [((), true)]
   {
@@ -562,7 +532,7 @@ pure func test_w4_inject_reasons_with_waits_inject() -> bool
       Some(d) => is_inject(d),
       None => false
     };
-    injects("dp7_rejected") && injects("solver_feedback") && injects("persist_nudge")
+    injects("solver_feedback") && injects("persist_nudge")
   }
 
 -- Pending tools × waits → RunTools.
@@ -595,7 +565,7 @@ pure func test_w4_park_arm_budget_guard_fails_at_the_budget() -> bool
       Some(d) => not is_any_park(d) && is_fail(d, "StepBudgetExhausted") && fail_message(d) == "step budget exhausted",
       None => false
     };
-    exhausted("stop") && exhausted("dp7_approved") && exhausted("dp7_fail_open") && exhausted("await_wake")
+    exhausted("stop") && exhausted("candidate_approved") && exhausted("await_wake")
   }
 
 -- R1, the same with `step_budget == 0` (unlimited) → Park.
@@ -607,5 +577,5 @@ pure func test_w4_park_arm_unlimited_budget_parks() -> bool
       Some(d) => is_park(d, ["h1"]),
       None => false
     };
-    parks("stop") && parks("dp7_approved") && parks("dp7_fail_open") && parks("await_wake")
+    parks("stop") && parks("candidate_approved") && parks("await_wake")
   }

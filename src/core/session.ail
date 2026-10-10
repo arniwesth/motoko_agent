@@ -2875,7 +2875,7 @@ func c2_continue_tool_batch(
 -- one message (the assistant) that entered the history on this path, and
 -- `artifacts_changed` computed at the call site, where both artifact values are
 -- in scope.
-func c2_dp7_approved_state(
+func c2_candidate_approved_state(
   session_id: string,
   identity: RunIdentity,
   st: C2LoopState,
@@ -2909,7 +2909,7 @@ func c2_dp7_approved_state(
     pending_tool_batched: true,
     accumulated_tool_msgs: [],
     pending_approval: None,
-    last_finish_reason: "dp7_approved",
+    last_finish_reason: "candidate_approved",
     last_response_text: output,
     nudges_used: count_persist_nudges(msgs_with_assistant),
     finalize_source: source,
@@ -2942,7 +2942,7 @@ func c2_await_wake_state(
   step_idx: int,
   candidate: string
 ) -> C2LoopState ! {IO, Trace} {
-  { c2_dp7_approved_state(session_id, identity, st, msgs_with_assistant, totals, ext_artifacts, telemetry, world, trace, emissions, artifacts_changed, step_idx, candidate, "") |
+  { c2_candidate_approved_state(session_id, identity, st, msgs_with_assistant, totals, ext_artifacts, telemetry, world, trace, emissions, artifacts_changed, step_idx, candidate, "") |
     last_finish_reason: "await_wake" }
 }
 
@@ -3616,8 +3616,8 @@ func c2_loop(
           -- ADR-003 D1's `state_delta`: the artifacts go inline ONLY when they
           -- moved. Computed ONCE here, where both the old value (`st`) and the
           -- new one (`chain.artifacts`) are in scope — every step-end literal
-          -- below carries `chain.artifacts`, and the `c2_dp7_*_state` builders
-          -- receive only the new one, so a per-site comparison would have to re-derive an old
+          -- below carries `chain.artifacts`, and `c2_candidate_approved_state`
+          -- receives only the new one, so a per-site comparison would have to re-derive an old
           -- value it does not hold.
           let artifacts_changed = encode(chain.artifacts) != encode(st.ext_artifacts);
           let _ = emit_pre_step_stages(session_id, step_idx, chain.stages);
@@ -3973,7 +3973,7 @@ func c2_loop(
                             let classified = classify_candidate(rt, { post_ctx | world: intercepted.next_state }, result.message.content, msgs_with_assistant, step_idx, session_id, policy.step.persist_retries, st.nudges_used, st.open_waits); -- WI-D19
                             match classified {
                               CandidateApproved(approved) =>
-                                c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, c2_dp7_approved_state(session_id, identity, st, msgs_with_assistant, new_totals, chain.artifacts, applied.telemetry, approved.world, trace_after_model, emissions_after_call, artifacts_changed, step_idx, approved.output, approved.source)),
+                                c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, c2_candidate_approved_state(session_id, identity, st, msgs_with_assistant, new_totals, chain.artifacts, applied.telemetry, approved.world, trace_after_model, emissions_after_call, artifacts_changed, step_idx, approved.output, approved.source)),
                               CandidateAwaitWake(waiting) =>
                                 c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, c2_await_wake_state(session_id, identity, st, msgs_with_assistant, new_totals, chain.artifacts, applied.telemetry, waiting.world, trace_after_model, emissions_after_call, artifacts_changed, step_idx, result.message.content)),
                               CandidateFeedback(fed) => {
