@@ -60,6 +60,10 @@ the plan's tasks through the herdr extension: W3-7 first, as its own small pull 
 It has four steps for the operator before the prompt, among them the local run file that names
 the pane.
 
+**Every task is done by a Claude delegate on Claude Opus 5.5.** The graph says so: each task's
+`owner` is `claude-opus-5-5`, and `plan.delegates` gives the kind and the model once. The prompt
+has the orchestrator pass that model on every delegation.
+
 No decision is left open. The operator answered eight on 2026-10-09 and the plan records them:
 
 - The corpus gate's `verifier-rejection` control is replaced by a `solver-feedback` control.
@@ -175,6 +179,7 @@ live session, or replay real journals. Its `eval_matrix` run was stopped before 
 - docs(005): both amendments to ADR-001 are accepted — the operator's decision
 - docs(005): the plan's one-commit groups become chains — the operator's decision
 - docs(005): a prompt that starts Motoko as the plan's orchestrator
+- docs(005): the plan's graph names the model — every task is owned by claude-opus-5-5
 
 10 files changed: the ADR with its two amendments, the plan, the plan's dagr document, the
 orchestrator's prompt, and three diagrams as Mermaid source and SVG.
@@ -249,7 +254,7 @@ Checked on 2026-10-09 at `36a96b1e`, AILANG v0.52.5.
 - [x] **The dagr document is contract-valid.** `dagr check
   PLAN-finalize-policy-migration.dagr.json --strict --json` prints `[]` and exits 0 at dagr 0.3.1.
   It has 24 tasks, 23 `queued` and one `canceled`; every dependency names a task in it; every
-  task id appears in the markdown plan.
+  task id appears in the markdown plan. Each of the 23 has the owner `claude-opus-5-5`.
 - [x] **The hybrid figures were computed from the session logs and the tree.** 1,103 logs
   scanned, 28 with a `hybrid_bash_extracted` event, 2 of those with no native tool call at all;
   `git grep` for the entry points' call sites gives 82 in 40 files at `38068013`.
@@ -294,6 +299,14 @@ Checked on 2026-10-09 at `36a96b1e`, AILANG v0.52.5.
   projects, and the result passes `dagr check --strict`.
 - [x] **A delegate's pane has the bot token.** A pane split through herdr from a process with
   no GitHub token had `GH_TOKEN` and `MOTOKO_BOT_GH_TOKEN`.
+- [x] **The owner reaches the run and the pane.** A run seeded from the run file by
+  `seed_from_plan` has `owner: claude-opus-5-5` on 23 tasks and passes `dagr check --strict`;
+  `dagr view --snapshot` shows it beside each queued task.
+- [x] **A delegate started with no flags comes up in bypass mode on Opus 5.5.** With
+  `permissions.defaultMode: bypassPermissions` in the operator's `~/.claude/settings.json`
+  (set 2026-10-10, outside this repository), `claude -p` with no permission flag reports
+  `permissionMode: bypassPermissions`, and reports the model `claude-opus-5-5` both with
+  `--model claude-opus-5-5` and with no `--model`. Claude Code 2.1.296.
 - [ ] No Motoko session was started with the prompt, and no delegate was launched.
 - [ ] No code changed in this pull request. The gates above ran in scratch trees. CI was not
   awaited.
