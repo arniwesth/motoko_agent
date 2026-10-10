@@ -1,0 +1,413 @@
+{
+  "dagr": 3,
+  "run": {
+    "id": "005-PLAN-finalize-policy-migration",
+    "title": "005 · policy leaves core: remove the DP7 verifier, the persist nudge and hybrid mode"
+  },
+  "generated_at": "2026-10-10T12:15:00Z",
+  "plan": {
+    "project": "005_harness_policy_boundary",
+    "address": "005/PLAN-finalize-policy-migration",
+    "markdown": "PLAN-finalize-policy-migration.md",
+    "implements": "ADR-001-harness-policy-boundary.md, Amendment 1 (A1, A4, A5, A6) and Amendment 2 (B1 to B4)",
+    "grounded_at": "36a96b1e",
+    "governed_by": "008 ADR-001 D2: structure only; no attempts, events or pane ids",
+    "delegates": {
+      "kind": "claude",
+      "model": "claude-opus-5-5",
+      "note": "Every task that is not canceled is done by a Claude delegate on Claude Opus 5.5. The task's owner is that model id, and it is the value an orchestrator passes as the delegation's model."
+    }
+  },
+  "projects": [
+    {
+      "id": "W1",
+      "title": "W1 · remove the DP7 verifier"
+    },
+    {
+      "id": "W2",
+      "title": "W2 · remove the persist nudge"
+    },
+    {
+      "id": "W3",
+      "title": "W3 · remove hybrid mode (DP6)"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "WI-7",
+      "title": "test: delete the tests that test only DP7",
+      "kind": "test",
+      "owner": "claude-opus-5-5",
+      "project": "W1",
+      "state": "queued",
+      "deps": [],
+      "criteria": "The DP7 smoke and its setup script are deleted; ledger parity has eight frames and its two wrappers agree; five of the six scenarios in phase_c2_wiring_scenarios.ail:1141-1360 are deleted, the blank-answer one is kept without its verifier checks, and the file's import of Dp7VerifierRejected is gone. No rig the item leaves behind turns verification on. make smoke_driver smoke_parity ledger_parity world_framed_wire park_wake phase_c_l1 passes, on a tree that still has the verifier.",
+      "note": "First in W1. The tests go before the code they test, so that nothing depends on the verifier when WI-1 removes it. One task, one commit.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § WI-7"
+      ]
+    },
+    {
+      "id": "WI-8",
+      "title": "test: the corpus gate's control moves to the solver-feedback branch",
+      "kind": "test",
+      "owner": "claude-opus-5-5",
+      "project": "W1",
+      "state": "queued",
+      "deps": [
+        "WI-7"
+      ],
+      "criteria": "A solver-feedback control replaces verifier-rejection, and corpus_judge_dst.ail's import of Dp7VerifierRejected is gone. With step_idx + 1 changed to step_idx at session.ail:4146 the control is red on driver-step-repeated and steps-not-contiguous; without the control the same mutant is green. Ruling 19 is added to 011 ADR-003. make corpus_judge and make corpus_pr pass.",
+      "note": "Decision 1. Before session.ail is edited, so :4146 is still the line. It does not need WI-7's edits; it follows WI-7 because W1's tasks share one worktree and one branch. Run corpus_pr by itself. One task, one commit.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § WI-8"
+      ]
+    },
+    {
+      "id": "WI-1",
+      "title": "impl: classify_candidate loses its verification stages",
+      "kind": "impl",
+      "owner": "claude-opus-5-5",
+      "project": "W1",
+      "state": "queued",
+      "deps": [
+        "WI-8"
+      ],
+      "criteria": "Stages 2 and 5's verifier run, CandidateRejected and its arm are gone; the stage comment is rewritten. make check_core passes. make smoke_driver ledger_parity world_framed_wire park_wake phase_c_l1 corpus_judge pass as they did after WI-8.",
+      "note": "Checked 2026-10-10 on main 38068013: make check_core passes with WI-1 alone. make anchors and make attribution_table are red from here until WI-9, and no gate before WI-9 names them. One task, one commit.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § WI-1"
+      ]
+    },
+    {
+      "id": "WI-2",
+      "title": "impl: delete the verifier",
+      "kind": "impl",
+      "owner": "claude-opus-5-5",
+      "project": "W1",
+      "state": "queued",
+      "deps": [
+        "WI-1"
+      ],
+      "criteria": "session.ail:2218-2299 and c2_dp7_rejected_state are deleted; the Dp7VerifierRejected import is gone. make check_core passes.",
+      "note": "Changes session.ail's import region, a protected span of the evaluation's manifest, which already refuses main. Checked 2026-10-10: make check_core and make test_coverage pass with WI-1 and WI-2 applied. One task, one commit.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § WI-2"
+      ]
+    },
+    {
+      "id": "WI-3",
+      "title": "impl: one neutral name for an approved candidate",
+      "kind": "impl",
+      "owner": "claude-opus-5-5",
+      "project": "W1",
+      "state": "queued",
+      "deps": [
+        "WI-2"
+      ],
+      "criteria": "c2_candidate_approved_state sets \"candidate_approved\"; decide has no dp7_* reason; the step_machine tests are updated. make test_coverage passes.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § WI-3"
+      ],
+      "note": "A rename and the dead arms of decide. One task, one commit."
+    },
+    {
+      "id": "WI-4",
+      "title": "impl: the wire event goes, the vocabulary version moves to event-vocabulary/2",
+      "kind": "impl",
+      "owner": "claude-opus-5-5",
+      "project": "W1",
+      "state": "queued",
+      "deps": [
+        "WI-3"
+      ],
+      "criteria": "Dp7VerifierRejected is gone from phase_vocab and the vocabulary; the two counting tests say 44; the version is event-vocabulary/2 in the function and in six pinned strings; the pin for /1 names a commit; the code-graph rule and its three pinned counts are updated. make event_vocabulary invariants test_coverage passes, and python3 -m pytest tools/code-graph/tests/test_event_subjects.py passes.",
+      "note": "Last of W1's code. WI-7 and WI-8 have removed every other use of the variant, so nothing names it when it goes. Old traces are read by a pinned runner (decision 5). One task, one commit.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § WI-4"
+      ]
+    },
+    {
+      "id": "WI-9",
+      "title": "docs: records and the attribution anchors",
+      "kind": "docs",
+      "owner": "claude-opus-5-5",
+      "project": "W1",
+      "state": "queued",
+      "deps": [
+        "WI-4"
+      ],
+      "criteria": "013 ADR-002, 013 ADR-004, 028 ADR-001, 031 ADR-001 and the DP7 design doc are marked or amended; the attribution anchors are re-baselined in the six-file form with three DST profiles re-issued. make anchors attribution_table passes.",
+      "note": "Last of the edits, when session.ail's line numbers have stopped moving.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § WI-9"
+      ]
+    },
+    {
+      "id": "WI-5",
+      "title": "docs: the system prompt says what is true",
+      "kind": "docs",
+      "owner": "claude-opus-5-5",
+      "project": "W1",
+      "state": "queued",
+      "deps": [],
+      "criteria": "SYSTEM.md's verification section ends by saying the runtime does not check this; the rest of the section is unchanged.",
+      "note": "Independent of every other item.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § WI-5"
+      ]
+    },
+    {
+      "id": "WI-6",
+      "title": "withdrawn: a profile that still asks for the gate does not start",
+      "kind": "impl",
+      "project": "W1",
+      "state": "canceled",
+      "deps": [],
+      "criteria": "None. Withdrawn by the operator's decision 2 on 2026-10-09.",
+      "note": "Profile config entries the host does not use are dealt with in a separate pull request. After W1 verification.enabled is read and ignored.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § WI-6"
+      ]
+    },
+    {
+      "id": "WI-10",
+      "title": "gate: W1's full gate and one live session",
+      "kind": "gate",
+      "owner": "claude-opus-5-5",
+      "project": "W1",
+      "state": "queued",
+      "deps": [
+        "WI-5",
+        "WI-9"
+      ],
+      "criteria": "make check_core; make test_coverage_selftest test_coverage; make smoke_parity; make test; make dst; make verify_core verify_mutations verify_classify_check; make new_contract_policy BASE=origin/main after committing; the targets only CI runs (verify_skills_tests verify_skills_refusal smoke_no_delegated_storm verify_profile_dir_agreement tui_context_limit dst_l2); the code-graph pytest. One live session on the default profile ends with a done event and no dp7_verifier_rejected.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § WI-10"
+      ]
+    },
+    {
+      "id": "W2-1",
+      "title": "test: remove only the read in a scratch tree and list what goes red",
+      "kind": "test",
+      "owner": "claude-opus-5-5",
+      "project": "W2",
+      "state": "queued",
+      "deps": [
+        "WI-10"
+      ],
+      "criteria": "A list of every red target and the file behind it, from make discovery strict_replay program_persistence run_report seeded_generator driver_plus_compose herdr_graded ledger_parity depth_canary eval_matrix. Anything red that the plan does not name is reported before W2-2 starts.",
+      "note": "W2 is its own pull request and follows W1: both edit classify_candidate and decide.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § W2-1"
+      ]
+    },
+    {
+      "id": "W2-2",
+      "title": "impl: remove the persist-nudge policy from core",
+      "kind": "impl",
+      "owner": "claude-opus-5-5",
+      "project": "W2",
+      "state": "queued",
+      "deps": [
+        "W2-1"
+      ],
+      "criteria": "No nudge arm, CandidateNudge, persist_nudge reason, PersistNudge event or persist_retries policy field remains; the helpers and tests the plan lists are gone; the vocabulary's counting tests say 43 and its version is event-vocabulary/3 with a pin for /2.",
+      "note": "Decision 3: delete, no guard extension.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § W2-2"
+      ]
+    },
+    {
+      "id": "W2-3",
+      "title": "impl: remove the nudges_used counter",
+      "kind": "impl",
+      "owner": "claude-opus-5-5",
+      "project": "W2",
+      "state": "queued",
+      "deps": [
+        "W2-2"
+      ],
+      "criteria": "nudges_used is gone from StepState, StepDelta, C2LoopState and Continuation, and count_persist_nudges with it. make check_core and make test_coverage pass.",
+      "note": "The wide edit: every loop literal.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § W2-3"
+      ]
+    },
+    {
+      "id": "W2-4",
+      "title": "impl: remove the MOTOKO_PERSIST_RETRIES read",
+      "kind": "impl",
+      "owner": "claude-opus-5-5",
+      "project": "W2",
+      "state": "queued",
+      "deps": [
+        "W2-1",
+        "W2-2"
+      ],
+      "criteria": "session_policy_init makes three reads; driver_env_keys has eleven keys; the six count tables, the ledger-parity order strings, the depth canary's pins and the evaluator's configuration, witness and regenerated fixtures agree. Every target W2-1 found red is green.",
+      "note": "Decision 4: in full, the read included. The evaluator paths are an evaluator change under 013 ADR-004 D5.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § W2-4"
+      ]
+    },
+    {
+      "id": "W2-5",
+      "title": "impl: the host stops passing the variable",
+      "kind": "impl",
+      "owner": "claude-opus-5-5",
+      "project": "W2",
+      "state": "queued",
+      "deps": [
+        "W2-4"
+      ],
+      "criteria": "src/tui/src/runtime-process.ts no longer sets MOTOKO_PERSIST_RETRIES for the runtime.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § W2-5"
+      ]
+    },
+    {
+      "id": "W2-6",
+      "title": "docs: records",
+      "kind": "docs",
+      "owner": "claude-opus-5-5",
+      "project": "W2",
+      "state": "queued",
+      "deps": [
+        "W2-2",
+        "W2-4"
+      ],
+      "criteria": "ADR-001 D4 and the persist-nudge handoff are marked superseded; 013 ADR-004's persist-retries settings row and read-count row are removed by a numbered change in that record.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § W2-6"
+      ]
+    },
+    {
+      "id": "W2-7",
+      "title": "gate: W2's full gate",
+      "kind": "gate",
+      "owner": "claude-opus-5-5",
+      "project": "W2",
+      "state": "queued",
+      "deps": [
+        "W2-3",
+        "W2-5",
+        "W2-6"
+      ],
+      "criteria": "Everything in WI-10, plus make eval_matrix and the targets named in W2-1.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § W2-7"
+      ]
+    },
+    {
+      "id": "W3-1",
+      "title": "test: inventory every carrier of hybrid_tools, then apply W3-2 and W3-3 in a scratch tree and list what is red",
+      "kind": "test",
+      "owner": "claude-opus-5-5",
+      "project": "W3",
+      "state": "queued",
+      "deps": [
+        "W2-7"
+      ],
+      "criteria": "A list of every signature, call site and record writer that carries hybrid_tools, from a signature scan and git grep. A list of every red target, with the file behind it, taken twice in a scratch tree: after W3-2 alone is applied and compiles, and again with W3-3 on top: make check_core test test_coverage event_vocabulary invariants smoke_parity ledger_parity world_framed_wire depth_canary eval_matrix, the code-graph pytest and witness_live_test.ail. Anything W3-2 to W3-4 do not name, and anything red after W3-2 alone, is reported before W3-2 starts.",
+      "note": "W3 follows W2: all three workstreams edit the loop, decide and the event vocabulary.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § W3-1"
+      ]
+    },
+    {
+      "id": "W3-2",
+      "title": "impl: core stops turning prose into a tool call",
+      "kind": "impl",
+      "owner": "claude-opus-5-5",
+      "project": "W3",
+      "state": "queued",
+      "deps": [
+        "W3-1"
+      ],
+      "criteria": "The hybrid branch, synthesize_hybrid_bash_call, any_native_call, session_emitted_native_tool_call, the hybrid_bash arm of decide, extract_bash with its helpers, parse_test.ail and its line in make test, the hybrid smoke and SYSTEM.md's hybrid section are gone. A response with no tool call that no extension intercepted goes to classify_candidate. make test passes.",
+      "note": "Before W3-3: it deletes the event's only emitter, and the variant stays, unused, until W3-3. One task, one commit.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § W3-2"
+      ]
+    },
+    {
+      "id": "W3-3",
+      "title": "impl: the hybrid_bash_extracted event goes, the vocabulary version moves again",
+      "kind": "impl",
+      "owner": "claude-opus-5-5",
+      "project": "W3",
+      "state": "queued",
+      "deps": [
+        "W3-2"
+      ],
+      "criteria": "HybridBashExtracted is gone from phase_vocab and the vocabulary; the counting tests, the script's count, the inventory baseline and the code-graph rule with its pinned counts agree; the version has moved with a pin for the one before. The evaluator's witness table has no hybrid_extractions row, its census size is 12 and its twin count 18, and the two matrix rows that named it are deleted.",
+      "note": "After W3-2, when nothing emits the event. The witness table is an evaluator path under 013 ADR-004 D5. One task, one commit.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § W3-3"
+      ]
+    },
+    {
+      "id": "W3-7",
+      "title": "impl: the Compose extension stops reading hybrid_tools",
+      "kind": "impl",
+      "owner": "claude-opus-5-5",
+      "project": "W3",
+      "state": "queued",
+      "deps": [],
+      "criteria": "current_composition_mode in packages/motoko-ext-compose/compose.ail no longer falls back to inline when hybrid_tools is false, and its tests follow. The Compose tool is allowed in subagent mode whatever the flag says. make verify_extensions driver_plus_compose compose_live_exec passes.",
+      "note": "Decision 8. Depends on nothing else in the plan, so it can land at any time before W3-4, as its own small pull request. Once it has, the ailang profile can have its flag switched off.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § W3-7"
+      ]
+    },
+    {
+      "id": "W3-4",
+      "title": "impl: the hybrid_tools parameter leaves the loop's entry points",
+      "kind": "impl",
+      "owner": "claude-opus-5-5",
+      "project": "W3",
+      "state": "queued",
+      "deps": [
+        "W3-3",
+        "W3-7"
+      ],
+      "criteria": "No exported or private function in session.ail takes hybrid_tools, the two forwarding modules do not pass it, and no call site does. The journal header's boot, the continuation, the exit manifest and the context views carry a constant. config.ail no longer reads tools.hybrid; the TUI's HYBRID_TOOLS mapping and template line are gone. make check_core and make test_coverage pass, and src/tui/src/config.test.ts passes.",
+      "note": "The wide edit: eight exported functions once W2 has landed, private helpers, two forwarding modules, three record writers in session.ail and five in rpc.ail. The header keeps boot.hybrid_tools, written as false (decision 7). The context views carry false too, which is safe once W3-7 has landed (decision 8).",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § W3-4"
+      ]
+    },
+    {
+      "id": "W3-5",
+      "title": "docs: records and the attribution anchors",
+      "kind": "docs",
+      "owner": "claude-opus-5-5",
+      "project": "W3",
+      "state": "queued",
+      "deps": [
+        "W3-4"
+      ],
+      "criteria": "The hybrid issue file's status; a note in 013 ADR-003; a numbered change in 013 ADR-004 for the stopping contract, the T0 setting and the census row; 004 ADR-001 and 003 ADR-001's hybrid passages marked superseded; the Compose plan's fallback passage marked; the attribution anchors re-baselined in the six-file form. make anchors attribution_table passes.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § W3-5"
+      ]
+    },
+    {
+      "id": "W3-6",
+      "title": "gate: W3's full gate and one live session",
+      "kind": "gate",
+      "owner": "claude-opus-5-5",
+      "project": "W3",
+      "state": "queued",
+      "deps": [
+        "W3-4",
+        "W3-5"
+      ],
+      "criteria": "Everything in WI-10, plus make eval_matrix and the TUI config test. One live session on the default profile, asked a question whose natural answer is a fenced shell example, ends with a done event, runs nothing, and has no hybrid_bash_extracted in its log. Compose is called once on the ailang profile and is allowed.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § W3-6"
+      ]
+    }
+  ]
+}
