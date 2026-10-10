@@ -16,6 +16,9 @@ is D6's known-unseen list, which that ruling extends by two branches.
 **Ruling 18, the same day,** takes those two branches off that list again: D1's gate gains one
 control run for each, and each is red on its mutant by the rule that names it
 (`evidence/judge-recoveries/branch-controls-b0aaaca1/`).
+**Ruling 19, 2026-10-10,** moves the second of those controls to another branch. 005 ADR-001's
+Amendment 1 takes the verifier out of core, so `verifier-rejection` is replaced by
+`solver-feedback`, which is red on the same one-edit mutant on the branch that stays.
 **Date:** 2026-10-06. Grounded at HEAD `259265b5`, AILANG v0.47.2 (`e939cba`).
 
 Reviewed, separately, by Codex (GPT-6-Astra) and Claude Fable 5.1:
@@ -227,7 +230,12 @@ members and not another profile: each is the bank's rig, through a run helper th
 exports. Two run it unchanged, at a small budget. Two change one part of its runtime, the tool
 policy's answer or the verifier, and neither part is a hook that calls the model, so D5's three
 premises hold for all four. Each of the two was measured clean on its unmutated run before it was
-held to anything.
+held to anything. *(Ruling 19.)* The second of those parts is now the judge's answer and not the
+verifier. The judge is a hook, and the second premise is about hooks, so it is stated for this
+one: it answers `ContinueWithFeedback` for every candidate, reads nothing and does not call the
+model. The recording adapter and the delta over the starting log are the bank's, unchanged. The
+control was measured clean on its unmutated run, with two prepared calls in the trace and two
+provider interactions in the log.
 
 **D6. Acceptance is by named mutants.** *(Ruled 2026-10-06, as revised in v0.2, with a
 tightening.)* A rule is accepted when its mutant has been seen red on that rule and the controls green.
@@ -293,9 +301,18 @@ reviewer's mutants under which every rule was green, each on a branch no member 
   `driver-step-repeated` and `steps-not-contiguous` are red on it. Unbounded, the same mutant does
   not end: the step budget is never reached. The control's script ends with a provider error that
   is not retried, so the defect ends as a red row.
+- *(Ruling 19, in place of the item above.)* **After a judge sends an answer back the model is
+  called again under the same step** (`session.ail:4146`). The branch in the item above leaves
+  core with the verifier (005 ADR-001, Amendment 1), and its control with it. The same edit one
+  branch over, where the loop resumes on a judge's `ContinueWithFeedback`, was not seen either:
+  the bank's judge has no opinion, and the gate as it stood was green under it. The gate's
+  control `solver-feedback` runs the rig with a judge that continues, and under the mutant
+  `driver-step-repeated` and `steps-not-contiguous` are red on it. Unbounded, this mutant does
+  not end either, and the control's script ends with the same provider error.
 
 What the two controls do not show: a verifier that accepts after it rejected, a tool an extension
-handles, or either branch on a generated run.
+handles, or either branch on a generated run. *(Ruling 19.)* For the first of the three, read a
+judge that accepts after it sent an answer back.
 
 **D7. The corpus's existing identity keys are not pinned by this ADR.** *(Ruled 2026-10-06; v0.2
 narrows the wording to what was measured.)* Option 3. Existing pins, the depth canary's among them,
@@ -482,3 +499,13 @@ request's, in the scope paragraph after D10, and stands as merged.
 | # | Amends | Ruling |
 |---|---|---|
 | 18 | 17, 9 | Item 10 of *Not decided* is taken up. D1's gate gains two control runs, `tool-run-without-approval` and `verifier-rejection`. Each is the bank's rig with one part of its runtime changed: the tool policy answers `Allow`, or the verifier is on and rejects. D5's three premises hold for both, so the invariant set and all six checks are held against them as against a member. Each was clean unmutated and red on its mutant by the rule that names it, so the two branches leave D6's known-unseen list. The verifier is a real `bash -c 'exit 3'` in the working directory: no world answers for the verifier, and the gate already ran with the process capability. Neither control is a bank member, and `corpus_pr`'s output is unchanged. |
+
+**On the second branch control, decided by the operator on 2026-10-09**, as decision 1 of
+`../005_harness_policy_boundary/PLAN-finalize-policy-migration.md`. The plan put the question:
+replace the `verifier-rejection` control with one on the solver-feedback branch, or drop it. The
+answer recorded there is to replace it. The change, the check of D5's premises and the mutant
+runs are that plan's item WI-8, done on 2026-10-10.
+
+| # | Amends | Ruling |
+|---|---|---|
+| 19 | 18 | The control `verifier-rejection` is replaced by `solver-feedback`. **Why:** 005 ADR-001's Amendment 1 takes the DP7 verifier out of core. The state built after a rejection, where ruling 18's mutant sat (`session.ail:2985`), goes with it, and a control cannot walk a branch that is not there. **The branch it walks now:** the loop's resumption when a judge returns `ContinueWithFeedback` (`session.ail:4146`), which also continues with `step_idx + 1`. No member and no other control has a judge that continues, so nothing in the gate walked it. **The run:** the bank's rig with one part changed, its one judge, which answers `ContinueWithFeedback` for every candidate, reads nothing and calls no model. The recording adapter and the delta over the starting log are unchanged, so D5's three premises hold and the invariant set and all six checks are held against the run. It asserts what the old control did: the run ends `Err` on `max_steps` on a step budget of 2, with `ext_solver_feedback` at steps 0 and 1, prepared steps 0 and 1, two provider interactions logged, and the third scripted entry never asked for. No process is run for it. **Two mutant runs,** both with `step_idx + 1` changed to `step_idx` at `session.ail:4146`, on the tree of the commit that adds this ruling (parent `e6b9be46`), AILANG v0.52.5. With the control, the gate is red on that control and nowhere else: `driver-step-repeated`, `steps-not-contiguous` and `provider-calls-exceed-budget`, on prepared steps 0, 0, 0. All 16 members and the other three controls are clean. Without the control the gate is green under the same mutant, 0 red rows, seen two ways: the gate as it stood at `e6b9be46`, with `verifier-rejection`, and the changed gate with this control's rows taken out. Unmutated, the changed gate is clean. **The script's last entry stays** a provider error that is not retried. With the mutant and without that entry the run was still calling the model at step 0 when it was killed at 90 seconds, 349 calls in. The control is not a bank member, and `corpus_pr`'s output is unchanged. Ruling 18's evidence directory records the control that is gone and is left as it is. |
