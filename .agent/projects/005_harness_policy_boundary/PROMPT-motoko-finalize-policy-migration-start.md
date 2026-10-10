@@ -12,56 +12,38 @@ Written 2026-10-10 against `main` `38068013` and the herdr extension as it is th
 
 ## Before you start
 
-Four steps, in order. Orchestrator mode is read once, when Motoko starts, so the run file of
-step 3 has to exist before step 4.
+Three steps.
 
-1. **Merge #249 and pull the shared checkout.** The plan, its graph and this file are only on
-   that branch until then, and worktrees are cut from `origin/main`.
-2. **Check that Claude delegates run without permission prompts.** The extension starts a
-   delegate with no flags, so it comes up in whatever `permissions.defaultMode` in
-   `~/.claude/settings.json` says. On 2026-10-10 the operator had it set to `bypassPermissions`.
-   That file is outside the repository and does not survive a container rebuild, so look
-   before you start: with no `permissions` block a delegate stops at its first shell command.
-3. **Make the run file, in the herdr pane Motoko will run in**, from the shared checkout:
+1. **Pull the shared checkout.** It needs `main` with #249, which brought the plan, its graph
+   and this file, and with the pull request that added the start script. Worktrees are cut from
+   `origin/main`.
+2. **In the herdr pane Motoko is to run in, start it with the script, in place of `make motoko`:**
 
-```sh
-cd /workspaces/motoko_agent
-python3 - <<'EOF'
-import json, os, sys
-pane = os.environ.get("HERDR_PANE_ID", "")
-if not pane:
-    sys.exit("HERDR_PANE_ID is empty: run this in the herdr pane Motoko will start in")
-src = ".agent/projects/005_harness_policy_boundary/PLAN-finalize-policy-migration.dagr.json"
-out = ".dagr/run-005-finalize-policy-migration.json"
-merged = os.environ.get("MERGED", "").split()   # task ids whose pull request has merged
-d = json.load(open(src, encoding="utf-8"))
-d["run"]["orchestrator"] = {
-    "pane": pane, "mode": "delegate", "max_in_flight": 1,
-    "guarded_paths": ["src/", "scripts/", "packages/", "tools/", ".agent/", ".github/",
-                      ".motoko/config/", "Makefile", "SYSTEM.md", "AGENTS.md"]}
-unknown = [i for i in merged if i not in {t["id"] for t in d["tasks"]}]
-if unknown:
-    sys.exit("MERGED names no such task: " + " ".join(unknown))
-for t in d["tasks"]:
-    if t["id"] in merged:
-        t["state"] = "done"
-        t["attempts"] = [{"id": t["id"] + "·a1", "n": 1, "cause": {"type": "initial"},
-                          "actor": "operator", "state": "done",
-                          "started_at": d["generated_at"], "ended_at": d["generated_at"],
-                          "outcome": {"result": "done", "evidence": "reported",
-                                      "reason": "merged; declared done by the operator for this session"}}]
-json.dump(d, open(out + ".tmp", "w", encoding="utf-8"), indent=2, ensure_ascii=False)
-print("wrote", out + ".tmp", "for pane", pane, "| merged:", merged or "none")
-EOF
-dagr check .dagr/run-005-finalize-policy-migration.json.tmp --strict --json \
-  && mv .dagr/run-005-finalize-policy-migration.json.tmp .dagr/run-005-finalize-policy-migration.json
-```
+   ```sh
+   bash .agent/projects/005_harness_policy_boundary/start-orchestrator.sh
+   ```
 
-   `dagr check` must print `[]`. The run file is the committed graph plus this pane's id. It is
-   local and gitignored, and it is the only one of the three documents that names a pane (008
-   ADR-001 D5). The block starts at the left margin so that it can be copied from the raw file.
-4. **Start Motoko in that same pane and paste the prompt below.** Read *Overlap* in the notes
-   first: pasting the prompt accepts it.
+   Arguments go on to `make motoko`, for example `PROFILE=dogfood`.
+3. **Paste the prompt below.** Read *Overlap* in the notes first: pasting the prompt accepts it.
+
+What the script does, and why starting Motoko alone is not enough: the herdr extension puts a
+session in orchestrator mode only if, when Motoko starts, a file under `.dagr/` names that
+session's own pane with `mode: "delegate"`. The committed graph names no pane (008 ADR-001 D5).
+So [`start-orchestrator.sh`](start-orchestrator.sh) writes
+`.dagr/run-005-finalize-policy-migration.json`, which is the committed graph plus this pane's id,
+checks it with `dagr check --strict`, and then runs `make motoko`. The file is local and
+gitignored.
+
+The script also warns about two things that would trip the run:
+
+- **No permission mode for delegates.** The extension starts a Claude delegate with no flags, so
+  it comes up in whatever `permissions.defaultMode` in `~/.claude/settings.json` says. On
+  2026-10-10 the operator had that set to `bypassPermissions`. The file is outside the
+  repository and does not survive a container rebuild. With no mode set, a delegate stops at its
+  first shell command.
+- **Another run file that names the same pane.** Motoko would be the orchestrator of that run
+  as well. `.dagr/` holds six older run files that turn the mode on, for panes `w1:p18`, `w3:p1`
+  and `w8:p1`. Use another pane, or move the old file away.
 
 ## The prompt
 
@@ -237,7 +219,7 @@ BUDGET AND HANDOFF
   paths. The default guards four (`src/`, `scripts/`, `packages/`, `tools/`). The six added here
   are the other places this plan's tasks edit, because Motoko's file tools are rooted at the
   shared checkout and an edit there lands in `main`'s working tree. Remove the `guarded_paths`
-  key to get the default back.
+  key in the script to get the default back.
 - **The guard does not reach a worktree.** A path outside the shared checkout matches no
   guarded prefix, so nothing stops the orchestrator editing a delegate's worktree except the
   prompt. `git status` in the worktree after each task is the check.
@@ -274,9 +256,6 @@ BUDGET AND HANDOFF
   the limit. `MOTOKO_PROCESS_TIMEOUT=600s` in the environment Motoko starts from raises it.
 - **The step budget.** "Step 900" assumes the `default` profile's 1200 steps. Change the number
   if you start Motoko on another profile.
-- **Other run files.** `.dagr/` holds six older run files that turn orchestrator mode on, for
-  panes `w1:p18`, `w3:p1` and `w8:p1`. If Motoko starts in a pane with one of those ids it
-  becomes the orchestrator of those runs too. Use another pane, or move the old file away.
 - **Codex.** `HERDR_ALLOWED_KINDS` is `claude,motoko`, so Motoko cannot delegate a review to
   Codex. Run one yourself if you want it.
 - **Hybrid mode** is still on in the `default` profile until #252 merges. It is inert after a
@@ -287,14 +266,13 @@ BUDGET AND HANDOFF
 W2 starts when W1's pull request has merged, and W3 when W2's has. For each:
 
 1. Pull the shared checkout.
-2. Make the run file again in the pane, with the merged tasks named, so that they are seeded as
-   done and the tasks behind them are ready. For W2:
+2. Start with the script again, naming the tasks that have merged. They are seeded as done, so
+   the tasks behind them are ready. For W2:
 
    ```sh
-   export MERGED="W3-7 WI-7 WI-8 WI-1 WI-2 WI-3 WI-4 WI-5 WI-9 WI-10"
+   MERGED="W3-7 WI-7 WI-8 WI-1 WI-2 WI-3 WI-4 WI-5 WI-9 WI-10" \
+     bash .agent/projects/005_harness_policy_boundary/start-orchestrator.sh
    ```
-
-   and then step 3 above, unchanged.
 3. Use the same prompt with *THIS SESSION* and the worktree lines changed. W2-1 and W3-1 are
    probes: each ends with a report, and the plan says what is reported before the next item
    starts. Those reports come to you.
@@ -305,10 +283,15 @@ This file does not carry a prompt for W2 or W3. W2-1's findings may change W2 fi
 
 Checked on 2026-10-10:
 
-- **The run file turns the mode on for its own pane and for no other.** The step-3 script was
-  run with a made-up pane id; `mode_from_doc_str` in `packages/motoko-ext-herdr/orchestrator.ail`
-  gives `on` with `max_in_flight` 1 and the ten guarded paths for that pane, and `off` for
-  another.
+- **The start script does what it says.** Run in a copy of the layout with a made-up pane id
+  and a stand-in for `make motoko`: it writes the run file, `dagr check --strict` prints `[]`,
+  and it runs `make motoko` in the shared checkout with its arguments passed on. It refuses
+  without a pane id, from a worktree, and when `MERGED` names no task. It warns when another run
+  file names the pane and when no permission mode is set. When `dagr check` rejects the file it
+  starts nothing and leaves the earlier run file as it was.
+- **The run file turns the mode on for its own pane and for no other.** `mode_from_doc_str` in
+  `packages/motoko-ext-herdr/orchestrator.ail`, on the file the script wrote, gives `on` with
+  `max_in_flight` 1 and the ten guarded paths for that pane, and `off` for another.
 - **The policy does what the prompt says.** `tool_violation` on that mode refuses `EditFile` on
   `SYSTEM.md` and `Makefile`, `WriteFile` under `.agent/`, and `sed -i` under `src/`. It allows
   a file under `tmp/`, `tools/worktree/new.sh`, the background gate command as written, and
@@ -336,12 +319,13 @@ Checked on 2026-10-10:
 
 Not checked:
 
-- No Motoko session was started with this prompt. Whether the model follows it is the first
-  session's finding.
+- No Motoko session was started with this prompt, and the script was not run against the real
+  `make motoko`. Whether the model follows the prompt is the first session's finding.
 - `tools/worktree/new.sh` was not run from inside a Motoko session.
 - No delegate was launched through the extension, so the mailbox path and the ship steps were
   not exercised, and the permission mode and the model were checked on a `claude` started by
   hand.
 - A background command started from the shell tool was not shown to outlive the call that
   started it. Earlier Motoko sessions ran their sweeps that way.
-- The `MERGED` form was seeded and validated, not used in a session.
+- The `MERGED` form was written by the script, seeded and validated. It was not used in a
+  session.
