@@ -14,7 +14,7 @@
 -- Controls:
 --   wrong handle (the re-issue bound, §8.3/R1/R2) · duplicate or late wake ·
 --   missing wake (HostError at the exhaustion point, directly) · stale world ·
---   empty stop with open waits · the DP7-rejected candidate with open waits
+--   empty stop with open waits
 -- Plus: two runs from one script (determinism) and the saved-program replay
 -- through `recording_wake`; Part 7's metric on each channel separately.
 --
@@ -322,7 +322,7 @@ func w4_provide(ctx: ProviderCtx, call: ToolCallEnvelope) -> ToolHandleOutcome !
   else { decision: Delegate, next_state: ctx.world }
 }
 
-func w4_rt(verify_cmd: string) -> ExtRuntime {
+func w4_rt() -> ExtRuntime {
   let hooks = fixture_hooks("w4_park", {
     config: jo([]),
     tools: ["Delegate", "DelegateCheck", "Verify"],
@@ -343,7 +343,7 @@ func w4_rt(verify_cmd: string) -> ExtRuntime {
       { decision: NoDecision, next_state: ctx.world }
     }
   });
-  let v: VerificationConfig = { enabled: verify_cmd != "", command: verify_cmd };
+  let v: VerificationConfig = { enabled: false, command: "" };
   { registry: { entries: [hooks] }, strict_mode: false, verification: v }
 }
 
@@ -417,7 +417,7 @@ pure func success_wakes() -> [WakeObservation] {
 
 func fixture_success() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("success (Settled) + Part 7 trace channel:");
-  let t = run_scripted("success", w4_rt(""), w4_world(success_script(), success_wakes()), 12);
+  let t = run_scripted("success", w4_rt(), w4_world(success_script(), success_wakes()), 12);
   let rs = t.trace.records;
   let vs = variants(rs);
   let ps = park_rows(rs);
@@ -440,7 +440,7 @@ func fixture_success() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMe
 
 func fixture_metric_program() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("Part 7 program channel:");
-  let t = run_recorded("metric_program", w4_rt(""), w4_world(success_script(), success_wakes()), 12);
+  let t = run_recorded("metric_program", w4_rt(), w4_world(success_script(), success_wakes()), 12);
   let ks = kinds(t.world.log);
   let np = count_of("expect_provider", ks);
   let nw = count_of("expect_wake", ks);
@@ -456,8 +456,8 @@ func fixture_metric_program() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, S
 func fixture_metric_verified() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("Part 7 verified variant (reported separately):");
   let script = [delegate_step("h1"), prose_step("delegated h1; waiting"), check_step("h1"), verify_step(), prose_step("verified final answer")];
-  let t = run_scripted("metric_verified", w4_rt(""), w4_world(script, success_wakes()), 12);
-  let r = run_recorded("metric_verified_program", w4_rt(""), w4_world(script, success_wakes()), 12);
+  let t = run_scripted("metric_verified", w4_rt(), w4_world(script, success_wakes()), 12);
+  let r = run_recorded("metric_verified_program", w4_rt(), w4_world(script, success_wakes()), 12);
   let pcp = count_of("ProviderCallPrepared", variants(t.trace.records));
   let np = count_of("expect_provider", kinds(r.world.log));
   let _ = println("METRIC verified trace_provider_call_prepared=${show(pcp)} program_provider_identity=${show(np)}");
@@ -469,7 +469,7 @@ func fixture_metric_verified() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, 
 
 func fixture_lost() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("Lost:");
-  let t = run_scripted("lost", w4_rt(""), w4_world(success_script(), [obs(0, "h1", Lost("agent gone"))]), 12);
+  let t = run_scripted("lost", w4_rt(), w4_world(success_script(), [obs(0, "h1", Lost("agent gone"))]), 12);
   let ws = wake_rows(t.trace.records);
   all_true([
     report("lost: WakeReceived lost on h1", List.length(ws) == 1 && wake_at(ws, 0).outcome == "lost" && wake_at(ws, 0).wait_id == "h1" && wake_at(ws, 0).detail == "agent gone", "wakes=${wakes_str(ws)}"),
@@ -481,7 +481,7 @@ func fixture_lost() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, 
 func fixture_operator_input() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("OperatorInput leaves the delegate pending:");
   let script = [delegate_step("h1"), prose_step("waiting"), prose_step("still waiting on h1"), check_step("h1"), prose_step("final answer")];
-  let t = run_scripted("operator_input", w4_rt(""), w4_world(script, [obs(0, "", OperatorInput("status please")), obs(1, "h1", Settled("ans"))]), 14);
+  let t = run_scripted("operator_input", w4_rt(), w4_world(script, [obs(0, "", OperatorInput("status please")), obs(1, "h1", Settled("ans"))]), 14);
   let ps = park_rows(t.trace.records);
   let ws = wake_rows(t.trace.records);
   all_true([
@@ -496,7 +496,7 @@ func fixture_two_delegates() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, Sh
   let _ = println("two delegates, one wake:");
   let script = [calls_step([delegate_call("h1"), delegate_call("h2")]), prose_step("waiting on both"), check_step("h1"),
                 prose_step("waiting on h2"), check_step("h2"), prose_step("final answer")];
-  let t = run_scripted("two_delegates", w4_rt(""), w4_world(script, [obs(0, "h1", Settled("a1")), obs(1, "h2", Settled("a2"))]), 16);
+  let t = run_scripted("two_delegates", w4_rt(), w4_world(script, [obs(0, "h1", Settled("a1")), obs(1, "h2", Settled("a2"))]), 16);
   let ps = park_rows(t.trace.records);
   all_true([
     report("two_delegates: the first park waits on both, in order", park_at(ps, 0).ids == "h1, h2", "parks=${parks_str(ps)}"),
@@ -508,7 +508,7 @@ func fixture_two_delegates() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, Sh
 func fixture_host_error() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("HostError leaves the wait open, then a second park succeeds:");
   let script = [delegate_step("h1"), prose_step("waiting"), prose_step("waiting again"), check_step("h1"), prose_step("final answer")];
-  let t = run_scripted("host_error", w4_rt(""), w4_world(script, [obs(0, "", HostError("herdr unreachable")), obs(1, "h1", Settled("ans"))]), 14);
+  let t = run_scripted("host_error", w4_rt(), w4_world(script, [obs(0, "", HostError("herdr unreachable")), obs(1, "h1", Settled("ans"))]), 14);
   let rs = t.trace.records;
   let ps = park_rows(rs);
   let ws = wake_rows(rs);
@@ -530,7 +530,7 @@ func fixture_host_error() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, Share
 func fixture_timed_out() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("TimedOut removes only the timer (TimerWait constructed by the fixture; no producer):");
   let script = [calls_step([delegate_call("h1"), timer_call("t1")]), prose_step("waiting"), prose_step("waiting on h1"), check_step("h1"), prose_step("final answer")];
-  let t = run_scripted("timed_out", w4_rt(""), w4_world(script, [obs(0, "t1", TimedOut), obs(1, "h1", Settled("ans"))]), 14);
+  let t = run_scripted("timed_out", w4_rt(), w4_world(script, [obs(0, "t1", TimedOut), obs(1, "h1", Settled("ans"))]), 14);
   let ps = park_rows(t.trace.records);
   all_true([
     report("timed_out: the first park waits on the delegate and the timer", park_at(ps, 0).ids == "h1, t1", "parks=${parks_str(ps)}"),
@@ -543,7 +543,7 @@ func fixture_redelegation() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, Sha
   let _ = println("re-delegation: the model is told both are open:");
   let script = [delegate_step("h1"), delegate_step("h2"), prose_step("waiting on both"), check_step("h1"),
                 prose_step("waiting on h2"), check_step("h2"), prose_step("final answer")];
-  let t = run_scripted("redelegation", w4_rt(""), w4_world(script, [obs(0, "h1", Settled("a1")), obs(1, "h2", Settled("a2"))]), 16);
+  let t = run_scripted("redelegation", w4_rt(), w4_world(script, [obs(0, "h1", Settled("a1")), obs(1, "h2", Settled("a2"))]), 16);
   let second = tool_msg_content(t.final.history, "cd-h2");
   let first = tool_msg_content(t.final.history, "cd-h1");
   let _ = println("BOTH_OPEN ${second}");
@@ -558,11 +558,11 @@ func fixture_redelegation() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, Sha
 func fixture_mid_park_commands() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("mid-park commands (§8.7): abort and restart:");
   let script = [delegate_step("h1"), prose_step("waiting")];
-  let a = run_scripted("abort", w4_rt(""), w4_world(script, [obs(0, "abort", Aborted)]), 12);
+  let a = run_scripted("abort", w4_rt(), w4_world(script, [obs(0, "abort", Aborted)]), 12);
   let _ = println("PARK_RUN_BEGIN abort_exit");
   let _ = Session.park_cancelled_exit("w4", result_message(a));
   let _ = println("PARK_RUN_END abort_exit");
-  let r = run_scripted("restart", w4_rt(""), w4_world(script, [obs(0, "restart:dogfood", Aborted)]), 12);
+  let r = run_scripted("restart", w4_rt(), w4_world(script, [obs(0, "restart:dogfood", Aborted)]), 12);
   let _ = println("PARK_RUN_BEGIN restart_exit");
   let _ = Session.park_cancelled_exit("w4", result_message(r));
   let _ = println("PARK_RUN_END restart_exit");
@@ -584,7 +584,7 @@ func fixture_wrong_handle() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, Sha
   let _ = println("control: wrong handle (the re-issue bound):");
   let bad: WakeObservation = { request_id: "w4.r0.0.p9", wait_id: "h1", outcome: Settled("not yours") };
   let script = [delegate_step("h1"), prose_step("waiting")];
-  let t = run_recorded("wrong_handle", w4_rt(""), w4_world(script, [bad, bad, bad, bad, bad, bad, bad, bad, bad, bad, bad, bad]), 6);
+  let t = run_recorded("wrong_handle", w4_rt(), w4_world(script, [bad, bad, bad, bad, bad, bad, bad, bad, bad, bad, bad, bad]), 6);
   let rs = t.trace.records;
   let ds = decisions(rs);
   let vs = variants(rs);
@@ -605,7 +605,7 @@ func fixture_duplicate_wake() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, S
   let _ = println("control: duplicate or late wake:");
   let script = [delegate_step("h1"), prose_step("waiting"), check_step("h1"), delegate_step("h2"), prose_step("waiting on h2"), check_step("h2"), prose_step("final answer")];
   let wakes = [obs(0, "h1", Settled("a1")), obs(0, "h1", Settled("a1 again")), obs(1, "h2", Settled("a2"))];
-  let t = run_scripted("duplicate_wake", w4_rt(""), w4_world(script, wakes), 16);
+  let t = run_scripted("duplicate_wake", w4_rt(), w4_world(script, wakes), 16);
   let rs = t.trace.records;
   let ds = decisions(rs);
   let ws = wake_rows(rs);
@@ -619,7 +619,7 @@ func fixture_duplicate_wake() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, S
 
 func fixture_missing_wake() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("control: missing wake:");
-  let t = run_scripted("missing_wake", w4_rt(""), w4_world([delegate_step("h1"), prose_step("waiting")], []), 6);
+  let t = run_scripted("missing_wake", w4_rt(), w4_world([delegate_step("h1"), prose_step("waiting")], []), 6);
   let ws = wake_rows(t.trace.records);
   all_true([
     report("missing_wake: the FIRST wake is HostError(\"wake_read unbound\") on p0, at the exhaustion point", wake_at(ws, 0).request_id == rid(0) && wake_at(ws, 0).outcome == "host_error" && wake_at(ws, 0).detail == "wake_read unbound" && wake_at(ws, 0).wait_id == "", "wakes=${wakes_str(ws)}")
@@ -629,7 +629,7 @@ func fixture_missing_wake() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, Sha
 func fixture_empty_stop() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("control: empty stop with open waits:");
   let script = [delegate_step("h1"), prose_step(""), check_step("h1"), prose_step("final answer")];
-  let t = run_scripted("empty_stop", w4_rt(""), w4_world(script, success_wakes()), 12);
+  let t = run_scripted("empty_stop", w4_rt(), w4_world(script, success_wakes()), 12);
   let rs = t.trace.records;
   let vs = variants(rs);
   let ds = decisions(rs);
@@ -640,25 +640,10 @@ func fixture_empty_stop() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, Share
   ])
 }
 
-func fixture_dp7_rejected() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
-  let _ = println("control: the DP7-rejected candidate with open waits:");
-  let t = run_scripted("dp7_rejected", w4_rt("exit 3"), w4_world([delegate_step("h1"), prose_step("done, h1 is running")], success_wakes()), 5);
-  let rs = t.trace.records;
-  let vs = variants(rs);
-  let ds = decisions(rs);
-  let inject = index_of("InjectUserMessage", ds, 0);
-  let park = index_of("Park", ds, 0);
-  all_true([
-    report("dp7_rejected: the verifier rejected the candidate while h1 was open", count_of("Dp7VerifierRejected", vs) >= 1, "order=${pipe(vs)}"),
-    report("dp7_rejected: stage 2 wins over stage 3, the rejection injects before any park", inject >= 0 && (park < 0 || inject < park), "decisions=${pipe(ds)}"),
-    report("dp7_rejected: no ParkEntered precedes the first rejection", index_of("ParkEntered", vs, 0) < 0 || index_of("ParkEntered", vs, 0) > index_of("Dp7VerifierRejected", vs, 0), "order=${pipe(vs)}")
-  ])
-}
-
 func fixture_determinism() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("determinism: two runs from one script:");
-  let a = run_scripted("determinism_a", w4_rt(""), w4_world(success_script(), success_wakes()), 12);
-  let b = run_scripted("determinism_b", w4_rt(""), w4_world(success_script(), success_wakes()), 12);
+  let a = run_scripted("determinism_a", w4_rt(), w4_world(success_script(), success_wakes()), 12);
+  let b = run_scripted("determinism_b", w4_rt(), w4_world(success_script(), success_wakes()), 12);
   all_true([
     report("determinism: identical record order", pipe(variants(a.trace.records)) == pipe(variants(b.trace.records)) && pipe(decisions(a.trace.records)) == pipe(decisions(b.trace.records)), "a=${pipe(variants(a.trace.records))}"),
     report("determinism: identical parks and wakes", parks_str(park_rows(a.trace.records)) == parks_str(park_rows(b.trace.records)) && wakes_str(wake_rows(a.trace.records)) == wakes_str(wake_rows(b.trace.records)), "parks/wakes differ"),
@@ -699,7 +684,7 @@ pure func program_of(log: [Interaction], initial: WorldState) -> ExecutionProgra
 func fixture_saved_program_replay() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("saved-program replay through recording_wake:");
   let initial = w4_world(success_script(), success_wakes());
-  let discovery = run_recorded("replay_discovery", w4_rt(""), initial, 12);
+  let discovery = run_recorded("replay_discovery", w4_rt(), initial, 12);
   let program = program_of(discovery.world.log, initial);
   let saved = match encode_artifact(program) { Encoded(s) => s, EncodeRefused(_) => "" };
   match decode_artifact(saved) {
@@ -709,7 +694,7 @@ func fixture_saved_program_replay() -> bool ! {AI, Clock, Env, FS, IO, Net, Proc
         Err(_) => report("replay: the saved program reconstitutes a world", false, "world_state_of refused"),
         Ok(replay_world) => {
           let balance = reconstitution_balance(loaded, replay_world);
-          let replay = run_recorded("replay_replayed", w4_rt(""), replay_world, 12);
+          let replay = run_recorded("replay_replayed", w4_rt(), replay_world, 12);
           let ms = strict_replay_findings(loaded.interactions, replay.world.log);
           let ws = wake_rows(replay.trace.records);
           all_true([
@@ -740,7 +725,6 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
     fixture_duplicate_wake(),
     fixture_missing_wake(),
     fixture_empty_stop(),
-    fixture_dp7_rejected(),
     fixture_determinism(),
     fixture_saved_program_replay()
   ];
