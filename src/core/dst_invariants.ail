@@ -750,8 +750,9 @@ export pure func display_only_baseline() -> [string] {
 --
 --   `CostExhausted` took `DoneEvent`'s treatment exactly, for `DoneEvent`'s
 --   reason: it is a terminal path, so the append lands BEFORE `c2_finalize` or
---   D6.1's final-record rule breaks. `Dp7VerifierRejected` is on the
---   re-injection path, which is not terminal, so nothing constrains its order.
+--   D6.1's final-record rule breaks. The eleventh was the DP7 verifier's
+--   rejection event, on the re-injection path, which is not terminal, so
+--   nothing constrained its order. 005 WI-4 deleted that variant.
 --
 -- WHAT WAS DELIBERATELY NOT DONE: no `LedgerTrace` was threaded into
 -- `tool_phase`. It type-checks — `ledger_append` is in `phase_vocab`, which that

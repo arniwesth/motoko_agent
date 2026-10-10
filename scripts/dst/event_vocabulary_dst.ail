@@ -2,7 +2,7 @@
 --
 -- WI-A8 acceptance, under ADR-001 D6.
 --
--- The artifact declares a wire name and a payload schema for each of the 45
+-- The artifact declares a wire name and a payload schema for each of the 44
 -- `LedgerEvent` variants. This script is what makes those declarations mean
 -- something: it builds ONE SAMPLE VALUE PER VARIANT and asserts, against the
 -- LIVE projection `phase_vocab.to_schema_v1`, that
@@ -36,7 +36,7 @@ import src/core/phase_vocab (
   LedgerEvent,
   ProviderCallPrepared, ScratchpadResult, RunSummary, NativeToolDenied, ToolPending,
   ExtToolHandled, DelegatedToolDeferred, V2ToolDispatchStart, V2ToolDispatchComplete,
-  Dp7VerifierRejected, CostExhausted, CompactionApplied, CompactionExhausted,
+  CostExhausted, CompactionApplied, CompactionExhausted,
   ExtCompactionRejected, ExtensionDiagnostic, ThinkingStreamStart, ThinkingStreamEnd,
   StreamErrorRetry, ProviderResult, CostWarning, ExtInterceptHandled, HybridBashExtracted,
   ToolArgumentsUndecodable,
@@ -93,7 +93,6 @@ pure func samples() -> [LedgerEvent] {
     DelegatedToolDeferred({ step: 1, stream_id: "s", tool: "t", id: "i" }),
     V2ToolDispatchStart({ step: 1, stream_id: "s", tool: "t", id: "i" }),
     V2ToolDispatchComplete({ step: 1, stream_id: "s", id: "i" }),
-    Dp7VerifierRejected({ step: 1, errors: "e" }),
     CostExhausted({ step: 1, total_cost_millicents: 10, total_cost_usd: 0.1,
       cap_millicents: 5 }),
     CompactionApplied({ step: 1, note: "n" }),
@@ -337,7 +336,7 @@ export func main() -> () ! {IO} {
             report_rejections(rs)
           };
 
-  -- 2. THE ROUND TRIP. All 45 variants against the live projection.
+  -- 2. THE ROUND TRIP. All 44 variants against the live projection.
   let c2 = assert_all(ss);
   let _ = if c2 then println("  ✓ all ${show(List.length(ss))} variants round-trip: wire name and payload schema match the live projection")
           else println("  ✗ at least one variant does not round-trip");
@@ -364,7 +363,7 @@ export func main() -> () ! {IO} {
   -- 4. The classification, and the D6.4 gap it makes countable.
   let logical = logical_variants(rows);
   let display = display_only_variants(rows);
-  let c4 = List.length(logical) + List.length(display) == 45;
+  let c4 = List.length(logical) + List.length(display) == 44;
   let _ = if c4 then println("  ✓ every variant classified: ${show(List.length(logical))} logical, ${show(List.length(display))} display-only")
           else println("  ✗ the classification does not partition the vocabulary");
   let _ = print_list("display-only", display);
