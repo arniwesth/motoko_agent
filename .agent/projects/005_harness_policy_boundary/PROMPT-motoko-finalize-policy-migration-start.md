@@ -17,13 +17,16 @@ Three steps.
 1. **Pull the shared checkout.** It needs `main` with #249, which brought the plan, its graph
    and this file, and with the pull request that added the start script. Worktrees are cut from
    `origin/main`.
-2. **In the herdr pane Motoko is to run in, start it with the script, in place of `make motoko`:**
+2. **In the herdr pane Motoko is to run in, start it with the script, from the repository
+   root, in place of `make motoko`:**
 
    ```sh
+   cd /workspaces/motoko_agent
    bash .agent/projects/005_harness_policy_boundary/start-orchestrator.sh
    ```
 
-   Arguments go on to `make motoko`, for example `PROFILE=dogfood`.
+   Arguments go on to `make motoko`, for example `PROFILE=dogfood`. The script refuses to
+   start from any other directory (*What the first session showed*, below).
 3. **Paste the prompt below.** Read *Overlap* in the notes first: pasting the prompt accepts it.
 
 What the script does, and why starting Motoko alone is not enough: the herdr extension puts a
@@ -37,10 +40,9 @@ gitignored.
 The script also warns about two things that would trip the run:
 
 - **No permission mode for delegates.** The extension starts a Claude delegate with no flags, so
-  it comes up in whatever `permissions.defaultMode` in `~/.claude/settings.json` says. On
-  2026-10-10 the operator had that set to `bypassPermissions`. The file is outside the
-  repository and does not survive a container rebuild. With no mode set, a delegate stops at its
-  first shell command.
+  it comes up in whatever `permissions.defaultMode` in `~/.claude/settings.json` says. The first
+  session ran with `auto`. The file is outside the repository and does not survive a container
+  rebuild. With no mode set, a delegate stops at its first shell command.
 - **Another run file that names the same pane.** Motoko would be the orchestrator of that run
   as well. `.dagr/` holds six older run files that turn the mode on, for panes `w1:p18`, `w3:p1`
   and `w8:p1`. Use another pane, or move the old file away.
@@ -167,8 +169,10 @@ SHIP STEPS, in the brief of W3-7 and of WI-10 only, after the gate is green
 
 VERIFYING A DELEGATE, before the next delegation
 1. DelegateCheck until it settles. Each call costs a step and blocks for about 45 s.
-   If it reports the delegate blocked or waiting for input, tell me the pane and what it
-   is asking, and end your turn. I will answer it.
+   A delegate can show as blocked for a few seconds and then go on by itself. So if
+   DelegateCheck reports it blocked or waiting for input, check three more times. Only
+   if it is still blocked then, tell me the pane and what it is asking, and end your turn.
+   I will answer it.
 2. From git: `git -C <worktree> log --oneline origin/main..HEAD` shows one new commit
    for the task; `git -C <worktree> status --short` is empty; `git status --short` here
    matches the list from step 0.
@@ -279,6 +283,30 @@ W2 starts when W1's pull request has merged, and W3 when W2's has. For each:
 
 This file does not carry a prompt for W2 or W3. W2-1's findings may change W2 first.
 
+## What the first session showed
+
+The first session was started on 2026-10-10 with this prompt. Three things, in its first ten
+minutes:
+
+- **The dagr pane could not find its run file.** The script had been started from inside this
+  directory. Motoko ran from the repository root, because the script changes directory for it,
+  but herdr reports the shell's directory as the pane's. The extension gives the dagr view a
+  relative path (`DAGR_RUN=./.dagr/run-<pane>-<session>.json`), and the view resolves it against
+  the pane's directory. It waited for a file under `.agent/projects/005_harness_policy_boundary/`.
+  The script now refuses to start from anywhere but the root. The relative path is the
+  extension's, in `packages/motoko-ext-herdr`, and is not changed here.
+- **The orchestrator parked on a block that had already cleared.** One `DelegateCheck`, eight
+  seconds into a delegate's run, reported it blocked. The orchestrator told the operator and
+  ended its turn, as the prompt said. The delegate was working by then and stayed so. The
+  prompt now has it check three more times first.
+- **The first delegate never got its task.** It came up, showed the notice that auto mode is
+  on, settled idle after eleven seconds with no prompt in its transcript, and was recorded as
+  `settled_unverified`. The orchestrator re-issued the task and the second delegate got it.
+  Why the first prompt did not arrive was not determined.
+
+Also seen: the second delegate looked for its task file in the worktree, did not find it, and
+read it from the shared checkout two seconds later without being told.
+
 ## What was checked, and what was not
 
 Checked on 2026-10-10:
@@ -319,13 +347,15 @@ Checked on 2026-10-10:
 
 Not checked:
 
-- No Motoko session was started with this prompt, and the script was not run against the real
-  `make motoko`. Whether the model follows the prompt is the first session's finding.
-- `tools/worktree/new.sh` was not run from inside a Motoko session.
-- No delegate was launched through the extension, so the mailbox path and the ship steps were
-  not exercised, and the permission mode and the model were checked on a `claude` started by
-  hand.
+- The first session is described above. It had not finished a task when this was written, so
+  verification, the ship steps and the stop rules are still unexercised. What it did show
+  working: orchestrator mode came on, the plan was recorded and W3-7 linked, the dagr pane
+  opened, the orchestrator made the worktree with `tools/worktree/new.sh`, and the delegate ran
+  on `claude-opus-5-5`.
+- The ship steps were not exercised. The permission mode was `auto` in the first session, not
+  the `bypassPermissions` this file was checked with.
 - A background command started from the shell tool was not shown to outlive the call that
   started it. Earlier Motoko sessions ran their sweeps that way.
+- The changed rule for a blocked delegate was not tried in a session.
 - The `MERGED` form was written by the script, seeded and validated. It was not used in a
   session.
