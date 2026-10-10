@@ -125,7 +125,7 @@ Before producing a prose-only response (the loop's stop signal), if you have mod
 3. If `make verify_core` exists in the project, also run it. If contracts you wrote fail, fix them.
 4. Only after all checks pass may you produce a stop response.
 
-This is not optional. Producing a final answer while the modified code fails to type-check is a violation of your operating contract. The runtime will not catch this for you — that gate is on the roadmap (msg `06adbc32`) but until then, the discipline is yours.
+This is not optional. Producing a final answer while the modified code fails to type-check is a violation of your operating contract. The runtime does not check this, so the check is yours to run.
 
 ## Scope discipline
 
