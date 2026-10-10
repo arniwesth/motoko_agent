@@ -617,6 +617,9 @@ The review checked these, and the plan relies on them.
   what the host writes. It depends on nothing else in this plan, so it can land at any time
   before that, as its own small pull request. Once it has, `ailang` can have its flag switched
   off like the other fifteen profiles.
+  **Gate:** `make verify_extensions driver_plus_compose compose_live_exec`. All three pass at
+  `38068013` with #252's profile change applied. `compose.ail` has no inline tests; the rig that
+  sets the flag to `false` is `scripts/dst/compose_live_exec.ail:116`.
 - **W3-4 — the parameter.** The wide edit, after W3-7.
   - Remove `hybrid_tools` from the eight exported functions, from `c2_loop` and the private
     helpers that thread it, from the two forwarding modules, and from every call site W3-1
