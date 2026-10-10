@@ -4,14 +4,19 @@
     "id": "005-PLAN-finalize-policy-migration",
     "title": "005 · policy leaves core: remove the DP7 verifier, the persist nudge and hybrid mode"
   },
-  "generated_at": "2026-10-10T11:30:00Z",
+  "generated_at": "2026-10-10T12:15:00Z",
   "plan": {
     "project": "005_harness_policy_boundary",
     "address": "005/PLAN-finalize-policy-migration",
     "markdown": "PLAN-finalize-policy-migration.md",
     "implements": "ADR-001-harness-policy-boundary.md, Amendment 1 (A1, A4, A5, A6) and Amendment 2 (B1 to B4)",
     "grounded_at": "36a96b1e",
-    "governed_by": "008 ADR-001 D2: structure only; no attempts, events or pane ids"
+    "governed_by": "008 ADR-001 D2: structure only; no attempts, events or pane ids",
+    "delegates": {
+      "kind": "claude",
+      "model": "claude-opus-5-5",
+      "note": "Every task that is not canceled is done by a Claude delegate on Claude Opus 5.5. The task's owner is that model id, and it is the value an orchestrator passes as the delegation's model."
+    }
   },
   "projects": [
     {
@@ -32,6 +37,7 @@
       "id": "WI-7",
       "title": "test: delete the tests that test only DP7",
       "kind": "test",
+      "owner": "claude-opus-5-5",
       "project": "W1",
       "state": "queued",
       "deps": [],
@@ -45,6 +51,7 @@
       "id": "WI-8",
       "title": "test: the corpus gate's control moves to the solver-feedback branch",
       "kind": "test",
+      "owner": "claude-opus-5-5",
       "project": "W1",
       "state": "queued",
       "deps": [
@@ -60,6 +67,7 @@
       "id": "WI-1",
       "title": "impl: classify_candidate loses its verification stages",
       "kind": "impl",
+      "owner": "claude-opus-5-5",
       "project": "W1",
       "state": "queued",
       "deps": [
@@ -75,6 +83,7 @@
       "id": "WI-2",
       "title": "impl: delete the verifier",
       "kind": "impl",
+      "owner": "claude-opus-5-5",
       "project": "W1",
       "state": "queued",
       "deps": [
@@ -90,6 +99,7 @@
       "id": "WI-3",
       "title": "impl: one neutral name for an approved candidate",
       "kind": "impl",
+      "owner": "claude-opus-5-5",
       "project": "W1",
       "state": "queued",
       "deps": [
@@ -105,6 +115,7 @@
       "id": "WI-4",
       "title": "impl: the wire event goes, the vocabulary version moves to event-vocabulary/2",
       "kind": "impl",
+      "owner": "claude-opus-5-5",
       "project": "W1",
       "state": "queued",
       "deps": [
@@ -120,6 +131,7 @@
       "id": "WI-9",
       "title": "docs: records and the attribution anchors",
       "kind": "docs",
+      "owner": "claude-opus-5-5",
       "project": "W1",
       "state": "queued",
       "deps": [
@@ -135,6 +147,7 @@
       "id": "WI-5",
       "title": "docs: the system prompt says what is true",
       "kind": "docs",
+      "owner": "claude-opus-5-5",
       "project": "W1",
       "state": "queued",
       "deps": [],
@@ -161,6 +174,7 @@
       "id": "WI-10",
       "title": "gate: W1's full gate and one live session",
       "kind": "gate",
+      "owner": "claude-opus-5-5",
       "project": "W1",
       "state": "queued",
       "deps": [
@@ -176,6 +190,7 @@
       "id": "W2-1",
       "title": "test: remove only the read in a scratch tree and list what goes red",
       "kind": "test",
+      "owner": "claude-opus-5-5",
       "project": "W2",
       "state": "queued",
       "deps": [
@@ -191,6 +206,7 @@
       "id": "W2-2",
       "title": "impl: remove the persist-nudge policy from core",
       "kind": "impl",
+      "owner": "claude-opus-5-5",
       "project": "W2",
       "state": "queued",
       "deps": [
@@ -206,6 +222,7 @@
       "id": "W2-3",
       "title": "impl: remove the nudges_used counter",
       "kind": "impl",
+      "owner": "claude-opus-5-5",
       "project": "W2",
       "state": "queued",
       "deps": [
@@ -221,6 +238,7 @@
       "id": "W2-4",
       "title": "impl: remove the MOTOKO_PERSIST_RETRIES read",
       "kind": "impl",
+      "owner": "claude-opus-5-5",
       "project": "W2",
       "state": "queued",
       "deps": [
@@ -237,6 +255,7 @@
       "id": "W2-5",
       "title": "impl: the host stops passing the variable",
       "kind": "impl",
+      "owner": "claude-opus-5-5",
       "project": "W2",
       "state": "queued",
       "deps": [
@@ -251,6 +270,7 @@
       "id": "W2-6",
       "title": "docs: records",
       "kind": "docs",
+      "owner": "claude-opus-5-5",
       "project": "W2",
       "state": "queued",
       "deps": [
@@ -266,6 +286,7 @@
       "id": "W2-7",
       "title": "gate: W2's full gate",
       "kind": "gate",
+      "owner": "claude-opus-5-5",
       "project": "W2",
       "state": "queued",
       "deps": [
@@ -282,6 +303,7 @@
       "id": "W3-1",
       "title": "test: inventory every carrier of hybrid_tools, then apply W3-2 and W3-3 in a scratch tree and list what is red",
       "kind": "test",
+      "owner": "claude-opus-5-5",
       "project": "W3",
       "state": "queued",
       "deps": [
@@ -297,6 +319,7 @@
       "id": "W3-2",
       "title": "impl: core stops turning prose into a tool call",
       "kind": "impl",
+      "owner": "claude-opus-5-5",
       "project": "W3",
       "state": "queued",
       "deps": [
@@ -312,6 +335,7 @@
       "id": "W3-3",
       "title": "impl: the hybrid_bash_extracted event goes, the vocabulary version moves again",
       "kind": "impl",
+      "owner": "claude-opus-5-5",
       "project": "W3",
       "state": "queued",
       "deps": [
@@ -327,6 +351,7 @@
       "id": "W3-7",
       "title": "impl: the Compose extension stops reading hybrid_tools",
       "kind": "impl",
+      "owner": "claude-opus-5-5",
       "project": "W3",
       "state": "queued",
       "deps": [],
@@ -340,6 +365,7 @@
       "id": "W3-4",
       "title": "impl: the hybrid_tools parameter leaves the loop's entry points",
       "kind": "impl",
+      "owner": "claude-opus-5-5",
       "project": "W3",
       "state": "queued",
       "deps": [
@@ -356,6 +382,7 @@
       "id": "W3-5",
       "title": "docs: records and the attribution anchors",
       "kind": "docs",
+      "owner": "claude-opus-5-5",
       "project": "W3",
       "state": "queued",
       "deps": [
@@ -370,6 +397,7 @@
       "id": "W3-6",
       "title": "gate: W3's full gate and one live session",
       "kind": "gate",
+      "owner": "claude-opus-5-5",
       "project": "W3",
       "state": "queued",
       "deps": [

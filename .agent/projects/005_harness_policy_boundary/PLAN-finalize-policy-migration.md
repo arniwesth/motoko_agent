@@ -18,6 +18,9 @@ Structure: [`PLAN-finalize-policy-migration.dagr.json`](PLAN-finalize-policy-mig
 holds the tasks and their dependencies, and is the only place they are stated (008 ADR-001 D2
 and D3, accepted 2026-10-04, in #215). A task's address is
 `005/PLAN-finalize-policy-migration/<task id>`.
+Who does the work: a Claude delegate on Claude Opus 5.5 (`claude-opus-5-5`), for every task. The
+graph says so twice: each task's `owner` is that model id, and `plan.delegates` gives the kind
+and the model once for the whole plan.
 
 ---
 

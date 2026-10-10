@@ -17,10 +17,11 @@ step 3 has to exist before step 4.
 
 1. **Merge #249 and pull the shared checkout.** The plan, its graph and this file are only on
    that branch until then, and worktrees are cut from `origin/main`.
-2. **Let Claude delegates run without permission prompts.** The extension starts a delegate with
-   no flags, so it comes up in whatever `permissions.defaultMode` in `~/.claude/settings.json`
-   says. On 2026-10-10 that file has no `permissions` block, so a delegate would stop at its
-   first shell command. Set the mode you use for delegates.
+2. **Check that Claude delegates run without permission prompts.** The extension starts a
+   delegate with no flags, so it comes up in whatever `permissions.defaultMode` in
+   `~/.claude/settings.json` says. On 2026-10-10 the operator had it set to `bypassPermissions`.
+   That file is outside the repository and does not survive a container rebuild, so look
+   before you start: with no `permissions` block a delegate stops at its first shell command.
 3. **Make the run file, in the herdr pane Motoko will run in**, from the shared checkout:
 
 ```sh
@@ -118,6 +119,9 @@ DELEGATE CALLS
 - On every Delegate pass dagr_task: "<task id>", kind: "claude",
   model: "claude-opus-5-5", cwd: "<that pull request's worktree>", and task_kind from the
   graph's kind (impl, test or docs; for the gate WI-10 use test).
+- Every delegate runs on Claude Opus 5.5. The graph says so: each task's owner is
+  "claude-opus-5-5", and plan.delegates names the kind and the model. Pass that model id
+  exactly, on every call. Never leave model out and never pass another one.
 - Read the first result. If it says the plan was not recorded or could not be read, or
   that dagr_task was not linked, stop and tell me.
 - retry_of only when you re-issue a task whose delegate failed or under-delivered.
@@ -257,7 +261,14 @@ BUDGET AND HANDOFF
   the file is. If one cannot find its task, tell it in its pane:
   `/workspaces/motoko_agent/.motoko/herdr-delegates/`.
 - **Look at the first delegate's pane.** A delegate sometimes asks whether to carry out a
-  pasted task before it starts. Answer it once and the rest follow the same path.
+  pasted task before it starts. Answer it once and the rest follow the same path. Its status
+  line also shows the model, which should be Opus 5.5.
+- **The model.** The graph gives every task the owner `claude-opus-5-5`, which the dagr pane
+  shows beside each queued task, and the prompt has the orchestrator pass it as `model` on
+  every `Delegate`. The extension turns that into `--model claude-opus-5-5` for the delegate
+  and records the request on the attempt. Nothing reads the model from the graph by itself:
+  if the orchestrator leaves `model` out, the delegate starts on the `model` in
+  `~/.claude/settings.json`, which is `opus` and resolves to Opus 5.5 today.
 - **The shell tool's limit.** A foreground command in a Motoko session is cut off after 30
   seconds. The prompt has the orchestrator run gates in the background, so nothing depends on
   the limit. `MOTOKO_PROCESS_TIMEOUT=600s` in the environment Motoko starts from raises it.
@@ -307,6 +318,13 @@ Checked on 2026-10-10:
   tasks under three projects, 23 `queued` and one `canceled`. With `MERGED` set to the ten
   tasks above it gives ten `done` and thirteen `queued`. Both results, and both run files, pass
   `dagr check --strict`.
+- **A delegate starts in bypass mode, on Opus 5.5.** With `permissions.defaultMode` set, a
+  `claude` started with no permission flag reports `permissionMode: bypassPermissions`. With
+  `--model claude-opus-5-5` it reports that model, and with no `--model` it reports the same
+  one. Claude Code 2.1.296.
+- **The owner reaches the run.** `seed_from_plan` carries each task's `owner` into the run it
+  seeds, and `dagr view` shows `claude-opus-5-5` beside each queued task where it showed
+  `unassigned`.
 - **A delegate's pane has the tokens.** A pane split through herdr from a process with no
   GitHub token had `GH_TOKEN`, `MOTOKO_BOT_GH_TOKEN` and the proxy variables, and no
   `AILANG_FS_SANDBOX`.
@@ -321,8 +339,9 @@ Not checked:
 - No Motoko session was started with this prompt. Whether the model follows it is the first
   session's finding.
 - `tools/worktree/new.sh` was not run from inside a Motoko session.
-- No delegate was launched, so the mailbox path, the permission mode and the ship steps were
-  not exercised end to end.
+- No delegate was launched through the extension, so the mailbox path and the ship steps were
+  not exercised, and the permission mode and the model were checked on a `claude` started by
+  hand.
 - A background command started from the shell tool was not shown to outlive the call that
   started it. Earlier Motoko sessions ran their sweeps that way.
 - The `MERGED` form was seeded and validated, not used in a session.
