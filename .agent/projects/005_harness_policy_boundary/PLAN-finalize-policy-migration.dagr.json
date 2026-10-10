@@ -4,7 +4,7 @@
     "id": "005-PLAN-finalize-policy-migration",
     "title": "005 · policy leaves core: remove the DP7 verifier, the persist nudge and hybrid mode"
   },
-  "generated_at": "2026-10-09T17:28:06Z",
+  "generated_at": "2026-10-10T11:30:00Z",
   "plan": {
     "project": "005_harness_policy_boundary",
     "address": "005/PLAN-finalize-policy-migration",
@@ -19,39 +19,54 @@
       "title": "W1 · remove the DP7 verifier"
     },
     {
-      "id": "W1-DRIVER",
-      "title": "one commit · the driver",
-      "parent": "W1"
-    },
-    {
-      "id": "W1-EVENT",
-      "title": "one commit · the wire event and what imports it",
-      "parent": "W1"
-    },
-    {
       "id": "W2",
       "title": "W2 · remove the persist nudge"
     },
     {
       "id": "W3",
       "title": "W3 · remove hybrid mode (DP6)"
-    },
-    {
-      "id": "W3-BRANCH",
-      "title": "one commit · the hybrid branch and its wire event",
-      "parent": "W3"
     }
   ],
   "tasks": [
     {
+      "id": "WI-7",
+      "title": "test: delete the tests that test only DP7",
+      "kind": "test",
+      "project": "W1",
+      "state": "queued",
+      "deps": [],
+      "criteria": "The DP7 smoke and its setup script are deleted; ledger parity has eight frames and its two wrappers agree; five of the six scenarios in phase_c2_wiring_scenarios.ail:1141-1360 are deleted, the blank-answer one is kept without its verifier checks, and the file's import of Dp7VerifierRejected is gone. No rig the item leaves behind turns verification on. make smoke_driver smoke_parity ledger_parity world_framed_wire park_wake phase_c_l1 passes, on a tree that still has the verifier.",
+      "note": "First in W1. The tests go before the code they test, so that nothing depends on the verifier when WI-1 removes it. One task, one commit.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § WI-7"
+      ]
+    },
+    {
+      "id": "WI-8",
+      "title": "test: the corpus gate's control moves to the solver-feedback branch",
+      "kind": "test",
+      "project": "W1",
+      "state": "queued",
+      "deps": [
+        "WI-7"
+      ],
+      "criteria": "A solver-feedback control replaces verifier-rejection, and corpus_judge_dst.ail's import of Dp7VerifierRejected is gone. With step_idx + 1 changed to step_idx at session.ail:4146 the control is red on driver-step-repeated and steps-not-contiguous; without the control the same mutant is green. Ruling 19 is added to 011 ADR-003. make corpus_judge and make corpus_pr pass.",
+      "note": "Decision 1. Before session.ail is edited, so :4146 is still the line. It does not need WI-7's edits; it follows WI-7 because W1's tasks share one worktree and one branch. Run corpus_pr by itself. One task, one commit.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § WI-8"
+      ]
+    },
+    {
       "id": "WI-1",
       "title": "impl: classify_candidate loses its verification stages",
       "kind": "impl",
-      "project": "W1-DRIVER",
+      "project": "W1",
       "state": "queued",
-      "deps": [],
-      "criteria": "Stages 2 and 5's verifier run, CandidateRejected and its arm are gone; the stage comment is rewritten. make check_core passes with WI-1, WI-2 and WI-3 applied together.",
-      "note": "Lands in one commit with WI-2 and WI-3: the tree does not type-check between them.",
+      "deps": [
+        "WI-8"
+      ],
+      "criteria": "Stages 2 and 5's verifier run, CandidateRejected and its arm are gone; the stage comment is rewritten. make check_core passes. make smoke_driver ledger_parity world_framed_wire park_wake phase_c_l1 corpus_judge pass as they did after WI-8.",
+      "note": "Checked 2026-10-10 on main 38068013: make check_core passes with WI-1 alone. make anchors and make attribution_table are red from here until WI-9, and no gate before WI-9 names them. One task, one commit.",
       "refs": [
         "PLAN-finalize-policy-migration.md § WI-1"
       ]
@@ -60,11 +75,13 @@
       "id": "WI-2",
       "title": "impl: delete the verifier",
       "kind": "impl",
-      "project": "W1-DRIVER",
+      "project": "W1",
       "state": "queued",
-      "deps": [],
-      "criteria": "session.ail:2218-2299 and c2_dp7_rejected_state are deleted; the Dp7VerifierRejected import is gone. make check_core passes with WI-1, WI-2 and WI-3 applied together.",
-      "note": "Changes session.ail's import region, a protected span of the evaluation's manifest, which already refuses main.",
+      "deps": [
+        "WI-1"
+      ],
+      "criteria": "session.ail:2218-2299 and c2_dp7_rejected_state are deleted; the Dp7VerifierRejected import is gone. make check_core passes.",
+      "note": "Changes session.ail's import region, a protected span of the evaluation's manifest, which already refuses main. Checked 2026-10-10: make check_core and make test_coverage pass with WI-1 and WI-2 applied. One task, one commit.",
       "refs": [
         "PLAN-finalize-policy-migration.md § WI-2"
       ]
@@ -73,29 +90,45 @@
       "id": "WI-3",
       "title": "impl: one neutral name for an approved candidate",
       "kind": "impl",
-      "project": "W1-DRIVER",
+      "project": "W1",
       "state": "queued",
-      "deps": [],
+      "deps": [
+        "WI-2"
+      ],
       "criteria": "c2_candidate_approved_state sets \"candidate_approved\"; decide has no dp7_* reason; the step_machine tests are updated. make test_coverage passes.",
       "refs": [
         "PLAN-finalize-policy-migration.md § WI-3"
-      ]
+      ],
+      "note": "A rename and the dead arms of decide. One task, one commit."
     },
     {
       "id": "WI-4",
       "title": "impl: the wire event goes, the vocabulary version moves to event-vocabulary/2",
       "kind": "impl",
-      "project": "W1-EVENT",
+      "project": "W1",
       "state": "queued",
       "deps": [
-        "WI-1",
-        "WI-2",
         "WI-3"
       ],
       "criteria": "Dp7VerifierRejected is gone from phase_vocab and the vocabulary; the two counting tests say 44; the version is event-vocabulary/2 in the function and in six pinned strings; the pin for /1 names a commit; the code-graph rule and its three pinned counts are updated. make event_vocabulary invariants test_coverage passes, and python3 -m pytest tools/code-graph/tests/test_event_subjects.py passes.",
-      "note": "Lands in one commit with WI-7 and WI-8: their imports need the variant until they are removed. Old traces are read by a pinned runner (decision 5).",
+      "note": "Last of W1's code. WI-7 and WI-8 have removed every other use of the variant, so nothing names it when it goes. Old traces are read by a pinned runner (decision 5). One task, one commit.",
       "refs": [
         "PLAN-finalize-policy-migration.md § WI-4"
+      ]
+    },
+    {
+      "id": "WI-9",
+      "title": "docs: records and the attribution anchors",
+      "kind": "docs",
+      "project": "W1",
+      "state": "queued",
+      "deps": [
+        "WI-4"
+      ],
+      "criteria": "013 ADR-002, 013 ADR-004, 028 ADR-001, 031 ADR-001 and the DP7 design doc are marked or amended; the attribution anchors are re-baselined in the six-file form with three DST profiles re-issued. make anchors attribution_table passes.",
+      "note": "Last of the edits, when session.ail's line numbers have stopped moving.",
+      "refs": [
+        "PLAN-finalize-policy-migration.md § WI-9"
       ]
     },
     {
@@ -122,57 +155,6 @@
       "note": "Profile config entries the host does not use are dealt with in a separate pull request. After W1 verification.enabled is read and ignored.",
       "refs": [
         "PLAN-finalize-policy-migration.md § WI-6"
-      ]
-    },
-    {
-      "id": "WI-7",
-      "title": "test: delete the tests that test only DP7",
-      "kind": "test",
-      "project": "W1-EVENT",
-      "state": "queued",
-      "deps": [
-        "WI-1",
-        "WI-2",
-        "WI-3"
-      ],
-      "criteria": "The DP7 smoke and its setup script are deleted; ledger parity has eight frames and its two wrappers agree; five of the six scenarios in phase_c2_wiring_scenarios.ail:1141-1360 are deleted and the blank-answer one is kept without its verifier checks. make smoke_driver smoke_parity ledger_parity world_framed_wire park_wake phase_c_l1 passes.",
-      "note": "Lands in one commit with WI-4 and WI-8.",
-      "refs": [
-        "PLAN-finalize-policy-migration.md § WI-7"
-      ]
-    },
-    {
-      "id": "WI-8",
-      "title": "test: the corpus gate's control moves to the solver-feedback branch",
-      "kind": "test",
-      "project": "W1-EVENT",
-      "state": "queued",
-      "deps": [
-        "WI-1",
-        "WI-2",
-        "WI-3"
-      ],
-      "criteria": "A solver-feedback control replaces verifier-rejection. With step_idx + 1 changed to step_idx at session.ail:4146 the control is red on driver-step-repeated and steps-not-contiguous; without the control the same mutant is green. Ruling 19 is added to 011 ADR-003. make corpus_judge and make corpus_pr pass.",
-      "note": "Decision 1. Lands in one commit with WI-4 and WI-7. Run corpus_pr by itself.",
-      "refs": [
-        "PLAN-finalize-policy-migration.md § WI-8"
-      ]
-    },
-    {
-      "id": "WI-9",
-      "title": "docs: records and the attribution anchors",
-      "kind": "docs",
-      "project": "W1",
-      "state": "queued",
-      "deps": [
-        "WI-4",
-        "WI-7",
-        "WI-8"
-      ],
-      "criteria": "013 ADR-002, 013 ADR-004, 028 ADR-001, 031 ADR-001 and the DP7 design doc are marked or amended; the attribution anchors are re-baselined in the six-file form with three DST profiles re-issued. make anchors attribution_table passes.",
-      "note": "Last of the edits, when session.ail's line numbers have stopped moving.",
-      "refs": [
-        "PLAN-finalize-policy-migration.md § WI-9"
       ]
     },
     {
@@ -305,7 +287,7 @@
       "deps": [
         "W2-7"
       ],
-      "criteria": "A list of every signature, call site and record writer that carries hybrid_tools, from a signature scan and git grep. A list of every red target, with the file behind it, after W3-2 and W3-3 are applied and compile: make check_core test test_coverage event_vocabulary invariants smoke_parity ledger_parity world_framed_wire depth_canary eval_matrix, the code-graph pytest and witness_live_test.ail. Anything W3-2 to W3-4 do not name is reported before W3-2 starts.",
+      "criteria": "A list of every signature, call site and record writer that carries hybrid_tools, from a signature scan and git grep. A list of every red target, with the file behind it, taken twice in a scratch tree: after W3-2 alone is applied and compiles, and again with W3-3 on top: make check_core test test_coverage event_vocabulary invariants smoke_parity ledger_parity world_framed_wire depth_canary eval_matrix, the code-graph pytest and witness_live_test.ail. Anything W3-2 to W3-4 do not name, and anything red after W3-2 alone, is reported before W3-2 starts.",
       "note": "W3 follows W2: all three workstreams edit the loop, decide and the event vocabulary.",
       "refs": [
         "PLAN-finalize-policy-migration.md § W3-1"
@@ -315,13 +297,13 @@
       "id": "W3-2",
       "title": "impl: core stops turning prose into a tool call",
       "kind": "impl",
-      "project": "W3-BRANCH",
+      "project": "W3",
       "state": "queued",
       "deps": [
         "W3-1"
       ],
       "criteria": "The hybrid branch, synthesize_hybrid_bash_call, any_native_call, session_emitted_native_tool_call, the hybrid_bash arm of decide, extract_bash with its helpers, parse_test.ail and its line in make test, the hybrid smoke and SYSTEM.md's hybrid section are gone. A response with no tool call that no extension intercepted goes to classify_candidate. make test passes.",
-      "note": "Lands in one commit with W3-3: the branch is the event's only emitter.",
+      "note": "Before W3-3: it deletes the event's only emitter, and the variant stays, unused, until W3-3. One task, one commit.",
       "refs": [
         "PLAN-finalize-policy-migration.md § W3-2"
       ]
@@ -330,13 +312,13 @@
       "id": "W3-3",
       "title": "impl: the hybrid_bash_extracted event goes, the vocabulary version moves again",
       "kind": "impl",
-      "project": "W3-BRANCH",
+      "project": "W3",
       "state": "queued",
       "deps": [
-        "W3-1"
+        "W3-2"
       ],
       "criteria": "HybridBashExtracted is gone from phase_vocab and the vocabulary; the counting tests, the script's count, the inventory baseline and the code-graph rule with its pinned counts agree; the version has moved with a pin for the one before. The evaluator's witness table has no hybrid_extractions row, its census size is 12 and its twin count 18, and the two matrix rows that named it are deleted.",
-      "note": "Lands in one commit with W3-2. The witness table is an evaluator path under 013 ADR-004 D5.",
+      "note": "After W3-2, when nothing emits the event. The witness table is an evaluator path under 013 ADR-004 D5. One task, one commit.",
       "refs": [
         "PLAN-finalize-policy-migration.md § W3-3"
       ]
@@ -361,7 +343,6 @@
       "project": "W3",
       "state": "queued",
       "deps": [
-        "W3-2",
         "W3-3",
         "W3-7"
       ],

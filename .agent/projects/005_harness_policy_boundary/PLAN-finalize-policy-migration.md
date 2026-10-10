@@ -3,9 +3,8 @@
 Implements **Amendment 1** to [ADR-001](ADR-001-harness-policy-boundary.md) (this dir): A1, A4 and
 A6 in workstream W1, A5 in workstream W2. Implements **Amendment 2** (B1 to B4) in workstream W3.
 
-Status: Proposed
-Written against: Amendment 1 as proposed in #249. The amendment is not accepted yet. W1 follows the
-operator's ruling of 2026-10-09 that it records.
+Status: Ready to implement
+Written against: Amendments 1 and 2, both accepted by the operator on 2026-10-10.
 Pinned toolchain: AILANG **v0.52.5** (`ailang.lock`)
 Grounded at: `origin/main` **`36a96b1e`**. Every `file:line` below was read at that commit.
 `session.ail` drifts quickly, so re-anchor before editing. `main` has since moved to `38068013`
@@ -132,7 +131,9 @@ Each item names the files, the change, and the `make` target that proves it.
 - Rewrite the stage comment (`:3227-3254`) to the new order. Do not leave "stage 2" numbering
   with a hole in it.
 
-**Gate:** `make check_core`.
+**Gate:** `make check_core`. Then `make smoke_driver ledger_parity world_framed_wire park_wake
+phase_c_l1 corpus_judge`: WI-7 and WI-8 left them green, and they stay green. A red one names a
+test that still depends on the verifier.
 
 ### WI-2 — delete the verifier
 
@@ -194,7 +195,8 @@ Each item names the files, the change, and the `make` target that proves it.
   that count rules: 30 to 29 in `tests/test_event_subjects.py:38`, fixed rules 19 to 18 in
   `overlay/validate_overlay.py:45`, and the tests' count of rules with several subjects, 15 to 14.
 - Two more scripts import the variant: `phase_c2_wiring_scenarios.ail:20` and
-  `corpus_judge_dst.ail:114`. Their imports go in the same commit (see *Sequencing*).
+  `corpus_judge_dst.ail:114`. WI-7 removes the first import and WI-8 the second, each with the
+  code that used it. Both come before this item, so nothing names the variant when it goes.
 
 **Gate:** `make event_vocabulary invariants test_coverage`, and
 `python3 -m pytest tools/code-graph/tests/test_event_subjects.py -q`. No `make` target and no CI
@@ -228,6 +230,9 @@ profile that sets it starts as usual and nothing is verified. No tracked profile
 
 ### WI-7 — delete the tests that test only DP7
 
+First item of W1. These tests are deleted while the verifier still exists, and nothing this item
+leaves behind turns verification on.
+
 - `scripts/smoke_v2_dp7_gate.ail` and `scripts/setup_dp7_smoke_workdirs.sh`: delete both.
 - `Makefile` `smoke_driver` (`:2455-2490`): remove the setup line, the list entry, and the two
   comment paragraphs about DP7's workdirs.
@@ -248,6 +253,8 @@ profile that sets it starts as usual and nothing is verified. No tracked profile
     `w2_checks`, `w2_count_event`). Delete the verifier's: `w2_dp7_count_path`,
     `w2_verifier_runs`, `w2_dp7_at_step`, and the verifier half of `w2_rt`.
   - Remove five list entries (`:1386-1388`, `:1390`, `:1391`). Keep `:1389`.
+  - Remove `Dp7VerifierRejected` from the import at `:20`. Nothing in the file uses it once the
+    five scenarios are gone.
 
 **Gate:** `make smoke_driver smoke_parity ledger_parity world_framed_wire park_wake phase_c_l1`.
 
@@ -255,6 +262,8 @@ profile that sets it starts as usual and nothing is verified. No tracked profile
 
 `scripts/dst/corpus_judge_dst.ail`, `scripts/dst/corpus_pr_dst.ail`,
 `.agent/projects/011_improve_test_axises/ADR-003-judge-recoveries-on-real-runs.md`.
+
+Second item of W1, before `session.ail` is edited. The line numbers below are then still exact.
 
 **What is there.** 011 ADR-003 ruling 18 gave the gate a control run named `verifier-rejection`
 (`corpus_judge_dst.ail:876-990`). It exists because a reviewer's mutant survived the gate: in
@@ -277,7 +286,8 @@ not walked by the gate today. After W1 and W2 it is the only way a final answer 
 - `corpus_judge_dst.ail`: rename the control. It asserts what the old one did, through the new
   branch: the run ends `Err` on `max_steps` with a step budget of 2; `ext_solver_feedback` at
   steps 0 and 1; prepared steps 0 and 1; two provider interactions logged; the third scripted
-  entry never asked for. Delete `rejected_steps` and `rejecting_verifier`.
+  entry never asked for. Delete `rejected_steps` and `rejecting_verifier`, and remove
+  `Dp7VerifierRejected` from the import at `:114`.
 - Keep the script's last entry a provider error that is not retried. The old control needed it
   so that a defect ends as a red row and not as a hang, and the same holds here.
 - **Run the mutant.** Change `step_idx + 1` to `step_idx` at `session.ail:4146` and confirm the
@@ -340,13 +350,32 @@ why:
 
 - **Nothing has to land first.** #250 (the Makefile target) and #251 (profiles) merged on
   2026-10-09.
-- **WI-1, WI-2 and WI-3 are one commit** (`W1-DRIVER` in the graph). The tree does not
-  type-check between them.
-- **WI-4, WI-7 and WI-8 are one commit** (`W1-EVENT`). The scripts' imports need the variant
-  until they are removed, so neither side compiles alone.
-- **WI-9 waits for those three** because it re-baselines line anchors, and the lines move until
-  the edits stop.
+- **One task is one commit, and its gate passes at that commit.** An orchestrator hands out one
+  task at a time and settles it before the next. So no task may need another task's edits in
+  order to compile or to pass the gate it names. An earlier version of this plan had three
+  groups of tasks that were to land as one commit each. They are chains now.
+- **The tests go first: WI-7, then WI-8.** Five rigs turn verification on: the DP7 smoke,
+  `dp7_rt` in ledger parity, `w4_rt("exit 3")` in park and wake, `w2_verifier` in the wiring
+  scenarios and `run_recording_verified_at` in the corpus gate. Those two items delete or
+  replace all five. After them no test depends on the verifier, so WI-1 removes it from a tree
+  where the same suites are green before and after.
+- **The other order leaves those suites red for three commits.** With WI-1 alone applied,
+  `smoke_driver`, `ledger_parity`, `world_framed_wire`, `park_wake`, `phase_c_l1` and
+  `corpus_judge` each fail, and only on rows WI-7 and WI-8 name (*The order, checked*, below).
+- **WI-1, WI-2 and WI-3 are three commits.** The earlier version said the tree does not
+  type-check between them. It does: `make check_core` passes with WI-1 alone, and with WI-1 and
+  WI-2. WI-3 is then a rename and the removal of arms nothing reaches.
+- **WI-4 comes after all of them.** WI-2 removes the variant's emitter, and WI-7 and WI-8 every
+  other use of it. The earlier version put the variant and the scripts in one commit because
+  "neither side compiles alone". The scripts' side does, while the variant is still there.
+- **`make anchors` and `make attribution_table` are red from WI-1 until WI-9.** WI-1 moves two
+  of the five `session.ail` anchors (`:4302` and `:4523`), and every later edit to the file
+  moves them again. WI-9 re-baselines them once the lines have stopped moving. No gate before
+  WI-9 names either target. `make dst` runs `attribution_table`, so it is WI-10's and not
+  earlier.
 - **WI-6 is `canceled` in the graph.** Its id is kept and not reused.
+- **W3-2 comes before W3-3.** W3-2 deletes the event's only emitter and the variant stays,
+  unused, until W3-3. The other way round does not compile.
 
 ---
 
@@ -545,13 +574,16 @@ The review checked these, and the plan relies on them.
     call site that passes it, and every place that writes it into a record. A signature scan
     and `git grep` do this; deleting a constructor does not, because the compile stops at the
     first cascade.
-  - *By running.* In a scratch tree apply W3-2 and W3-3 as written, get the tree to compile, and
+  - *By running.* In a scratch tree apply W3-2 as written, get the tree to compile, and
     run `make check_core test test_coverage event_vocabulary invariants smoke_parity
     ledger_parity world_framed_wire depth_canary eval_matrix`, the code-graph pytest and
     `src/eval/journal/witness_live_test.ail`. Record every red target with the file behind it.
-  - Anything either inventory finds that W3-2 to W3-4 do not name is reported before W3-2
-    starts.
-- **W3-2 — the behaviour.** One commit with W3-3.
+    Then apply W3-3 on top and run them again. W3-2 is settled by itself, so what is red
+    after W3-2 alone matters as much as what is red after both.
+  - Anything either inventory finds that W3-2 to W3-4 do not name, and anything red after W3-2
+    alone, is reported before W3-2 starts.
+- **W3-2 — the behaviour.** Before W3-3. It deletes the event's only emitter, and the variant
+  stays, unused, until W3-3.
   - `session.ail`: the hybrid branch (`:4058-4121`), so that a response with no tool call that no
     extension intercepted goes to `classify_candidate`; `synthesize_hybrid_bash_call`,
     `any_native_call`, `session_emitted_native_tool_call` and its test (`:2067-2168`); the
@@ -563,7 +595,7 @@ The review checked these, and the plan relies on them.
     (`Makefile:3203-3204`). Without that, `make test` fails on a missing file.
   - `scripts/smoke_v2_hybrid.ail`, and its run in `scripts/dst/phase_a_event_parity.sh:184`.
   - `SYSTEM.md:92-97`: the section goes.
-- **W3-3 — the wire event.** Same commit as W3-2, since the branch is the event's only emitter.
+- **W3-3 — the wire event.** After W3-2, when nothing emits it.
   - `phase_vocab.ail`: `HybridBashInfo` (`:1003`), the variant (`:1310`), its encoding (`:1493`),
     its golden (`:1950`), and the comments at `:862` and `:1111`.
   - `dst_event_vocabulary.ail`: its four mentions (`:107`, `:175`, `:235`, `:397`), the two
@@ -659,6 +691,28 @@ build a decoder (WI-4). The operator confirmed it on 2026-10-09, as decision 5.
 
 Not reviewed: neither workstream was implemented in full, and `make dst`, `eval_matrix`,
 `check_core`, the contract gates, `corpus_pr` and a live session were not run.
+
+### The order, checked
+
+On 2026-10-10 the operator asked for the graph's one-commit groups to become chains. The order
+was checked in a scratch tree at `main` `38068013`, with scratch forms of WI-1 and WI-2:
+
+| Applied | Ran | Result |
+|---|---|---|
+| WI-1 | `make check_core` | Passed |
+| WI-1 | `make smoke_driver` | Failed on `smoke_v2_dp7_gate.ail` alone |
+| WI-1 | `make ledger_parity`, `make world_framed_wire` | Each failed on one row, "dp7: the returned trace holds Dp7VerifierRejected" |
+| WI-1 | `make park_wake` | Failed on the two `dp7_rejected` rows |
+| WI-1 | `make phase_c_l1` | Five scenarios failed, the five WI-7 deletes. The one it keeps passed. |
+| WI-1 | `make corpus_judge` | Failed on the two `verifier-rejection` control rows. Every bank member and the other three controls were clean. |
+| WI-1 | `make anchors` | Failed on `session.ail:4302` and `:4523` |
+| WI-1 and WI-2 | `make check_core`, `make test_coverage` | Both passed |
+
+Not checked: WI-7 and WI-8 were not written. That their gates pass on a tree which still has
+the verifier rests on reading (the five rigs above are the only ones that turn verification
+on) and, for WI-8, on the reviewer's trial of the control, which ran on such a tree. WI-3 and
+WI-4 were not applied. W3-2 before W3-3 rests on the reviewer's finding that the branch is the
+event's only emitter; W3-1 now measures it.
 
 ### The review of W3
 
