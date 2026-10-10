@@ -2,8 +2,8 @@
 
 Date: 2026-07-10
 Status: Proposed
-Amended by: Amendment 1 (2026-10-09, proposed): pre-finalize verification (DP7) leaves core.
-Amendment 2 (2026-10-09, proposed): hybrid mode (DP6) is removed from core.
+Amended by: Amendment 1 (2026-10-09, accepted 2026-10-10): pre-finalize verification (DP7) leaves core.
+Amendment 2 (2026-10-09, accepted 2026-10-10): hybrid mode (DP6) is removed from core.
 See [Amendments](#amendments).
 Pinned toolchain: AILANG **v0.26.0**; `ailang.lock` → `ailang_version: "v0.26.0"`
 Grounded at: branch `arniwesth/mot-35-fix-context-size-estimation`, HEAD `66a4ecb`
@@ -262,12 +262,12 @@ process boundary.
 
 Each amendment cites the artifact that forced it and supersedes the cited text without revising it.
 
-### Amendment 1 (2026-10-09, proposed) — pre-finalize verification (DP7) is finalize policy and leaves core
+### Amendment 1 (2026-10-09, accepted 2026-10-10) — pre-finalize verification (DP7) is finalize policy and leaves core
 
-Status: Proposed. Grounded at `origin/main` `36a96b1e`, AILANG v0.52.5. Line references below are
-to that commit.
+Status: Accepted by the operator on 2026-10-10 ("mark the amendments accepted"). Grounded at
+`origin/main` `36a96b1e`, AILANG v0.52.5. Line references below are to that commit.
 
-**Amends** D1, D2, D3 and D4. **On acceptance it also supersedes** stage 2 of the candidate
+**Amends** D1, D2, D3 and D4. **It also supersedes** stage 2 of the candidate
 pipeline in [013 ADR-002](../013_core_architecture_for_dst/ADR-002-park-and-wake.md) D2
 (`:337-366`), one sentence of
 [031 ADR-001](../031_system_one_decisions/ADR-001-extension-owned-structured-decisions.md) D4
@@ -476,7 +476,10 @@ One gap outlives the verifier. `src/tui/src` has no handler for `dp7_verifier_re
 `ext_solver_feedback`, which is why the 2026-10-09 transcript shows only the model repeating
 itself. The other guards' feedback is as invisible to the operator. That is a separate change.
 
-#### Text superseded in other records, on acceptance
+#### Text superseded in other records
+
+Superseded from 2026-10-10. The records themselves are edited when the plan's work items land:
+WI-5, WI-8 and WI-9 in W1, and W2-6 in W2.
 
 | Record | Text | What replaces it |
 |---|---|---|
@@ -519,13 +522,13 @@ Closed on 2026-10-09:
   nudge and its environment read. The plan replaces the unwritten
   `PLAN-persist-nudge-migration.md` listed above.
 
-### Amendment 2 (2026-10-09, proposed) — hybrid mode (DP6) is response policy and is removed from core
+### Amendment 2 (2026-10-09, accepted 2026-10-10) — hybrid mode (DP6) is response policy and is removed from core
 
-Status: Proposed. Grounded at `origin/main` `38068013`, AILANG v0.52.5. Line references below are
-to that commit.
+Status: Accepted by the operator on 2026-10-10 ("mark the amendments accepted"). Grounded at
+`origin/main` `38068013`, AILANG v0.52.5. Line references below are to that commit.
 
 **Amends** the Decision, which already names response intercept among the points where policy
-belongs to extensions. **On acceptance it also supersedes** the non-goal "do not remove hybrid
+belongs to extensions. **It also supersedes** the non-goal "do not remove hybrid
 mode" of `.agent/issues/hybrid-bash-extracts-prose-examples-in-native-tool-mode.md` and the
 section of `SYSTEM.md` that describes hybrid mode (`:92-97`).
 
