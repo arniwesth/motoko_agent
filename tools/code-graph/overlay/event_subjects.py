@@ -13,7 +13,7 @@ clause 3, defining profile reachability. This is the **event-subject table**: it
 attributes *events to subject modules*. The two are not kin and this paragraph
 exists so no future reader assumes they are.
 
-Rules produce **subject sets**, not modules — 14 of 29 rows are multi-subject,
+Rules produce **subject sets**, not modules — 14 of 28 rows are multi-subject,
 typically ``{owning mechanism} ∪ {payload-named tool/ext module}``. `rule_kind`
 records *how* the subject was derived so downstream views can weight or filter by
 attribution quality without a fuzzy confidence number.
@@ -79,12 +79,13 @@ class Rule:
 
 
 # ---------------------------------------------------------------------------
-# 29 of the NOTE's 30 rows, in the NOTE's order. Row numbers are the NOTE's.
+# 28 of the NOTE's 30 rows, in the NOTE's order. Row numbers are the NOTE's.
 # Row 10 was `Dp7VerifierRejected`; 005 WI-4 deleted that variant, and its row.
+# Row 22 was `PersistNudge`; 005 W2-2 deleted that variant, and its row.
 # ---------------------------------------------------------------------------
 
 RULES: tuple[Rule, ...] = (
-    # --- WireRecord: 27 LOGICAL variants -----------------------------------
+    # --- WireRecord: 26 LOGICAL variants -----------------------------------
     Rule("WireRecord:ProviderCallPrepared", FIXED, (MODEL_PHASE,),
          note="1. Call assembly; payload digests are replay identity (009/D8)"),
     Rule("WireRecord:ScratchpadResult", FIXED, (TOOL_PHASE, ENV_CLIENT),
@@ -130,8 +131,6 @@ RULES: tuple[Rule, ...] = (
          note="21. dispatch_solver_candidate (ext/runtime.ail:453). The NOTE names a second "
               "subject — the concrete solver ext — which cannot be resolved at v1 because it "
               "is not in the payload. Recorded here rather than invented or dropped"),
-    Rule("WireRecord:PersistNudge", FIXED, (SESSION,),
-         note="22. should_inject_persist_nudge in session's loop; policy-driven, no hook_phase"),
     Rule("WireRecord:NativeToolCalls", PAYLOAD_ROUTED, (MODEL_PHASE,),
          route_field="tool_calls", route_kind="tool_list",
          note="23. Subject set includes a LIST of tools — the first set-valued payload"),

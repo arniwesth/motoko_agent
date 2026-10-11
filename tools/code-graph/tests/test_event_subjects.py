@@ -35,13 +35,13 @@ def _subjects(attributions):
 # --------------------------------------------------------------------------
 
 
-def test_table_has_the_twenty_nine_settled_rows() -> None:
-    assert len(es.RULES) == 29
-    assert len(es.RULES_BY_KEY) == 29, "duplicate record_key in the table"
+def test_table_has_the_twenty_eight_settled_rows() -> None:
+    assert len(es.RULES) == 28
+    assert len(es.RULES_BY_KEY) == 28, "duplicate record_key in the table"
 
 
 def test_rule_kind_tally_matches_the_note() -> None:
-    assert es.rule_kind_tally() == {"fixed": 18, "payload_routed": 10, "correlated": 1}
+    assert es.rule_kind_tally() == {"fixed": 17, "payload_routed": 10, "correlated": 1}
 
 
 def test_fourteen_rows_are_multi_subject() -> None:

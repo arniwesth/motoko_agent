@@ -186,33 +186,6 @@ func tool_call_with_stop_finish_still_runs_scenario() -> Scenario {
   { id: "phase_c.c2.tool_call_with_stop_finish_still_runs", seed: "fixed", run: scenario_tool_call_with_stop_finish_still_runs }
 }
 
-func scenario_traced_persist_nudge_decisions() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
-  let traced = Session.run_v2_session_traced_with_persist_retries(
-    empty_rt(),
-    "task",
-    "",
-    false,
-    budget(),
-    "phase-c-model",
-    history(),
-    ".",
-    8,
-    false,
-    0,
-    zero_rates(),
-    1,
-    Scripted([prose_step("not done"), prose_step("done")])
-  );
-  match traced.result {
-    Ok(_) => assert_decisions(traced.trace, ["CallModel", "InjectUserMessage", "CallModel", "Finalize"]),
-    Err(e) => Err({ failed_invariant: "scripted nudge succeeds", trace: ["${e.code}:${e.message}"] })
-  }
-}
-
-func traced_persist_nudge_decisions_scenario() -> Scenario {
-  { id: "phase_c.c2.traced_persist_nudge_decisions", seed: "fixed", run: scenario_traced_persist_nudge_decisions }
-}
-
 func no_describe(_cfg: Json) -> [ToolSchema] { [] }
 
 func no_prompt(_ctx: PureCtx) -> PromptPatch {
@@ -1137,8 +1110,8 @@ func w2_rt(entries: [FixtureHooks]) -> ExtRuntime {
   { registry: { entries: entries }, strict_mode: false, verification: v }
 }
 
-func w2_run(rt: ExtRuntime, steps: int, persist_retries: int, script: [ScriptedStep]) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
-  Session.run_v2_session_traced_with_persist_retries(rt, "task", "", false, budget(), "phase-c-model", history(), ".", steps, false, 0, zero_rates(), persist_retries, Scripted(script))
+func w2_run(rt: ExtRuntime, steps: int, script: [ScriptedStep]) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  Session.run_v2_session_traced(rt, "task", "", false, budget(), "phase-c-model", history(), ".", steps, false, 0, zero_rates(), Scripted(script))
 }
 
 func w2_count_event(records: [LedgerRecord], wire: string) -> int {
@@ -1172,7 +1145,7 @@ func w2_checks(name: string, checks: [{ name: string, ok: bool, detail: string }
 -- (d) A BLANK candidate with `empty_stop_guard` registered gets the guard's
 -- feedback.
 func scenario_w2_blank_candidate_goes_to_empty_stop_guard() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
-  let traced = w2_run(w2_rt([guard_hook()]), 1, 0, [prose_step(""), prose_step("")]);
+  let traced = w2_run(w2_rt([guard_hook()]), 1, [prose_step(""), prose_step("")]);
   let records = traced.trace.records;
   let decisions = trace_decision_names(traced.trace);
   w2_checks("w2 (d)", [
@@ -1192,7 +1165,6 @@ export func main() -> () ! {IO, AI, Clock, Env, FS, Net, Process, SharedMem, Str
     traced_prose_decisions_scenario(),
     traced_tool_decisions_scenario(),
 	    tool_call_with_stop_finish_still_runs_scenario(),
-	    traced_persist_nudge_decisions_scenario(),
 	    traced_approval_default_deny_scenario(),
 	    traced_stage_records_scenario(),
 	    compactor_chain_order_is_registry_order_scenario(),

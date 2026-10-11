@@ -1102,7 +1102,7 @@ func scenario_exclusion_check() -> bool ! {IO} {
   let meta: ReplayMetadata =
     { source_revision: "HEAD", toolchain_version: "ailang 0.33.0",
       profile_id: compose_profile_id(), profile_version: compose_profile_version(),
-      event_vocabulary_version: "event-vocabulary/2" };
+      event_vocabulary_version: "event-vocabulary/3" };
   let d = driver_plus_compose();
   let sees_exclusion = is_excluded_hook(d, "compose", "tool_provider[0]");
   let sees_coverage = not is_excluded_hook(d, "compose", "response_interceptor[0]");
