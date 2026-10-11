@@ -688,7 +688,6 @@ export type StepState = {
   history: History,
   telemetry: TokenTelemetry,
   totals: LoopTotals,
-  nudges_used: int,
   ext_artifacts: Json,
   pending_tool_calls: [ToolCall],
   last_finish_reason: string,
@@ -701,7 +700,6 @@ export type StepState = {
 export type StateDelta = {
   telemetry: Option[TokenTelemetry],
   totals: Option[LoopTotals],
-  nudges_used: Option[int],
   ext_artifacts: Option[Json],
   pending_tool_calls: Option[[ToolCall]],
   last_finish_reason: Option[string],
@@ -709,7 +707,7 @@ export type StateDelta = {
 }
 
 export pure func empty_delta() -> StateDelta {
-  { telemetry: None, totals: None, nudges_used: None, ext_artifacts: None,
+  { telemetry: None, totals: None, ext_artifacts: None,
     pending_tool_calls: None, last_finish_reason: None, last_response_text: None }
 }
 
@@ -719,7 +717,6 @@ export func apply_state_delta(s: StepState, d: StateDelta) -> StepState {
     history: s.history,
     telemetry: match d.telemetry { Some(t) => t, None => s.telemetry },
     totals: match d.totals { Some(t) => t, None => s.totals },
-    nudges_used: match d.nudges_used { Some(n) => n, None => s.nudges_used },
     ext_artifacts: match d.ext_artifacts { Some(a) => a, None => s.ext_artifacts },
     pending_tool_calls: match d.pending_tool_calls { Some(c) => c, None => s.pending_tool_calls },
     last_finish_reason: match d.last_finish_reason { Some(f) => f, None => s.last_finish_reason },
@@ -737,7 +734,6 @@ export func apply_checkpoint(s: StepState, plan: CheckpointPlan)
       history: cp.history,
       telemetry: s.telemetry,
       totals: s.totals,
-      nudges_used: s.nudges_used,
       ext_artifacts: s.ext_artifacts,
       pending_tool_calls: s.pending_tool_calls,
       last_finish_reason: s.last_finish_reason,
@@ -1875,7 +1871,6 @@ pure func test_apply_checkpoint_returns_rewrite_with_event() -> bool
           history: h,
           telemetry: { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 },
           totals: { input_tokens: 0, output_tokens: 0, cost_millicents: 0, cost_warned_pct: 0 },
-          nudges_used: 0,
           ext_artifacts: jo([]),
           pending_tool_calls: [],
           last_finish_reason: "",

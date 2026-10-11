@@ -5,9 +5,6 @@
 
 module src/core/recovery
 
-import std/ai (Message)
-import std/string (contains)
-
 -- Retry a failed model stream only when the provider marked the error
 -- retryable (transient: timeout / connection / rate-limit / 5xx). A
 -- non-retryable error (ProtocolError, ContextLength, SchemaValidation,
@@ -25,21 +22,6 @@ export pure func should_retry_stream_error(retryable: bool, retry_enabled: bool,
   retryable
     && retry_enabled
     && remaining_step_budget > 1
-}
-
--- What is left of the persist nudge. 005 W2-2 removed the policy; the marker
--- and the count below are what `nudges_used` is re-derived from, and they go
--- with that counter (W2-3).
-export pure func persist_nudge_marker() -> string { "[motoko-persist-nudge]" }
-
-export pure func count_persist_nudges(msgs: [Message]) -> int {
-  match msgs {
-    [] => 0,
-    m :: rest => {
-      let here = if m.role == "user" && contains(m.content, persist_nudge_marker()) then 1 else 0;
-      here + count_persist_nudges(rest)
-    }
-  }
 }
 
 pure func test_stream_retry_policy() -> bool

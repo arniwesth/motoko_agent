@@ -18,7 +18,6 @@ export pure func result_delta(result: StepResult, sent_estimate: int) -> StateDe
   {
     telemetry: Some({ last_input_tokens: result.input_tokens, last_output_tokens: result.output_tokens, last_estimated_input_tokens: sent_estimate }),
     totals: None,
-    nudges_used: None,
     ext_artifacts: None,
     pending_tool_calls: Some(result.tool_calls),
     last_finish_reason: Some(result.finish_reason),

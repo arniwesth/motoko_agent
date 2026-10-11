@@ -136,7 +136,6 @@ func policy(context_limit: int, checkpoint_pct: int, checkpoint_enabled: bool) -
     step_budget: 8,
     max_cost_millicents: 0,
     cost_metered: true,
-    persist_retries: 0,
     retry_stream_errors: true,
     require_system_prompt: true,
     model: "phase-c-model",
@@ -169,7 +168,6 @@ func state_from_msgs(msgs: [Message]) -> Result[StepState, string] {
         cost_millicents: 0,
         cost_warned_pct: 0
       },
-      nudges_used: 0,
       ext_artifacts: jo([]),
       pending_tool_calls: [],
       last_finish_reason: "",

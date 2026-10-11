@@ -193,7 +193,7 @@ import src/core/test/stub_step (StepProvider, dispatch_step, LiveAI, Scripted, S
 import src/core/step_machine (decide)
 import src/core/model_phase (phase_from_result)
 import src/core/hook_phase (stage_record)
-import src/core/recovery (should_retry_stream_error, count_persist_nudges)
+import src/core/recovery (should_retry_stream_error)
 import src/core/tool_phase (resolve_approval, execute_allowed_tool_call, dispatch_tool_entries_with_builtin, ToolDispatchDone, ToolDispatchPending)
 import src/core/ports (ParkRequest, WakeInput, WakeOutcome, wake_outcome_id, wake_outcome_detail, wake_outcome_of, Settled, Lost, OperatorInput, TimedOut, HostError, Aborted, ScriptedStep, ApprovalAllowed, ApprovalDenied, Ports, PortedProvider, WorldState, empty_world_state, context_reader_of, PathKind, PathMissing, PathFile, PathDir, EnvRead, ClockRead, ToolExec, RequestWitness, ToolFailed) import src/core/world_ordinal (advance, request_class_id) -- PLAN-001 P2 Part 1: the request classes and their one writer, joined onto this line so the five clock anchors do not move. WI-D18: PathKind crosses the ABI boundary in `ext_ports_of` and the translation is an exhaustive match, not a string. 031 P1.1: `ToolFailed` imported BY NAME -- ABI 8.0's `ObservedToolOutcome` declares a `ToolFailed` too, and on v0.33.0 an unimported constructor resolves to the EARLIEST import's (the ABI's, line 48); a named import binds ports' (evidence/P1.1/ctor_collision/)
 
@@ -530,7 +530,6 @@ type C2LoopState = {
   pending_approval: Option[ApprovalRequest],
   last_finish_reason: string,
   last_response_text: string,
-  nudges_used: int,
   finalize_source: string,
   prior_counts: RuntimeStatusCounts,
   trace: LedgerTrace,
@@ -964,7 +963,6 @@ func c2_step_state(st: C2LoopState) -> Result[StepState, string] {
       history: h,
       telemetry: st.telemetry,
       totals: c2_step_totals(st.totals),
-      nudges_used: st.nudges_used,
       ext_artifacts: st.ext_artifacts,
       pending_tool_calls: st.pending_tool_calls,
       last_finish_reason: st.last_finish_reason,
@@ -999,7 +997,6 @@ func c2_initial_state_with_counts(history: [Message], provider: PortedProvider, 
     pending_approval: None,
     last_finish_reason: "",
     last_response_text: "",
-    nudges_used: count_persist_nudges(history),
     finalize_source: "",
     prior_counts: prior_counts,
     trace: empty_ledger_trace(),
@@ -2395,7 +2392,6 @@ pure func c2_continuation(
     cumulative: runtime_status_counts_add(st.prior_counts, runtime_status_counts(st.trace)),
     telemetry: ext_token_telemetry(st.telemetry),
     ext_artifacts: st.ext_artifacts,
-    nudges_used: st.nudges_used,
     model: model,
     profile: identity.profile,
     boot: boot
@@ -2481,11 +2477,7 @@ pure func loop_token_telemetry(t: TokenTelemetry) -> { last_input_tokens: int, l
 --   is the whole of the repair, since today's path recurses with the PRE-TURN
 --   history and the exhausted turn's messages die on the floor; `cumulative`
 --   as the new run's `prior_counts`, so the judging number keeps counting
---   across the boundary; `telemetry` and `ext_artifacts`; and `nudges_used`,
---   which is NOT re-derived from the history the way
---   `c2_initial_state_with_counts` re-derives it (`count_persist_nudges`): a
---   nudge the previous run spent is spent, and re-deriving it from a history a
---   compaction stage may have rewritten would silently refund it.
+--   across the boundary; and `telemetry` and `ext_artifacts`.
 --
 --   RESET, because a resumed run is its own run: `step_idx` (the step budget
 --   is per run — that is what the suspension was about), `totals`
@@ -2520,7 +2512,6 @@ pure func c2_state_from_continuation(c: Continuation, provider: PortedProvider, 
     pending_approval: reset.pending_approval,
     last_finish_reason: reset.last_finish_reason,
     last_response_text: reset.last_response_text,
-    nudges_used: c.nudges_used,
     finalize_source: reset.finalize_source,
     prior_counts: c.cumulative,
     trace: reset.trace,
@@ -2740,7 +2731,6 @@ func c2_finish_tool_batch(
     pending_approval: None,
     last_finish_reason: "tools_complete",
     last_response_text: "",
-    nudges_used: st.nudges_used,
     finalize_source: "",
     prior_counts: st.prior_counts,
     trace: trace_with_history,
@@ -2792,7 +2782,6 @@ func c2_continue_tool_batch(
         pending_approval: None,
         last_finish_reason: "approval_resolved",
         last_response_text: "",
-        nudges_used: st.nudges_used,
         finalize_source: "",
         prior_counts: st.prior_counts,
         trace: trace,
@@ -2812,10 +2801,10 @@ func c2_continue_tool_batch(
 -- PLAN-002 W2 Part 4: the approved arm of `c2_after_dp7`, which was the
 -- verifier call and the two states it chose between. The verifier and the
 -- rejected state are gone (005 ADR-001 Amendment 1, A4); this is the state an
--- approved candidate leaves. Content is the old arm's byte for byte: the same
--- journal events in the same order, the same `nudges_used` recount, and the
--- old call site's `st.provider`, `st.prior_counts` and `st.history_digest`,
--- which is why it takes `st` rather than those fields one by one.
+-- approved candidate leaves. Content is the old arm's: the same journal events
+-- in the same order, and the old call site's `st.provider`, `st.prior_counts`
+-- and `st.history_digest`, which is why it takes `st` rather than those fields
+-- one by one.
 --
 -- ADR-003 D2's `:2356`/`:2381` still hold here: ONE `HistoryAppended` for the
 -- one message (the assistant) that entered the history on this path, and
@@ -2857,7 +2846,6 @@ func c2_candidate_approved_state(
     pending_approval: None,
     last_finish_reason: "candidate_approved",
     last_response_text: output,
-    nudges_used: count_persist_nudges(msgs_with_assistant),
     finalize_source: source,
     prior_counts: st.prior_counts,
     trace: trace_with_delta,
@@ -3204,7 +3192,6 @@ func c2_loop(
     pending_approval: None,
             last_finish_reason: "user_injected",
             last_response_text: "",
-            nudges_used: st.nudges_used,
             finalize_source: "",
             prior_counts: st.prior_counts,
             trace: c2_journal(session_id, trace_with_decision, appended.events),
@@ -3267,7 +3254,6 @@ func c2_loop(
             pending_approval: st.pending_approval,
             last_finish_reason: st.last_finish_reason,
             last_response_text: st.last_response_text,
-            nudges_used: st.nudges_used,
             finalize_source: st.finalize_source,
             prior_counts: st.prior_counts,
             trace: trace_with_delta,
@@ -3487,7 +3473,6 @@ func c2_loop(
                 pending_approval: Some(pending.request),
                 last_finish_reason: "await_approval",
                 last_response_text: pending.request.reason,
-                nudges_used: st.nudges_used,
                 finalize_source: "",
                 prior_counts: st.prior_counts,
                 -- WI-D2: `pending.emitted`, and the suspension is exactly where
@@ -3674,7 +3659,6 @@ func c2_loop(
     pending_approval: None,
                       last_finish_reason: "stream_error",
                       last_response_text: e.message,
-                      nudges_used: st.nudges_used,
                       finalize_source: "",
                       prior_counts: st.prior_counts,
                       -- A STEP END WITH NO MESSAGE. `st.msgs` is unchanged — the
@@ -3772,7 +3756,6 @@ func c2_loop(
     pending_approval: None,
                         last_finish_reason: "intercept_handled",
                         last_response_text: result.message.content,
-                        nudges_used: applied.nudges_used,
                         finalize_source: "",
                         prior_counts: st.prior_counts,
                         trace: trace_with_delta,
@@ -3820,7 +3803,6 @@ func c2_loop(
     pending_approval: None,
                           last_finish_reason: "tool_calls",
                           last_response_text: applied.last_response_text,
-                          nudges_used: applied.nudges_used,
                           finalize_source: "",
                           prior_counts: st.prior_counts,
                           trace: trace_with_delta,
@@ -3884,7 +3866,6 @@ func c2_loop(
     pending_approval: None,
                               last_finish_reason: "hybrid_bash",
                               last_response_text: result.message.content,
-                              nudges_used: applied.nudges_used,
                               finalize_source: "",
                               prior_counts: st.prior_counts,
                               trace: trace_with_delta,
@@ -3931,7 +3912,6 @@ func c2_loop(
     pending_approval: None,
                                   last_finish_reason: "solver_feedback",
                                   last_response_text: fed.feedback,
-                                  nudges_used: applied.nudges_used,
                                   finalize_source: "",
                                   prior_counts: st.prior_counts,
                                   trace: trace_with_delta,
@@ -5270,9 +5250,6 @@ func run_v2_from_parked_traced(
     cumulative: plan.cumulative,
     telemetry: plan.telemetry,
     ext_artifacts: plan.ext_artifacts,
-    -- RE-DERIVED, as `plan_resume` re-derives it for a suspended boundary: the
-    -- journal carries no nudge count.
-    nudges_used: count_persist_nudges(plan.history),
     model: plan.model,
     profile: plan.profile,
     boot: plan.boot
@@ -5543,7 +5520,6 @@ func test_runtime_status_includes_prior_conversation_counts() -> bool ! {IO, Tra
       pending_approval: None,
       last_finish_reason: "tool_calls",
       last_response_text: "",
-      nudges_used: 0,
       finalize_source: "",
       prior_counts: prior,
       trace: trace,
@@ -5598,7 +5574,6 @@ func test_runtime_status_reports_actual_context_window() -> bool ! {IO, Trace}
       pending_approval: None,
       last_finish_reason: "tool_calls",
       last_response_text: "",
-      nudges_used: 0,
       finalize_source: "",
       prior_counts: zero_runtime_status_counts(),
       trace: { records: [] },
@@ -5685,7 +5660,7 @@ pure func test_runtime_status_counts_generated_compaction_ai_id() -> bool
 -- Part 5 replaces it with, and each returns the value the runtime produces
 -- TODAY, which is nothing: there is no run identity in the loop at all, and the
 -- resume path recurses with the pre-turn history (`:3418–3427`), dropping the
--- exhausted run's messages, counts and nudge tally on the floor. That drop is
+-- exhausted run's messages and counts on the floor. That drop is
 -- what the assertions below describe the repair of.
 --
 -- WHAT MUST NOT HAPPEN TO THEM: filling a stub in with the assertion's own
@@ -5727,7 +5702,6 @@ type ResumeStateShape = {
   step_idx: int,
   totals_cost_millicents: int,
   prior_calls_completed: int,
-  nudges_used: int,
   pending_tool_calls: int,
   trace_len: int,
   emissions_len: int,
@@ -5742,20 +5716,19 @@ type ResumeStateShape = {
 -- projection rather than a second opinion: change the constructor's reset half
 -- and this function changes with it, and the assertion below is what notices.
 --
--- The three arguments ARE the continuation's carried fields — `List.length(
--- c.history)`, `c.cumulative.provider_calls_completed`, `c.nudges_used` —
+-- The two arguments ARE the continuation's carried fields — `List.length(
+-- c.history)` and `c.cumulative.provider_calls_completed` —
 -- because a `C2LoopState` cannot be built in a `pure` test at all: it holds a
 -- `Ports` and a `WorldState` and every constructor of those is effectful.
 -- `ext_artifacts` and `telemetry` are carried too; they are not integers and
 -- `journal.ail`'s round-trip test pins them instead.
-pure func c2_state_from_continuation_shape(history_len: int, cumulative_calls_completed: int, nudges_used: int) -> ResumeStateShape {
+pure func c2_state_from_continuation_shape(history_len: int, cumulative_calls_completed: int) -> ResumeStateShape {
   let reset = c2_resume_reset();
   {
     msgs_len: history_len,
     step_idx: reset.step_idx,
     totals_cost_millicents: reset.totals.cost_millicents,
     prior_calls_completed: cumulative_calls_completed,
-    nudges_used: nudges_used,
     pending_tool_calls: List.length(reset.pending_tool_calls),
     trace_len: List.length(reset.trace.records),
     emissions_len: List.length(reset.emissions),
@@ -5765,8 +5738,8 @@ pure func c2_state_from_continuation_shape(history_len: int, cumulative_calls_co
   }
 }
 
--- The continuation of the DST fixture's run, read as a resume: eight messages,
--- three completed provider calls, no nudges. The step index and the totals
+-- The continuation of the DST fixture's run, read as a resume: eight messages
+-- and three completed provider calls. The step index and the totals
 -- RESET (the next run counts its own steps and its own cost); the history and
 -- the cumulative counts CARRY (that is the whole of the repair); the pending
 -- fields, the trace and the emissions start empty (a resumed run's trace is its
@@ -5774,10 +5747,9 @@ pure func c2_state_from_continuation_shape(history_len: int, cumulative_calls_co
 pure func test_c2_state_from_continuation_resets_and_carries() -> bool
   tests [((), true)]
   {
-    let st = c2_state_from_continuation_shape(8, 3, 0);
+    let st = c2_state_from_continuation_shape(8, 3);
     st.msgs_len == 8
       && st.prior_calls_completed == 3
-      && st.nudges_used == 0
       && st.step_idx == 0
       && st.totals_cost_millicents == 0
       && st.pending_tool_calls == 0
@@ -5808,7 +5780,7 @@ pure func w5_world(ordinal: int) -> WorldState {
 }
 
 pure func w5_continuation() -> Continuation {
-  { history: [], step_idx: 2, cumulative: zero_runtime_status_counts(), telemetry: zero_token_telemetry(), ext_artifacts: jo([]), nudges_used: 0, model: "m", profile: "p", boot: empty_boot() }
+  { history: [], step_idx: 2, cumulative: zero_runtime_status_counts(), telemetry: zero_token_telemetry(), ext_artifacts: jo([]), model: "m", profile: "p", boot: empty_boot() }
 }
 
 -- W5(c): the next turn starts from the PUBLISHED successor, never from the
@@ -5843,7 +5815,7 @@ pure func test_w5_a_wake_opened_run_first_parks_at_p1() -> bool
   tests [((), true)]
   {
     let identity = loop_run_identity("s", "p", 0, 3);
-    let resumed = c2_state_from_continuation_shape(8, 3, 0);
+    let resumed = c2_state_from_continuation_shape(8, 3);
     let seeded = { resumed | park_ordinal: initial_park_ordinal(true) };
     resumed.park_ordinal == 0
       && seeded.park_ordinal == 1
