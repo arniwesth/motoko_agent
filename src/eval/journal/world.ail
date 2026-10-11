@@ -231,7 +231,7 @@ pure func test_world_m2_literal() -> bool
           && jw_strs_eq(List.map(\t. t.tool_call_id, w.tools), ["c2a", "c2b", "c3", "c4"])
           && List.foldl(\acc p. acc || (p.key == "MOTOKO_EXIT_MANIFEST" && p.value == ""), false, w.env)
           && List.foldl(\acc p. acc || (p.key == "MOTOKO_CAPTURE_FAILED_PAYLOAD" && p.value == ""), false, w.env)
-          && List.length(w.env) == 9
+          && List.length(w.env) == 8
           && w.clock_ms == 7
     }
   }

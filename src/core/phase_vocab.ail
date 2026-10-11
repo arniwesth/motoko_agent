@@ -411,7 +411,6 @@ export type StepPolicy = {
   step_budget: int,
   max_cost_millicents: int,
   cost_metered: bool,
-  persist_retries: int,
   retry_stream_errors: bool,
   require_system_prompt: bool,
   model: string,
@@ -689,7 +688,6 @@ export type StepState = {
   history: History,
   telemetry: TokenTelemetry,
   totals: LoopTotals,
-  nudges_used: int,
   ext_artifacts: Json,
   pending_tool_calls: [ToolCall],
   last_finish_reason: string,
@@ -702,7 +700,6 @@ export type StepState = {
 export type StateDelta = {
   telemetry: Option[TokenTelemetry],
   totals: Option[LoopTotals],
-  nudges_used: Option[int],
   ext_artifacts: Option[Json],
   pending_tool_calls: Option[[ToolCall]],
   last_finish_reason: Option[string],
@@ -710,7 +707,7 @@ export type StateDelta = {
 }
 
 export pure func empty_delta() -> StateDelta {
-  { telemetry: None, totals: None, nudges_used: None, ext_artifacts: None,
+  { telemetry: None, totals: None, ext_artifacts: None,
     pending_tool_calls: None, last_finish_reason: None, last_response_text: None }
 }
 
@@ -720,7 +717,6 @@ export func apply_state_delta(s: StepState, d: StateDelta) -> StepState {
     history: s.history,
     telemetry: match d.telemetry { Some(t) => t, None => s.telemetry },
     totals: match d.totals { Some(t) => t, None => s.totals },
-    nudges_used: match d.nudges_used { Some(n) => n, None => s.nudges_used },
     ext_artifacts: match d.ext_artifacts { Some(a) => a, None => s.ext_artifacts },
     pending_tool_calls: match d.pending_tool_calls { Some(c) => c, None => s.pending_tool_calls },
     last_finish_reason: match d.last_finish_reason { Some(f) => f, None => s.last_finish_reason },
@@ -738,7 +734,6 @@ export func apply_checkpoint(s: StepState, plan: CheckpointPlan)
       history: cp.history,
       telemetry: s.telemetry,
       totals: s.totals,
-      nudges_used: s.nudges_used,
       ext_artifacts: s.ext_artifacts,
       pending_tool_calls: s.pending_tool_calls,
       last_finish_reason: s.last_finish_reason,
@@ -852,15 +847,15 @@ export type PhaseResult = {
 -- ============================================================================
 -- LedgerEvent: typed/DST-canonical layer. to_schema_v1 targets production wire.
 --
--- Production schema-v1 inventory — 28 JSONL `type` values (regenerate with:
+-- Production schema-v1 inventory — 27 JSONL `type` values (regenerate with:
 --   grep -o 'emit_event(session_id, "[a-z_]*"' src/core/agent_loop_v2.ail
 --   plus the two direct emit_json stream types at :255 and :265):
---   26 emit_event names:
+--   25 emit_event names:
 --     compaction_exhausted compaction_extension cost_exhausted cost_warning
 --     delegated_tool_deferred done error
 --     ext_intercept_handled ext_solver_feedback ext_tool_handled
 --     hybrid_bash_extracted native_tool_calls native_tool_denied
---     native_tool_results persist_nudge run_summary scratchpad_result
+--     native_tool_results run_summary scratchpad_result
 --     session_start session_suspend stream_error_retry thinking
 --     thinking_stream_end thinking_stream_start tool_pending
 --     v2_tool_dispatch_complete v2_tool_dispatch_start
@@ -1000,7 +995,6 @@ export type EmptyStopFinalizeInfo = { step: int, input_tokens: int, estimated_in
 export type ErrorInfo = { source: string, code: string, message: string }
 export type FeedbackInfo = { step: int, feedback: string }
 export type HybridBashInfo = { step: int, cmd: string }
-export type PersistNudgeInfo = { step: int, nudge_num: int, budget: int }
 -- `run_id` is ADR-003 D5's identity on the `run_started` entry (D1): the host
 -- assigns entry ids, but the child says which RUN an entry belongs to, and the
 -- fold attributes by that rather than by position. `<session_id>.r<resume_count>
@@ -1310,7 +1304,6 @@ export type LedgerEvent
   | DoneEvent(DoneInfo)                      -- [prod] done
   | EmptyStopFinalize(EmptyStopFinalizeInfo) -- [prod] empty_stop_finalize
   | ExtSolverFeedback(FeedbackInfo)          -- [prod] ext_solver_feedback
-  | PersistNudge(PersistNudgeInfo)           -- [prod] persist_nudge
   | NativeToolCalls(ToolBatchInfo)           -- [prod] native_tool_calls
   | NativeToolResults(ToolBatchInfo)         -- [prod] native_tool_results
   | SessionSuspend(SessionSuspendInfo)       -- [prod] session_suspend
@@ -1492,7 +1485,6 @@ export func to_schema_v1_kvs(e: LedgerEvent) -> [{key: string, value: Json}] {
     DoneEvent(i) => done_kvs(i),
     EmptyStopFinalize(i) => [kv("type", js("empty_stop_finalize")), kv("step", jnum(_int_to_float(i.step))), kv("input_tokens", jnum(_int_to_float(i.input_tokens))), kv("estimated_input_tokens", jnum(_int_to_float(i.estimated_input_tokens))), kv("context_limit", jnum(_int_to_float(i.context_limit)))],
     ExtSolverFeedback(i) => [kv("type", js("ext_solver_feedback")), kv("step", jnum(_int_to_float(i.step))), kv("feedback", js(i.feedback))],
-    PersistNudge(i) => [kv("type", js("persist_nudge")), kv("step", jnum(_int_to_float(i.step))), kv("nudge_num", jnum(_int_to_float(i.nudge_num))), kv("budget", jnum(_int_to_float(i.budget)))],
     NativeToolCalls(i) => [kv("type", js("native_tool_calls")), kv("request_id", js(i.request_id)), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("tool_calls", i.payload)],
     NativeToolResults(i) => [kv("type", js("native_tool_results")), kv("request_id", js(i.request_id)), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("results", i.payload)],
     SessionSuspend(i) => [kv("type", js("session_suspend")), kv("session_id", js(i.session_id)), kv("target_profile", js(i.target_profile))],
@@ -1879,7 +1871,6 @@ pure func test_apply_checkpoint_returns_rewrite_with_event() -> bool
           history: h,
           telemetry: { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 },
           totals: { input_tokens: 0, output_tokens: 0, cost_millicents: 0, cost_warned_pct: 0 },
-          nudges_used: 0,
           ext_artifacts: jo([]),
           pending_tool_calls: [],
           last_finish_reason: "",
@@ -1949,7 +1940,6 @@ pure func test_ledger_projection_golden_bytes() -> bool
     && golden(DoneEvent({ step: 1, output: "ok", source: "ext_solver_accept" }), "{\"type\":\"done\",\"step\":1,\"output\":\"ok\",\"source\":\"ext_solver_accept\"}")
     && golden(EmptyStopFinalize({ step: 96, input_tokens: 22312, estimated_input_tokens: 8600, context_limit: 131072 }), "{\"type\":\"empty_stop_finalize\",\"step\":96,\"input_tokens\":22312,\"estimated_input_tokens\":8600,\"context_limit\":131072}")
     && golden(ExtSolverFeedback({ step: 1, feedback: "fix" }), "{\"type\":\"ext_solver_feedback\",\"step\":1,\"feedback\":\"fix\"}")
-    && golden(PersistNudge({ step: 1, nudge_num: 2, budget: 3 }), "{\"type\":\"persist_nudge\",\"step\":1,\"nudge_num\":2,\"budget\":3}")
     && golden(NativeToolCalls({ request_id: "step-1", step: 1, stream_id: "s", payload: ja([]) }), "{\"type\":\"native_tool_calls\",\"request_id\":\"step-1\",\"step\":1,\"stream_id\":\"s\",\"tool_calls\":[]}")
     && golden(NativeToolResults({ request_id: "step-1", step: 1, stream_id: "s", payload: ja([]) }), "{\"type\":\"native_tool_results\",\"request_id\":\"step-1\",\"step\":1,\"stream_id\":\"s\",\"results\":[]}")
     && golden(SessionSuspend({ session_id: "sid", target_profile: "dogfood" }), "{\"type\":\"session_suspend\",\"session_id\":\"sid\",\"target_profile\":\"dogfood\"}")

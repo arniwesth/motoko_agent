@@ -62,7 +62,6 @@ import src/core/phase_vocab (
   wait_descriptors_json, wait_id,
   SessionResumedInfo, system_prefix_digest_for
 )
-import src/core/recovery (count_persist_nudges)
 import src/core/ext/ctx_defaults (empty_ext_artifacts, zero_token_telemetry)
 import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, TokenTelemetry)
 
@@ -140,7 +139,6 @@ export type Continuation = {
   cumulative: RuntimeStatusCounts,
   telemetry: TokenTelemetry,
   ext_artifacts: Json,
-  nudges_used: int,
   model: string,
   profile: string,
   boot: BootInputs
@@ -1755,14 +1753,13 @@ pure func finish_fold(header: HeaderEntry, acc: FoldAcc) -> Result[SessionState,
 -- than in the resume script because `Continuation` is this module's type and the
 -- projection is total: everything but the boot inputs comes off the folded
 -- state, and the boot inputs are the header's by construction.
-export pure func continuation_of_session(s: SessionState, step_idx: int, nudges_used: int) -> Continuation {
+export pure func continuation_of_session(s: SessionState, step_idx: int) -> Continuation {
   {
     history: s.history,
     step_idx: step_idx,
     cumulative: s.cumulative,
     telemetry: s.telemetry,
     ext_artifacts: s.ext_artifacts,
-    nudges_used: nudges_used,
     model: s.model,
     profile: s.profile,
     boot: s.header.boot
@@ -2285,9 +2282,6 @@ export pure func plan_resume(s: SessionState, inv: ResumeInvocation) -> Result[R
             cumulative: s.cumulative,
             telemetry: s.telemetry,
             ext_artifacts: artifacts,
-            -- RE-DERIVED, and only here: the journal carries no nudge count, and
-            -- the nudges a previous run spent are in the history it journaled.
-            nudges_used: count_persist_nudges(history),
             model: inv.model,
             profile: inv.profile,
             boot: inv.boot
@@ -2582,7 +2576,6 @@ pure func test_continuation_cumulative_is_the_sum_of_its_parts() -> bool
       cumulative: runtime_status_counts_add(prior, this_run),
       telemetry: { last_input_tokens: 120, last_output_tokens: 40, last_estimated_input_tokens: 100 },
       ext_artifacts: jo([]),
-      nudges_used: 0,
       model: "openrouter/anthropic/claude-haiku-4.5",
       profile: "default",
       boot: {
@@ -2616,7 +2609,6 @@ pure func test_final_state_projects_the_continuation() -> bool
       cumulative: counts(1, 1),
       telemetry: { last_input_tokens: 10, last_output_tokens: 2, last_estimated_input_tokens: 9 },
       ext_artifacts: jo([]),
-      nudges_used: 0,
       model: "m",
       profile: "p",
       boot: {
@@ -3219,7 +3211,7 @@ pure func test_boundary_and_continuation_projection() -> bool
     match fold_journal(lines, journal_leaf(lines)) {
       Err(_) => false,
       Ok(s) => {
-        let c = continuation_of_session(s, 0, 0);
+        let c = continuation_of_session(s, 0);
         boundary_id(s.last) == "suspended"
           && (match s.last { BoundarySuspended(rid, step) => rid == t_run_id() && step == 3, _ => false })
           && c.cumulative.provider_calls_completed == 2

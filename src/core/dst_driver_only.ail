@@ -532,7 +532,14 @@ export pure func driver_only_id() -> string { "driver_only" }
 -- re-issues every profile that refers to the table. Installed, covered,
 -- waived, classified and omitted: all as v34 had them. The account is at
 -- `driver_only_attribution_ref`.
-export pure func driver_only_version() -> string { "35" }
+--
+-- v35 → v36 AT 005 W2 (2026-10-11), AN ATTRIBUTION RE-ISSUE. No claim changed.
+-- The persist nudge left core (005 ADR-001 Amendment 1, A5), all five
+-- session.ail anchors moved with it, and the table's content hash moved with
+-- them. D4 re-issues every profile that refers to the table. Installed,
+-- covered, waived, classified and omitted: all as v35 had them. The account is
+-- at `driver_only_attribution_ref`.
+export pure func driver_only_version() -> string { "36" }
 
 -- The attribution table this profile was issued against. Literals by design —
 -- see the header. Re-issuing the profile after a table correction means bumping
@@ -877,7 +884,20 @@ export pure func driver_only_attribution_ref() -> AttributionRef {
     -- text identical against `git show 86f2b817:`, thirteen hits, and all five
     -- anchored expressions byte-identical at their new offsets. The tool_phase
     -- anchors did not move.
-    content_hash: "sha256:c7500943bffc8be0c48521afc17fa4b70ea3740c65a049394081d2d6bf513c6d" }
+    -- 005 W2 (the W2-6 follow-up): re-recorded with all three successors', from
+    -- sha256:c7500943bffc8be0c48521afc17fa4b70ea3740c65a049394081d2d6bf513c6d.
+    -- All five session anchors moved — 1469/1728/1840/4142/4363 ->
+    -- 1465/1724/1836/4020/4203 (-4, -4, -4, -122, -160) — up again, and the
+    -- last two by different amounts: 005 ADR-001 Amendment 1 (A5) takes the
+    -- persist nudge out of core. One import line and three `nudges_used` lines
+    -- went from above all five; the nudge's helpers, `CandidateNudge` and its
+    -- arm, the rest of the counter and the `MOTOKO_PERSIST_RETRIES` read went
+    -- from above the last two; `run_v2_session_traced_with_persist_retries`
+    -- went from between them. NOT A TABLE CORRECTION: `clock_now(` text
+    -- identical against `git show da88a088:`, thirteen hits, and all five
+    -- anchored expressions byte-identical at their new offsets. The tool_phase
+    -- anchors did not move.
+    content_hash: "sha256:0d4d166ddf960cb667345f26a7fb75cf5c17ba03d2ff5da6a678fbf23d1bc1e1" }
 }
 
 -- ---------------------------------------------------------------------------

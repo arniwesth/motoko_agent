@@ -213,7 +213,7 @@ func m9_a9_known_failing(jw: JournalWorld, run: TracedSessionResult) -> bool ! {
   let _ = println("a9: first provider ordinal=${show(lt_first_provider_ordinal(run.world.log))} clean=${show(List.length(check_a9(clean)))} mutated first=${got}");
   lt_report("m9_a9_known_failing_round_trip",
             List.length(check_a9(clean)) == 0
-              && got == "A9:replay-refused-provider-outcome-undecodable@interaction:7")
+              && got == "A9:replay-refused-provider-outcome-undecodable@interaction:6")
 }
 
 pure func lt_is_request(r: LedgerRecord) -> bool {

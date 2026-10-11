@@ -6,7 +6,7 @@
 -- its wire projection as a maintained compatibility surface, and this artifact
 -- carries that obligation.
 --
--- One artifact binds, for every one of the 44 `LedgerEvent` variants:
+-- One artifact binds, for every one of the 43 `LedgerEvent` variants:
 --
 --   the variant itself; its wire name; its payload schema; and its
 --   classification as LOGICAL or DISPLAY-ONLY.
@@ -51,7 +51,7 @@
 --                than an outcome.
 --
 -- THE CLASSIFICATION IS SEMANTIC, NOT A SURVEY OF WHAT IS APPENDED TODAY, and
--- that is deliberate. Of the 38 Logical rows, **36 reach the returned trace now
+-- that is deliberate. Of the 37 Logical rows, **35 reach the returned trace now
 -- and 2 do not**; the two are `d64_gap_register`'s entries, both of long
 -- standing. ADR-003 D1's `SessionResumed` was the third until PLAN-003 P3 Part 5,
 -- whose resumed traced entry appends it as the first record of the frame. The other four journal-class variants were
@@ -106,7 +106,7 @@ import src/core/phase_vocab (
   ExtCompactionRejected, ExtensionDiagnostic, ThinkingStreamStart, ThinkingStreamEnd,
   StreamErrorRetry, ProviderResult, CostWarning, ExtInterceptHandled, HybridBashExtracted,
   ToolArgumentsUndecodable,
-  DoneEvent, EmptyStopFinalize, ExtSolverFeedback, PersistNudge, NativeToolCalls,
+  DoneEvent, EmptyStopFinalize, ExtSolverFeedback, NativeToolCalls,
   NativeToolResults, SessionSuspend, RunSuspended, ParkEntered, WakeReceived,
   HistorySeeded, HistoryAppended, HistoryReplaced, StateDelta, SessionResumed,
   ContextLimitResolved, WorldRequest,
@@ -119,18 +119,24 @@ import src/core/phase_vocab (
 -- traces are decoded or a runner is pinned, never silently reinterpreted. The
 -- version lands in the execution manifest (WI-A10) and the failure record (D8).
 --
--- `/2` (005 WI-4) deleted the `Dp7VerifierRejected` variant. OLD TRACES ARE READ
--- BY A PINNED RUNNER, because the tree has no decoder for wire events:
+-- `/2` (005 WI-4) deleted the `Dp7VerifierRejected` variant, and `/3` (005
+-- W2-2) deleted `PersistNudge`. OLD TRACES ARE READ BY A PINNED RUNNER, because
+-- the tree has no decoder for wire events:
 --
 --   `event-vocabulary/1` is read by commit
 --   86f2b8176bfc33cc186b1e1007acefd9e04266cc, the commit `/2` was cut from. Any
 --   later commit that still has `/1` reads it too.
 --
--- A build at `/2` does not read a `/1` trace: `dst_profile.version_matches`
--- refuses its manifest with `ManifestVersionDrifted`. Nothing is built for the
--- pin. No recorded trace is committed, so what it covers is the corpus
--- artifacts CI keeps for 14 days and anything on a developer's disk.
-export pure func event_vocabulary_version() -> string { "event-vocabulary/2" }
+--   `event-vocabulary/2` is read by commit
+--   da88a08801aac7fe154be19d57251b1cba8830e1, the commit `/3` was cut from. Any
+--   later commit that still has `/2` reads it too.
+--
+-- A build at `/3` reads neither a `/1` nor a `/2` trace:
+-- `dst_profile.version_matches` refuses its manifest with
+-- `ManifestVersionDrifted`. Nothing is built for either pin. No recorded trace
+-- is committed, so what they cover is the corpus artifacts CI keeps for 14 days
+-- and anything on a developer's disk.
+export pure func event_vocabulary_version() -> string { "event-vocabulary/3" }
 
 export type EventClassification = Logical | DisplayOnly
 
@@ -188,7 +194,6 @@ export pure func event_variant_id(e: LedgerEvent) -> string {
     DoneEvent(_) => "DoneEvent",
     EmptyStopFinalize(_) => "EmptyStopFinalize",
     ExtSolverFeedback(_) => "ExtSolverFeedback",
-    PersistNudge(_) => "PersistNudge",
     NativeToolCalls(_) => "NativeToolCalls",
     NativeToolResults(_) => "NativeToolResults",
     SessionSuspend(_) => "SessionSuspend",
@@ -247,7 +252,6 @@ export pure func event_wire_name(e: LedgerEvent) -> string {
     DoneEvent(_) => "done",
     EmptyStopFinalize(_) => "empty_stop_finalize",
     ExtSolverFeedback(_) => "ext_solver_feedback",
-    PersistNudge(_) => "persist_nudge",
     NativeToolCalls(_) => "native_tool_calls",
     NativeToolResults(_) => "native_tool_results",
     SessionSuspend(_) => "session_suspend",
@@ -430,10 +434,6 @@ export pure func event_vocabulary() -> [EventRow] {
 
     { variant: "ExtSolverFeedback", wire_names: ["ext_solver_feedback"],
       payload: [req("step"), req("feedback")],
-      classification: Logical, reaches_trace_today: true },
-
-    { variant: "PersistNudge", wire_names: ["persist_nudge"],
-      payload: [req("step"), req("nudge_num"), req("budget")],
       classification: Logical, reaches_trace_today: true },
 
     { variant: "NativeToolCalls", wire_names: ["native_tool_calls"],
@@ -865,7 +865,7 @@ pure func has_rule(rs: [VocabularyRejection], rule: string) -> bool {
 pure func test_vocabulary_has_thirty_five_distinct_rows() -> bool
   tests [((), true)]
   {
-    List.length(event_vocabulary()) == 44
+    List.length(event_vocabulary()) == 43
       && no_dups(row_variants(event_vocabulary()), [])
   }
 
@@ -931,7 +931,7 @@ pure func test_classification_partitions_the_vocabulary() -> bool
   tests [((), true)]
   {
     let rows = event_vocabulary();
-    List.length(logical_variants(rows)) + List.length(display_only_variants(rows)) == 44
+    List.length(logical_variants(rows)) + List.length(display_only_variants(rows)) == 43
       && List.length(display_only_variants(rows)) == 6
   }
 

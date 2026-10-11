@@ -29,7 +29,6 @@
 -- the first two are admissible (`admission_column` never yields ColFault):
 --
 --   key                            Suspended  Finalize  Fault (never admitted)
---   MOTOKO_PERSIST_RETRIES             1         1        1
 --   MOTOKO_RETRY_STREAM_ERROR          1         1        1
 --   OPENAI_BASE_URL                    1         1        1
 --   MOTOKO_HEADLESS                    1         1        1
@@ -121,7 +120,7 @@ export pure func admission_column(e: ExpectedEnd) -> EndColumn {
 
 -- One cell of D3's table.
 export pure func env_table_count(key: string, c: EndColumn, t: int) -> int {
-  if key == "MOTOKO_PERSIST_RETRIES" || key == "MOTOKO_RETRY_STREAM_ERROR" || key == "OPENAI_BASE_URL"
+  if key == "MOTOKO_RETRY_STREAM_ERROR" || key == "OPENAI_BASE_URL"
        || key == "MOTOKO_HEADLESS" || key == "MOTOKO_PROFILE_DIR" || key == "MOTOKO_SESSION_ID" then 1
   else if key == "MOTOKO_TOOL_TIMEOUT_MS" then t
   else if key == "MOTOKO_EXIT_MANIFEST" then (match c { ColFinalize => 1, _ => 0 })
@@ -359,15 +358,15 @@ pure func test_m11_env_table_columns() -> bool
   {
     wt_strs_eq(wt_env_col(ColSuspended, 4), [
         "MOTOKO_CAPTURE_FAILED_PAYLOAD=0", "MOTOKO_CONFIG=0", "MOTOKO_HEADLESS=1", "MOTOKO_MODELS_FILE=0",
-        "MOTOKO_PERSIST_RETRIES=1", "MOTOKO_PROFILE_DIR=1", "MOTOKO_REPO=0", "MOTOKO_RETRY_STREAM_ERROR=1",
+        "MOTOKO_PROFILE_DIR=1", "MOTOKO_REPO=0", "MOTOKO_RETRY_STREAM_ERROR=1",
         "MOTOKO_SESSION_ID=1", "MOTOKO_TOOL_TIMEOUT_MS=4", "OPENAI_BASE_URL=1", "MOTOKO_EXIT_MANIFEST=0"])
       && wt_strs_eq(wt_env_col(ColFinalize, 3), [
         "MOTOKO_CAPTURE_FAILED_PAYLOAD=0", "MOTOKO_CONFIG=0", "MOTOKO_HEADLESS=1", "MOTOKO_MODELS_FILE=0",
-        "MOTOKO_PERSIST_RETRIES=1", "MOTOKO_PROFILE_DIR=1", "MOTOKO_REPO=0", "MOTOKO_RETRY_STREAM_ERROR=1",
+        "MOTOKO_PROFILE_DIR=1", "MOTOKO_REPO=0", "MOTOKO_RETRY_STREAM_ERROR=1",
         "MOTOKO_SESSION_ID=1", "MOTOKO_TOOL_TIMEOUT_MS=3", "OPENAI_BASE_URL=1", "MOTOKO_EXIT_MANIFEST=1"])
       && wt_strs_eq(wt_env_col(ColFault, 0), [
         "MOTOKO_CAPTURE_FAILED_PAYLOAD=1", "MOTOKO_CONFIG=0", "MOTOKO_HEADLESS=1", "MOTOKO_MODELS_FILE=0",
-        "MOTOKO_PERSIST_RETRIES=1", "MOTOKO_PROFILE_DIR=1", "MOTOKO_REPO=0", "MOTOKO_RETRY_STREAM_ERROR=1",
+        "MOTOKO_PROFILE_DIR=1", "MOTOKO_REPO=0", "MOTOKO_RETRY_STREAM_ERROR=1",
         "MOTOKO_SESSION_ID=1", "MOTOKO_TOOL_TIMEOUT_MS=0", "OPENAI_BASE_URL=1", "MOTOKO_EXIT_MANIFEST=0"])
       && column_id(admission_column(EndSuspended(3))) == "EndSuspended"
       && column_id(admission_column(EndFinalize("model_stop"))) == "EndFinalize"
@@ -388,7 +387,7 @@ pure func wt_env_log(from: int, keys: [string]) -> [Interaction] {
 }
 
 pure func wt_base_keys() -> [string] {
-  ["MOTOKO_PERSIST_RETRIES", "MOTOKO_RETRY_STREAM_ERROR", "OPENAI_BASE_URL", "MOTOKO_HEADLESS",
+  ["MOTOKO_RETRY_STREAM_ERROR", "OPENAI_BASE_URL", "MOTOKO_HEADLESS",
    "MOTOKO_PROFILE_DIR", "MOTOKO_SESSION_ID", "MOTOKO_TOOL_TIMEOUT_MS"]
 }
 
@@ -431,7 +430,7 @@ pure func test_m11_witness_built_not_read() -> bool
     w.provider_calls == 1 && w.tool_dispatches == 1 && w.clock_delta_ms == 2
       && w.approval_reads == 0 && w.approvals_consumed == 0 && w.file_writes == 0
       && w.file_removes == 0 && w.dir_makes == 0 && w.extension_effects == 0
-      && List.length(w.expected_env_reads) == 12
+      && List.length(w.expected_env_reads) == 11
       && prepared_calls(wt_trace(3)) == 3
   }
 

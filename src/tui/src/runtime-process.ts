@@ -547,7 +547,6 @@ export function buildChildEnv(
     MOTOKO_HEADLESS:
       process.env.MOTOKO_HEADLESS ??
       (process.stdin.isTTY ? "" : "1"),
-    MOTOKO_PERSIST_RETRIES: process.env.MOTOKO_PERSIST_RETRIES ?? "",
     MOTOKO_REPO: process.env.MOTOKO_REPO ?? "",
     MOTOKO_CAPTURE_FAILED_PAYLOAD: process.env.MOTOKO_CAPTURE_FAILED_PAYLOAD ?? "",
     MOTOKO_PROFILE_DIR: loaderProfileDir(workdir, profile),

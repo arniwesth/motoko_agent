@@ -172,7 +172,6 @@ pure func complete_branches() -> [BranchCoverage] {
 
 pure func env_expectations() -> [EnvExpectation] {
   [{ key: "MOTOKO_SESSION_ID", count: 1 },
-   { key: "MOTOKO_PERSIST_RETRIES", count: 1 },
    { key: "MOTOKO_RETRY_STREAM_ERROR", count: 1 },
    { key: "OPENAI_BASE_URL", count: 1 },
    { key: "MOTOKO_HEADLESS", count: 1 },
@@ -206,7 +205,7 @@ pure func complete_evidence() -> [CompletenessEvidence] {
    runtime_evidence("runtime_random_draw", 6, 6),
    runtime_evidence("expect_extension_effect", 0, 0),
    -- The seventh, and the one that is a DIFFERENT KIND.
-   env_evidence(env_expectations(), 19)]
+   env_evidence(env_expectations(), 18)]
 }
 
 pure func complete_replay_ref() -> ReplayReference {
@@ -551,14 +550,14 @@ func scenario_env_evidence_is_a_different_kind() -> bool ! {IO} {
   -- precisely because some keys are read more than once: MOTOKO_TOOL_TIMEOUT_MS
   -- once per tool dispatch, and since WI-D3 MOTOKO_REPO twice per context
   -- resolution. A recorder logging the first read of each key would report 11
-  -- against 19.
-  let ev = env_evidence(env_expectations(), 19);
+  -- against 18.
+  let ev = env_evidence(env_expectations(), 18);
   let c = report("the env expectation asserts MULTIPLICITY (${ev.witnessed} reads over ${List.length(driver_env_keys())} keys), not presence",
                  ev.witnessed > List.length(driver_env_keys()),
                  "the expected read total equals the key count — the check is presence, and a recorder that dropped repeats would look complete");
   let d = report("a first-read-only recorder is caught",
                  env_evidence(env_expectations(), List.length(driver_env_keys())).logged
-                   != env_evidence(env_expectations(), 19).witnessed,
+                   != env_evidence(env_expectations(), 18).witnessed,
                  "a recorder logging one read per key matched the expectation");
   a && b && c && d
 }

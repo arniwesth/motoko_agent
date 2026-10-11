@@ -25,7 +25,6 @@
 -- THE T0 SETTINGS (v5 D1's table), served through the world's environment and
 -- file table in the order policy init and dispatch read them:
 --
---   MOTOKO_PERSIST_RETRIES          "0"          the persist-nudge arm unreachable
 --   MOTOKO_RETRY_STREAM_ERROR       recorded     read once at policy init
 --   OPENAI_BASE_URL                 recorded     read once at policy init
 --   MOTOKO_HEADLESS                 recorded     read once at policy init
@@ -183,7 +182,6 @@ export pure func context_limit_source(limits: [ContextLimit], run_id: string) ->
 
 export pure func served_env(session_id: string, env: RecordedEnv) -> [EnvPair] {
   [
-    { key: "MOTOKO_PERSIST_RETRIES", value: "0" },
     { key: "MOTOKO_RETRY_STREAM_ERROR", value: env.retry_stream_error },
     { key: "OPENAI_BASE_URL", value: env.openai_base_url },
     { key: "MOTOKO_HEADLESS", value: env.headless },
@@ -292,8 +290,7 @@ pure func test_t0_settings_served_values() -> bool
     let env: RecordedEnv = { headless: "1", openai_base_url: "http://b", retry_stream_error: "0", tool_timeout_ms: None };
     let s = t0_settings("sess_fx", false, true, env, EncWindow(4096), true);
     let v = \k. match env_value(s.env, k) { Some(x) => x, None => "<unserved>" };
-    List.length(s.env) == 9
-      && v("MOTOKO_PERSIST_RETRIES") == "0"
+    List.length(s.env) == 8
       && v("MOTOKO_RETRY_STREAM_ERROR") == "0"
       && v("OPENAI_BASE_URL") == "http://b"
       && v("MOTOKO_HEADLESS") == "1"

@@ -645,7 +645,7 @@ func witness_for(initial: WorldState, run: TracedSessionResult, expected_env: [E
 -- The env keys this scenario's control flow reaches, DERIVED FROM THE DRIVER'S
 -- SOURCE and not from the run:
 --
---   session.ail:1417  session_policy_init runs unconditionally, four keys
+--   session.ail:1417  session_policy_init runs unconditionally, three keys
 --   session.ail:939   derive_session_id runs on the traced path (called at
 --                     session.ail:2283), one key
 --   tool_phase.ail:343 once per NATIVE tool dispatch — so it is reached in the
@@ -655,7 +655,7 @@ func witness_for(initial: WorldState, run: TracedSessionResult, expected_env: [E
 -- MOTOKO_CAPTURE_FAILED_PAYLOAD (session.ail:2018) is on the non-retryable
 -- provider-error path, which neither scenario takes, and is correctly absent
 -- from both lists.
--- The COUNTS matter, not merely the keys. Each of the five below is read
+-- The COUNTS matter, not merely the keys. Each of the four below is read
 -- exactly once per traced run: `session_policy_init` runs once before the loop
 -- and `derive_session_id` once at its start. A recorder that logged the first
 -- read of a key and dropped later ones would satisfy a presence check.
@@ -663,7 +663,7 @@ func witness_for(initial: WorldState, run: TracedSessionResult, expected_env: [E
 -- session.ail:4582, key via `manifest_path_var()`), once per run that reaches
 -- DoneEvent. These scenarios all terminate Ok through the success arm, so the
 -- publish runs and the read is expected exactly once — derived from the
--- driver's control flow, like the five above. The count is a literal for the
+-- driver's control flow, like the four above. The count is a literal for the
 -- same reason the resolution counts are: the env class emits no ledger event.
 -- It is pinned in `driver_env_keys()` by the `verify_exit_intent` literal
 -- (`manifest_path_var() == "MOTOKO_EXIT_MANIFEST"`) because the Makefile
@@ -674,8 +674,7 @@ func env_reads_exit_publish() -> [EnvExpectation] {
 }
 
 func env_reads_always(resolutions: int) -> [EnvExpectation] {
-  [{ key: "MOTOKO_PERSIST_RETRIES",    count: 1 },
-   { key: "MOTOKO_RETRY_STREAM_ERROR", count: 1 },
+  [{ key: "MOTOKO_RETRY_STREAM_ERROR", count: 1 },
    { key: "OPENAI_BASE_URL",           count: 1 },
    { key: "MOTOKO_HEADLESS",           count: 1 },
    { key: "MOTOKO_SESSION_ID",         count: 1 }]

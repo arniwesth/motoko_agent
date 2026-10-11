@@ -231,7 +231,7 @@ M9.A9.blank_generator_id	src/eval/journal/admission.ail:test_m9_a9_round_trip	re
 M9.A9.manifest_version_drifted	src/eval/journal/admission.ail:test_m9_a9_round_trip	refused	A9:manifest-version-drifted	aggregate:manifest
 M9.A9.negative_epoch	src/eval/journal/admission.ail:test_m9_a9_round_trip	refused	A9:program-negative-time	aggregate:program
 M9.A9.live.clean	src/eval/journal/admission_live_test.ail:m9_a9_known_failing_round_trip	pass	-	aggregate:program
-M9.A9.live.provider_undecodable	src/eval/journal/admission_live_test.ail:m9_a9_known_failing_round_trip	refused	A9:replay-refused-provider-outcome-undecodable	interaction:7
+M9.A9.live.provider_undecodable	src/eval/journal/admission_live_test.ail:m9_a9_known_failing_round_trip	refused	A9:replay-refused-provider-outcome-undecodable	interaction:6
 M9.A9b.clean	src/eval/journal/admission.ail:test_m9_a9b_clean	pass	-	aggregate:provenance
 M9.A9b.source_revision.not_commit	src/eval/journal/admission.ail:test_m9_a9b_each_identity_false	refused	A9b:RevisionNotACommit	aggregate:provenance:source_revision
 M9.A9b.source_revision.tracked_changes	src/eval/journal/admission.ail:test_m9_a9b_each_identity_false	refused	A9b:TrackedChanges	aggregate:provenance:source_revision
@@ -308,7 +308,7 @@ M10.A4.live.json_inequal	src/eval/journal/source_checks_live_test.ail:m10_a4_jso
 M10.A4.live.json_equal	src/eval/journal/source_checks_live_test.ail:m10_a4_json_inequal	pass	-	aggregate:invocations
 M10.A4.live.program_digest_first	src/eval/journal/source_checks_live_test.ail:m10_a4_json_inequal	refused	A4:ArgumentsDigestDiffers	snapshot:13
 M10.A4.live.count.short	src/eval/journal/source_checks_live_test.ail:m10_a4_count	refused	A4:InvocationCountDiffers	snapshot:20
-M10.A4.live.count.long	src/eval/journal/source_checks_live_test.ail:m10_a4_count	refused	A4:InvocationCountDiffers	interaction:23
+M10.A4.live.count.long	src/eval/journal/source_checks_live_test.ail:m10_a4_count	refused	A4:InvocationCountDiffers	interaction:22
 M10.verdict.faithful	src/eval/journal/source_checks.ail:test_m10_verdict_mapping	admitted	-	-
 M10.verdict.check_order	src/eval/journal/source_checks.ail:test_m10_verdict_mapping	refused	AdmissionCheck(A2)	snapshot:14
 M10.verdict.stable_within_check	src/eval/journal/source_checks.ail:test_m10_verdict_mapping	refused	AdmissionCheck(A3)	call:2
@@ -572,18 +572,18 @@ M15.PreflightMismatch	-	inapplicable	reason: identity refusals have no replay (P
 M15.GuardTripped	-	inapplicable	reason: resource refusals have no replay (PLAN-004 M15)	-
 M14.reproduced.suspended	src/eval/journal/candidate_checks_live_test.ail:m14_reproduced_suspended	reproduced	-	-
 M14.reproduced.finalize	src/eval/journal/candidate_checks_live_test.ail:m14_reproduced_finalize	reproduced	-	-
-M14.WrongKind	src/eval/journal/candidate_checks_live_test.ail:m14_k2_wrong_kind	diverged	K2:WrongKind	interaction:7
-M14.WrongOrigin	src/eval/journal/candidate_checks_live_test.ail:m14_k2_wrong_origin	diverged	K2:WrongOrigin	interaction:7
-M14.UnsafeIdentity	src/eval/journal/candidate_checks_live_test.ail:m14_k2_unsafe_identity	diverged	K2:UnsafeIdentity	interaction:10
-M14.ProjectionDiffers	src/eval/journal/candidate_checks_live_test.ail:m14_k2_projection_differs	diverged	K2:ProjectionDiffers	interaction:14
-M14.OutcomeDiffers	src/eval/journal/candidate_checks_live_test.ail:m14_k2_outcome_differs	diverged	K2:OutcomeDiffers	interaction:17
-M14.ProgramExhausted.log_length	src/eval/journal/candidate_checks_live_test.ail:m14_k2_program_exhausted	diverged	K2:ProgramExhausted	interaction:23
-M14.UnusedInteraction.log_length	src/eval/journal/candidate_checks_live_test.ail:m14_k2_unused_interaction	diverged	K2:UnusedInteraction	interaction:22
-M14.exhausted_marker.past_end	src/eval/journal/candidate_checks_live_test.ail:m14_exhausted_marker_past_end	diverged	K2:ProgramExhausted	interaction:18
-M14.exhausted_marker.at_position	src/eval/journal/candidate_checks_live_test.ail:m14_exhausted_marker_at_position	diverged	K2:ProjectionDiffers	interaction:18
-M14.exhausted_marker.earlier_mismatch	src/eval/journal/candidate_checks_live_test.ail:m14_exhausted_marker_earlier_mismatch	diverged	K2:ProjectionDiffers	interaction:14
+M14.WrongKind	src/eval/journal/candidate_checks_live_test.ail:m14_k2_wrong_kind	diverged	K2:WrongKind	interaction:6
+M14.WrongOrigin	src/eval/journal/candidate_checks_live_test.ail:m14_k2_wrong_origin	diverged	K2:WrongOrigin	interaction:6
+M14.UnsafeIdentity	src/eval/journal/candidate_checks_live_test.ail:m14_k2_unsafe_identity	diverged	K2:UnsafeIdentity	interaction:9
+M14.ProjectionDiffers	src/eval/journal/candidate_checks_live_test.ail:m14_k2_projection_differs	diverged	K2:ProjectionDiffers	interaction:13
+M14.OutcomeDiffers	src/eval/journal/candidate_checks_live_test.ail:m14_k2_outcome_differs	diverged	K2:OutcomeDiffers	interaction:16
+M14.ProgramExhausted.log_length	src/eval/journal/candidate_checks_live_test.ail:m14_k2_program_exhausted	diverged	K2:ProgramExhausted	interaction:22
+M14.UnusedInteraction.log_length	src/eval/journal/candidate_checks_live_test.ail:m14_k2_unused_interaction	diverged	K2:UnusedInteraction	interaction:21
+M14.exhausted_marker.past_end	src/eval/journal/candidate_checks_live_test.ail:m14_exhausted_marker_past_end	diverged	K2:ProgramExhausted	interaction:17
+M14.exhausted_marker.at_position	src/eval/journal/candidate_checks_live_test.ail:m14_exhausted_marker_at_position	diverged	K2:ProjectionDiffers	interaction:17
+M14.exhausted_marker.earlier_mismatch	src/eval/journal/candidate_checks_live_test.ail:m14_exhausted_marker_earlier_mismatch	diverged	K2:ProjectionDiffers	interaction:13
 M14.K1.ReconstitutionFinding	src/eval/journal/candidate_checks_live_test.ail:m14_k1_reconstitution	diverged	K1:QueueOverfilled	aggregate:reconstitution:tools
-M14.K1.unstartable	src/eval/journal/candidate_checks_live_test.ail:m14_k1_unstartable	refused	ProgramUndecodable:ProviderOutcomeUndecodable(7)	aggregate:program
+M14.K1.unstartable	src/eval/journal/candidate_checks_live_test.ail:m14_k1_unstartable	refused	ProgramUndecodable:ProviderOutcomeUndecodable(6)	aggregate:program
 M14.K3.DiscoveryFinding.prepared_gt_recorded	src/eval/journal/candidate_checks_live_test.ail:m14_k3_prepared_over_recorded	diverged	K3:UnderRecorded	aggregate:witness
 M14.K3.DiscoveryFinding.prepared_gt_recorded.stored_witness_agrees	src/eval/journal/candidate_checks_live_test.ail:m14_k3_prepared_over_recorded_stored_witness_agrees	diverged	K3:UnderRecorded	aggregate:witness
 M14.K3.DiscoveryFinding.prepared_lt_recorded	src/eval/journal/candidate_checks_live_test.ail:m14_k3_prepared_under_recorded	diverged	K3:OverRecorded	aggregate:witness
@@ -598,7 +598,7 @@ M14.K6.EndMismatch	src/eval/journal/candidate_checks_live_test.ail:m14_k6_end	di
 M14.K6.EndMismatch.marker_scan	src/eval/journal/candidate_checks_live_test.ail:m14_k6_marker_scan	diverged	K6:ExhaustedMarker	call:3
 M14.K7.ChainMismatch.seed	src/eval/journal/candidate_checks_live_test.ail:m14_k7_seed_chain	diverged	K7:SeedDigestDiffers	snapshot:12
 M14.K7.ChainMismatch.append	src/eval/journal/candidate_checks_live_test.ail:m14_k7_append_chain	diverged	K7:ChainDiffers	snapshot:14
-M14.regression_diagnostic_only	src/eval/journal/candidate_checks_live_test.ail:m14_regression_diagnostic_only	diverged	K2:ProjectionDiffers	interaction:14
+M14.regression_diagnostic_only	src/eval/journal/candidate_checks_live_test.ail:m14_regression_diagnostic_only	diverged	K2:ProjectionDiffers	interaction:13
 M14.pure.K2.positions	src/eval/journal/candidate_checks.ail:test_m14_k2_positions	pass	-	aggregate:k2
 M14.pure.K4.family_record	src/eval/journal/candidate_checks.ail:test_m14_k4_family_record	pass	-	aggregate:family
 M14.pure.K4.census_record	src/eval/journal/candidate_checks.ail:test_m14_k4_census_record	pass	-	aggregate:census

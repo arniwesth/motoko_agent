@@ -231,7 +231,12 @@ export pure func compose_profile_id() -> string { "driver_plus_compose" }
 -- content hash moved: the DP7 verifier left core (005 ADR-001 Amendment 1) and
 -- all five session.ail anchors moved with it. Nothing installed, covered,
 -- excluded, omitted or routed changes. See `compose_attribution_ref`.
-export pure func compose_profile_version() -> string { "16" }
+-- v17 (2026-10-11, 005 W2, the W2-6 follow-up). RE-ISSUED because the
+-- attribution table's content hash moved: the persist nudge left core (005
+-- ADR-001 Amendment 1, A5) and all five session.ail anchors moved with it.
+-- Nothing installed, covered, excluded, omitted or routed changes. See
+-- `compose_attribution_ref`.
+export pure func compose_profile_version() -> string { "17" }
 
 -- The same attribution table both predecessors bind, at the same identity.
 -- THREE profiles referring to one table: D4's rule now re-issues three, and the
@@ -396,7 +401,13 @@ export pure func compose_attribution_ref() -> AttributionRef {
     -- removal of the DP7 verifier (005 ADR-001 Amendment 1). An anchor
     -- re-measurement, not a table correction. See
     -- `driver_only_attribution_ref`.
-    content_hash: "sha256:c7500943bffc8be0c48521afc17fa4b70ea3740c65a049394081d2d6bf513c6d" }
+    -- 005 W2 (the W2-6 follow-up): re-recorded with both predecessors', from
+    -- sha256:c7500943bffc8be0c48521afc17fa4b70ea3740c65a049394081d2d6bf513c6d.
+    -- All five session anchors moved -4/-4/-4/-122/-160, pulled up by the
+    -- removal of the persist nudge (005 ADR-001 Amendment 1, A5). An anchor
+    -- re-measurement, not a table correction. See
+    -- `driver_only_attribution_ref`.
+    content_hash: "sha256:0d4d166ddf960cb667345f26a7fb75cf5c17ba03d2ff5da6a678fbf23d1bc1e1" }
 }
 
 -- ---------------------------------------------------------------------------

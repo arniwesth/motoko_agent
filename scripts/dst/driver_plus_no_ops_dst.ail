@@ -466,7 +466,7 @@ func scenario_exclusion_check() -> bool ! {IO} {
   let meta: ReplayMetadata =
     { source_revision: "HEAD", toolchain_version: "ailang 0.33.0",
       profile_id: no_ops_id(), profile_version: no_ops_version(),
-      event_vocabulary_version: "event-vocabulary/2" };
+      event_vocabulary_version: "event-vocabulary/3" };
   let none_excluded = not is_excluded_hook(driver_plus_no_ops(), "compaction_structural", "tool_provider[0]");
   let no_violation =
     match routing_violation_at(driver_plus_no_ops(), "compaction_structural", "tool_provider[0]", 0,

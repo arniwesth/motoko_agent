@@ -111,7 +111,6 @@ import src/core/phase_vocab (
   DoneEvent,
   EmptyStopFinalize,
   ExtSolverFeedback,
-  PersistNudge,
   NativeToolCalls,
   NativeToolResults,
   StreamDelta,
@@ -194,7 +193,7 @@ import src/core/test/stub_step (StepProvider, dispatch_step, LiveAI, Scripted, S
 import src/core/step_machine (decide)
 import src/core/model_phase (phase_from_result)
 import src/core/hook_phase (stage_record)
-import src/core/recovery (should_retry_stream_error, should_inject_persist_nudge)
+import src/core/recovery (should_retry_stream_error)
 import src/core/tool_phase (resolve_approval, execute_allowed_tool_call, dispatch_tool_entries_with_builtin, ToolDispatchDone, ToolDispatchPending)
 import src/core/ports (ParkRequest, WakeInput, WakeOutcome, wake_outcome_id, wake_outcome_detail, wake_outcome_of, Settled, Lost, OperatorInput, TimedOut, HostError, Aborted, ScriptedStep, ApprovalAllowed, ApprovalDenied, Ports, PortedProvider, WorldState, empty_world_state, context_reader_of, PathKind, PathMissing, PathFile, PathDir, EnvRead, ClockRead, ToolExec, RequestWitness, ToolFailed) import src/core/world_ordinal (advance, request_class_id) -- PLAN-001 P2 Part 1: the request classes and their one writer, joined onto this line so the five clock anchors do not move. WI-D18: PathKind crosses the ABI boundary in `ext_ports_of` and the translation is an exhaustive match, not a string. 031 P1.1: `ToolFailed` imported BY NAME -- ABI 8.0's `ObservedToolOutcome` declares a `ToolFailed` too, and on v0.33.0 an unimported constructor resolves to the EARLIEST import's (the ABI's, line 48); a named import binds ports' (evidence/P1.1/ctor_collision/)
 
@@ -531,7 +530,6 @@ type C2LoopState = {
   pending_approval: Option[ApprovalRequest],
   last_finish_reason: string,
   last_response_text: string,
-  nudges_used: int,
   finalize_source: string,
   prior_counts: RuntimeStatusCounts,
   trace: LedgerTrace,
@@ -965,7 +963,6 @@ func c2_step_state(st: C2LoopState) -> Result[StepState, string] {
       history: h,
       telemetry: st.telemetry,
       totals: c2_step_totals(st.totals),
-      nudges_used: st.nudges_used,
       ext_artifacts: st.ext_artifacts,
       pending_tool_calls: st.pending_tool_calls,
       last_finish_reason: st.last_finish_reason,
@@ -1000,7 +997,6 @@ func c2_initial_state_with_counts(history: [Message], provider: PortedProvider, 
     pending_approval: None,
     last_finish_reason: "",
     last_response_text: "",
-    nudges_used: count_persist_nudges(history),
     finalize_source: "",
     prior_counts: prior_counts,
     trace: empty_ledger_trace(),
@@ -2213,29 +2209,9 @@ pure func step_cost_millicents(input_tokens: int, output_tokens: int, rates: Cos
 -- prose-only responses unambiguously stop the loop (no continuation-intent
 -- heuristic needed).
 
--- M-MOTOKO-PERSIST-NUDGE: bounded loop-persistence at the NoDecision boundary.
--- Root cause (2026-06-18 A/B transcripts): on local models the agent often
--- DISENGAGES after 0–1 tool calls WITHOUT writing a solution — either answering
--- in prose (0 tool calls) or making one inspect call (e.g. `cat solution.ail`)
--- and stopping. The loop then finalizes at NoDecision. These helpers let the loop
--- inject a bounded nudge to keep going instead. Off by default (MOTOKO_PERSIST_
--- RETRIES=0); opt-in for A/B so the rotation is unchanged until validated.
-
--- Marker embedded in injected nudges so we can count them from history alone
--- (no new loop_v2 state to thread through its 16 recursive call sites).
-func persist_nudge_marker() -> string { "[motoko-persist-nudge]" }
-
--- How many persistence nudges are allowed this run (MOTOKO_PERSIST_RETRIES,
--- default 0 = feature off).
-pure func parse_persist_retries_budget(raw: string) -> int {
-  match _stringToInt(trim(raw)) {
-    Some(n) => if n > 0 then n else 0,
-    None => 0
-  }
-}
-
--- WI-A12's env class. Four of the driver's env reads are here, and they are
--- threaded rather than ambient.
+-- WI-A12's env class. Three of the driver's env reads are here, and they are
+-- threaded rather than ambient. There were four until 005 W2-4 removed the
+-- `MOTOKO_PERSIST_RETRIES` read, so the history below counts four.
 --
 -- The count this comment used to carry — "four of the driver's SEVEN" — was true
 -- from WI-A12 until WI-D3, which routed `context_usage`'s four keys through the
@@ -2264,16 +2240,14 @@ export type SessionPolicyInit = { policy: SessionPolicy, next_state: WorldState 
 
 func session_policy_init(ports: Ports, world: WorldState, model: string, step_budget: int, max_cost_millicents: int, cost_rates: CostRates) -> SessionPolicyInit ! {Env, FS} {
   let budget_steps = if step_budget <= 0 then 8 else step_budget;
-  let r_persist = ports.env_get(world, "MOTOKO_PERSIST_RETRIES", "0");
-  let r_retry = ports.env_get(advance(r_persist.next_state, EnvRead), "MOTOKO_RETRY_STREAM_ERROR", "1");
+  let r_retry = ports.env_get(world, "MOTOKO_RETRY_STREAM_ERROR", "1");
   let r_base = ports.env_get(advance(r_retry.next_state, EnvRead), "OPENAI_BASE_URL", "");
   let r_headless = ports.env_get(advance(r_base.next_state, EnvRead), "MOTOKO_HEADLESS", "");
-  -- WI-D3's filesystem class. The fifth request this function makes, threaded
-  -- from the fourth's successor exactly like the four env reads above and for
+  -- WI-D3's filesystem class. The fourth request this function makes, threaded
+  -- from the third's successor exactly like the three env reads above and for
   -- the same reason A13 stage 2 gave: once a read appends to the world's log,
   -- discarding the successor drops every read it carried.
   let r_limit = resolve_context_limit_sum(context_reader_of(ports), advance(r_headless.next_state, EnvRead), model);
-  let persist_retries = parse_persist_retries_budget(r_persist.value);
   let retry_stream_errors = r_retry.value != "0";
   let provider_base_url = r_base.value;
   let headless = r_headless.value == "1";
@@ -2283,7 +2257,6 @@ func session_policy_init(ports: Ports, world: WorldState, model: string, step_bu
         step_budget: budget_steps,
         max_cost_millicents: max_cost_millicents,
         cost_metered: cost_rates.input_per_1m_millicents > 0,
-        persist_retries: persist_retries,
         retry_stream_errors: retry_stream_errors,
         require_system_prompt: not headless,
         model: model,
@@ -2315,7 +2288,6 @@ func session_policy_with_model(ports: Ports, world: WorldState, policy: SessionP
       step_budget: policy.step.step_budget,
       max_cost_millicents: policy.step.max_cost_millicents,
       cost_metered: policy.step.cost_metered,
-      persist_retries: policy.step.persist_retries,
       retry_stream_errors: policy.step.retry_stream_errors,
       require_system_prompt: policy.step.require_system_prompt,
       model: model,
@@ -2332,38 +2304,6 @@ func session_policy_with_model(ports: Ports, world: WorldState, policy: SessionP
     headless: policy.headless
     },
     next_state: r_limit.next_state
-  }
-}
-
--- Count nudges already injected (user messages carrying the marker) so we never
--- exceed the budget — the count IS the persistence state, read from history.
-func count_persist_nudges(msgs: [Message]) -> int {
-  match msgs {
-    [] => 0,
-    m :: rest => {
-      let here = if m.role == "user" && contains(m.content, persist_nudge_marker()) then 1 else 0;
-      here + count_persist_nudges(rest)
-    }
-  }
-}
-
-func tool_calls_have_writefile(calls: [ToolCall]) -> bool {
-  match calls {
-    [] => false,
-    c :: rest => if c.name == "WriteFile" then true else tool_calls_have_writefile(rest)
-  }
-}
-
--- True once the model has attempted ANY WriteFile this run — if so it is engaged
--- with producing a solution, so we let it finalize/fail on its own (don't nudge).
--- Both disengagement modes (0 calls / 1 inspect call) have zero WriteFile, so
--- this gates the nudge precisely to the premature-stop case.
-func any_writefile_attempt(msgs: [Message]) -> bool {
-  match msgs {
-    [] => false,
-    m :: rest =>
-      if tool_calls_have_writefile(m.tool_calls) then true
-      else any_writefile_attempt(rest)
   }
 }
 
@@ -2449,7 +2389,6 @@ pure func c2_continuation(
     cumulative: runtime_status_counts_add(st.prior_counts, runtime_status_counts(st.trace)),
     telemetry: ext_token_telemetry(st.telemetry),
     ext_artifacts: st.ext_artifacts,
-    nudges_used: st.nudges_used,
     model: model,
     profile: identity.profile,
     boot: boot
@@ -2535,11 +2474,7 @@ pure func loop_token_telemetry(t: TokenTelemetry) -> { last_input_tokens: int, l
 --   is the whole of the repair, since today's path recurses with the PRE-TURN
 --   history and the exhausted turn's messages die on the floor; `cumulative`
 --   as the new run's `prior_counts`, so the judging number keeps counting
---   across the boundary; `telemetry` and `ext_artifacts`; and `nudges_used`,
---   which is NOT re-derived from the history the way
---   `c2_initial_state_with_counts` re-derives it (`count_persist_nudges`): a
---   nudge the previous run spent is spent, and re-deriving it from a history a
---   compaction stage may have rewritten would silently refund it.
+--   across the boundary; and `telemetry` and `ext_artifacts`.
 --
 --   RESET, because a resumed run is its own run: `step_idx` (the step budget
 --   is per run — that is what the suspension was about), `totals`
@@ -2574,7 +2509,6 @@ pure func c2_state_from_continuation(c: Continuation, provider: PortedProvider, 
     pending_approval: reset.pending_approval,
     last_finish_reason: reset.last_finish_reason,
     last_response_text: reset.last_response_text,
-    nudges_used: c.nudges_used,
     finalize_source: reset.finalize_source,
     prior_counts: c.cumulative,
     trace: reset.trace,
@@ -2794,7 +2728,6 @@ func c2_finish_tool_batch(
     pending_approval: None,
     last_finish_reason: "tools_complete",
     last_response_text: "",
-    nudges_used: st.nudges_used,
     finalize_source: "",
     prior_counts: st.prior_counts,
     trace: trace_with_history,
@@ -2846,7 +2779,6 @@ func c2_continue_tool_batch(
         pending_approval: None,
         last_finish_reason: "approval_resolved",
         last_response_text: "",
-        nudges_used: st.nudges_used,
         finalize_source: "",
         prior_counts: st.prior_counts,
         trace: trace,
@@ -2866,10 +2798,10 @@ func c2_continue_tool_batch(
 -- PLAN-002 W2 Part 4: the approved arm of `c2_after_dp7`, which was the
 -- verifier call and the two states it chose between. The verifier and the
 -- rejected state are gone (005 ADR-001 Amendment 1, A4); this is the state an
--- approved candidate leaves. Content is the old arm's byte for byte: the same
--- journal events in the same order, the same `nudges_used` recount, and the
--- old call site's `st.provider`, `st.prior_counts` and `st.history_digest`,
--- which is why it takes `st` rather than those fields one by one.
+-- approved candidate leaves. Content is the old arm's: the same journal events
+-- in the same order, and the old call site's `st.provider`, `st.prior_counts`
+-- and `st.history_digest`, which is why it takes `st` rather than those fields
+-- one by one.
 --
 -- ADR-003 D2's `:2356`/`:2381` still hold here: ONE `HistoryAppended` for the
 -- one message (the assistant) that entered the history on this path, and
@@ -2911,7 +2843,6 @@ func c2_candidate_approved_state(
     pending_approval: None,
     last_finish_reason: "candidate_approved",
     last_response_text: output,
-    nudges_used: count_persist_nudges(msgs_with_assistant),
     finalize_source: source,
     prior_counts: st.prior_counts,
     trace: trace_with_delta,
@@ -3084,7 +3015,6 @@ pure func both_open_msgs(calls: [ToolCall], before: [WaitDescriptor], after: [Wa
 
 type CandidateClass
   = CandidateFeedback({ event: LedgerEvent, feedback: string, world: WorldState })
-  | CandidateNudge({ event: LedgerEvent, world: WorldState })
   | CandidateApproved({ output: string, source: string, world: WorldState })
   -- PLAN-002 W4 Part 1: the waits stage. The world is the intercept's
   -- successor, holder-cleared: no completion hook ran.
@@ -3097,10 +3027,12 @@ type CandidateClass
 --   1. pending      upstream: tool calls or a pending approval never reach here.
 --   2. waits        LIVE from PLAN-002 W4 Part 1: any open wait classifies the
 --                   candidate `await_wake`, whatever it says, blank included,
---                   before any solver or nudge runs.
---   3. completion   `dispatch_solver_candidate`, then the persist nudge.
---   4. finalize     a candidate the completion policy neither sent back nor
---                   nudged is approved as it stands, blank or not.
+--                   before any solver runs.
+--   3. completion   `dispatch_solver_candidate`, and nothing after it: core
+--                   has no persist nudge (005 ADR-001 Amendment 1, A5).
+--   4. finalize     a candidate the completion policy did not send back is
+--                   approved as it stands, blank or not. A silent merge of the
+--                   judges (`NoDecision`) is one.
 --
 -- THE WAITS-STAGE WORLD IS `token_to_world(clear_holder(ctx.world))`. No
 -- completion hook has run at that point, so there is no fold to take a
@@ -3115,11 +3047,8 @@ func classify_candidate(
   rt: ExtRuntime,
   ctx: ExtCtx,
   candidate: string,
-  msgs_with_assistant: [Message],
   step_idx: int,
   session_id: string,
-  persist_retries: int,
-  nudges_used: int,
   open_waits: [WaitDescriptor]
 ) -> CandidateClass ! {Process, IO, Clock, Trace} {
   -- Stage 2 (PLAN-002 W4 Part 1).
@@ -3137,16 +3066,7 @@ func classify_candidate(
         let _ = ledger_emit(session_id, event);
         CandidateFeedback({ event: event, feedback: feedback, world: world })
       },
-      NoDecision =>
-        if should_inject_persist_nudge(persist_retries, nudges_used, any_writefile_attempt(msgs_with_assistant)) then {
-          let event = PersistNudge({
-            step: step_idx,
-            nudge_num: nudges_used + 1,
-            budget: persist_retries
-          });
-          let _ = ledger_emit(session_id, event);
-          CandidateNudge({ event: event, world: world })
-        } else CandidateApproved({ output: candidate, source: "", world: world })
+      NoDecision => CandidateApproved({ output: candidate, source: "", world: world })
     }
   }
 }
@@ -3247,7 +3167,6 @@ func c2_loop(
         },
         InjectUserMessage(msg) => {
           let next_msgs = st.msgs ++ [msg];
-          let next_nudges = if st.last_finish_reason == "persist_nudge" then st.nudges_used + 1 else st.nudges_used;
           -- ADR-003 D2's `:2494`. The injected message is a `user` message the
           -- OPERATOR never sent, and it is journaled exactly like one that was:
           -- the provider sees it, so a resume that did not would send a
@@ -3270,7 +3189,6 @@ func c2_loop(
     pending_approval: None,
             last_finish_reason: "user_injected",
             last_response_text: "",
-            nudges_used: next_nudges,
             finalize_source: "",
             prior_counts: st.prior_counts,
             trace: c2_journal(session_id, trace_with_decision, appended.events),
@@ -3333,7 +3251,6 @@ func c2_loop(
             pending_approval: st.pending_approval,
             last_finish_reason: st.last_finish_reason,
             last_response_text: st.last_response_text,
-            nudges_used: st.nudges_used,
             finalize_source: st.finalize_source,
             prior_counts: st.prior_counts,
             trace: trace_with_delta,
@@ -3553,7 +3470,6 @@ func c2_loop(
                 pending_approval: Some(pending.request),
                 last_finish_reason: "await_approval",
                 last_response_text: pending.request.reason,
-                nudges_used: st.nudges_used,
                 finalize_source: "",
                 prior_counts: st.prior_counts,
                 -- WI-D2: `pending.emitted`, and the suspension is exactly where
@@ -3740,7 +3656,6 @@ func c2_loop(
     pending_approval: None,
                       last_finish_reason: "stream_error",
                       last_response_text: e.message,
-                      nudges_used: st.nudges_used,
                       finalize_source: "",
                       prior_counts: st.prior_counts,
                       -- A STEP END WITH NO MESSAGE. `st.msgs` is unchanged — the
@@ -3838,7 +3753,6 @@ func c2_loop(
     pending_approval: None,
                         last_finish_reason: "intercept_handled",
                         last_response_text: result.message.content,
-                        nudges_used: applied.nudges_used,
                         finalize_source: "",
                         prior_counts: st.prior_counts,
                         trace: trace_with_delta,
@@ -3886,7 +3800,6 @@ func c2_loop(
     pending_approval: None,
                           last_finish_reason: "tool_calls",
                           last_response_text: applied.last_response_text,
-                          nudges_used: applied.nudges_used,
                           finalize_source: "",
                           prior_counts: st.prior_counts,
                           trace: trace_with_delta,
@@ -3950,7 +3863,6 @@ func c2_loop(
     pending_approval: None,
                               last_finish_reason: "hybrid_bash",
                               last_response_text: result.message.content,
-                              nudges_used: applied.nudges_used,
                               finalize_source: "",
                               prior_counts: st.prior_counts,
                               trace: trace_with_delta,
@@ -3970,7 +3882,7 @@ func c2_loop(
                             -- PLAN-002 W2 Part 4 (ADR-002 D2). ONE classification, in stage
                             -- order: open waits before the completion policy. See
                             -- `classify_candidate`.
-                            let classified = classify_candidate(rt, { post_ctx | world: intercepted.next_state }, result.message.content, msgs_with_assistant, step_idx, session_id, policy.step.persist_retries, st.nudges_used, st.open_waits); -- WI-D19
+                            let classified = classify_candidate(rt, { post_ctx | world: intercepted.next_state }, result.message.content, step_idx, session_id, st.open_waits); -- WI-D19
                             match classified {
                               CandidateApproved(approved) =>
                                 c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, c2_candidate_approved_state(session_id, identity, st, msgs_with_assistant, new_totals, chain.artifacts, applied.telemetry, approved.world, trace_after_model, emissions_after_call, artifacts_changed, step_idx, approved.output, approved.source)),
@@ -3997,40 +3909,6 @@ func c2_loop(
     pending_approval: None,
                                   last_finish_reason: "solver_feedback",
                                   last_response_text: fed.feedback,
-                                  nudges_used: applied.nudges_used,
-                                  finalize_source: "",
-                                  prior_counts: st.prior_counts,
-                                  trace: trace_with_delta,
-                                  emissions: emissions_after_call,
-                                  history_digest: appended.digest,
-                                  open_waits: st.open_waits,
-                                  park_ordinal: st.park_ordinal,
-                                  park_attempt: st.park_attempt
-                                };
-                                c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
-                              },
-                              CandidateNudge(nudged) => {
-                                let appended = c2_history_appended(identity.run_id, step_idx, st.history_digest, false, last_msg(msgs_with_assistant));
-                                let trace_with_history = c2_journal(session_id, ledger_append(trace_after_model, WireRecord(nudged.event)), appended.events);
-                                let trace_with_delta = c2_journal(session_id, trace_with_history,
-                                  [c2_state_delta_event(identity.run_id, step_idx, st.prior_counts, trace_with_history, applied.telemetry, chain.artifacts, artifacts_changed)]);
-                                let next_state: C2LoopState = {
-                                  msgs: msgs_with_assistant,
-	                                  step_idx: step_idx + 1,
-	                                  totals: new_totals,
-	                                  ext_artifacts: chain.artifacts,
-	                                  telemetry: applied.telemetry,
-	                                  provider: st.provider,
-	                                  world_state: nudged.world,
-                                  pending_tool_calls: [],
-                                  pending_tool_context: [],
-                                  pending_tool_prefix: [],
-                                  pending_tool_batched: true,
-    accumulated_tool_msgs: [],
-    pending_approval: None,
-                                  last_finish_reason: "persist_nudge",
-                                  last_response_text: result.message.content,
-                                  nudges_used: st.nudges_used,
                                   finalize_source: "",
                                   prior_counts: st.prior_counts,
                                   trace: trace_with_delta,
@@ -4280,44 +4158,6 @@ export func run_v2_session_traced(
   let pp = ported_provider(rt, provider);
   let init = session_policy_init(pp.ports, pp.world, model, step_budget, max_cost_millicents, cost_rates);
   run_v2_from_messages_traced_with_policy(rt, task, env_url, hybrid_tools, budget, init.policy, model, history, workdir, ohmy_pi, max_cost_millicents, cost_rates, { pp | world: init.next_state })
-}
-
-export func run_v2_session_traced_with_persist_retries(
-  rt: ExtRuntime,
-  task: string,
-  env_url: string,
-  hybrid_tools: bool,
-  budget: BudgetPlan,
-  model: string,
-  history: [Message],
-  workdir: string,
-  step_budget: int,
-  ohmy_pi: bool,
-  max_cost_millicents: int,
-  cost_rates: CostRates,
-  persist_retries: int,
-  provider: StepProvider
-) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
-  let pp = ported_provider(rt, provider);
-  let init = session_policy_init(pp.ports, pp.world, model, step_budget, max_cost_millicents, cost_rates);
-  let base = init.policy;
-  let policy: SessionPolicy = {
-    step: {
-      step_budget: base.step.step_budget,
-      max_cost_millicents: base.step.max_cost_millicents,
-      cost_metered: base.step.cost_metered,
-      persist_retries: persist_retries,
-      retry_stream_errors: base.step.retry_stream_errors,
-      require_system_prompt: base.step.require_system_prompt,
-      model: base.step.model,
-      provider_base_url: base.step.provider_base_url,
-      checkpoint_enabled: base.step.checkpoint_enabled,
-      checkpoint_pct: base.step.checkpoint_pct,
-      compaction: base.step.compaction
-    },
-    headless: base.headless
-  };
-  run_v2_from_messages_traced_with_policy(rt, task, env_url, hybrid_tools, budget, policy, model, history, workdir, ohmy_pi, max_cost_millicents, cost_rates, pp)
 }
 
 func run_v2_from_messages_with_policy(
@@ -5407,9 +5247,6 @@ func run_v2_from_parked_traced(
     cumulative: plan.cumulative,
     telemetry: plan.telemetry,
     ext_artifacts: plan.ext_artifacts,
-    -- RE-DERIVED, as `plan_resume` re-derives it for a suspended boundary: the
-    -- journal carries no nudge count.
-    nudges_used: count_persist_nudges(plan.history),
     model: plan.model,
     profile: plan.profile,
     boot: plan.boot
@@ -5680,7 +5517,6 @@ func test_runtime_status_includes_prior_conversation_counts() -> bool ! {IO, Tra
       pending_approval: None,
       last_finish_reason: "tool_calls",
       last_response_text: "",
-      nudges_used: 0,
       finalize_source: "",
       prior_counts: prior,
       trace: trace,
@@ -5695,7 +5531,6 @@ func test_runtime_status_includes_prior_conversation_counts() -> bool ! {IO, Tra
         step_budget: 100,
         max_cost_millicents: 0,
         cost_metered: false,
-        persist_retries: 0,
         retry_stream_errors: false,
         require_system_prompt: true,
         model: "m",
@@ -5736,7 +5571,6 @@ func test_runtime_status_reports_actual_context_window() -> bool ! {IO, Trace}
       pending_approval: None,
       last_finish_reason: "tool_calls",
       last_response_text: "",
-      nudges_used: 0,
       finalize_source: "",
       prior_counts: zero_runtime_status_counts(),
       trace: { records: [] },
@@ -5751,7 +5585,6 @@ func test_runtime_status_reports_actual_context_window() -> bool ! {IO, Trace}
         step_budget: 100,
         max_cost_millicents: 0,
         cost_metered: false,
-        persist_retries: 0,
         retry_stream_errors: false,
         require_system_prompt: true,
         model: "m",
@@ -5824,7 +5657,7 @@ pure func test_runtime_status_counts_generated_compaction_ai_id() -> bool
 -- Part 5 replaces it with, and each returns the value the runtime produces
 -- TODAY, which is nothing: there is no run identity in the loop at all, and the
 -- resume path recurses with the pre-turn history (`:3418–3427`), dropping the
--- exhausted run's messages, counts and nudge tally on the floor. That drop is
+-- exhausted run's messages and counts on the floor. That drop is
 -- what the assertions below describe the repair of.
 --
 -- WHAT MUST NOT HAPPEN TO THEM: filling a stub in with the assertion's own
@@ -5866,7 +5699,6 @@ type ResumeStateShape = {
   step_idx: int,
   totals_cost_millicents: int,
   prior_calls_completed: int,
-  nudges_used: int,
   pending_tool_calls: int,
   trace_len: int,
   emissions_len: int,
@@ -5881,20 +5713,19 @@ type ResumeStateShape = {
 -- projection rather than a second opinion: change the constructor's reset half
 -- and this function changes with it, and the assertion below is what notices.
 --
--- The three arguments ARE the continuation's carried fields — `List.length(
--- c.history)`, `c.cumulative.provider_calls_completed`, `c.nudges_used` —
+-- The two arguments ARE the continuation's carried fields — `List.length(
+-- c.history)` and `c.cumulative.provider_calls_completed` —
 -- because a `C2LoopState` cannot be built in a `pure` test at all: it holds a
 -- `Ports` and a `WorldState` and every constructor of those is effectful.
 -- `ext_artifacts` and `telemetry` are carried too; they are not integers and
 -- `journal.ail`'s round-trip test pins them instead.
-pure func c2_state_from_continuation_shape(history_len: int, cumulative_calls_completed: int, nudges_used: int) -> ResumeStateShape {
+pure func c2_state_from_continuation_shape(history_len: int, cumulative_calls_completed: int) -> ResumeStateShape {
   let reset = c2_resume_reset();
   {
     msgs_len: history_len,
     step_idx: reset.step_idx,
     totals_cost_millicents: reset.totals.cost_millicents,
     prior_calls_completed: cumulative_calls_completed,
-    nudges_used: nudges_used,
     pending_tool_calls: List.length(reset.pending_tool_calls),
     trace_len: List.length(reset.trace.records),
     emissions_len: List.length(reset.emissions),
@@ -5904,8 +5735,8 @@ pure func c2_state_from_continuation_shape(history_len: int, cumulative_calls_co
   }
 }
 
--- The continuation of the DST fixture's run, read as a resume: eight messages,
--- three completed provider calls, no nudges. The step index and the totals
+-- The continuation of the DST fixture's run, read as a resume: eight messages
+-- and three completed provider calls. The step index and the totals
 -- RESET (the next run counts its own steps and its own cost); the history and
 -- the cumulative counts CARRY (that is the whole of the repair); the pending
 -- fields, the trace and the emissions start empty (a resumed run's trace is its
@@ -5913,10 +5744,9 @@ pure func c2_state_from_continuation_shape(history_len: int, cumulative_calls_co
 pure func test_c2_state_from_continuation_resets_and_carries() -> bool
   tests [((), true)]
   {
-    let st = c2_state_from_continuation_shape(8, 3, 0);
+    let st = c2_state_from_continuation_shape(8, 3);
     st.msgs_len == 8
       && st.prior_calls_completed == 3
-      && st.nudges_used == 0
       && st.step_idx == 0
       && st.totals_cost_millicents == 0
       && st.pending_tool_calls == 0
@@ -5947,7 +5777,7 @@ pure func w5_world(ordinal: int) -> WorldState {
 }
 
 pure func w5_continuation() -> Continuation {
-  { history: [], step_idx: 2, cumulative: zero_runtime_status_counts(), telemetry: zero_token_telemetry(), ext_artifacts: jo([]), nudges_used: 0, model: "m", profile: "p", boot: empty_boot() }
+  { history: [], step_idx: 2, cumulative: zero_runtime_status_counts(), telemetry: zero_token_telemetry(), ext_artifacts: jo([]), model: "m", profile: "p", boot: empty_boot() }
 }
 
 -- W5(c): the next turn starts from the PUBLISHED successor, never from the
@@ -5982,7 +5812,7 @@ pure func test_w5_a_wake_opened_run_first_parks_at_p1() -> bool
   tests [((), true)]
   {
     let identity = loop_run_identity("s", "p", 0, 3);
-    let resumed = c2_state_from_continuation_shape(8, 3, 0);
+    let resumed = c2_state_from_continuation_shape(8, 3);
     let seeded = { resumed | park_ordinal: initial_park_ordinal(true) };
     resumed.park_ordinal == 0
       && seeded.park_ordinal == 1

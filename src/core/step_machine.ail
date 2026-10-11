@@ -38,7 +38,6 @@ import src/core/phase_vocab (
   checkpoint_would_relieve,
   project
 )
-import src/core/recovery (persist_nudge_message)
 
 pure func plan_native(calls: [ToolCall]) -> [ToolPlanEntry] {
   match calls {
@@ -119,8 +118,6 @@ export func decide(s: StepState, pol: StepPolicy) -> StepDecision {
   }
   else if s.last_finish_reason == "solver_feedback"
   then InjectUserMessage({ role: "user", content: s.last_response_text, tool_calls: [], tool_call_id: "", images: [] })
-  else if s.last_finish_reason == "persist_nudge"
-  then InjectUserMessage(persist_nudge_message(s.nudges_used + 1, pol.persist_retries))
   -- PLAN-002 W4 Part 1 (ADR-002 D2). THE ARM READS `open_waits`: no stop-class
   -- reason, blank `stop` included, finalizes while a wait is open, whatever
   -- stage 3 did. It is also the arm a re-issue re-enters, and it precedes
@@ -166,7 +163,6 @@ func mk_policy(context_limit: ContextLimit) -> StepPolicy {
     step_budget: 8,
     max_cost_millicents: 0,
     cost_metered: true,
-    persist_retries: 2,
     retry_stream_errors: true,
     require_system_prompt: true,
     model: "phase-c-model",
@@ -185,7 +181,6 @@ func mk_state_with_messages(reason: string, response: string, pending: [ToolCall
       history: h,
       telemetry: { last_input_tokens: context_limit, last_output_tokens: 0, last_estimated_input_tokens: 0 },
       totals: { input_tokens: 0, output_tokens: 0, cost_millicents: cost, cost_warned_pct: 0 },
-      nudges_used: 0,
       ext_artifacts: jo([]),
       pending_tool_calls: pending,
       last_finish_reason: reason,
@@ -278,7 +273,7 @@ pure func test_decide_cost_cap() -> bool
   {
     match mk_state("", "", [], 0, 10, 0) {
       Ok(s) => {
-        let pol = { step_budget: 8, max_cost_millicents: 10, cost_metered: true, persist_retries: 0, retry_stream_errors: true, require_system_prompt: true, model: "phase-c-model", provider_base_url: "", checkpoint_enabled: false, checkpoint_pct: 90, compaction: mk_policy(fixture_unmeasured()).compaction };
+        let pol = { step_budget: 8, max_cost_millicents: 10, cost_metered: true, retry_stream_errors: true, require_system_prompt: true, model: "phase-c-model", provider_base_url: "", checkpoint_enabled: false, checkpoint_pct: 90, compaction: mk_policy(fixture_unmeasured()).compaction };
         fail_message(decide(s, pol)) == "cost cap reached: 10 of 10 millicents used"
       },
       Err(_) => false
@@ -290,7 +285,7 @@ pure func test_decide_cost_cap_unmetered_does_not_exhaust() -> bool
   {
     match mk_state("", "", [], 0, 10, 0) {
       Ok(s) => {
-        let pol = { step_budget: 8, max_cost_millicents: 10, cost_metered: false, persist_retries: 0, retry_stream_errors: true, require_system_prompt: true, model: "phase-c-model", provider_base_url: "", checkpoint_enabled: false, checkpoint_pct: 90, compaction: mk_policy(fixture_unmeasured()).compaction };
+        let pol = { step_budget: 8, max_cost_millicents: 10, cost_metered: false, retry_stream_errors: true, require_system_prompt: true, model: "phase-c-model", provider_base_url: "", checkpoint_enabled: false, checkpoint_pct: 90, compaction: mk_policy(fixture_unmeasured()).compaction };
         not is_fail(decide(s, pol), "BudgetExceeded")
       },
       Err(_) => false
@@ -370,15 +365,6 @@ pure func test_decide_candidate_approved_finalizes() -> bool
     }
   }
 
-pure func test_decide_persist_nudge() -> bool
-  tests [((), true)]
-  {
-    match mk_state("persist_nudge", "", [], 0, 0, 0) {
-      Ok(s) => is_inject(decide(s, mk_policy(fixture_unmeasured()))),
-      Err(_) => false
-    }
-  }
-
 pure func test_decide_actual_token_pressure_still_calls_model() -> bool
   tests [((), true)]
   {
@@ -420,7 +406,6 @@ pure func test_enabled_policy_checkpoints_under_pressure() -> bool
           step_budget: base.step_budget,
           max_cost_millicents: base.max_cost_millicents,
           cost_metered: base.cost_metered,
-          persist_retries: base.persist_retries,
           retry_stream_errors: base.retry_stream_errors,
           require_system_prompt: base.require_system_prompt,
           model: base.model,
@@ -524,7 +509,7 @@ pure func test_w4_await_wake_parks_only_with_waits() -> bool
     with_waits && without
   }
 
--- The two inject reasons × waits still inject.
+-- The inject reason × waits still injects.
 pure func test_w4_inject_reasons_with_waits_inject() -> bool
   tests [((), true)]
   {
@@ -532,7 +517,7 @@ pure func test_w4_inject_reasons_with_waits_inject() -> bool
       Some(d) => is_inject(d),
       None => false
     };
-    injects("solver_feedback") && injects("persist_nudge")
+    injects("solver_feedback")
   }
 
 -- Pending tools × waits → RunTools.

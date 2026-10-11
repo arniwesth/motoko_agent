@@ -1,5 +1,15 @@
 # Handoff: write the persist-nudge migration plan
 
+**Superseded, from 2026-10-10. Do not write this plan.**
+[ADR-001](ADR-001-harness-policy-boundary.md), Amendment 1 (A5), replaces decision D4. The
+operator ruled on 2026-10-09 that the persist nudge is deleted and no guard extension is built,
+so there is no migration to plan and `PLAN-persist-nudge-migration.md` is not written. Workstream
+W2 of [`PLAN-finalize-policy-migration.md`](PLAN-finalize-policy-migration.md) removes the nudge
+from core. The persist-nudge code this handoff names is gone: `should_inject_persist_nudge`,
+`persist_nudge_message`, `persist_nudge_marker`, `count_persist_nudges`, `any_writefile_attempt`,
+the `PersistNudge` event, the `persist_nudge` arm of `decide`, and the `persist_retries` policy
+field with its `MOTOKO_PERSIST_RETRIES` read. The text below is left as written.
+
 Audience: a fresh agent session. You are deliberately fresh — see
 `../004_phase_core_refactor/NOTE-plan-authoring-session-choice.md`. Freshness is a test: **if you
 cannot plan this from ADR-001 (+ code) alone, the ADR has a gap — record it in an "ADR gaps found"
