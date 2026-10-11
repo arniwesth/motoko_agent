@@ -1567,6 +1567,52 @@ are untouched.
   is now `candidate_approved`. The contract's outcomes are the same: a blank stop and a stop call
   are both `CandidateApproved`, and `decide` finalises.
 
+### Change 2 (2026-10-11) — the two `MOTOKO_PERSIST_RETRIES` rows are removed
+
+**Changes** D1's T0 settings table, the row `MOTOKO_PERSIST_RETRIES` (`:611`), and D3's table of
+expected environment reads, the row `MOTOKO_PERSIST_RETRIES` (`:966`).
+
+**What forced it.**
+[005 ADR-001](../005_harness_policy_boundary/ADR-001-harness-policy-boundary.md), Amendment 1
+(A5), accepted 2026-10-10, deletes the persist nudge, its environment read included, and builds
+no guard in its place. `should_inject_persist_nudge`, the function the settings row's reason
+cites, no longer exists. `session_policy_init` no longer reads the key, and no code in the tree
+reads or sets it.
+
+**The change.** Both rows are removed: read the two tables without them. Change 1 left its row
+standing as a pin that decides nothing, because the field it pins is still there. Here the
+setting itself is gone, so there is nothing to serve and nothing to count. The text of the
+tables is left as written, like every text this section changes.
+
+- *The settings row.* The entry serves no `MOTOKO_PERSIST_RETRIES`. The evaluator's `served_env`
+  serves eight values where it served nine (`src/eval/journal/configuration.ail`). The row made
+  the nudge arm unreachable, and there is no nudge arm.
+- *The read-count row.* The witness expects no read of the key, in any column.
+  `driver_env_keys()` has eleven keys where it had twelve (`src/core/dst_discovery.ail`), so
+  `expected_env_reads` has eleven entries. A log that holds a read of the key now fails
+  `check_discovery` with `EnvKeyNotInSource`.
+
+**What stays.** The other rows of both tables are untouched. Policy initialisation still reads
+`MOTOKO_RETRY_STREAM_ERROR`, `OPENAI_BASE_URL` and `MOTOKO_HEADLESS` once each, in that order
+(the settings row at `:614`, the count rows at `:967-969`). The stopping contract's outcomes are
+the same. A `NoDecision` from the empty registry was `CandidateApproved` because the budget was
+zero. It is `CandidateApproved` now because nothing stands between the completion policy and
+the approval.
+
+**The nudge elsewhere in this record,** left as written:
+
+- The version history restates the condition (`:180-181`), lists "nudge" among what
+  `classify_candidate` yields and `persist_nudge` among the reasons `decide` injects for
+  (`:170-172`), and gives the blank stop "a zero persist budget" (`:294`).
+- D1's stopping contract has "the zero persist budget makes it `CandidateApproved`" in item 4
+  (`:653`), and "the persist nudge" among the arms unreachable under the settings (`:681`). The
+  arm is gone, and no setting is needed to keep a run off it.
+- D3's witness paragraph gives `driver_env_keys()` as "the twelve below" (`:959-960`). It has
+  eleven.
+- D1's starting state derives `nudges_used` from the seed (`:579`), and the version history
+  names the same count twice (`:38`, `:114-115`). The loop state has no such field now. It went
+  with the nudge, its only reader.
+
 ## Cross-references
 
 - `REVIEW-adr004-v4-verdicts-codex.md`: the v4 review; its per-decision verdicts (§2), mechanism

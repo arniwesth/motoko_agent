@@ -163,6 +163,19 @@ persist-nudge in `session.ail:1828-1857` / `recovery.ail:44-55` is policy on the
 It is reimplemented as a coding-task guard extension on `on_solver_candidate` and removed from
 core. Not part of this ADR's immediate change; tracked as a follow-on plan.
 
+> **Superseded, from 2026-10-10,** by [Amendment 1](#amendments), A5, which replaces D4. The
+> operator ruled on 2026-10-09 that the persist nudge is deleted and no guard extension is
+> built, so nothing migrates. `PLAN-persist-nudge-migration.md` is not written. Workstream W2 of
+> [`PLAN-finalize-policy-migration.md`](PLAN-finalize-policy-migration.md) removes the nudge,
+> its counter and its `MOTOKO_PERSIST_RETRIES` read from core. The text above is left as
+> written.
+>
+> The same holds where this record repeats D4: item 3 of the TL;DR and the sentence after that
+> list, the first positive consequence, and the second item of the Follow-on list above the
+> Amendments. Other passages describe the nudge as it stood in July 2026 and decide nothing:
+> *Context*, *The boundary*, D2, two of the rejected alternatives and OQ5. They are left as
+> written too.
+
 ## Alternatives considered
 
 - **Put the empty-stop guard in core** (mirror persist-nudge). Rejected: it repeats the exact
