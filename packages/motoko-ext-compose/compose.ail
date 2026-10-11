@@ -43,7 +43,7 @@ import pkg/sunholo/motoko_ext_compose/config (host_config_json, host_config_of, 
 import pkg/sunholo/motoko_ext_compose/proc (bash_exec_tool, bash_exec_args, decode_bash_result, message_of)
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
   ToolCallEnvelope, ToolResultEnvelope,
-  PureCtx, ProviderCtx, InterceptCtx, InterceptPorts, ExtRegistration, ExtProcOutcome, ExtPathStat,
+  PureCtx, pure_ctx, ProviderCtx, InterceptCtx, InterceptPorts, ExtRegistration, ExtProcOutcome, ExtPathStat,
   Capability, DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider, ResponseInterceptor, SolverJudge, PromptPatch, BudgetPlan, BudgetPatch,
   -- WI-D19: the routed half of `on_response_intercept`. `ExtPathKind`'s three
   -- constructors are imported by name because `remove_if_file` matches on them
@@ -99,23 +99,21 @@ export func on_build_system_prompt(_ctx: PureCtx) -> PromptPatch {
   { prepend: [], append: [compose_main_prompt_card()] }
 }
 
-func current_composition_mode(ctx: PureCtx, raw: string) -> string {
-  let mode =
-    if raw == "inline" then "inline"
-    else if raw == "off" then "off"
-    else if raw == "subagent" then "subagent"
-    else "subagent";
-  if not ctx.hybrid_tools && mode == "subagent" then "inline" else mode
+func current_composition_mode(raw: string) -> string {
+  if raw == "inline" then "inline"
+  else if raw == "off" then "off"
+  else if raw == "subagent" then "subagent"
+  else "subagent"
 }
 
 func is_compose_tool_name(name: string) -> bool {
   name == "Compose" || name == "compose"
 }
 
-func on_tool_policy_with_mode(raw_mode: string, ctx: PureCtx, call: ToolCallEnvelope) -> ToolPolicyDecision {
+func on_tool_policy_with_mode(raw_mode: string, call: ToolCallEnvelope) -> ToolPolicyDecision {
   if not is_compose_tool_name(call.tool) then NoOpinion
   else {
-    let mode = current_composition_mode(ctx, raw_mode);
+    let mode = current_composition_mode(raw_mode);
     if mode == "off" then Deny("Compose is disabled in this session. Use non-Compose tools.")
     else if mode == "inline" then Deny("Compose is disabled in inline composition mode. Emit an inline ```ailang snippet or use non-Compose tools.")
     else Allow
@@ -127,7 +125,21 @@ func on_tool_policy_with_mode(raw_mode: string, ctx: PureCtx, call: ToolCallEnve
 -- channel) and is decoded per call. The row is the slot's, `{}`: the 7.4
 -- declaration's `! {Env}` was never performed.
 export func on_tool_policy(ctx: PureCtx, call: ToolCallEnvelope) -> ToolPolicyDecision {
-  on_tool_policy_with_mode(composition_mode_of(ctx.ext_config), ctx, call)
+  on_tool_policy_with_mode(composition_mode_of(ctx.ext_config), call)
+}
+
+-- Subagent mode allows the tool whatever `hybrid_tools` says. The flag once
+-- chose between a step with typed tool calls and one without; every session
+-- has had them since that second step was deleted.
+func subagent_mode_allows_compose(hybrid_tools: bool) -> bool
+  tests [(false, true), (true, true)]
+{
+  let cfg = jo([kv("compose", jo([kv("mode", js("subagent"))]))]);
+  let ctx = { pure_ctx(cfg) | hybrid_tools: hybrid_tools };
+  match on_tool_policy(ctx, { id: "t", tool: "Compose", arguments: jo([]) }) {
+    Allow => true,
+    _ => false
+  }
 }
 
 func json_escape(s: string) -> string {
