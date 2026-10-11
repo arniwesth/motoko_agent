@@ -662,7 +662,55 @@ check src/core/test/stub_step.ail 203 'now()' "the one remaining ambient clock (
 # and it has four hits. The message at the foot of this file says FOUR from
 # this commit on.
 
-for l in 1469 1728 1840 4142 4363; do
+# 005 W2 RE-BASELINED THE FIVE session.ail ANCHORS A FOURTEENTH TIME --
+# `1469/1728/1840/4142/4363 -> 1465/1724/1836/4020/4203` (-4, -4, -4, -122,
+# -160) -- UP AGAIN, AND THE LAST TWO BY DIFFERENT AMOUNTS. The drift is the
+# persist nudge leaving core (005 ADR-001 Amendment 1, A5,
+# PLAN-finalize-policy-migration W2). Measured commit by commit, from
+# `da88a088`, the commit W2 is cut from:
+#
+#   W2-2 `b4bf4f12`  -1, -1, -1,  -99, -137   the policy
+#   W2-3 `443a6139`  -3, -3, -3,  -20,  -20   the `nudges_used` counter
+#   W2-4 `de07c2c2`   0,  0,  0,   -3,   -3   the `MOTOKO_PERSIST_RETRIES` read
+#
+# W2-2 took the `PersistNudge` import line from above all five; the nudge's
+# helpers, `CandidateNudge`, its arm in `classify_candidate` and its arm in
+# `c2_loop` from between the third and the fourth; and the exported
+# `run_v2_session_traced_with_persist_retries`, 38 lines, from between the
+# fourth and the fifth, which is why those two no longer move together. W2-3
+# took three `nudges_used` lines from above all five and seventeen more, net,
+# from between the third and the fourth: the field in thirteen more literals
+# and four comment lines. W2-4 took three lines net from `session_policy_init`
+# and the comment above it. W2-5 and W2-6 do not edit the file. The plan names
+# no re-baseline for W2, so the anchors were red from W2-2 until this commit,
+# which the operator ordered as a follow-up to W2-6. All five failed the check;
+# none re-pointed silently. The tool_phase.ail, ext/runtime.ail and
+# stub_step.ail anchors did not move (W2 does not edit those files) and were
+# read again at their lines anyway.
+#
+# THE D4 JUDGEMENT, with the evidence: `grep -o 'clock_now.*'` over
+# `git show da88a088:src/core/session.ail` and over the tree is IDENTICAL
+# (thirteen hits, same text, same order), and all five anchored expressions are
+# byte-identical at their new offsets. No site was added, removed or re-routed.
+# The nudge read no clock: no line W2 deleted from or added to session.ail
+# names one.
+#
+# WIDTH: THE EIGHT FILES OF THE W1 NOTE ABOVE, four profiles: driver_only v35 ->
+# v36, no_ops v24 -> v25, compose v16 -> v17, herdr v5 -> v6, and
+# `driver_plus_herdr/5` -> `/6`, twice, in scripts/dst/herdr_graded_dst.ail.
+# The table's content hash goes `sha256:c7500943...` -> `sha256:0d4d166d...`.
+#
+# MEASURED AGAIN, IN THREE STEPS. Before the re-baseline the four profile
+# targets and `herdr_graded` were green and `attribution_table` failed on the
+# five anchors alone. With files 1 to 6 done, `anchors`, `attribution_table`
+# and the first three profiles were green and `make driver_plus_herdr` and
+# `make herdr_graded` both exited 2 on [attribution-identity-stale]. With file
+# 7 done and file 8 not, both were green AND PRINTED `driver_plus_herdr/5 rests
+# on it` FOR A PROFILE AT v6: no check compares the script's literal with
+# `herdr_profile_version()`. File 8 is therefore a convention, kept at every
+# re-issue since v1, and nothing goes red when it is forgotten.
+
+for l in 1465 1724 1836 4020 4203; do
   check src/core/session.ail "$l" 'clock_now' "a routed core clock site"
 done
 check src/core/tool_phase.ail 484 'clock_now' "the FIFTH routed core clock site (D4's table says four)"

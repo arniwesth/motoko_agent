@@ -408,7 +408,7 @@ pure func graded_program(w: WorldState, initial: WorldState) -> ExecutionProgram
       synthetic_environment: initial.env,
       files: [],
       clock_epoch: initial.clock_ms,
-      extension_profile: "driver_plus_herdr/5"
+      extension_profile: "driver_plus_herdr/6"
     },
     bounds: {
       max_interactions: 256,
@@ -789,7 +789,7 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, SharedMem, Stream, Trac
   let rec = scenario_the_record();
   let _ = println("HERDR-GRADED: the profile record loads clean and its clauses bind:  ${show(rec)}");
   if dispatched && succeeded && served && disc && rec then
-    println("HERDR-GRADED: PASS — the ToolProvider path is reachable under DST, the run is recorded, graded, validated and strictly replayed, and driver_plus_herdr/5 rests on it")
+    println("HERDR-GRADED: PASS — the ToolProvider path is reachable under DST, the run is recorded, graded, validated and strictly replayed, and driver_plus_herdr/6 rests on it")
   else {
     let _ = println("HERDR-GRADED: FAIL — the call sequence desynchronised or an effect reached the live world");
     let _ = show_each(tools);
