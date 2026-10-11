@@ -956,12 +956,13 @@ func scenario_the_demonstration()
 -- stale if the driver's loop structure changes the number, and that is the
 -- intended failure.
 --
--- THE FIVE ONCE-PER-RUN KEYS are the same five `discovery_dst` derives, from the
--- same two source sites: `session_policy_init` (session.ail:1417, four keys) and
+-- THE FOUR ONCE-PER-RUN KEYS are the same four `discovery_dst` derives, from the
+-- same two source sites: `session_policy_init` (session.ail:1417, three keys) and
 -- `derive_session_id` (session.ail:939, one key), each reached once on the traced
 -- path. The COUNTS matter and not merely the keys — a recorder that logged the
 -- first read of a key and dropped later ones would satisfy a presence check.
--- Five + five + zero = ten, which is exactly the census's environment_read.
+-- Four + five + zero, and the one exit-manifest read below, is ten, which is
+-- exactly the census's environment_read.
 --
 -- MOTOKO_TOOL_TIMEOUT_MS IS DECLARED AT ZERO RATHER THAN OMITTED, which is a
 -- real assertion and not padding: the key is read once per NATIVE dispatch
@@ -984,8 +985,7 @@ func graded_witness(clock_delta: int) -> DiscoveryWitness {
 }
 
 pure func env_reads_always(resolutions: int) -> [EnvExpectation] {
-  [{ key: "MOTOKO_PERSIST_RETRIES",    count: 1 },
-   { key: "MOTOKO_RETRY_STREAM_ERROR", count: 1 },
+  [{ key: "MOTOKO_RETRY_STREAM_ERROR", count: 1 },
    { key: "OPENAI_BASE_URL",           count: 1 },
    { key: "MOTOKO_HEADLESS",           count: 1 },
    { key: "MOTOKO_SESSION_ID",         count: 1 }]

@@ -572,8 +572,8 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   -- seed, so the seed stays first and every other position keeps its order.
   --
   -- RE-PINNED AT PLAN-001 P2B: `WorldRequest` (one per helped leaf, witnessed
-  -- in request order). FIFTEEN lead each run — the bootstrap witnesses of
-  -- `session_policy_init` (4 env + 8 limit reads), `derive_session_id` (env +
+  -- in request order). FOURTEEN lead each run — the bootstrap witnesses of
+  -- `session_policy_init` (3 env + 8 limit reads), `derive_session_id` (env +
   -- clock) and the start clock — so `HistorySeeded` is the first JOURNAL-CLASS
   -- record, which is what ADR-003 D2 requires, not the first record. One
   -- follows each model step's deltas, three follow the native dispatch events
@@ -586,6 +586,10 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   -- is why `native` closes on TWO `WorldRequest`s. `capped` publishes nothing
   -- (no `DoneEvent` on a cost cap) and is unchanged.
   --
+  -- RE-PINNED AT 005 W2-4: fourteen lead each run, not fifteen.
+  -- `session_policy_init` no longer reads `MOTOKO_PERSIST_RETRIES`, so it makes
+  -- three env reads where it made four. Nothing after `HistorySeeded` moves.
+  --
   -- So the order claim is a pinned sequence over the returned trace. Two
   -- subjects rather than all eight: `native` states where the dispatch events
   -- sit, and `capped` states the terminal ordering D6.1 turns on.
@@ -593,10 +597,10 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   let capped_order = pipe_join(trace_variants(capped.trace.records));
   let order_ok =
     report("order: the dispatch events land BETWEEN the batch announcement and its results",
-           native_order == "WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|HistorySeeded|ContextLimitResolved|ThinkingStreamStart|ProviderCallPrepared|WorldRequest|ThinkingStreamEnd|ProviderResult|HistoryAppended|StateDelta|NativeToolCalls|V2ToolDispatchStart|V2ToolDispatchComplete|WorldRequest|WorldRequest|WorldRequest|NativeToolResults|HistoryAppended|ThinkingStreamStart|ProviderCallPrepared|WorldRequest|ThinkingStreamEnd|ProviderResult|HistoryAppended|StateDelta|DoneEvent|WorldRequest|WorldRequest|RunSummary|",
+           native_order == "WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|HistorySeeded|ContextLimitResolved|ThinkingStreamStart|ProviderCallPrepared|WorldRequest|ThinkingStreamEnd|ProviderResult|HistoryAppended|StateDelta|NativeToolCalls|V2ToolDispatchStart|V2ToolDispatchComplete|WorldRequest|WorldRequest|WorldRequest|NativeToolResults|HistoryAppended|ThinkingStreamStart|ProviderCallPrepared|WorldRequest|ThinkingStreamEnd|ProviderResult|HistoryAppended|StateDelta|DoneEvent|WorldRequest|WorldRequest|RunSummary|",
            "native order is ${native_order}")
     && report("order: CostExhausted is appended BEFORE the RunSummary, which stays final (D6.1)",
-           capped_order == "WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|HistorySeeded|ContextLimitResolved|ThinkingStreamStart|ProviderCallPrepared|WorldRequest|ThinkingStreamEnd|ProviderResult|HistoryAppended|StateDelta|NativeToolCalls|NativeToolDenied|NativeToolResults|HistoryAppended|CostExhausted|WorldRequest|RunSummary|",
+           capped_order == "WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|HistorySeeded|ContextLimitResolved|ThinkingStreamStart|ProviderCallPrepared|WorldRequest|ThinkingStreamEnd|ProviderResult|HistoryAppended|StateDelta|NativeToolCalls|NativeToolDenied|NativeToolResults|HistoryAppended|CostExhausted|WorldRequest|RunSummary|",
            "capped order is ${capped_order} — a CostExhausted after the summary is `record-after-terminal`");
 
   -- S7: the scenarios must DIFFER in what they witness, or one of them is

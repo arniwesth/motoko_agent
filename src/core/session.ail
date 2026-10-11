@@ -2209,8 +2209,9 @@ pure func step_cost_millicents(input_tokens: int, output_tokens: int, rates: Cos
 -- prose-only responses unambiguously stop the loop (no continuation-intent
 -- heuristic needed).
 
--- WI-A12's env class. Four of the driver's env reads are here, and they are
--- threaded rather than ambient.
+-- WI-A12's env class. Three of the driver's env reads are here, and they are
+-- threaded rather than ambient. There were four until 005 W2-4 removed the
+-- `MOTOKO_PERSIST_RETRIES` read, so the history below counts four.
 --
 -- The count this comment used to carry — "four of the driver's SEVEN" — was true
 -- from WI-A12 until WI-D3, which routed `context_usage`'s four keys through the
@@ -2239,15 +2240,11 @@ export type SessionPolicyInit = { policy: SessionPolicy, next_state: WorldState 
 
 func session_policy_init(ports: Ports, world: WorldState, model: string, step_budget: int, max_cost_millicents: int, cost_rates: CostRates) -> SessionPolicyInit ! {Env, FS} {
   let budget_steps = if step_budget <= 0 then 8 else step_budget;
-  -- 005 W2-2: nothing reads this value any more. The read itself is still made
-  -- and threaded, because the driver's key set and the tables that count it
-  -- name it; it goes with them (W2-4).
-  let r_persist = ports.env_get(world, "MOTOKO_PERSIST_RETRIES", "0");
-  let r_retry = ports.env_get(advance(r_persist.next_state, EnvRead), "MOTOKO_RETRY_STREAM_ERROR", "1");
+  let r_retry = ports.env_get(world, "MOTOKO_RETRY_STREAM_ERROR", "1");
   let r_base = ports.env_get(advance(r_retry.next_state, EnvRead), "OPENAI_BASE_URL", "");
   let r_headless = ports.env_get(advance(r_base.next_state, EnvRead), "MOTOKO_HEADLESS", "");
-  -- WI-D3's filesystem class. The fifth request this function makes, threaded
-  -- from the fourth's successor exactly like the four env reads above and for
+  -- WI-D3's filesystem class. The fourth request this function makes, threaded
+  -- from the third's successor exactly like the three env reads above and for
   -- the same reason A13 stage 2 gave: once a read appends to the world's log,
   -- discarding the successor drops every read it carried.
   let r_limit = resolve_context_limit_sum(context_reader_of(ports), advance(r_headless.next_state, EnvRead), model);

@@ -151,7 +151,6 @@ pure func synthetic_env() -> [{ key: string, value: string }] {
    { key: "MOTOKO_CONFIG", value: "default" },
    { key: "MOTOKO_HEADLESS", value: "1" },
    { key: "MOTOKO_MODELS_FILE", value: "/srv/motoko/.motoko/model-catalog.json" },
-   { key: "MOTOKO_PERSIST_RETRIES", value: "3" },
    { key: "MOTOKO_PROFILE_DIR", value: "/srv/motoko/.motoko/config/default" },
    { key: "MOTOKO_REPO", value: "/srv/motoko" },
    { key: "MOTOKO_RETRY_STREAM_ERROR", value: "0" },
@@ -188,7 +187,7 @@ pure func streamed(advance: int, payload: string, cs: [StreamChunkRecord]) -> Ti
 -- chunks between them.
 --
 -- S7's no-two-equal rule, applied to the quantities this suite reads:
--- 9 interactions, 12 environment entries, 5 distinct kinds, 3 stream chunks.
+-- 9 interactions, 11 environment entries, 5 distinct kinds, 3 stream chunks.
 -- Pairwise distinct on purpose, and asserted below — a fixture whose counts
 -- coincide cannot distinguish a check that reads "how many interactions" from
 -- one that reads "how many chunks", and both type-check.

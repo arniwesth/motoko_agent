@@ -168,7 +168,7 @@ func lt_t0(name: string, f: WorldFixture, calls: int, tools: int, clock: int, de
                           List.map(\e. "${e.family}:${if e.evaluated then "t" else "f"}:${show(e.inputs)}", a8.family_evidence));
           let env = List.map(lt_env_line, w.expected_env_reads);
           let want_env = ["MOTOKO_CAPTURE_FAILED_PAYLOAD=0", "MOTOKO_CONFIG=0", "MOTOKO_HEADLESS=1", "MOTOKO_MODELS_FILE=0",
-            "MOTOKO_PERSIST_RETRIES=1", "MOTOKO_PROFILE_DIR=1", "MOTOKO_REPO=0", "MOTOKO_RETRY_STREAM_ERROR=1",
+            "MOTOKO_PROFILE_DIR=1", "MOTOKO_REPO=0", "MOTOKO_RETRY_STREAM_ERROR=1",
             "MOTOKO_SESSION_ID=1", "MOTOKO_TOOL_TIMEOUT_MS=${show(tools)}", "OPENAI_BASE_URL=1", "MOTOKO_EXIT_MANIFEST=${show(exit_reads)}"];
           let _ = println("${name}: findings=[${join(";", lt_labels(r.findings))}] witness provider=${show(w.provider_calls)} tools=${show(w.tool_dispatches)} clock=${show(w.clock_delta_ms)} env=${join(",", env)}");
           let _ = println("${name}: budget=${show(x.decision_budget)} retry=${show(x.retry_budget)} decisions=${show(census_count(a8.census, "decisions"))} unevaluated=${join(",", a8.unevaluated)} vacuous=${join(",", a8.vacuous)} evaluate=${show(List.length(evaluate(x)))}");

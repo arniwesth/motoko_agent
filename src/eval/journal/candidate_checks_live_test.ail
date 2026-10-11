@@ -13,8 +13,8 @@
 -- (EndFinalize(model_stop)) admitted in-process (`admit_with_evidence`,
 -- report clean), then `entry_of_admission`: the program, the end, the
 -- recorded chain, the witness, the budgets, the metadata, the family record
--- and the census. m3's program: providers at 7, 14, 18; tools at 10, 13,
--- 17, 21; 23 interactions.
+-- and the census. m3's program: providers at 6, 13, 17; tools at 9, 12,
+-- 16, 20; 22 interactions.
 --
 -- THE CANDIDATE. C is this build (C = P): its run is `admission_run` against
 -- `world_state_of(program)`. A divergence is produced by mutating ONE thing —
@@ -57,16 +57,16 @@
 --
 -- EXHAUSTED MARKER (M14): the actual first finding, never a universal
 -- ProgramExhausted —
---   past_end    the program truncated before call 3's record (18 of 23
+--   past_end    the program truncated before call 3's record (17 of 22
 --               interactions): C's call 3 finds the script exhausted and its
---               marker lands at position 18, past the program's end ->
---               K2 ProgramExhausted@interaction:18;
+--               marker lands at position 17, past the program's end ->
+--               K2 ProgramExhausted@interaction:17;
 --   at_position the program's call 3 outcome is the marker itself (so the
 --               world holds two steps and K1 balances): C's marker record
---               is at 18, inside the program, and its projection differs ->
---               K2 ProjectionDiffers@interaction:18;
+--               is at 17, inside the program, and its projection differs ->
+--               K2 ProjectionDiffers@interaction:17;
 --   earlier     the same, with call 2's projection also changed ->
---               K2 ProjectionDiffers@interaction:14 (the earlier mismatch).
+--               K2 ProjectionDiffers@interaction:13 (the earlier mismatch).
 -- Each asserts `exhausted_markers = [call:3]` in the envelope.
 --
 -- Synthetic fixtures only (§0.6).
@@ -263,28 +263,28 @@ func m14_k2(c: CRun) -> bool ! {IO} {
     lt_case(name, lt_verdict(e, c.w0, run), all, want, lt_has(all, k4))
   };
   let wk = go("m14_k2_wrong_kind",
-    lt_at(log, 7, \i. { lt_env_read(7) | request_projection: i.request_projection }),
-    "diverged|K2:WrongKind|interaction:7", "K4:replay-rule-violated(replay-wrong-kind)@interaction:7");
+    lt_at(log, 6, \i. { lt_env_read(6) | request_projection: i.request_projection }),
+    "diverged|K2:WrongKind|interaction:6", "K4:replay-rule-violated(replay-wrong-kind)@interaction:6");
   let wo = go("m14_k2_wrong_origin",
-    lt_at(log, 7, \i. { i | identity: { ordinal: 7, body: ProviderIdentity("fx_origin", 0, "fx/model-b") } }),
-    "diverged|K2:WrongOrigin|interaction:7", "K4:replay-rule-violated(replay-wrong-origin)@interaction:7");
+    lt_at(log, 6, \i. { i | identity: { ordinal: 6, body: ProviderIdentity("fx_origin", 0, "fx/model-b") } }),
+    "diverged|K2:WrongOrigin|interaction:6", "K4:replay-rule-violated(replay-wrong-origin)@interaction:6");
   let ui = go("m14_k2_unsafe_identity",
-    lt_at(log, 10, \i. { i | identity: { ordinal: 10, body: ToolIdentity("loop_v2", "c2z", "BashExec") } }),
-    "diverged|K2:UnsafeIdentity|interaction:10", "K4:replay-rule-violated(replay-unsafe-identity-mismatch)@interaction:10");
+    lt_at(log, 9, \i. { i | identity: { ordinal: 9, body: ToolIdentity("loop_v2", "c2z", "BashExec") } }),
+    "diverged|K2:UnsafeIdentity|interaction:9", "K4:replay-rule-violated(replay-unsafe-identity-mismatch)@interaction:9");
   let pd = go("m14_k2_projection_differs",
-    lt_at(log, 14, \i. { i | request_projection: "${i.request_projection} fx=1" }),
-    "diverged|K2:ProjectionDiffers|interaction:14", "K4:replay-rule-violated(replay-projection-differs)@interaction:14");
+    lt_at(log, 13, \i. { i | request_projection: "${i.request_projection} fx=1" }),
+    "diverged|K2:ProjectionDiffers|interaction:13", "K4:replay-rule-violated(replay-projection-differs)@interaction:13");
   let od = go("m14_k2_outcome_differs",
-    lt_at(log, 17, \i. { i | outcome: { i.outcome | payload: "${i.outcome.payload} " } }),
-    "diverged|K2:OutcomeDiffers|interaction:17", "K4:replay-rule-violated(replay-outcome-differs)@interaction:17");
+    lt_at(log, 16, \i. { i | outcome: { i.outcome | payload: "${i.outcome.payload} " } }),
+    "diverged|K2:OutcomeDiffers|interaction:16", "K4:replay-rule-violated(replay-outcome-differs)@interaction:16");
   let pe = go("m14_k2_program_exhausted",
-    log ++ [lt_env_read(23)],
-    "diverged|K2:ProgramExhausted|interaction:23", "K4:replay-rule-violated(replay-program-exhausted)@interaction:23");
+    log ++ [lt_env_read(22)],
+    "diverged|K2:ProgramExhausted|interaction:22", "K4:replay-rule-violated(replay-program-exhausted)@interaction:22");
   let un = go("m14_k2_unused_interaction",
     lt_drop_last(log),
-    "diverged|K2:UnusedInteraction|interaction:22", "K4:interactions-unconsumed@interaction:22");
+    "diverged|K2:UnusedInteraction|interaction:21", "K4:interactions-unconsumed@interaction:21");
   let _ = println("k2: program ${show(List.length(e.program.interactions))} log ${show(List.length(log))}");
-  wk && wo && ui && pd && od && pe && un && List.length(log) == 23
+  wk && wo && ui && pd && od && pe && un && List.length(log) == 22
 }
 
 -- ============================================================================
@@ -296,7 +296,7 @@ pure func lt_program(e: CandidateEntry, xs: [Interaction]) -> CandidateEntry {
 }
 
 pure func lt_marked(xs: [Interaction]) -> [Interaction] {
-  lt_at(xs, 18, \i. { i | outcome: { i.outcome | payload: "{\"served\":false}", advance_ms: 0 } })
+  lt_at(xs, 17, \i. { i | outcome: { i.outcome | payload: "{\"served\":false}", advance_ms: 0 } })
 }
 
 func m14_marker(name: string, a: Admitted, e: CandidateEntry, want: string) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
@@ -322,13 +322,13 @@ pure func lt_has_prefix(xs: [string], p: string) -> bool {
 func m14_markers(a: Admitted) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let e = a.entry;
   let xs = e.program.interactions;
-  let past = m14_marker("m14_exhausted_marker_past_end", a, lt_program(e, lt_take(18, xs)),
-                        "diverged|K2:ProgramExhausted|interaction:18");
+  let past = m14_marker("m14_exhausted_marker_past_end", a, lt_program(e, lt_take(17, xs)),
+                        "diverged|K2:ProgramExhausted|interaction:17");
   let at = m14_marker("m14_exhausted_marker_at_position", a, lt_program(e, lt_marked(xs)),
-                      "diverged|K2:ProjectionDiffers|interaction:18");
+                      "diverged|K2:ProjectionDiffers|interaction:17");
   let earlier = m14_marker("m14_exhausted_marker_earlier_mismatch", a,
-                           lt_program(e, lt_at(lt_marked(xs), 14, \i. { i | request_projection: "${i.request_projection} fx=1" })),
-                           "diverged|K2:ProjectionDiffers|interaction:14");
+                           lt_program(e, lt_at(lt_marked(xs), 13, \i. { i | request_projection: "${i.request_projection} fx=1" })),
+                           "diverged|K2:ProjectionDiffers|interaction:13");
   past && at && earlier
 }
 
@@ -342,11 +342,11 @@ func m14_k1(a: Admitted, w0: WorldState) -> bool ! {AI, Clock, Env, FS, IO, Net,
   let run = candidate_run(a.jw, handed, lt_workdir());
   let over = lt_case("m14_k1_reconstitution", lt_verdict(a.entry, handed, run), lt_all(a.entry, handed, run),
                      "diverged|K1:QueueOverfilled|aggregate:reconstitution:tools", true);
-  let bad = lt_program(a.entry, lt_at(a.entry.program.interactions, 7, \i. { i | outcome: { i.outcome | payload: "not json" } }));
+  let bad = lt_program(a.entry, lt_at(a.entry.program.interactions, 6, \i. { i | outcome: { i.outcome | payload: "not json" } }));
   let o = evaluate_candidate("candidate", bad, a.jw, lt_workdir(), lt_provenance());
   let _ = println("m14_k1_unstartable: ${candidate_label(o.verdict)}");
   let refused = lt_report("m14_k1_unstartable",
-    lt_triple(o.verdict) == "refused|ProgramUndecodable:ProviderOutcomeUndecodable(7)|aggregate:program"
+    lt_triple(o.verdict) == "refused|ProgramUndecodable:ProviderOutcomeUndecodable(6)|aggregate:program"
       && not score_permitted(o.verdict)
       && (match o.run { None => true, Some(_) => false }))
   over && refused
@@ -449,12 +449,12 @@ func m14_k567(c: CRun) -> bool ! {IO} {
 
 func m14_diagnostic(c: CRun) -> bool ! {IO} {
   let e = c.a.entry;
-  let run = lt_with_log(c.run, lt_at(c.run.world.log, 14, \i. { i | request_projection: "${i.request_projection} fx=1" }));
+  let run = lt_with_log(c.run, lt_at(c.run.world.log, 13, \i. { i | request_projection: "${i.request_projection} fx=1" }));
   let v = lt_verdict(e, c.w0, run);
   let d = candidate_envelope(v).diagnostic;
   let _ = println("diagnostic: ${join(" | ", d)}");
   lt_report("m14_regression_diagnostic_only",
-    lt_triple(v) == "diverged|K2:ProjectionDiffers|interaction:14"
+    lt_triple(v) == "diverged|K2:ProjectionDiffers|interaction:13"
       && List.length(d) == 1
       && (match d { x :: _ => startsWith(x, "regression replay: 0 fatal, 1 recorded difference"), [] => false })
       && not score_permitted(v))

@@ -1832,7 +1832,7 @@ def read_world(lines, log, s, env):
         raise WorldRefused("HybridPredicate", f"entry:{calls[-1]['seq']}", "session_emitted_native_tool_call")
     enc = context_encoding(events, run_id)
     limits = [e for e in events if e["kind"] == "context_limit" and e["run_id"] == run_id]
-    served = [("MOTOKO_PERSIST_RETRIES", "0"), ("MOTOKO_RETRY_STREAM_ERROR", env["retry"]),
+    served = [("MOTOKO_RETRY_STREAM_ERROR", env["retry"]),
               ("OPENAI_BASE_URL", env["base_url"]), ("MOTOKO_HEADLESS", env["headless"]),
               ("MOTOKO_PROFILE_DIR", EVAL_PROFILE_DIR), ("MOTOKO_SESSION_ID", header["session_id"]),
               ("MOTOKO_TOOL_TIMEOUT_MS", env["timeout"] if env["timeout"] is not None else "0"),

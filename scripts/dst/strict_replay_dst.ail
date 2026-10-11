@@ -390,7 +390,7 @@ func witness_of(initial: WorldState, run: TracedSessionResult, expected_env: [En
   }
 }
 
--- Session-wide env reads (session_policy_init's four plus derive_session_id's
+-- Session-wide env reads (session_policy_init's three plus derive_session_id's
 -- one), each reached exactly once per traced run — derived from the driver's
 -- source, as `dst_discovery`'s header requires for the one class with no
 -- runtime witness.
@@ -410,8 +410,7 @@ func env_reads_exit_publish(expect_ok: bool) -> [EnvExpectation] {
 }
 
 func env_reads_always(resolutions: int) -> [EnvExpectation] {
-  [{ key: "MOTOKO_PERSIST_RETRIES",    count: 1 },
-   { key: "MOTOKO_RETRY_STREAM_ERROR", count: 1 },
+  [{ key: "MOTOKO_RETRY_STREAM_ERROR", count: 1 },
    { key: "OPENAI_BASE_URL",           count: 1 },
    { key: "MOTOKO_HEADLESS",           count: 1 },
    { key: "MOTOKO_SESSION_ID",         count: 1 }]

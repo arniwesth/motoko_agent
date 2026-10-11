@@ -38,9 +38,12 @@
 # one below it aborts with RT_REC_003), with and without the #160 fault:
 #
 #   seed  records   depth FIXED   depth WITH FAULT   ceiling here
-#   7     123       63            150                76
-#   11    191       92            237                110
-#   23    217       105           265                126
+#   7     122       63            150                76
+#   11    190       92            237                110
+#   23    216       105           265                126
+#
+# The records column is the pin as it stands, and it moved once after that
+# measurement, from 123/191/217. See "RE-PINNED AT 005 W2-4" below.
 #
 # Ceilings are floor + ~20%. Every one of them is comfortably below the
 # fault-present depth, so reintroducing the traversal fails all three — this is
@@ -109,6 +112,15 @@
 # per-response chunk count fixed or subtract it, because a lever above 8 does
 # not vary "only records".
 #
+# RE-PINNED AT 005 W2-4 (2026-10-11): THE RECORD COUNTS ONLY, 123/191/217 to
+# 122/190/216. `session_policy_init` no longer reads MOTOKO_PERSIST_RETRIES, so
+# every run carries one bootstrap `WorldRequest` fewer. No ceiling moved. The
+# same bisection on AILANG v0.52.5 (7200786) gives a floor of 33/42/53 on the
+# tree before the change and 32/41/52 after it: one frame lower on each seed,
+# for one record fewer on each. Those floors are about half the table's, which
+# was measured on v0.33.0. That gap is there before this change and was not
+# traced, so the depth columns above are left as they were measured.
+#
 # IT FAILS CLOSED. A new traversal can only RAISE depth, so the failure mode of
 # the thing being guarded is the direction the gate is sensitive in.
 #
@@ -169,7 +181,7 @@ fi
 echo "depth canary — tier 1: the real driver, out of process"
 
 # seed:ceiling:expected_records  — see the pin table in the header
-for row in "7:76:123" "11:110:191" "23:126:217"; do
+for row in "7:76:122" "11:110:190" "23:126:216"; do
   seed="${row%%:*}"; rest="${row#*:}"; ceiling="${rest%%:*}"; want_records="${rest##*:}"
 
   set +e

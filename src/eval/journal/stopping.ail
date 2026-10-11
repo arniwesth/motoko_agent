@@ -1086,8 +1086,7 @@ pure func test_m5_served_configuration() -> bool
     st_world_agrees(fxw_m5_config_window()) && (match st_fx_world(fxw_m5_config_window()) {
       Err(_) => false,
       Ok(w) =>
-        st_served(w, "MOTOKO_PERSIST_RETRIES") == "0"
-          && st_served(w, "MOTOKO_RETRY_STREAM_ERROR") == "0"
+        st_served(w, "MOTOKO_RETRY_STREAM_ERROR") == "0"
           && st_served(w, "OPENAI_BASE_URL") == "http://127.0.0.1:8000/v1"
           && st_served(w, "MOTOKO_HEADLESS") == ""
           && st_served(w, "MOTOKO_PROFILE_DIR") == ".motoko/eval-profile"
