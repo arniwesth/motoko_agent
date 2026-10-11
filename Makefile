@@ -2451,35 +2451,23 @@ terminal_trace:
 	ailang test src/core/phase_vocab.ail > /dev/null; echo "  ✓ src/core/phase_vocab.ail"; \
 	ailang test src/core/session.ail > /dev/null && echo "  ✓ src/core/session.ail"
 
-# Driver full-loop coverage (WI-A16). These eight smoke scripts exercise the v2
+# Driver full-loop coverage (WI-A16). These seven smoke scripts exercise the v2
 # driver loop end-to-end and, until this target existed, ran in no make target
 # and no CI job — cluster 1 (WI-A2) changed the contract every one of them
-# depends on and nothing in the repo would have run them. smoke_v2_dp7_gate is
-# the ONLY executable coverage of c2_after_dp7. src/core/test/scripted_ports.ail
-# is here for the same reason: check_core globs src/core/*.ail only, so its six
-# unit tests were run by nothing.
+# depends on and nothing in the repo would have run them.
+# src/core/test/scripted_ports.ail is here for the same reason: check_core globs
+# src/core/*.ail only, so its six unit tests were run by nothing.
 #
 # Every script runs even if an earlier one fails, so a driver change sees its
 # whole blast radius in one pass rather than one failure at a time. The target
 # still exits non-zero if any script or the unit tests fail.
 #
-# All eight need the full capability set and --ai-stub, and all eight read from
+# All seven need the full capability set and --ai-stub, and all seven read from
 # /dev/null so a stub prompt cannot block CI. This mirrors compaction_dst.
-#
-# THE SETUP LINE IS PART OF THE TARGET, not a documented precondition.
-# smoke_v2_dp7_gate needs three /tmp workdirs (always-fail, always-pass, and
-# no-Makefile) to tell DP7's three outcomes apart. Only `smoke_parity` created
-# them, via phase_a_event_parity.sh — and in CI that step runs AFTER this one,
-# so smoke_driver failed on every PR from the day WI-A16 wired it in while
-# passing on any developer machine where an earlier `make smoke_parity` had left
-# the directories behind. A target whose result depends on what ran before it is
-# not a gate, so it now makes its own fixtures.
 .PHONY: smoke_driver
 smoke_driver:
-	@bash scripts/setup_dp7_smoke_workdirs.sh > /dev/null
 	@fail=0; \
-	for f in scripts/smoke_v2_dp7_gate.ail \
-	         scripts/smoke_v2_pending_full_loop.ail \
+	for f in scripts/smoke_v2_pending_full_loop.ail \
 	         scripts/smoke_v2_compaction_full_loop.ail \
 	         scripts/smoke_v2_stream_parity.ail \
 	         scripts/smoke_v2_ext_fixture_parity.ail \

@@ -6,7 +6,7 @@
 -- its wire projection as a maintained compatibility surface, and this artifact
 -- carries that obligation.
 --
--- One artifact binds, for every one of the 45 `LedgerEvent` variants:
+-- One artifact binds, for every one of the 44 `LedgerEvent` variants:
 --
 --   the variant itself; its wire name; its payload schema; and its
 --   classification as LOGICAL or DISPLAY-ONLY.
@@ -51,7 +51,7 @@
 --                than an outcome.
 --
 -- THE CLASSIFICATION IS SEMANTIC, NOT A SURVEY OF WHAT IS APPENDED TODAY, and
--- that is deliberate. Of the 39 Logical rows, **37 reach the returned trace now
+-- that is deliberate. Of the 38 Logical rows, **36 reach the returned trace now
 -- and 2 do not**; the two are `d64_gap_register`'s entries, both of long
 -- standing. ADR-003 D1's `SessionResumed` was the third until PLAN-003 P3 Part 5,
 -- whose resumed traced entry appends it as the first record of the frame. The other four journal-class variants were
@@ -102,7 +102,7 @@ import src/core/phase_vocab (
   LedgerEvent,
   ProviderCallPrepared, ScratchpadResult, RunSummary, NativeToolDenied, ToolPending,
   ExtToolHandled, DelegatedToolDeferred, V2ToolDispatchStart, V2ToolDispatchComplete,
-  Dp7VerifierRejected, CostExhausted, CompactionApplied, CompactionExhausted,
+  CostExhausted, CompactionApplied, CompactionExhausted,
   ExtCompactionRejected, ExtensionDiagnostic, ThinkingStreamStart, ThinkingStreamEnd,
   StreamErrorRetry, ProviderResult, CostWarning, ExtInterceptHandled, HybridBashExtracted,
   ToolArgumentsUndecodable,
@@ -118,7 +118,19 @@ import src/core/phase_vocab (
 -- wire name, payload schema or classification is a version change, and old
 -- traces are decoded or a runner is pinned, never silently reinterpreted. The
 -- version lands in the execution manifest (WI-A10) and the failure record (D8).
-export pure func event_vocabulary_version() -> string { "event-vocabulary/1" }
+--
+-- `/2` (005 WI-4) deleted the `Dp7VerifierRejected` variant. OLD TRACES ARE READ
+-- BY A PINNED RUNNER, because the tree has no decoder for wire events:
+--
+--   `event-vocabulary/1` is read by commit
+--   86f2b8176bfc33cc186b1e1007acefd9e04266cc, the commit `/2` was cut from. Any
+--   later commit that still has `/1` reads it too.
+--
+-- A build at `/2` does not read a `/1` trace: `dst_profile.version_matches`
+-- refuses its manifest with `ManifestVersionDrifted`. Nothing is built for the
+-- pin. No recorded trace is committed, so what it covers is the corpus
+-- artifacts CI keeps for 14 days and anything on a developer's disk.
+export pure func event_vocabulary_version() -> string { "event-vocabulary/2" }
 
 export type EventClassification = Logical | DisplayOnly
 
@@ -160,7 +172,6 @@ export pure func event_variant_id(e: LedgerEvent) -> string {
     DelegatedToolDeferred(_) => "DelegatedToolDeferred",
     V2ToolDispatchStart(_) => "V2ToolDispatchStart",
     V2ToolDispatchComplete(_) => "V2ToolDispatchComplete",
-    Dp7VerifierRejected(_) => "Dp7VerifierRejected",
     CostExhausted(_) => "CostExhausted",
     CompactionApplied(_) => "CompactionApplied",
     CompactionExhausted(_) => "CompactionExhausted",
@@ -220,7 +231,6 @@ export pure func event_wire_name(e: LedgerEvent) -> string {
     DelegatedToolDeferred(_) => "delegated_tool_deferred",
     V2ToolDispatchStart(_) => "v2_tool_dispatch_start",
     V2ToolDispatchComplete(_) => "v2_tool_dispatch_complete",
-    Dp7VerifierRejected(_) => "dp7_verifier_rejected",
     CostExhausted(_) => "cost_exhausted",
     CompactionApplied(_) => "compaction_extension",
     CompactionExhausted(_) => "compaction_exhausted",
@@ -320,11 +330,6 @@ export pure func event_vocabulary() -> [EventRow] {
 
     { variant: "V2ToolDispatchComplete", wire_names: ["v2_tool_dispatch_complete"],
       payload: [req("step"), req("stream_id"), req("id")],
-      classification: Logical, reaches_trace_today: true },
-
-    { variant: "Dp7VerifierRejected", wire_names: ["dp7_verifier_rejected"],
-      payload: [req("step"), req("errors")],
-      -- Drives a user-message re-injection, so it changes history.
       classification: Logical, reaches_trace_today: true },
 
     { variant: "CostExhausted", wire_names: ["cost_exhausted"],
@@ -860,7 +865,7 @@ pure func has_rule(rs: [VocabularyRejection], rule: string) -> bool {
 pure func test_vocabulary_has_thirty_five_distinct_rows() -> bool
   tests [((), true)]
   {
-    List.length(event_vocabulary()) == 45
+    List.length(event_vocabulary()) == 44
       && no_dups(row_variants(event_vocabulary()), [])
   }
 
@@ -926,7 +931,7 @@ pure func test_classification_partitions_the_vocabulary() -> bool
   tests [((), true)]
   {
     let rows = event_vocabulary();
-    List.length(logical_variants(rows)) + List.length(display_only_variants(rows)) == 45
+    List.length(logical_variants(rows)) + List.length(display_only_variants(rows)) == 44
       && List.length(display_only_variants(rows)) == 6
   }
 

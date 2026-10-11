@@ -222,7 +222,11 @@ export pure func no_ops_id() -> string { "driver_plus_no_ops" }
 -- list changed again: `skills`, the extension 037 adds, is named in it with
 -- its measured reason (037 ADR-001 D13 and A8). Nothing installed, covered,
 -- excluded or routed changes; the omitted count goes 15 -> 16.
-export pure func no_ops_version() -> string { "23" }
+-- v24 (2026-10-11, 005 W1, WI-9). RE-ISSUED because the attribution table's
+-- content hash moved: the DP7 verifier left core (005 ADR-001 Amendment 1) and
+-- all five session.ail anchors moved with it. Nothing installed, covered,
+-- excluded, omitted or routed changes. See `no_ops_attribution_ref`.
+export pure func no_ops_version() -> string { "24" }
 
 -- The same attribution table `driver_only` binds, at the same identity. Two
 -- profiles referring to one table is the case D4's rule was written for: a
@@ -417,7 +421,13 @@ export pure func no_ops_attribution_ref() -> AttributionRef {
     -- All five session anchors moved +24/+24/+24/+290/+290, pushed by PLAN-002
     -- W4. An anchor re-measurement, not a table correction. See
     -- `driver_only_attribution_ref`.
-    content_hash: "sha256:0211ac242f677bd392bb317611b03a335d266426ec9d050cd5cce4e96b8f5583" }
+    -- 005 W1 (WI-9): re-recorded with `driver_only`'s, from
+    -- sha256:0211ac242f677bd392bb317611b03a335d266426ec9d050cd5cce4e96b8f5583.
+    -- All five session anchors moved -2/-2/-2/-160/-160, pulled up by the
+    -- removal of the DP7 verifier (005 ADR-001 Amendment 1). An anchor
+    -- re-measurement, not a table correction. See
+    -- `driver_only_attribution_ref`.
+    content_hash: "sha256:c7500943bffc8be0c48521afc17fa4b70ea3740c65a049394081d2d6bf513c6d" }
 }
 
 -- ---------------------------------------------------------------------------

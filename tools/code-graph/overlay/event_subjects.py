@@ -13,7 +13,7 @@ clause 3, defining profile reachability. This is the **event-subject table**: it
 attributes *events to subject modules*. The two are not kin and this paragraph
 exists so no future reader assumes they are.
 
-Rules produce **subject sets**, not modules — 15 of 30 rows are multi-subject,
+Rules produce **subject sets**, not modules — 14 of 29 rows are multi-subject,
 typically ``{owning mechanism} ∪ {payload-named tool/ext module}``. `rule_kind`
 records *how* the subject was derived so downstream views can weight or filter by
 attribution quality without a fuzzy confidence number.
@@ -79,11 +79,12 @@ class Rule:
 
 
 # ---------------------------------------------------------------------------
-# The 30 rows, in the NOTE's order. Row numbers are the NOTE's.
+# 29 of the NOTE's 30 rows, in the NOTE's order. Row numbers are the NOTE's.
+# Row 10 was `Dp7VerifierRejected`; 005 WI-4 deleted that variant, and its row.
 # ---------------------------------------------------------------------------
 
 RULES: tuple[Rule, ...] = (
-    # --- WireRecord: 28 LOGICAL variants -----------------------------------
+    # --- WireRecord: 27 LOGICAL variants -----------------------------------
     Rule("WireRecord:ProviderCallPrepared", FIXED, (MODEL_PHASE,),
          note="1. Call assembly; payload digests are replay identity (009/D8)"),
     Rule("WireRecord:ScratchpadResult", FIXED, (TOOL_PHASE, ENV_CLIENT),
@@ -107,9 +108,6 @@ RULES: tuple[Rule, ...] = (
          route_kind="tool", correlate_by="id",
          note="9. THE ONE CORRELATED ROW: no `tool` field; joins to its "
               "V2ToolDispatchStart by `id` within the same trace"),
-    Rule("WireRecord:Dp7VerifierRejected", FIXED, (SESSION, EXT_RUNTIME),
-         note="10. run_dp7_verifier (session.ail:1713, !{Process}) runs the verifier via "
-              "ExtRuntime; the payload does not name the ext"),
     Rule("WireRecord:CostExhausted", FIXED, (COST_PHASE,), note="11."),
     Rule("WireRecord:CompactionExhausted", FIXED, (COMPACTION,),
          note="12. Terminal cause, not a stage outcome"),

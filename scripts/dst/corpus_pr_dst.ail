@@ -242,7 +242,7 @@ import src/core/dst_corpus (
   render_corpus, corpus_rules_version
 )
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
-  BudgetPlan, BudgetPatch, Delegate, PureCtx, AiCtx, ProviderCtx, InterceptCtx, ProcessCtx, ExtRuntime, FinalizeDecision, NoDecision, NoIntercept, PassThrough, Pending, DenyAfterTimeout, Allow,
+  BudgetPlan, BudgetPatch, Delegate, PureCtx, AiCtx, ProviderCtx, InterceptCtx, ProcessCtx, ExtRuntime, FinalizeDecision, NoDecision, ContinueWithFeedback, NoIntercept, PassThrough, Pending, DenyAfterTimeout, Allow,
   PreStepDecision, PromptPatch, ResponseInterceptDecision, ToolHandleDecision,
   ToolPolicyDecision, ToolSchema
 )
@@ -328,6 +328,10 @@ func no_intercept(ctx: InterceptCtx, _text: string)
   -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: { NoIntercept }, next_state: ctx.world } }
 func no_solver(ctx: ProcessCtx, _text: string)
   -> FinalizeOutcome ! {Process}  { { decision: { NoDecision }, next_state: ctx.world } }
+-- The one judge in this file that is not neutral: it sends every candidate
+-- back. It reads nothing, runs nothing and hands back the world it was given.
+func continuing_solver(ctx: ProcessCtx, _text: string)
+  -> FinalizeOutcome ! {Process}  { { decision: { ContinueWithFeedback("constructed: the judge sends every candidate back") }, next_state: ctx.world } }
 func passthrough_pre_step(ctx: AiCtx, _msgs: [Msg])
   -> PreStepOutcome ! {AI, IO, Trace}  { { decision: { PassThrough }, next_state: ctx.world } }
 func pending_policy(_ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision {
@@ -337,10 +341,12 @@ func pending_policy(_ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPolicyDecisio
 func allow_policy(_ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { Allow }
 
 -- THE RIG'S RUNTIME, WRITTEN ONCE, with the two parts a caller may state: the
--- tool-policy answer and the verifier. Every other hook is neutral and none of
--- them calls the model, which is the premise `corpus_judge_dst`'s two balances
--- rest on (011 ADR-003 D5).
-func rig_rt(id: string, policy: (PureCtx, ToolCallEnvelope) -> ToolPolicyDecision, v: VerificationConfig) -> ExtRuntime {
+-- tool-policy answer and the judge. Every other hook is neutral, and no hook
+-- calls the model, either judge included, which is the premise
+-- `corpus_judge_dst`'s two balances rest on (011 ADR-003 D5). Nothing is
+-- verified under any of them.
+func rig_rt(id: string, policy: (PureCtx, ToolCallEnvelope) -> ToolPolicyDecision,
+            judge: (ProcessCtx, string) -> FinalizeOutcome ! {Process}) -> ExtRuntime {
   let hooks = fixture_hooks(id, {
     config: jo([]),
     tools: [],
@@ -351,15 +357,15 @@ func rig_rt(id: string, policy: (PureCtx, ToolCallEnvelope) -> ToolPolicyDecisio
     policy: policy,
     provide: no_handle,
     intercept: no_intercept,
-    judge: no_solver
+    judge: judge
   });
-  { registry: { entries: [hooks] }, strict_mode: false, verification: v }
+  { registry: { entries: [hooks] }, strict_mode: false, verification: no_verifier() }
 }
 
 pure func no_verifier() -> VerificationConfig { { enabled: false, command: "" } }
 
--- The bank's: every tool call pends for approval, and nothing is verified.
-func approval_rt(id: string) -> ExtRuntime { rig_rt(id, pending_policy, no_verifier()) }
+-- The bank's: every tool call pends for approval, and the judge has no opinion.
+func approval_rt(id: string) -> ExtRuntime { rig_rt(id, pending_policy, no_solver) }
 
 -- THE BANK'S STEP BUDGET, STATED ONCE (011 ADR-003 D4, ruling 13). Both run
 -- helpers below pass it to the driver, and `corpus_judge_dst` declares the same
@@ -390,27 +396,27 @@ func run_recording(id: string, w: WorldState) -> TracedSessionResult
   run_recording_at(id, w, bank_step_budget())
 }
 
--- THE RECORDING RIG WITH ONE PART CHANGED (011 ADR-003 ruling 18), for
+-- THE RECORDING RIG WITH ONE PART CHANGED (011 ADR-003 rulings 18 and 19), for
 -- `corpus_judge_dst`'s two branch controls. No bank member is run through
 -- either: under `approval_rt` every tool takes the approval arm of the tool
--- fold and no candidate answer is verified, so two branches of the driver have
--- no member that walks them.
+-- fold and the judge has no opinion on a candidate answer, so two branches of
+-- the driver have no member that walks them.
 --
 -- `allowing`: the policy answers `Allow`, so a tool is executed with no
--- approval. `verified`: the verifier is on with the command the caller states.
--- That command is a real `bash -c` in the working directory, not a world
--- answer, so state one that reads and writes nothing.
+-- approval. `continuing`: the one `SolverJudge` atom answers
+-- `ContinueWithFeedback` for every candidate, so no answer is accepted and the
+-- loop goes round on the judge's feedback until the step budget ends it.
 export func run_recording_allowing_at(id: string, w: WorldState, step_budget: int) -> TracedSessionResult
   ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2_session_traced(
-    rig_rt(id, allow_policy, no_verifier()), "task", "", false, budget(), "phase-c-model", history(), ".",
+    rig_rt(id, allow_policy, no_solver), "task", "", false, budget(), "phase-c-model", history(), ".",
     step_budget, false, 0, zero_rates(), RecordingWorld(w))
 }
 
-export func run_recording_verified_at(id: string, w: WorldState, step_budget: int, command: string) -> TracedSessionResult
+export func run_recording_continuing_at(id: string, w: WorldState, step_budget: int) -> TracedSessionResult
   ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2_session_traced(
-    rig_rt(id, pending_policy, { enabled: true, command: command }), "task", "", false, budget(), "phase-c-model", history(), ".",
+    rig_rt(id, pending_policy, continuing_solver), "task", "", false, budget(), "phase-c-model", history(), ".",
     step_budget, false, 0, zero_rates(), RecordingWorld(w))
 }
 

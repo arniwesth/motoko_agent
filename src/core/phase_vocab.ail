@@ -852,12 +852,12 @@ export type PhaseResult = {
 -- ============================================================================
 -- LedgerEvent: typed/DST-canonical layer. to_schema_v1 targets production wire.
 --
--- Production schema-v1 inventory — 29 JSONL `type` values (regenerate with:
+-- Production schema-v1 inventory — 28 JSONL `type` values (regenerate with:
 --   grep -o 'emit_event(session_id, "[a-z_]*"' src/core/agent_loop_v2.ail
 --   plus the two direct emit_json stream types at :255 and :265):
---   27 emit_event names:
+--   26 emit_event names:
 --     compaction_exhausted compaction_extension cost_exhausted cost_warning
---     delegated_tool_deferred done dp7_verifier_rejected error
+--     delegated_tool_deferred done error
 --     ext_intercept_handled ext_solver_feedback ext_tool_handled
 --     hybrid_bash_extracted native_tool_calls native_tool_denied
 --     native_tool_results persist_nudge run_summary scratchpad_result
@@ -994,7 +994,6 @@ export type CompactionInfo = { step: int, note: string }
 export type CompactionExhaustedInfo = { step: int, model: string, reason: string }
 export type CostExhaustedInfo = { step: int, total_cost_millicents: int, total_cost_usd: float, cap_millicents: int }
 export type CostWarningInfo = { threshold: string, step: int, pct: int, total_cost_millicents: int, total_cost_usd: float, cap_millicents: int }
-export type Dp7RejectedInfo = { step: int, errors: string }
 export type CheckpointInfo = { reason: string, before_digest: string, after_digest: string }
 export type DoneInfo = { step: int, output: string, source: string }
 export type EmptyStopFinalizeInfo = { step: int, input_tokens: int, estimated_input_tokens: int, context_limit: int }
@@ -1295,7 +1294,6 @@ export type LedgerEvent
   | DelegatedToolDeferred(ToolCallInfo)      -- [prod] delegated_tool_deferred
   | V2ToolDispatchStart(ToolCallInfo)        -- [prod] v2_tool_dispatch_start
   | V2ToolDispatchComplete(ToolDispatchCompleteInfo) -- [prod] v2_tool_dispatch_complete
-  | Dp7VerifierRejected(Dp7RejectedInfo)     -- [prod] dp7_verifier_rejected
   | CostExhausted(CostExhaustedInfo)         -- [prod] cost_exhausted
   | CompactionApplied(CompactionInfo)        -- [prod] compaction_extension
   | CompactionExhausted(CompactionExhaustedInfo) -- [prod] compaction_exhausted
@@ -1478,7 +1476,6 @@ export func to_schema_v1_kvs(e: LedgerEvent) -> [{key: string, value: Json}] {
     DelegatedToolDeferred(i) => [kv("type", js("delegated_tool_deferred")), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("tool", js(i.tool)), kv("id", js(i.id))],
     V2ToolDispatchStart(i) => [kv("type", js("v2_tool_dispatch_start")), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("tool", js(i.tool)), kv("id", js(i.id))],
     V2ToolDispatchComplete(i) => [kv("type", js("v2_tool_dispatch_complete")), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("id", js(i.id))],
-    Dp7VerifierRejected(i) => [kv("type", js("dp7_verifier_rejected")), kv("step", jnum(_int_to_float(i.step))), kv("errors", js(i.errors))],
     CostExhausted(i) => [kv("type", js("cost_exhausted")), kv("step", jnum(_int_to_float(i.step))), kv("total_cost_millicents", jnum(_int_to_float(i.total_cost_millicents))), kv("total_cost_usd", jnum(i.total_cost_usd)), kv("cap_millicents", jnum(_int_to_float(i.cap_millicents)))],
     CompactionApplied(i) => [kv("type", js("compaction_extension")), kv("step", jnum(_int_to_float(i.step))), kv("note", js(i.note))],
     CompactionExhausted(i) => [kv("type", js("compaction_exhausted")), kv("step", jnum(_int_to_float(i.step))), kv("model", js(i.model)), kv("reason", js(i.reason))],
@@ -1934,7 +1931,6 @@ pure func test_ledger_projection_golden_bytes() -> bool
     && golden(DelegatedToolDeferred({ step: 1, stream_id: "s", tool: "T", id: "tc" }), "{\"type\":\"delegated_tool_deferred\",\"step\":1,\"stream_id\":\"s\",\"tool\":\"T\",\"id\":\"tc\"}")
     && golden(V2ToolDispatchStart({ step: 1, stream_id: "s", tool: "T", id: "tc" }), "{\"type\":\"v2_tool_dispatch_start\",\"step\":1,\"stream_id\":\"s\",\"tool\":\"T\",\"id\":\"tc\"}")
     && golden(V2ToolDispatchComplete({ step: 1, stream_id: "s", id: "tc" }), "{\"type\":\"v2_tool_dispatch_complete\",\"step\":1,\"stream_id\":\"s\",\"id\":\"tc\"}")
-    && golden(Dp7VerifierRejected({ step: 1, errors: "bad" }), "{\"type\":\"dp7_verifier_rejected\",\"step\":1,\"errors\":\"bad\"}")
     && golden(CostExhausted({ step: 4, total_cost_millicents: 65600, total_cost_usd: 0.656, cap_millicents: 50000 }), "{\"type\":\"cost_exhausted\",\"step\":4,\"total_cost_millicents\":65600,\"total_cost_usd\":0.656,\"cap_millicents\":50000}")
     && golden(CompactionApplied({ step: 1, note: "n" }), "{\"type\":\"compaction_extension\",\"step\":1,\"note\":\"n\"}")
     && golden(CompactionExhausted({ step: 1, model: "m", reason: "full" }), "{\"type\":\"compaction_exhausted\",\"step\":1,\"model\":\"m\",\"reason\":\"full\"}")

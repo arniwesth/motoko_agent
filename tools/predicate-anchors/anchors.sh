@@ -611,7 +611,58 @@ check src/core/test/stub_step.ail 203 'now()' "the one remaining ambient clock (
 # no_ops v20 -> v21, compose v12 -> v13. `driver_plus_herdr` is NOT re-issued
 # (DST_KNOWN_RED).
 
-for l in 1471 1730 1842 4302 4523; do
+# 005 W1 RE-BASELINED THE FIVE session.ail ANCHORS A THIRTEENTH TIME --
+# `1471/1730/1842/4302/4523 -> 1469/1728/1840/4142/4363` (-2, -2, -2, -160,
+# -160) -- AND IT IS THE FIRST TIME THEY MOVED UP. The drift is the DP7
+# verifier leaving core (005 ADR-001 Amendment 1, PLAN-finalize-policy-migration
+# W1). WI-1 (`87e71186`) took `classify_candidate`'s two verification stages and
+# `CandidateRejected`: 27 lines net, between `:1842` and the last two. WI-2
+# (`7f7106db`) took two import lines from above all five, and the verifier and
+# `c2_dp7_rejected_state` from between the third and the fourth: 131 lines net.
+# WI-3 renamed in place and moved nothing. The plan priced ONE re-issue for W1,
+# here at WI-9, so the anchors were red from WI-1 to this commit on purpose. All
+# five failed the check; none re-pointed silently, which is the trap the ABI 7.0
+# note records. The tool_phase.ail, ext/runtime.ail and stub_step.ail anchors
+# did not move: W1 does not edit those files.
+#
+# THE D4 JUDGEMENT, with the evidence: `grep -o 'clock_now.*'` over
+# `git show 86f2b817:src/core/session.ail` (the commit W1 is cut from) and over
+# the tree is IDENTICAL (thirteen hits, same text, same order), and all five
+# anchored expressions are byte-identical at their new offsets. No site was
+# added, removed or re-routed. The verifier read no clock: no line W1 deleted
+# from session.ail names one, and it reached the process through a direct
+# `exec`, not through a port.
+#
+# WIDTH: EIGHT FILES, AND THE PLAN PRICED SIX. It read the six-file form off the
+# PLAN-002 W4 note above, which leaves `driver_plus_herdr` out as
+# DST_KNOWN_RED. That reason expired the day it was written: PINDH (`eba309c8`)
+# re-issued the profile against the live table, and DST_KNOWN_RED is empty. So
+# the fourth profile of the PLAN-003 P3 Part 3 footer has had an owner since
+# then, and that footer's "SEVEN files, not six" is one short, because the
+# herdr acceptance script spells the profile's version as a literal:
+#
+#   1. this file                                (the check itself)
+#   2. src/core/dst_attribution_table.ail       (5 rows + 1 test literal)
+#   3. scripts/dst/attribution_table_dst.ail    (1 literal, in `omitted_site`)
+#   4. src/core/dst_driver_only.ail             (v34 -> v35 + content hash)
+#   5. src/core/dst_driver_plus_no_ops.ail      (v23 -> v24 + content hash)
+#   6. src/core/dst_driver_plus_compose.ail     (v15 -> v16 + content hash)
+#   7. src/core/dst_driver_plus_herdr.ail       (v4  -> v5  + content hash)
+#   8. scripts/dst/herdr_graded_dst.ail         (`driver_plus_herdr/4` -> `/5`, twice)
+#
+# MEASURED, NOT ARGUED. All four profile targets were green before the
+# re-baseline. With files 1 to 6 done and 7 and 8 not, the first three were
+# green and `make driver_plus_herdr` and `make herdr_graded` both exited 2 on
+#
+#     [attribution-identity-stale] ... D4 re-issues every referring profile
+#
+# With all eight, all four are green, and so are `profile_definition` and
+# `attribution_table`. The grep that finds every profile that pins the table is
+#   grep -n 'content_hash: "sha256:' src/core/dst_driver_*.ail
+# and it has four hits. The message at the foot of this file says FOUR from
+# this commit on.
+
+for l in 1469 1728 1840 4142 4363; do
   check src/core/session.ail "$l" 'clock_now' "a routed core clock site"
 done
 check src/core/tool_phase.ail 484 'clock_now' "the FIFTH routed core clock site (D4's table says four)"
@@ -620,8 +671,9 @@ if [ "$fail" -ne 0 ]; then
   echo
   echo "An anchor moved. Do NOT re-baseline it without deciding which site is 'the'"
   echo "attributed one — that is a D4 judgement with other consumers, and correcting"
-  echo "the table re-issues every referring profile — THREE of them since WI-D27:"
-  echo "bump driver_only_version, no_ops_version and compose_profile_version, and"
-  echo "re-record all three attribution refs. The eleven-file set is listed above."
+  echo "the table re-issues every referring profile — FOUR of them since PINDH:"
+  echo "bump driver_only_version, no_ops_version, compose_profile_version and"
+  echo "herdr_profile_version (and its literal in scripts/dst/herdr_graded_dst.ail),"
+  echo "and re-record all four attribution refs. The file sets are listed above."
   exit 1
 fi

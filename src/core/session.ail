@@ -34,8 +34,7 @@ import std/result (Result, Ok, Err)
 import std/string (trim, startsWith, substring, toLower, contains)
 import std/string as Str (length)
 import std/fs (writeFileResult)
-import std/process (exec, ProcessError, ProcessOutput)
-import std/bytes (toString)
+import std/process (ProcessError, ProcessOutput)
 import std/crypto (sha256Hex)
 import std/trace as Trace
 import src/core/tool_catalog (tools_with_extensions)
@@ -97,7 +96,6 @@ import src/core/phase_vocab (
   TermInternalFailure,
   finish_reason_wire,
   NativeToolDenied,
-  Dp7VerifierRejected,
   CostExhausted,
   StreamErrorRetry,
   CostWarning,
@@ -575,8 +573,8 @@ type C2LoopState = {
   -- and `settled` through `apply_tool_lifecycle`; every other literal carries
   -- it. Projected to `StepState` and, encoded, to `ExtCtx.open_waits`.
   --
-  -- INERT IN W2 (PLAN-002 §1 row 13). `classify_candidate`'s stage 3 treats it
-  -- as empty and no guard reads the ctx field; W4 activates both. Like
+  -- INERT IN W2 (PLAN-002 §1 row 13). `classify_candidate`'s waits stage treats
+  -- it as empty and no guard reads the ctx field; W4 activates both. Like
   -- `history_digest` it is NOT in `FinalState` or `Continuation`: a run's waits
   -- end with the run (D3's last lifecycle row), and ADR-003's `park` entry, not
   -- this field, carries them across a durable park.
@@ -2215,89 +2213,6 @@ pure func step_cost_millicents(input_tokens: int, output_tokens: int, rates: Cos
 -- prose-only responses unambiguously stop the loop (no continuation-intent
 -- heuristic needed).
 
--- DP7: pre-finalize AILANG type-check gate.
--- Runs make check_core in the project workdir before any done emission.
--- Fail-open: if check infrastructure is missing (no workdir, no Makefile, or
--- no check_core target), returns Approve so projects without DP7 setup are not
--- blocked. Only genuine type errors (exit non-zero with substantive output)
--- produce Reject.
-type FinalizeVerification
-  = Approve
-  | Reject(string)
-
--- Detect "infrastructure missing" — the verification command failed because the
--- project lacks a Makefile/target or the workdir doesn't exist, NOT because the
--- code under verification has type errors. These cases must fail-open.
-pure func is_missing_infrastructure(output: string) -> bool {
-  let lower = toLower(output);
-  contains(lower, "no rule to make target")
-    || contains(lower, "no targets specified and no makefile found")
-    || contains(lower, "no makefile found")
-    || contains(lower, "make: *** no")
-    || contains(lower, "no such file or directory")
-    || contains(lower, "command not found")
-}
-
-func run_dp7_verifier(rt: ExtRuntime, workdir: string) -> FinalizeVerification ! {Process} {
-  if not rt.verification.enabled then Approve
-  else
-    match exec("bash", ["-c", "cd \"$1\" && ${rt.verification.command} 2>&1", "_dp7", workdir]) {
-      Err(_) => Approve,
-      Ok(out) => {
-        if out.exitCode == 0 then Approve
-        else {
-          let output = toString(out.stdout);
-          if is_missing_infrastructure(output) then Approve
-          else Reject(output)
-        }
-      }
-    }
-}
-
-func dp7_gate(rt: ExtRuntime, workdir: string, step_idx: int, session_id: string) -> Option[Message] ! {Process, IO, Trace} {
-  match run_dp7_verifier(rt, workdir) {
-    Approve => None,
-    Reject(errors) => {
-      let _ = ledger_emit(session_id, Dp7VerifierRejected({
-        step: step_idx,
-        errors: errors
-      }));
-      Some({
-        role: "user",
-        content: "The code you just wrote does not type-check. Fix all errors before declaring done:\n\n${errors}",
-        tool_calls: [],
-        tool_call_id: "",
-        images: []
-      })
-    }
-  }
-}
-
--- WI-D2 WIDENED THE RETURN, and it is the same move `ToolDispatchOutcome` took
--- one file over: this returned the rejection text and dropped the event it had
--- just projected, so `Dp7VerifierRejected` reached the wire and nothing else.
--- The caller has the trace; giving it the event is what lets the driver stay the
--- sole appender.
---
--- The re-injection path is NOT terminal — the run continues and terminates later
--- via max-steps or the budget — so D6.1's ordering constraint does not bind this
--- append, unlike `CostExhausted` above.
-export type Dp7Rejection = { errors: string, event: LedgerEvent }
-
-func dp7_rejection_errors(rt: ExtRuntime, workdir: string, step_idx: int, session_id: string) -> Option[Dp7Rejection] ! {Process, IO, Trace} {
-  match run_dp7_verifier(rt, workdir) {
-    Approve => None,
-    Reject(errors) => {
-      let event = Dp7VerifierRejected({
-        step: step_idx,
-        errors: errors
-      });
-      let _ = ledger_emit(session_id, event);
-      Some({ errors: errors, event: event })
-    }
-  }
-}
-
 -- M-MOTOKO-PERSIST-NUDGE: bounded loop-persistence at the NoDecision boundary.
 -- Root cause (2026-06-18 A/B transcripts): on local models the agent often
 -- DISENGAGES after 0–1 tool calls WITHOUT writing a solution — either answering
@@ -2948,67 +2863,19 @@ func c2_continue_tool_batch(
   }
 }
 
--- PLAN-002 W2 Part 4: `c2_after_dp7`, SPLIT. It was the verifier call and the
--- two states it chose between; the verifier call now lives in
--- `classify_candidate` (stage 2 for a non-blank candidate, stage 5 for a blank
--- one) and these are the two states, shared by both stages. Content is the old
--- arms' byte for byte: the same journal events in the same order, the same
--- `nudges_used` recount, and the old call sites' `st.provider`,
--- `st.prior_counts` and `st.history_digest`, which is why they take `st`
--- rather than those fields one by one.
+-- PLAN-002 W2 Part 4: the approved arm of `c2_after_dp7`, which was the
+-- verifier call and the two states it chose between. The verifier and the
+-- rejected state are gone (005 ADR-001 Amendment 1, A4); this is the state an
+-- approved candidate leaves. Content is the old arm's byte for byte: the same
+-- journal events in the same order, the same `nudges_used` recount, and the
+-- old call site's `st.provider`, `st.prior_counts` and `st.history_digest`,
+-- which is why it takes `st` rather than those fields one by one.
 --
 -- ADR-003 D2's `:2356`/`:2381` still hold here: ONE `HistoryAppended` for the
 -- one message (the assistant) that entered the history on this path, and
 -- `artifacts_changed` computed at the call site, where both artifact values are
 -- in scope.
-func c2_dp7_rejected_state(
-  session_id: string,
-  identity: RunIdentity,
-  st: C2LoopState,
-  msgs_with_assistant: [Message],
-  totals: RuntimeLoopTotals,
-  ext_artifacts: Json,
-  telemetry: { last_input_tokens: int, last_output_tokens: int, last_estimated_input_tokens: int },
-  world: WorldState,
-  trace: LedgerTrace,
-  emissions: [LedgerEvent],
-  artifacts_changed: bool,
-  step_idx: int,
-  rejection: Dp7Rejection
-) -> C2LoopState ! {IO, Trace} {
-  let appended = c2_history_appended(identity.run_id, step_idx, st.history_digest, false, last_msg(msgs_with_assistant));
-  let trace_with_history = c2_journal(session_id, ledger_append(trace, WireRecord(rejection.event)), appended.events);
-  let trace_with_delta = c2_journal(session_id, trace_with_history,
-    [c2_state_delta_event(identity.run_id, step_idx, st.prior_counts, trace_with_history, telemetry, ext_artifacts, artifacts_changed)]);
-  {
-    msgs: msgs_with_assistant,
-    step_idx: step_idx + 1,
-    totals: totals,
-    ext_artifacts: ext_artifacts,
-    telemetry: telemetry,
-    provider: st.provider,
-    world_state: world,
-    pending_tool_calls: [],
-    pending_tool_context: [],
-    pending_tool_prefix: [],
-    pending_tool_batched: true,
-    accumulated_tool_msgs: [],
-    pending_approval: None,
-    last_finish_reason: "dp7_rejected",
-    last_response_text: rejection.errors,
-    nudges_used: count_persist_nudges(msgs_with_assistant),
-    finalize_source: "",
-    prior_counts: st.prior_counts,
-    trace: trace_with_delta,
-    emissions: emissions,
-    history_digest: appended.digest,
-    open_waits: st.open_waits,
-    park_ordinal: st.park_ordinal,
-    park_attempt: st.park_attempt
-  }
-}
-
-func c2_dp7_approved_state(
+func c2_candidate_approved_state(
   session_id: string,
   identity: RunIdentity,
   st: C2LoopState,
@@ -3042,7 +2909,7 @@ func c2_dp7_approved_state(
     pending_tool_batched: true,
     accumulated_tool_msgs: [],
     pending_approval: None,
-    last_finish_reason: "dp7_approved",
+    last_finish_reason: "candidate_approved",
     last_response_text: output,
     nudges_used: count_persist_nudges(msgs_with_assistant),
     finalize_source: source,
@@ -3056,10 +2923,10 @@ func c2_dp7_approved_state(
   }
 }
 
--- PLAN-002 W4 Part 1: stage 3's state. The approved candidate's journaling,
--- with the reason `decide`'s `Park` arm accepts and no finalize source: the
--- candidate enters the history exactly as an approved one would, and nothing
--- finalizes it while the waits are open.
+-- PLAN-002 W4 Part 1: the waits stage's state. The approved candidate's
+-- journaling, with the reason `decide`'s `Park` arm accepts and no finalize
+-- source: the candidate enters the history exactly as an approved one would,
+-- and nothing finalizes it while the waits are open.
 func c2_await_wake_state(
   session_id: string,
   identity: RunIdentity,
@@ -3075,7 +2942,7 @@ func c2_await_wake_state(
   step_idx: int,
   candidate: string
 ) -> C2LoopState ! {IO, Trace} {
-  { c2_dp7_approved_state(session_id, identity, st, msgs_with_assistant, totals, ext_artifacts, telemetry, world, trace, emissions, artifacts_changed, step_idx, candidate, "") |
+  { c2_candidate_approved_state(session_id, identity, st, msgs_with_assistant, totals, ext_artifacts, telemetry, world, trace, emissions, artifacts_changed, step_idx, candidate, "") |
     last_finish_reason: "await_wake" }
 }
 
@@ -3216,96 +3083,71 @@ pure func both_open_msgs(calls: [ToolCall], before: [WaitDescriptor], after: [Wa
 }
 
 type CandidateClass
-  = CandidateRejected({ rejection: Dp7Rejection, world: WorldState })
-  | CandidateFeedback({ event: LedgerEvent, feedback: string, world: WorldState })
+  = CandidateFeedback({ event: LedgerEvent, feedback: string, world: WorldState })
   | CandidateNudge({ event: LedgerEvent, world: WorldState })
   | CandidateApproved({ output: string, source: string, world: WorldState })
-  -- PLAN-002 W4 Part 1: stage 3. The world is stage 2's rejection world, for
-  -- the same reason: no completion hook ran.
+  -- PLAN-002 W4 Part 1: the waits stage. The world is the intercept's
+  -- successor, holder-cleared: no completion hook ran.
   | CandidateAwaitWake({ world: WorldState })
 
--- The candidate's classification, in D2's stage order and no other:
+-- The candidate's classification, in this stage order and no other. It is
+-- ADR-002 D2's order without its verification stage (005 ADR-001 Amendment 1,
+-- A4): core runs no verifier on a candidate.
 --
 --   1. pending      upstream: tool calls or a pending approval never reach here.
---   2. DP7          a NON-BLANK candidate (`trim(candidate) != ""`, PLAN-002
---                   §0.2 rule 6) is verified FIRST; a rejection returns before
---                   any completion policy runs, so a solver that would have
---                   bounced the same candidate never sees it.
---   3. waits        LIVE from PLAN-002 W4 Part 1: any open wait classifies the
+--   2. waits        LIVE from PLAN-002 W4 Part 1: any open wait classifies the
 --                   candidate `await_wake`, whatever it says, blank included,
---                   before any solver, nudge or blank verification runs.
---   4. completion   `dispatch_solver_candidate`, then the persist nudge, as at
---                   HEAD.
---   5. finalize     a non-blank candidate is approved without a second verifier
---                   run (stage 2 judged it); a BLANK one is verified here, as
---                   HEAD's `c2_after_dp7` did (§1 row 7). So the verifier runs
---                   at most once per candidate.
+--                   before any solver or nudge runs.
+--   3. completion   `dispatch_solver_candidate`, then the persist nudge.
+--   4. finalize     a candidate the completion policy neither sent back nor
+--                   nudged is approved as it stands, blank or not.
 --
--- THE STAGE-2 WORLD IS `token_to_world(clear_holder(ctx.world))`. HEAD's
--- rejection arm carried `token_to_world(finalized.next_state)`, and with no
--- finalize hook registered that is `clear_holder(collected.next_state)` over an
--- empty fold, i.e. `clear_holder(ctx.world)` (`ext/runtime.ail:722`, `:727`).
--- Under stage 2 no hook has run, so this is that same expression with the fold
--- removed. `ctx.world` is the intercept's successor, already holder-cleared by
--- `dispatch_response_intercept`, and `clear_holder` is idempotent on it; it is
--- written out so the equivalence with HEAD does not rest on that.
+-- THE WAITS-STAGE WORLD IS `token_to_world(clear_holder(ctx.world))`. No
+-- completion hook has run at that point, so there is no fold to take a
+-- successor from. `ctx.world` is the intercept's successor, already
+-- holder-cleared by `dispatch_response_intercept`, and `clear_holder` is
+-- idempotent on it; it is written out so a holder-free world does not rest on
+-- that.
 --
--- The row is the union of `dispatch_solver_candidate`'s and
--- `dp7_rejection_errors`': nothing here recurses into the loop.
+-- The row is the union of `dispatch_solver_candidate`'s and `ledger_emit`'s:
+-- nothing here recurses into the loop.
 func classify_candidate(
   rt: ExtRuntime,
   ctx: ExtCtx,
   candidate: string,
   msgs_with_assistant: [Message],
-  workdir: string,
   step_idx: int,
   session_id: string,
   persist_retries: int,
   nudges_used: int,
   open_waits: [WaitDescriptor]
 ) -> CandidateClass ! {Process, IO, Clock, Trace} {
-  let blank = trim(candidate) == "";
-  -- Stage 2.
-  let stage2 = if blank then None else dp7_rejection_errors(rt, workdir, step_idx, session_id);
-  match stage2 {
-    Some(rejection) => CandidateRejected({ rejection: rejection, world: token_to_world(clear_holder(ctx.world)) }),
-    None =>
-      -- Stage 3 (PLAN-002 W4 Part 1).
-      if List.length(open_waits) > 0 then CandidateAwaitWake({ world: token_to_world(clear_holder(ctx.world)) })
-      else {
-      -- Stage 4. The solver's successor is the world from here on, whichever
-      -- decision won (WI-B2b).
-      let finalized = dispatch_solver_candidate(rt, ctx, candidate);
-      let world = token_to_world(finalized.next_state);
-      let completion = match finalized.decision {
-        Accept => CandidateApproved({ output: candidate, source: "ext_solver_accept", world: world }), -- 8.0: `Accept` is nullary; the judged candidate is what is finalized
-        ContinueWithFeedback(feedback) => {
-          let event = ExtSolverFeedback({ step: step_idx, feedback: feedback });
+  -- Stage 2 (PLAN-002 W4 Part 1).
+  if List.length(open_waits) > 0 then CandidateAwaitWake({ world: token_to_world(clear_holder(ctx.world)) })
+  else {
+    -- Stages 3 and 4. The solver's successor is the world from here on,
+    -- whichever decision won (WI-B2b). The two `CandidateApproved` arms are
+    -- stage 4: nothing runs between the completion policy and the approval.
+    let finalized = dispatch_solver_candidate(rt, ctx, candidate);
+    let world = token_to_world(finalized.next_state);
+    match finalized.decision {
+      Accept => CandidateApproved({ output: candidate, source: "ext_solver_accept", world: world }), -- 8.0: `Accept` is nullary; the judged candidate is what is finalized
+      ContinueWithFeedback(feedback) => {
+        let event = ExtSolverFeedback({ step: step_idx, feedback: feedback });
+        let _ = ledger_emit(session_id, event);
+        CandidateFeedback({ event: event, feedback: feedback, world: world })
+      },
+      NoDecision =>
+        if should_inject_persist_nudge(persist_retries, nudges_used, any_writefile_attempt(msgs_with_assistant)) then {
+          let event = PersistNudge({
+            step: step_idx,
+            nudge_num: nudges_used + 1,
+            budget: persist_retries
+          });
           let _ = ledger_emit(session_id, event);
-          CandidateFeedback({ event: event, feedback: feedback, world: world })
-        },
-        NoDecision =>
-          if should_inject_persist_nudge(persist_retries, nudges_used, any_writefile_attempt(msgs_with_assistant)) then {
-            let event = PersistNudge({
-              step: step_idx,
-              nudge_num: nudges_used + 1,
-              budget: persist_retries
-            });
-            let _ = ledger_emit(session_id, event);
-            CandidateNudge({ event: event, world: world })
-          } else CandidateApproved({ output: candidate, source: "", world: world })
-      };
-      -- Stage 5.
-      match completion {
-        CandidateApproved(approved) =>
-          if not blank then completion
-          else match dp7_rejection_errors(rt, workdir, step_idx, session_id) {
-            Some(rejection) => CandidateRejected({ rejection: rejection, world: approved.world }),
-            None => completion
-          },
-        _ => completion
-      }
-      }
+          CandidateNudge({ event: event, world: world })
+        } else CandidateApproved({ output: candidate, source: "", world: world })
+    }
   }
 }
 
@@ -3774,8 +3616,8 @@ func c2_loop(
           -- ADR-003 D1's `state_delta`: the artifacts go inline ONLY when they
           -- moved. Computed ONCE here, where both the old value (`st`) and the
           -- new one (`chain.artifacts`) are in scope — every step-end literal
-          -- below carries `chain.artifacts`, and the `c2_dp7_*_state` builders
-          -- receive only the new one, so a per-site comparison would have to re-derive an old
+          -- below carries `chain.artifacts`, and `c2_candidate_approved_state`
+          -- receives only the new one, so a per-site comparison would have to re-derive an old
           -- value it does not hold.
           let artifacts_changed = encode(chain.artifacts) != encode(st.ext_artifacts);
           let _ = emit_pre_step_stages(session_id, step_idx, chain.stages);
@@ -4126,14 +3968,12 @@ func c2_loop(
                             -- forward, and the solver hook's successor is the
                             -- current one from here on.
                             -- PLAN-002 W2 Part 4 (ADR-002 D2). ONE classification, in stage
-                            -- order: DP7 before the completion policy for a non-blank
-                            -- candidate. See `classify_candidate`.
-                            let classified = classify_candidate(rt, { post_ctx | world: intercepted.next_state }, result.message.content, msgs_with_assistant, workdir, step_idx, session_id, policy.step.persist_retries, st.nudges_used, st.open_waits); -- WI-D19
+                            -- order: open waits before the completion policy. See
+                            -- `classify_candidate`.
+                            let classified = classify_candidate(rt, { post_ctx | world: intercepted.next_state }, result.message.content, msgs_with_assistant, step_idx, session_id, policy.step.persist_retries, st.nudges_used, st.open_waits); -- WI-D19
                             match classified {
-                              CandidateRejected(rejected) =>
-                                c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, c2_dp7_rejected_state(session_id, identity, st, msgs_with_assistant, new_totals, chain.artifacts, applied.telemetry, rejected.world, trace_after_model, emissions_after_call, artifacts_changed, step_idx, rejected.rejection)),
                               CandidateApproved(approved) =>
-                                c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, c2_dp7_approved_state(session_id, identity, st, msgs_with_assistant, new_totals, chain.artifacts, applied.telemetry, approved.world, trace_after_model, emissions_after_call, artifacts_changed, step_idx, approved.output, approved.source)),
+                                c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, c2_candidate_approved_state(session_id, identity, st, msgs_with_assistant, new_totals, chain.artifacts, applied.telemetry, approved.world, trace_after_model, emissions_after_call, artifacts_changed, step_idx, approved.output, approved.source)),
                               CandidateAwaitWake(waiting) =>
                                 c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, c2_await_wake_state(session_id, identity, st, msgs_with_assistant, new_totals, chain.artifacts, applied.telemetry, waiting.world, trace_after_model, emissions_after_call, artifacts_changed, step_idx, result.message.content)),
                               CandidateFeedback(fed) => {

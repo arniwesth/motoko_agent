@@ -819,9 +819,10 @@ func scenario_parity_register_is_the_whole_gap() -> bool ! {IO} {
   -- the DIRECT statement for the variants WI-D2 closed — a reader checking why
   -- the register is 2 should not have to derive "and none of the eleven was
   -- reclassified" from two other rows.
+  -- Ten are named below. The eleventh was the DP7 verifier's rejection event,
+  -- and 005 WI-4 deleted that variant.
   let g = report("WI-D2's eleven left the gap by being APPENDED, not by being reclassified",
                  is_logical(event_vocabulary(), "CostExhausted")
-                   && is_logical(event_vocabulary(), "Dp7VerifierRejected")
                    && is_logical(event_vocabulary(), "ThinkingStreamEnd")
                    && is_logical(event_vocabulary(), "NativeToolDenied")
                    && is_logical(event_vocabulary(), "ToolPending")

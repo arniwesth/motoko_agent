@@ -288,15 +288,6 @@ pure func parked_world() -> WorldState {
     env: [{ key: "MOTOKO_SESSION_ID", value: "lp" }] }
 }
 
--- The DP7 runtime. `enabled` with a command that exits non-zero and prints
--- nothing recognisable as missing infrastructure, so `run_dp7_verifier`
--- Rejects rather than failing open. This is the only scenario that needs the
--- Process capability for its own sake.
-func dp7_rt() -> ExtRuntime {
-  let v: VerificationConfig = { enabled: true, command: "exit 3" };
-  { registry: { entries: [] }, strict_mode: false, verification: v }
-}
-
 -- ---------------------------------------------------------------------------
 -- Fixtures
 -- ---------------------------------------------------------------------------
@@ -523,17 +514,6 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   let f5 = end_frame("capped", capped);
   let r5 = check_scenario("capped", capped, ["CostExhausted"]);
 
-  -- Subject 6: the DP7 re-injection path, which is NOT terminal — the run
-  -- continues after it, which is why its append is unconstrained by D6.1.
-  let p6 = Scripted([prose_step("done"), prose_step("done again")]);
-  let _ = begin_frame("dp7", p6);
-  let rejected = Session.run_v2_session_traced(
-    dp7_rt(), "task", "", false, mk_budget(), "phase-c-model",
-    [system_msg()], "/tmp", 4, false, 0, zero_rates(), p6
-  );
-  let f6 = end_frame("dp7", rejected);
-  let r6 = check_scenario("dp7", rejected, ["Dp7VerifierRejected"]);
-
   -- Subject 7: an extension-served tool. See `handled_rt`.
   let p7 = Scripted(tool_script());
   let _ = begin_frame("handled", p7);
@@ -631,11 +611,11 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
               count_of("NativeToolDenied", native_vs) == 0,
               "the native subject denied a tool, so it is not isolating the allowed arm");
 
-  let _ = println("LEDGER_SUBJECTS 9");
-  let _ = println("WORLD_RUN_FRAMES 9");
-  let framed = f1 && f2 && f3 && f4 && f5 && f6 && f7 && f8 && f9;
+  let _ = println("LEDGER_SUBJECTS 8");
+  let _ = println("WORLD_RUN_FRAMES 8");
+  let framed = f1 && f2 && f3 && f4 && f5 && f7 && f8 && f9;
 
-  if req_ok && r1 && r2 && r3 && r4 && r5 && r6 && r7 && r8 && r9 && order_ok && disjoint && framed then println("ledger_parity_dst PASS")
+  if req_ok && r1 && r2 && r3 && r4 && r5 && r7 && r8 && r9 && order_ok && disjoint && framed then println("ledger_parity_dst PASS")
   else {
     let _ = println("ledger_parity_dst FAIL");
     exit(1)

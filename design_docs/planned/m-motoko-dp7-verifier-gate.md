@@ -1,6 +1,6 @@
 # M-MOTOKO-DP7-VERIFIER-GATE: Pre-Finalize AILANG Type-Check Gate
 
-**Status**: Planned  
+**Status**: Removed. The gate was built and is now out of core, with nothing in its place: Amendment 1 of [005 ADR-001](../../.agent/projects/005_harness_policy_boundary/ADR-001-harness-policy-boundary.md), accepted 2026-10-10. The text below is the design as planned.  
 **Priority**: P1 — highest-leverage single change available  
 **Estimate**: ~1 day (~200 LOC)  
 **Target branch**: motoko-dx-compaction-pending  

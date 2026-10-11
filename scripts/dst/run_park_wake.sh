@@ -49,7 +49,7 @@ count_in() {  # count_in LABEL FIXED-STRING
 
 check "the in-process fixtures passed (exit ${rc})" "$([ "$rc" -eq 0 ] && echo 1 || echo 0)"
 fixtures="$(sed -n 's/^PARK_WAKE_FIXTURES \([0-9]*\)$/\1/p' "$out" | tail -1)"
-check "all 17 fixtures reported" "$([ "${fixtures:-0}" -eq 17 ] && echo 1 || echo 0)" "PARK_WAKE_FIXTURES=${fixtures:-none}"
+check "all 16 fixtures reported" "$([ "${fixtures:-0}" -eq 16 ] && echo 1 || echo 0)" "PARK_WAKE_FIXTURES=${fixtures:-none}"
 
 for label in success wrong_handle duplicate_wake abort_exit restart_exit determinism_a determinism_b; do
   b="$(grep -cx "PARK_RUN_BEGIN ${label}" "$out" || true)"; e="$(grep -cx "PARK_RUN_END ${label}" "$out" || true)"

@@ -9,7 +9,7 @@ must exist is paired with one asserting the forbidden thing does not.
                        kinds have a subject rule; the 2 named D6.4 gap rows are
                        present; DISPLAY-ONLY variants have NO rule, and neither
                        does any other unreachable variant.
-    rule-shape         the tally matches the settled table (19 fixed / 10
+    rule-shape         the tally matches the settled table (18 fixed / 10
                        payload_routed / 1 correlated) and every subject slug is
                        a real layout node.
     trace-contract     every completed run carries exactly one RunSummary and it
@@ -42,7 +42,7 @@ import event_subjects as es  # noqa: E402
 
 DEFAULT_OUT = TOOL_ROOT / ".out"
 
-EXPECTED_TALLY = {es.FIXED: 19, es.PAYLOAD_ROUTED: 10, es.CORRELATED: 1}
+EXPECTED_TALLY = {es.FIXED: 18, es.PAYLOAD_ROUTED: 10, es.CORRELATED: 1}
 
 
 @dataclass(frozen=True)
@@ -113,11 +113,11 @@ def check_rule_shape(out_dir: Path, out: list[Finding]) -> None:
     tally = es.rule_kind_tally()
     if tally != EXPECTED_TALLY:
         out.append(Finding("rule-shape", f"rule-kind tally is {tally}, expected {EXPECTED_TALLY}"))
-    if len(es.RULES) != 30:
-        out.append(Finding("rule-shape", f"{len(es.RULES)} rules, expected the settled 30"))
-    if len(es.multi_subject_keys()) != 15:
+    if len(es.RULES) != 29:
+        out.append(Finding("rule-shape", f"{len(es.RULES)} rules, expected the settled 29"))
+    if len(es.multi_subject_keys()) != 14:
         out.append(Finding("rule-shape",
-                           f"{len(es.multi_subject_keys())} multi-subject rows, expected 15 (NOTE tally)"))
+                           f"{len(es.multi_subject_keys())} multi-subject rows, expected 14 (NOTE tally)"))
 
     nodes = set()
     layout = out_dir / "layout.csv"

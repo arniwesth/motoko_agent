@@ -1454,6 +1454,57 @@ new order (v0.52.0 against v0.52.2). Keeping the fourth class with no member: a 
 expectation reversed: the class is defined as compiler-clean with no effect performed, and the
 row performs.
 
+### Amendment 7 (2026-10-11) — the host verifies nothing before finalize: D4 and freeze item 6 lose their DP7 half
+
+**Supersedes** two phrases. In D4 (`:628-629`), "Host permissions and deterministic verification
+remain authoritative": the words "and deterministic verification". In freeze evidence item 6
+(`:1154`), "Composition with DP7, waits, permissions, …": the word "DP7". **No type, constructor,
+function or version in the ABI package moves**, and the two precedence orders stated beside D4's
+sentence are as written.
+
+**The artifact: two sessions that could not finish.**
+[005 ADR-001](../005_harness_policy_boundary/ADR-001-harness-policy-boundary.md), Amendment 1,
+records them and decides the removal. This amendment carries that decision into this record.
+
+| | 2026-10-09 | 2026-10-08 |
+|---|---|---|
+| Session | `session_1791533149980-980e8a0796dab753` | `session_demo_1791478595_340711` |
+| `dp7_verifier_rejected` events | 57 | 320 |
+| `ext_solver_feedback` events | 0 | 2 |
+
+Neither run could end. The verifier's command was `make check_core`, which could not pass inside
+a session, and a rejection had no budget (005 Amendment 1 has the cause and the measurements).
+The host stage ran before the finalize atoms (013 ADR-002 D2, stage 2), so a candidate it
+rejected never reached a judge. That is the composition freeze item 6 asks evidence for: the
+stage this ADR left authoritative stood between the judges and every candidate it rejected. The
+logs are in the shared checkout's `.motoko/logfile/`, which is gitignored, so they are not
+attached. The four counts above were recounted from the two JSONL files on 2026-10-11.
+
+**What is adopted.**
+
+1. D4's sentence is read without the verification half. Host permissions remain authoritative,
+   and a learned `Allow` cannot grant permissions unavailable through the existing tool path.
+   The host runs no verification before finalize, and by the operator's ruling of 2026-10-09
+   nothing replaces it: no shipped profile verifies at finalize and no verifier guard is built.
+2. Freeze item 6 is read without "DP7". There is no host verifier to compose with. Its other
+   members stand: waits, permissions, all-atom ordering, tool-policy tie behavior, shadow mode,
+   and the allowances that compaction, profile changes and resume cannot reset.
+3. A finalize atom sees every candidate that has no open wait. Before, a non-blank candidate
+   that the verifier rejected never reached one.
+
+**Nothing else moves.** Finalize precedence is still first `ContinueWithFeedback`, otherwise
+`Accept`, otherwise `NoDecision`, and 005 Amendment 1 (A3) relies on that. Tool-policy precedence
+and the park and wake boundary are untouched. `ExtRuntime.verification` and `VerificationConfig`
+stay exported by the ABI package at 8.0. Nothing in core reads them now, and dropping them is for
+the next major under the 8.x rule.
+
+**Not settled here.** D3's `VerificationEvidence` (`:564-569`) is the host's report of its
+verifier run, and the host no longer has one. Whether the field stays `NotReached`, becomes
+`Disabled` or is retired is open (005 Amendment 1, OQ-A5), and this amendment does not answer
+it. Two other passages describe DP7 as it was and decide nothing: the session row of the
+current-behavior table (`:75`) and D4's sentence that DP7 verifies workspace work and not a
+candidate's prose (`:636-637`). They are left as written.
+
 ## Related records
 
 - [037: Skills system](../037_skills_system/ADR-001-skills-system.md) — D2 is the decision Amendment 5 records

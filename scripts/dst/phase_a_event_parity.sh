@@ -170,12 +170,9 @@ run_json_smoke() {
   fi
 }
 
-bash scripts/setup_dp7_smoke_workdirs.sh >/dev/null
-
 run_json_smoke smoke_v2_cost_budget_full_loop scripts/smoke_v2_cost_budget_full_loop.ail "$FULL_CAPS" full normal
 run_json_smoke smoke_v2_compaction_full_loop scripts/smoke_v2_compaction_full_loop.ail "$FULL_CAPS" full normal
 run_json_smoke smoke_v2_pending_full_loop scripts/smoke_v2_pending_full_loop.ail "$FULL_CAPS" full devnull
-run_json_smoke smoke_v2_dp7_gate scripts/smoke_v2_dp7_gate.ail "$FULL_CAPS" full normal
 run_json_smoke smoke_phase_a_tool_parity scripts/smoke_phase_a_tool_parity.ail "$FULL_CAPS" full normal
 run_json_smoke smoke_v2_ext_fixture_parity scripts/smoke_v2_ext_fixture_parity.ail "$FULL_CAPS" full normal
 run_json_smoke smoke_v2_compaction_chain scripts/smoke_v2_compaction_chain.ail "$FULL_CAPS" full normal

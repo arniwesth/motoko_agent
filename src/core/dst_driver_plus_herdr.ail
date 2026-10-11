@@ -106,6 +106,16 @@ import src/core/dst_event_vocabulary as Vocab (event_vocabulary_version)
 
 export pure func herdr_profile_id() -> string { "driver_plus_herdr" }
 
+-- v5 (2026-10-11, 005 W1, WI-9). RE-ISSUED under D4 because the attribution
+-- table's content hash moved: the DP7 verifier left core (005 ADR-001
+-- Amendment 1) and all five session.ail anchors moved with it. The plan priced
+-- three profiles, from the cascade list in `tools/predicate-anchors/anchors.sh`,
+-- which still left this one out as known-red. With the other three re-issued
+-- and this one not, `make driver_plus_herdr` and `make herdr_graded` answered
+-- [attribution-identity-stale], which is v2's story over again. Nothing
+-- installed, covered, excluded, omitted or routed changes; the acceptance
+-- script's `extension_profile` literal follows.
+--
 -- v4 (2026-10-05, 037 PLAN-001 P6, the re-pin). RE-ISSUED because the omitted
 -- list changed again: `skills`, the extension 037 adds, is named in it with
 -- its measured reason (037 ADR-001 D13 and A8). Nothing installed, covered,
@@ -132,7 +142,7 @@ export pure func herdr_profile_id() -> string { "driver_plus_herdr" }
 -- Neither changes what is installed, covered, excluded or routed.
 --
 -- v1. First issue; there is no predecessor to re-issue from.
-export pure func herdr_profile_version() -> string { "4" }
+export pure func herdr_profile_version() -> string { "5" }
 
 -- The revision the measurements below were taken at.
 export pure func measured_at() -> string { "8470c3f" }
@@ -155,7 +165,11 @@ export pure func herdr_attribution_ref() -> AttributionRef {
   { source_revision: "c0fbf10",
     -- RE-RECORDED AT PINDH FOR v2, from
     -- sha256:eba3f47ba859f6bd5afefbadba22f6b50560fa17fe26ef4d2093a82c8793abc4.
-    content_hash: "sha256:0211ac242f677bd392bb317611b03a335d266426ec9d050cd5cce4e96b8f5583" }
+    -- RE-RECORDED AT 005 W1 (WI-9) FOR v5, with the other three profiles', from
+    -- sha256:0211ac242f677bd392bb317611b03a335d266426ec9d050cd5cce4e96b8f5583.
+    -- An anchor re-measurement, not a table correction. See
+    -- `driver_only_attribution_ref`.
+    content_hash: "sha256:c7500943bffc8be0c48521afc17fa4b70ea3740c65a049394081d2d6bf513c6d" }
 }
 
 export pure func installed_extension_ids() -> [string] { ["herdr"] }
