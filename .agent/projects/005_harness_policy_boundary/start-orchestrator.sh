@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Start Motoko as the orchestrator of PLAN-finalize-policy-migration.
 #
-# Run it in the herdr pane Motoko is to run in, in place of `make motoko`:
+# Run it in the herdr pane Motoko is to run in, from the repository root, in place of
+# `make motoko`:
 #
 #   bash .agent/projects/005_harness_policy_boundary/start-orchestrator.sh [make arguments]
 #
@@ -32,6 +33,15 @@ if [ ! -d "$root/.git" ]; then
 fi
 if [ -z "${HERDR_PANE_ID:-}" ]; then
   echo "start-orchestrator: HERDR_PANE_ID is empty. Run this in a herdr pane." >&2
+  exit 1
+fi
+# herdr reports the shell's directory as the pane's, and the dagr view the extension opens
+# resolves its run file against that. This script cannot move the shell, so it must be
+# started from the root. Started from elsewhere, Motoko runs but the dagr pane waits for a
+# run file under the wrong directory (seen 2026-10-10).
+if [ "$(pwd -P)" != "$(cd "$root" && pwd -P)" ]; then
+  echo "start-orchestrator: run this from the repository root, or the dagr pane cannot find its run file:" >&2
+  echo "  cd $root && bash .agent/projects/005_harness_policy_boundary/start-orchestrator.sh $*" >&2
   exit 1
 fi
 command -v dagr >/dev/null || { echo "start-orchestrator: dagr is not on PATH." >&2; exit 1; }
