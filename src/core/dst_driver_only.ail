@@ -525,7 +525,14 @@ export pure func driver_only_id() -> string { "driver_only" }
 -- `omitted_extensions` names `skills`, the extension 037 adds, with its
 -- measured reason (037 ADR-001 D13 and A8). Installed, covered, waived,
 -- classified and attributed: all as v33 had them.
-export pure func driver_only_version() -> string { "34" }
+--
+-- v34 → v35 AT 005 W1 (2026-10-11), AN ATTRIBUTION RE-ISSUE. No claim changed.
+-- The DP7 verifier left core (005 ADR-001 Amendment 1), all five session.ail
+-- anchors moved with it, and the table's content hash moved with them. D4
+-- re-issues every profile that refers to the table. Installed, covered,
+-- waived, classified and omitted: all as v34 had them. The account is at
+-- `driver_only_attribution_ref`.
+export pure func driver_only_version() -> string { "35" }
 
 -- The attribution table this profile was issued against. Literals by design —
 -- see the header. Re-issuing the profile after a table correction means bumping
@@ -859,7 +866,18 @@ export pure func driver_only_attribution_ref() -> AttributionRef {
     -- TABLE CORRECTION: `clock_now(` text identical against `git show 9430873:`,
     -- thirteen hits, and all five anchored expressions byte-identical at their
     -- new offsets. The tool_phase anchors did not move.
-    content_hash: "sha256:0211ac242f677bd392bb317611b03a335d266426ec9d050cd5cce4e96b8f5583" }
+    -- 005 W1 (WI-9): re-recorded with all three successors', from
+    -- sha256:0211ac242f677bd392bb317611b03a335d266426ec9d050cd5cce4e96b8f5583.
+    -- All five session anchors moved — 1471/1730/1842/4302/4523 ->
+    -- 1469/1728/1840/4142/4363 (-2, -2, -2, -160, -160) — and for the first
+    -- time they moved UP: 005 ADR-001 Amendment 1 takes the DP7 verifier out of
+    -- core. Two import lines went from above all five; the verifier, its
+    -- rejected-state builder and `classify_candidate`'s two verification
+    -- stages went from above the last two. NOT A TABLE CORRECTION: `clock_now(`
+    -- text identical against `git show 86f2b817:`, thirteen hits, and all five
+    -- anchored expressions byte-identical at their new offsets. The tool_phase
+    -- anchors did not move.
+    content_hash: "sha256:c7500943bffc8be0c48521afc17fa4b70ea3740c65a049394081d2d6bf513c6d" }
 }
 
 -- ---------------------------------------------------------------------------

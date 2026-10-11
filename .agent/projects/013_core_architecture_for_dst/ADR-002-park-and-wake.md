@@ -25,6 +25,11 @@ Provenance: measurements are the v1 review's re-derivation (§7.6 there) and
 as corrected. Code coordinates are at HEAD `3ee3d03`, whose `src/` and `packages/` are
 byte-identical to the reviewed `97827bf` (only a fixture under `tools/` changed between them).
 
+**Superseded in part, from 2026-10-10.**
+[005 ADR-001](../005_harness_policy_boundary/ADR-001-harness-policy-boundary.md), Amendment 1 (A4),
+takes the DP7 verifier out of core. D2's stage 2 and the cross-product cases that name a DP7
+rejection no longer hold. The note above D2's pipeline says what replaces them.
+
 ---
 
 ## Version history and retractions
@@ -327,6 +332,26 @@ A *park* is the loop's decision to block on its open waits instead of calling th
 **State.** `C2LoopState` gains `open_waits: [WaitDescriptor]` (type in D3) and the projection
 to `StepState` (`session.ail:684–697`) carries it; `decide` cannot see what `StepState` does not
 hold.
+
+> **Superseded in part, from 2026-10-10,** by
+> [005 ADR-001](../005_harness_policy_boundary/ADR-001-harness-policy-boundary.md), Amendment 1
+> (A4). Core runs no verifier on a candidate, and nothing replaces the verifier. The text below
+> is left as written. What it says that no longer holds:
+>
+> - **Stage 2.** There is no DP7 stage. `classify_candidate` has four stages: pending, waits,
+>   completion policy, finalize. The cost priced below, a verifier run on every non-blank
+>   candidate, is gone with it.
+> - **"Moves DP7 ahead of solver dispatch."** Every non-blank candidate reaches the solver
+>   judges. None is rejected before they see it.
+> - **Stage 5's reasons.** An approved candidate carries `candidate_approved`. `dp7_approved`,
+>   `dp7_fail_open` and `dp7_rejected` are gone, and `decide` has no arm for them.
+> - **The cross-product cases that name a DP7 rejection.** These are "DP7 rejection × open waits
+>   → `InjectUserMessage`" and "a solver-feedback candidate that DP7 rejects", and with them the
+>   fixture "the DP7-rejected solver candidate". A candidate with open waits parks.
+>
+> The same holds where this record repeats that text: the TL;DR's D2 row, D5 step 2,
+> *Consequences* and the implementation handoff. This note marks what A4 supersedes and nothing
+> else.
 
 **The pipeline, explicit.** The driver's candidate classification — the `CallModel` arm's
 no-tool-calls branch, `session.ail:3012–3082` — is refactored into one function,

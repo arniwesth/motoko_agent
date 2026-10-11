@@ -10,6 +10,13 @@ regression in item 2 is its first entry.
 
 ## 1. Flip the DP7 gate to fail-closed
 
+> **Superseded, from 2026-10-10,** by
+> [005 ADR-001](../005_harness_policy_boundary/ADR-001-harness-policy-boundary.md),
+> Amendment 1. The DP7 verifier is removed from core and nothing replaces it,
+> so there is no gate to flip and this item is not to be implemented.
+> `run_dp7_verifier`, `dp7_gate` and `Dp7VerifierRejected` no longer exist.
+> Items 2 to 5 are not touched by that amendment. The text is left as written.
+
 - File: `src/core/session.ail` (funcs `run_dp7_verifier` ~L1800, `dp7_gate` ~L1816)
 - Change `Err(_) => Approve` → `Err(_) => Reject(infra-error-reason)`; thread
   the error text into the `Dp7VerifierRejected` feedback message so the agent

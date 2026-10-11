@@ -1533,6 +1533,40 @@ the harness's existing entry points and the prototypes' evidence, not their code
 commit is one reviewed, line-neutral core commit that changes no running adapter and moves no
 anchor; everything else lands at E.
 
+## Changes after acceptance
+
+Numbered. Each names the text it changes and what forced it, and leaves that text as written.
+
+### Change 1 (2026-10-11) — the `rt.verification` row of the T0 settings is no longer needed
+
+**Changes** D1's T0 settings table, the row `rt.verification` (`:610`).
+
+**What forced it.**
+[005 ADR-001](../005_harness_policy_boundary/ADR-001-harness-policy-boundary.md), Amendment 1,
+accepted 2026-10-10, takes the DP7 verifier out of core and puts nothing in its place.
+`run_dp7_verifier` and `dp7_rejection_errors`, the two functions the row's reason cites, no
+longer exist, and `classify_candidate` has no verification stage.
+
+**The change.** The row is no longer needed. It pinned `rt.verification` to `{ enabled: false }`
+so that no completion arm would start a real subprocess. No value of the setting starts one now,
+or changes which completion arms are reachable, so the pin decides nothing.
+
+**What stays.** The field is still there. `ExtRuntime.verification` is exported by the ABI
+package at 8.0, so the entry's runtime literal still gives it a value, and the evaluator's
+settings record still carries `verification_enabled: false`
+(`src/eval/journal/configuration.ail`). This change edits neither. The other rows of the table
+are untouched.
+
+**The same setting elsewhere in this record,** left as written:
+
+- The version history restates the condition (`:179-180`), and D2's entry passes
+  `verification.enabled = false` (`:784-785`). Both are without effect for the same reason.
+- D1's stopping contract walks `classify_candidate` with the verifier in it: "stage 5 calls the
+  disabled verifier" and `dp7_approved` in items 4 and 5 (`:651-660`), and "verifier rejection"
+  among the arms unreachable under the settings (`:678-679`). The stages are gone and the reason
+  is now `candidate_approved`. The contract's outcomes are the same: a blank stop and a stop call
+  are both `CandidateApproved`, and `decide` finalises.
+
 ## Cross-references
 
 - `REVIEW-adr004-v4-verdicts-codex.md`: the v4 review; its per-decision verdicts (§2), mechanism
