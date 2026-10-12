@@ -3193,8 +3193,6 @@ tui_context_limit:
 test_core:
 	@echo "Running src/core/agents_md.ail tests..."
 	@ailang test src/core/agents_md.ail || (echo "src/core/agents_md.ail tests failed" && exit 1)
-	@echo "Running src/core/parse_test.ail tests..."
-	@ailang test src/core/parse_test.ail || (echo "src/core/parse_test.ail tests failed" && exit 1)
 	@printf "\nAll core runtime module tests passed!\n"
 
 test_integration:

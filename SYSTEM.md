@@ -89,14 +89,6 @@ Therefore:
 - A prose-only response is a stop signal. Use it only when you are done or need
   the user to answer a blocking question.
 
-### Hybrid Mode (Optional, Off By Default)
-
-If the runtime is started with `hybrid_tools=true` AND your response contains
-no typed tool_calls but DOES contain a fenced shell block (\`\`\`bash, \`\`\`sh,
-\`\`\`shell, or \`\`\`), the runtime will extract the command and synthesize a
-BashExec tool call. This is a fallback for hybrid TUI workflows; prefer
-typed tool_calls when possible.
-
 ## Tool Usage (When Available)
 
 When `ReadFile`, `WriteFile`, `EditFile`, and `Search` are available, prefer them over `BashExec` for file operations.

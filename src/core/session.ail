@@ -39,7 +39,6 @@ import std/crypto (sha256Hex)
 import std/trace as Trace
 import src/core/tool_catalog (tools_with_extensions)
 import src/core/tool_contract (call_to_json)
-import src/core/parse (extract_bash)
 import src/core/tool_dispatch_adapter (tool_call_to_envelope)
 import src/core/types (Msg)
 import src/core/config (CostRates)
@@ -107,7 +106,6 @@ import src/core/phase_vocab (
   ThinkingStreamEnd,
   ProviderResult,
   ExtInterceptHandled,
-  HybridBashExtracted,
   DoneEvent,
   EmptyStopFinalize,
   ExtSolverFeedback,
@@ -2048,119 +2046,6 @@ func tool_messages_to_result_jsons(msgs: [Message]) -> [Json] {
   }
 }
 
--- M7: Synthesize a BashExec ToolCall from a hybrid-mode shell command
--- extracted from the assistant's prose. The model emitted no typed
--- tool_calls (finish_reason != "tool_calls") but its content contained
--- a fenced shell block (```bash / ```sh / ```shell / ```), so we treat
--- that block as the canonical hybrid shorthand and pass it through the
--- M3-M6 dispatch pipeline as if it were a typed BashExec call.
---
--- This preserves the full M4 policy gate + M5 tool-handle routing + M6
--- backend split for hybrid commands (e.g. an extension can still Deny
--- a hybrid `rm -rf /` just as it would deny a typed call). The
--- synthetic call uses a "hybrid-step-N" id so it doesn't collide with
--- model-emitted tool_call_ids on the wire.
-func synthesize_hybrid_bash_call(cmd: string, step_idx: int) -> ToolCall {
-  {
-    id: "hybrid-step-${show(step_idx)}",
-    name: "BashExec",
-    arguments: encode(jo([kv("cmd", js(cmd))]))
-  }
-}
-
--- ---------------------------------------------------------------------------
--- ONCE A SESSION HAS EMITTED A NATIVE TOOL CALL, ITS PROSE IS PROSE
--- ---------------------------------------------------------------------------
---
--- Hybrid extraction exists for models that CANNOT emit typed tool calls: with
--- `tools.hybrid` on, any response carrying no native call is scanned for a
--- fenced shell block and the first one is run. A model that has just emitted
--- several hundred typed calls and then writes prose is not using shorthand.
---
--- MEASURED, in the PLAN-001 live run (2026-09-05). The user asked "how do we use
--- the herdr extension to actually start the tasks?", the model answered in prose
--- with copy-paste ```bash examples, and the runtime ran the first fence of each
--- answer: three stray panes, then `herdr agent start d6-worker --kind motoko
--- --pane w3:pX` with the PLACEHOLDER pane id straight out of the example text.
--- The model then reported that failure in its next answer as a finding, and by
--- the fourth answer had rewritten its examples with a `text:` prefix to stop the
--- harness executing them — a model routing around its own runtime.
--- (`.agent/issues/hybrid-bash-extracts-prose-examples-in-native-tool-mode.md`,
--- option 1, which that file calls the smallest of the three.)
---
--- THE SIGNAL IS THE TRANSCRIPT, NOT A NEW STATE FIELD. "Has this session ever
--- emitted a native call" is already written down: an assistant message carrying
--- `tool_calls` (`phase_vocab.step_result_to_message` copies them through). A
--- `C2LoopState` field would be a second home for a fact the history already
--- holds, and D1's rule about re-deriving state from message history cuts the
--- other way here — this is not an effect cursor, it is a property OF the
--- transcript being read off the transcript.
---
--- COMPACTION DEGRADES THIS TO TODAY'S BEHAVIOUR, not to a wrong answer: if the
--- assistant turns carrying tool_calls are folded away, extraction switches back
--- on. That is the safe direction and it is why the read is cheap enough to do
--- per step rather than latched.
---
--- THE `hybrid-step-` FILTER IS LOAD-BEARING AND IS THE WHOLE REASON THIS IS NOT
--- A ONE-LINE `m.tool_calls != []`. The hybrid branch below builds its own
--- assistant message carrying the SYNTHESISED call, and that message enters
--- `msgs` through `pending_tool_prefix`. Counting it would mean one hybrid
--- extraction disables hybrid extraction for the rest of the run — a latch that
--- looks like this fix working and is the opposite of it. The id prefix is
--- `synthesize_hybrid_bash_call`'s, which exists so the synthetic call cannot
--- collide with a model-emitted id on the wire; `any_native_call` is its second
--- reader.
---
--- ADR-001 §4. Recursive over a list, so a synthesised `ensures { true }` cannot
--- be encoded at all rather than failing to prove. The property worth stating —
--- `exists c in calls. not is_hybrid(c.id)` — is exactly the shape the fragment
--- rejects.
--- contracts: BLOCKED — RECURSIVE; a synthesised `ensures { true }` fails to
--- encode rather than failing to prove.
-pure func any_native_call(calls: [ToolCall]) -> bool {
-  match calls {
-    [] => false,
-    c :: rest => if startsWith(c.id, "hybrid-step-") then any_native_call(rest) else true
-  }
-}
-
--- contracts: BLOCKED — RECURSIVE; see `any_native_call`.
-pure func session_emitted_native_tool_call(msgs: [Message]) -> bool {
-  match msgs {
-    [] => false,
-    m :: rest =>
-      if m.role == "assistant" && any_native_call(m.tool_calls) then true
-      else session_emitted_native_tool_call(rest)
-  }
-}
-
--- THE DETERMINISTIC PIN the issue asks for, at the gate rather than through the
--- loop: "a v2 session whose step N emitted a native call and whose step N+1 is
--- prose with a ```bash fence must produce no `hybrid_bash_extracted` event".
---
--- The first conjunct is what stops this passing for the wrong reason. The prose
--- fixture is the live-run shape — placeholder pane id and all — and
--- `extract_bash` DOES extract from it, so the case is closed by the gate and not
--- by the fence having quietly stopped matching.
---
--- The last conjunct is the one that fails against the naive implementation: a
--- session whose only tool call is the SYNTHESISED hybrid one must still have
--- extraction available.
--- contracts: SKIPPED — calls `extract_bash` and builds `Message` records, neither
--- of which the SMT fragment can encode.
-pure func test_hybrid_extraction_stops_after_a_native_tool_call() -> bool
-  tests [((), true)]
-  {
-    let prose_text = "Start it like this:\n\n```bash\nherdr agent start d6-worker --kind motoko --pane w3:pX\n```\n\nThat is the shape.";
-    let native: Message = { role: "assistant", content: "", tool_calls: [{ id: "call_abc", name: "WriteFile", arguments: "{}" }], tool_call_id: "", images: [] };
-    let synthetic: Message = { role: "assistant", content: "prose", tool_calls: [synthesize_hybrid_bash_call("ls", 4)], tool_call_id: "", images: [] };
-    let prose: Message = { role: "assistant", content: prose_text, tool_calls: [], tool_call_id: "", images: [] };
-    (match extract_bash(prose_text) { Some(_) => true, None => false })
-      && session_emitted_native_tool_call([native, prose])
-      && session_emitted_native_tool_call([prose]) == false
-      && session_emitted_native_tool_call([synthetic, prose]) == false
-  }
-
 -- Build a structured tool-role Message indicating the ohmy_pi delegation
 -- pathway is not yet wired in v2. M6 plumbs split_by_backend through but
 -- defers the inbox-based wait_for_tool_results to a follow-up — for now
@@ -3811,40 +3696,22 @@ func c2_loop(
                         };
                         c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
                       } else {
-                        -- `session_emitted_native_tool_call` is the 2026-09-06
-                        -- gate; see its declaration for the measurement. It reads
-                        -- `msgs_with_assistant`, which includes THIS step's
-                        -- assistant message — harmless, because this branch is
-                        -- reached only when that message carried no calls.
-                        let hybrid_attempt: Option[string] =
-                          if hybrid_tools && session_emitted_native_tool_call(msgs_with_assistant) == false then
-                            extract_bash(result.message.content)
-                          else None;
-                        match hybrid_attempt {
-                          Some(cmd) => {
-                            let event = HybridBashExtracted({ step: step_idx, cmd: cmd });
-                            let _ = ledger_emit(session_id, event);
-                            let synth_call = synthesize_hybrid_bash_call(cmd, step_idx);
-                            let augmented_assistant_msg: Message = {
-                              role: "assistant",
-                              content: result.message.content,
-                              tool_calls: [synth_call],
-                              tool_call_id: "",
-                              images: []
-                            };
-                            -- THE PLAIN ASSISTANT IS JOURNALED HERE, and the
-                            -- augmented one is NOT: `msgs` carries the plain one
-                            -- and `pending_tool_prefix` carries the augmented
-                            -- one, and the batch finish replaces the first with
-                            -- the second under `replaces_previous`. Journaling
-                            -- the augmented message here instead would put a
-                            -- synthesized tool call into the journal for a step
-                            -- that may never reach the tool phase, and D4 rule
-                            -- 4's "on the hybrid path the journaled assistant
-                            -- carries no calls until `:2251` replaces it, so a
-                            -- crash there strips nothing" would stop being true.
+                        -- WI-B2b. Bound, for the same reason the intercept
+                        -- above is: every branch below carries the world
+                        -- forward, and the solver hook's successor is the
+                        -- current one from here on.
+                        -- PLAN-002 W2 Part 4 (ADR-002 D2). ONE classification, in stage
+                        -- order: open waits before the completion policy. See
+                        -- `classify_candidate`.
+                        let classified = classify_candidate(rt, { post_ctx | world: intercepted.next_state }, result.message.content, step_idx, session_id, st.open_waits); -- WI-D19
+                        match classified {
+                          CandidateApproved(approved) =>
+                            c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, c2_candidate_approved_state(session_id, identity, st, msgs_with_assistant, new_totals, chain.artifacts, applied.telemetry, approved.world, trace_after_model, emissions_after_call, artifacts_changed, step_idx, approved.output, approved.source)),
+                          CandidateAwaitWake(waiting) =>
+                            c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, c2_await_wake_state(session_id, identity, st, msgs_with_assistant, new_totals, chain.artifacts, applied.telemetry, waiting.world, trace_after_model, emissions_after_call, artifacts_changed, step_idx, result.message.content)),
+                          CandidateFeedback(fed) => {
                             let appended = c2_history_appended(identity.run_id, step_idx, st.history_digest, false, last_msg(msgs_with_assistant));
-                            let trace_with_history = c2_journal(session_id, ledger_append(trace_after_model, WireRecord(event)), appended.events);
+                            let trace_with_history = c2_journal(session_id, ledger_append(trace_after_model, WireRecord(fed.event)), appended.events);
                             let trace_with_delta = c2_journal(session_id, trace_with_history,
                               [c2_state_delta_event(identity.run_id, step_idx, st.prior_counts, trace_with_history, applied.telemetry, chain.artifacts, artifacts_changed)]);
                             let next_state: C2LoopState = {
@@ -3854,15 +3721,15 @@ func c2_loop(
 	                              ext_artifacts: chain.artifacts,
 	                              telemetry: applied.telemetry,
 	                              provider: st.provider,
-	                              world_state: token_to_world(intercepted.next_state), -- WI-D19
-                              pending_tool_calls: [synth_call],
-                              pending_tool_context: msgs_with_assistant,
-                              pending_tool_prefix: st.msgs ++ [augmented_assistant_msg],
-                              pending_tool_batched: false,
+	                              world_state: fed.world,
+                              pending_tool_calls: [],
+                              pending_tool_context: [],
+                              pending_tool_prefix: [],
+                              pending_tool_batched: true,
     accumulated_tool_msgs: [],
     pending_approval: None,
-                              last_finish_reason: "hybrid_bash",
-                              last_response_text: result.message.content,
+                              last_finish_reason: "solver_feedback",
+                              last_response_text: fed.feedback,
                               finalize_source: "",
                               prior_counts: st.prior_counts,
                               trace: trace_with_delta,
@@ -3873,54 +3740,6 @@ func c2_loop(
                               park_attempt: st.park_attempt
                             };
                             c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
-                          },
-                          None => {
-                            -- WI-B2b. Bound, for the same reason the intercept
-                            -- above is: every branch below carries the world
-                            -- forward, and the solver hook's successor is the
-                            -- current one from here on.
-                            -- PLAN-002 W2 Part 4 (ADR-002 D2). ONE classification, in stage
-                            -- order: open waits before the completion policy. See
-                            -- `classify_candidate`.
-                            let classified = classify_candidate(rt, { post_ctx | world: intercepted.next_state }, result.message.content, step_idx, session_id, st.open_waits); -- WI-D19
-                            match classified {
-                              CandidateApproved(approved) =>
-                                c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, c2_candidate_approved_state(session_id, identity, st, msgs_with_assistant, new_totals, chain.artifacts, applied.telemetry, approved.world, trace_after_model, emissions_after_call, artifacts_changed, step_idx, approved.output, approved.source)),
-                              CandidateAwaitWake(waiting) =>
-                                c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, c2_await_wake_state(session_id, identity, st, msgs_with_assistant, new_totals, chain.artifacts, applied.telemetry, waiting.world, trace_after_model, emissions_after_call, artifacts_changed, step_idx, result.message.content)),
-                              CandidateFeedback(fed) => {
-                                let appended = c2_history_appended(identity.run_id, step_idx, st.history_digest, false, last_msg(msgs_with_assistant));
-                                let trace_with_history = c2_journal(session_id, ledger_append(trace_after_model, WireRecord(fed.event)), appended.events);
-                                let trace_with_delta = c2_journal(session_id, trace_with_history,
-                                  [c2_state_delta_event(identity.run_id, step_idx, st.prior_counts, trace_with_history, applied.telemetry, chain.artifacts, artifacts_changed)]);
-                                let next_state: C2LoopState = {
-                                  msgs: msgs_with_assistant,
-	                                  step_idx: step_idx + 1,
-	                                  totals: new_totals,
-	                                  ext_artifacts: chain.artifacts,
-	                                  telemetry: applied.telemetry,
-	                                  provider: st.provider,
-	                                  world_state: fed.world,
-                                  pending_tool_calls: [],
-                                  pending_tool_context: [],
-                                  pending_tool_prefix: [],
-                                  pending_tool_batched: true,
-    accumulated_tool_msgs: [],
-    pending_approval: None,
-                                  last_finish_reason: "solver_feedback",
-                                  last_response_text: fed.feedback,
-                                  finalize_source: "",
-                                  prior_counts: st.prior_counts,
-                                  trace: trace_with_delta,
-                                  emissions: emissions_after_call,
-                                  history_digest: appended.digest,
-                                  open_waits: st.open_waits,
-                                  park_ordinal: st.park_ordinal,
-                                  park_attempt: st.park_attempt
-                                };
-                                c2_loop(rt, task, env_url, hybrid_tools, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, next_state)
-                              }
-                            }
                           }
                         }
                       }
