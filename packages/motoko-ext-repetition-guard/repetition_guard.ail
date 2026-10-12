@@ -61,8 +61,8 @@ module sunholo/motoko_ext_repetition_guard/repetition_guard
 -- That trade is an operator's to make, not this guard's.
 
 import std/string (trim, intToStr, length)
-import std/json (Json, encode, decode, jo, kv, jint, getInt)
-import std/option (Some, None)
+import std/json (Json, encode, decode, jo, kv, jint, getInt, asObject)
+import std/option (Option, Some, None)
 import std/result (Ok, Err)
 import pkg/sunholo/motoko_ext_abi/types (
   PureCtx, Msg, ToolCall, ToolCallEnvelope,
@@ -166,6 +166,37 @@ pure func msg_signature(c: ToolCall) -> string
 
 type Seen = { sig: string, out: string }
 
+-- THE RESULT AS THE MODEL SEES IT, MINUS ITS OWN ADDRESS. A result an extension
+-- handled reaches history as the encoded `ToolResultEnvelope`, which carries the
+-- call's own `tool_call_id`, so two answers to the same question were never
+-- byte-identical and this guard could not fire on any extension-provided tool.
+-- Measured 2026-10-12: the same refused `ailang_cli` call 215 times in one run,
+-- each result differing only in that id. The id is dropped before comparing;
+-- anything that is not a JSON object compares as itself.
+pure func drop_call_id(kvs: [{key: string, value: Json}]) -> [{key: string, value: Json}] {
+  match kvs {
+    [] => [],
+    x :: rest => if x.key == "tool_call_id" then drop_call_id(rest) else x :: drop_call_id(rest)
+  }
+}
+
+export pure func result_key(out: string) -> string
+  tests [
+    ("{\"tool_call_id\":\"call_1\",\"stdout\":\"x\"}", "{\"stdout\":\"x\"}"),
+    ("{\"stdout\":\"x\",\"tool_call_id\":\"call_2\"}", "{\"stdout\":\"x\"}"),
+    ("plain text", "plain text"),
+    ("[1,2]", "[1,2]")
+  ]
+  {
+  match decode(out) {
+    Ok(j) => match asObject(j) {
+      Some(kvs) => encode(jo(drop_call_id(kvs))),
+      None => out
+    },
+    Err(_) => out
+  }
+}
+
 pure func result_for(msgs: [Msg], id: string) -> string {
   match msgs {
     [] => "",
@@ -183,7 +214,7 @@ pure func pair_calls(all: [Msg], cs: [ToolCall]) -> [Seen] {
       let tail = pair_calls(all, rest);
       -- A call still in flight has no result yet, and an unanswered call is not
       -- evidence of anything.
-      if out == "" then tail else { sig: msg_signature(c), out: out } :: tail
+      if out == "" then tail else { sig: msg_signature(c), out: result_key(out) } :: tail
     }
   }
 }

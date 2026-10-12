@@ -97,6 +97,19 @@ func repeat_moving(n: int, tool: string, args: string) -> [Msg] {
   }
 }
 
+-- n copies of one call answered with the ENCODED ToolResultEnvelope an
+-- extension's result reaches history as: identical but for the call's own
+-- tool_call_id. `moving` makes stdout differ too (the polling shape).
+func repeat_envelope(n: int, tool: string, args: string, moving: bool) -> [Msg] {
+  if n <= 0 then []
+  else {
+    let id = "e${intToStr(n)}";
+    let body = if moving then "tick ${intToStr(n)}" else "refused: op check requires path";
+    let out = "{\"tool_call_id\":\"${id}\",\"tool\":\"${tool}\",\"exit_code\":0,\"stdout\":\"${body}\",\"stderr\":\"\",\"metadata\":{}}";
+    [assistant_call(id, tool, args), tool_result(id, out)] ++ repeat_envelope(n - 1, tool, args, moving)
+  }
+}
+
 func check(label: string, ok: bool) -> bool ! {IO} {
   if ok then { println("OK: ${label}"); true } else { println("FAIL: ${label}"); false }
 }
@@ -242,7 +255,18 @@ export func main() -> () ! {IO} {
   let a13 = check("budget 0 disables the answer half",
                   accepted(decide_answer_with_budget(said3, answer, 0)) == false);
 
+  -- 19. EXTENSION RESULTS CARRY THEIR OWN CALL ID. Measured 2026-10-12: one
+  --     refused ailang_cli call 215 times, each envelope differing only in
+  --     tool_call_id, and the guard never fired. The id must not count.
+  let cli_args = "{\"op\":\"check\",\"module\":\"packages/x/request.ail\"}";
+  let env5 = ctx_of(repeat_envelope(5, "ailang_cli", cli_args, false));
+  let a19 = check("identical envelopes that differ only in tool_call_id are a loop",
+                  denied(decide_call(env5, envelope("ailang_cli", cli_args))));
+  let envmov = ctx_of(repeat_envelope(5, "ailang_cli", cli_args, true));
+  let a20 = check("envelopes whose stdout moves are still polling, not a loop",
+                  denied(decide_call(envmov, envelope("ailang_cli", cli_args))) == false);
+
   if a1 && a2 && a3 && a4 && a5 && a6 && a7 && a8 && a9 && a10 && a11 && a12 && a13
-     && a14 && a15 && a16 && a17 && a18
+     && a14 && a15 && a16 && a17 && a18 && a19 && a20
   then () else exit(1)
 }
