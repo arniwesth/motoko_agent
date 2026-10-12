@@ -6,13 +6,13 @@
 -- its wire projection as a maintained compatibility surface, and this artifact
 -- carries that obligation.
 --
--- One artifact binds, for every one of the 43 `LedgerEvent` variants:
+-- One artifact binds, for every one of the 42 `LedgerEvent` variants:
 --
 --   the variant itself; its wire name; its payload schema; and its
 --   classification as LOGICAL or DISPLAY-ONLY.
 --
 -- This is new construction. `phase_vocab.ledger_record_name` is not a seed and
--- is not grown here: it names three of the 43 and collapses the rest to the
+-- is not grown here: it names three of the 42 and collapses the rest to the
 -- literal "wire", which is a different thing that happens to share a subject.
 --
 -- ============================================================================
@@ -51,7 +51,7 @@
 --                than an outcome.
 --
 -- THE CLASSIFICATION IS SEMANTIC, NOT A SURVEY OF WHAT IS APPENDED TODAY, and
--- that is deliberate. Of the 37 Logical rows, **35 reach the returned trace now
+-- that is deliberate. Of the 36 Logical rows, **34 reach the returned trace now
 -- and 2 do not**; the two are `d64_gap_register`'s entries, both of long
 -- standing. ADR-003 D1's `SessionResumed` was the third until PLAN-003 P3 Part 5,
 -- whose resumed traced entry appends it as the first record of the frame. The other four journal-class variants were
@@ -104,7 +104,7 @@ import src/core/phase_vocab (
   ExtToolHandled, DelegatedToolDeferred, V2ToolDispatchStart, V2ToolDispatchComplete,
   CostExhausted, CompactionApplied, CompactionExhausted,
   ExtCompactionRejected, ExtensionDiagnostic, ThinkingStreamStart, ThinkingStreamEnd,
-  StreamErrorRetry, ProviderResult, CostWarning, ExtInterceptHandled, HybridBashExtracted,
+  StreamErrorRetry, ProviderResult, CostWarning, ExtInterceptHandled,
   ToolArgumentsUndecodable,
   DoneEvent, EmptyStopFinalize, ExtSolverFeedback, NativeToolCalls,
   NativeToolResults, SessionSuspend, RunSuspended, ParkEntered, WakeReceived,
@@ -119,9 +119,10 @@ import src/core/phase_vocab (
 -- traces are decoded or a runner is pinned, never silently reinterpreted. The
 -- version lands in the execution manifest (WI-A10) and the failure record (D8).
 --
--- `/2` (005 WI-4) deleted the `Dp7VerifierRejected` variant, and `/3` (005
--- W2-2) deleted `PersistNudge`. OLD TRACES ARE READ BY A PINNED RUNNER, because
--- the tree has no decoder for wire events:
+-- `/2` (005 WI-4) deleted the `Dp7VerifierRejected` variant, `/3` (005 W2-2)
+-- deleted `PersistNudge`, and `/4` (005 W3-3) deleted `HybridBashExtracted`.
+-- OLD TRACES ARE READ BY A PINNED RUNNER, because the tree has no decoder for
+-- wire events:
 --
 --   `event-vocabulary/1` is read by commit
 --   86f2b8176bfc33cc186b1e1007acefd9e04266cc, the commit `/2` was cut from. Any
@@ -131,12 +132,16 @@ import src/core/phase_vocab (
 --   da88a08801aac7fe154be19d57251b1cba8830e1, the commit `/3` was cut from. Any
 --   later commit that still has `/2` reads it too.
 --
--- A build at `/3` reads neither a `/1` nor a `/2` trace:
+--   `event-vocabulary/3` is read by commit
+--   d59c6a33d359af10c442f903a952cc0488586bf9, the commit `/4` was cut from. Any
+--   later commit that still has `/3` reads it too.
+--
+-- A build at `/4` reads no `/1`, `/2` or `/3` trace:
 -- `dst_profile.version_matches` refuses its manifest with
--- `ManifestVersionDrifted`. Nothing is built for either pin. No recorded trace
--- is committed, so what they cover is the corpus artifacts CI keeps for 14 days
--- and anything on a developer's disk.
-export pure func event_vocabulary_version() -> string { "event-vocabulary/3" }
+-- `ManifestVersionDrifted`. Nothing is built for any of the pins. No recorded
+-- trace is committed, so what they cover is the corpus artifacts CI keeps for
+-- 14 days and anything on a developer's disk.
+export pure func event_vocabulary_version() -> string { "event-vocabulary/4" }
 
 export type EventClassification = Logical | DisplayOnly
 
@@ -189,7 +194,6 @@ export pure func event_variant_id(e: LedgerEvent) -> string {
     ProviderResult(_) => "ProviderResult",
     CostWarning(_) => "CostWarning",
     ExtInterceptHandled(_) => "ExtInterceptHandled",
-    HybridBashExtracted(_) => "HybridBashExtracted",
     ToolArgumentsUndecodable(_) => "ToolArgumentsUndecodable",
     DoneEvent(_) => "DoneEvent",
     EmptyStopFinalize(_) => "EmptyStopFinalize",
@@ -247,7 +251,6 @@ export pure func event_wire_name(e: LedgerEvent) -> string {
     ProviderResult(_) => "thinking",
     CostWarning(_) => "cost_warning",
     ExtInterceptHandled(_) => "ext_intercept_handled",
-    HybridBashExtracted(_) => "hybrid_bash_extracted",
     ToolArgumentsUndecodable(_) => "tool_arguments_undecodable",
     DoneEvent(_) => "done",
     EmptyStopFinalize(_) => "empty_stop_finalize",
@@ -401,10 +404,6 @@ export pure func event_vocabulary() -> [EventRow] {
       -- and this arm emits neither. Recorded as the schema rather than
       -- corrected, because correcting it would change the wire.
       payload: [req("step"), req("tool"), req("exit_code")],
-      classification: Logical, reaches_trace_today: true },
-
-    { variant: "HybridBashExtracted", wire_names: ["hybrid_bash_extracted"],
-      payload: [req("step"), req("cmd")],
       classification: Logical, reaches_trace_today: true },
 
     { variant: "ToolArgumentsUndecodable", wire_names: ["tool_arguments_undecodable"],
@@ -865,7 +864,7 @@ pure func has_rule(rs: [VocabularyRejection], rule: string) -> bool {
 pure func test_vocabulary_has_thirty_five_distinct_rows() -> bool
   tests [((), true)]
   {
-    List.length(event_vocabulary()) == 43
+    List.length(event_vocabulary()) == 42
       && no_dups(row_variants(event_vocabulary()), [])
   }
 
@@ -931,7 +930,7 @@ pure func test_classification_partitions_the_vocabulary() -> bool
   tests [((), true)]
   {
     let rows = event_vocabulary();
-    List.length(logical_variants(rows)) + List.length(display_only_variants(rows)) == 43
+    List.length(logical_variants(rows)) + List.length(display_only_variants(rows)) == 42
       && List.length(display_only_variants(rows)) == 6
   }
 

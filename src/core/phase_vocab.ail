@@ -847,14 +847,14 @@ export type PhaseResult = {
 -- ============================================================================
 -- LedgerEvent: typed/DST-canonical layer. to_schema_v1 targets production wire.
 --
--- Production schema-v1 inventory — 27 JSONL `type` values (regenerate with:
+-- Production schema-v1 inventory — 26 JSONL `type` values (regenerate with:
 --   grep -o 'emit_event(session_id, "[a-z_]*"' src/core/agent_loop_v2.ail
 --   plus the two direct emit_json stream types at :255 and :265):
---   25 emit_event names:
+--   24 emit_event names:
 --     compaction_exhausted compaction_extension cost_exhausted cost_warning
 --     delegated_tool_deferred done error
 --     ext_intercept_handled ext_solver_feedback ext_tool_handled
---     hybrid_bash_extracted native_tool_calls native_tool_denied
+--     native_tool_calls native_tool_denied
 --     native_tool_results run_summary scratchpad_result
 --     session_start session_suspend stream_error_retry thinking
 --     thinking_stream_end thinking_stream_start tool_pending
@@ -994,7 +994,6 @@ export type DoneInfo = { step: int, output: string, source: string }
 export type EmptyStopFinalizeInfo = { step: int, input_tokens: int, estimated_input_tokens: int, context_limit: int }
 export type ErrorInfo = { source: string, code: string, message: string }
 export type FeedbackInfo = { step: int, feedback: string }
-export type HybridBashInfo = { step: int, cmd: string }
 -- `run_id` is ADR-003 D5's identity on the `run_started` entry (D1): the host
 -- assigns entry ids, but the child says which RUN an entry belongs to, and the
 -- fold attributes by that rather than by position. `<session_id>.r<resume_count>
@@ -1101,11 +1100,12 @@ export type HistorySeededInfo = { run_id: string, messages: Json, digest: string
 -- ONE MESSAGE PER EVENT, never a batch: a batch of N tool results is N
 -- consecutive events, because the host writes one entry per message and
 -- `HistoryReplaced.first_kept` is an INDEX into that one-message-per-entry
--- sequence. `replaces_previous` is set on the first event of a hybrid-bash
--- batch, whose augmented assistant supersedes the plain one the previous event
+-- sequence. `replaces_previous` was set on the first event of a hybrid-bash
+-- batch, whose augmented assistant superseded the plain one the previous event
 -- carried; `digest_after` then chains from the entry BEFORE the replaced one,
 -- which is what pins the replacement — a fold that appended instead breaks the
--- chain exactly there.
+-- chain exactly there. 005 W3 removed hybrid mode, so no new journal sets it;
+-- the field stays for the journals recorded before.
 export type HistoryAppendedInfo = {
   run_id: string,
   step: int,
@@ -1299,7 +1299,6 @@ export type LedgerEvent
   | ProviderResult(ThinkingInfo)             -- [prod] thinking
   | CostWarning(CostWarningInfo)             -- [prod] cost_warning
   | ExtInterceptHandled(ToolHandledInfo)     -- [prod] ext_intercept_handled
-  | HybridBashExtracted(HybridBashInfo)      -- [prod] hybrid_bash_extracted
   | ToolArgumentsUndecodable(ToolArgsUndecodableInfo) -- [NEW]  tool_arguments_undecodable
   | DoneEvent(DoneInfo)                      -- [prod] done
   | EmptyStopFinalize(EmptyStopFinalizeInfo) -- [prod] empty_stop_finalize
@@ -1480,7 +1479,6 @@ export func to_schema_v1_kvs(e: LedgerEvent) -> [{key: string, value: Json}] {
     ProviderResult(i) => [kv("type", js("thinking")), kv("step", jnum(_int_to_float(i.step))), kv("text", js(i.text)), kv("finish_reason", js(i.finish_reason)), kv("tool_calls", jnum(_int_to_float(i.tool_calls)))] ++ thinking_usage_kvs(i),
     CostWarning(i) => [kv("type", js("cost_warning")), kv("threshold", js(i.threshold)), kv("step", jnum(_int_to_float(i.step))), kv("pct", jnum(_int_to_float(i.pct))), kv("total_cost_millicents", jnum(_int_to_float(i.total_cost_millicents))), kv("total_cost_usd", jnum(i.total_cost_usd)), kv("cap_millicents", jnum(_int_to_float(i.cap_millicents)))],
     ExtInterceptHandled(i) => [kv("type", js("ext_intercept_handled")), kv("step", jnum(_int_to_float(i.step))), kv("tool", js(i.tool)), kv("exit_code", jnum(_int_to_float(i.exit_code)))],
-    HybridBashExtracted(i) => [kv("type", js("hybrid_bash_extracted")), kv("step", jnum(_int_to_float(i.step))), kv("cmd", js(i.cmd))],
     ToolArgumentsUndecodable(i) => [kv("type", js("tool_arguments_undecodable")), kv("step", jnum(_int_to_float(i.step))), kv("stream_id", js(i.stream_id)), kv("tool", js(i.tool)), kv("id", js(i.id)), kv("raw_length", jnum(_int_to_float(i.raw_length)))],
     DoneEvent(i) => done_kvs(i),
     EmptyStopFinalize(i) => [kv("type", js("empty_stop_finalize")), kv("step", jnum(_int_to_float(i.step))), kv("input_tokens", jnum(_int_to_float(i.input_tokens))), kv("estimated_input_tokens", jnum(_int_to_float(i.estimated_input_tokens))), kv("context_limit", jnum(_int_to_float(i.context_limit)))],
@@ -1934,7 +1932,6 @@ pure func test_ledger_projection_golden_bytes() -> bool
     && golden(ProviderResult({ step: 1, text: "hello", finish_reason: "stop", tool_calls: 0, input_tokens: 10, output_tokens: 5, cost_usd: 0.01, cache_read_input_tokens: 7, cache_creation_input_tokens: 8 }), "{\"type\":\"thinking\",\"step\":1,\"text\":\"hello\",\"finish_reason\":\"stop\",\"tool_calls\":0,\"input_tokens\":10,\"output_tokens\":5,\"cost_usd\":0.01,\"cache_read_input_tokens\":7,\"cache_creation_input_tokens\":8}")
     && golden(CostWarning({ threshold: "75pct", step: 2, pct: 80, total_cost_millicents: 800, total_cost_usd: 0.008, cap_millicents: 1000 }), "{\"type\":\"cost_warning\",\"threshold\":\"75pct\",\"step\":2,\"pct\":80,\"total_cost_millicents\":800,\"total_cost_usd\":0.008,\"cap_millicents\":1000}")
     && golden(ExtInterceptHandled({ step: 1, stream_id: "", tool: "T", id: "", exit_code: 0 }), "{\"type\":\"ext_intercept_handled\",\"step\":1,\"tool\":\"T\",\"exit_code\":0}")
-    && golden(HybridBashExtracted({ step: 1, cmd: "echo hi" }), "{\"type\":\"hybrid_bash_extracted\",\"step\":1,\"cmd\":\"echo hi\"}")
     && golden(ToolArgumentsUndecodable({ step: 36, stream_id: "step-36", tool: "WriteFile", id: "call_9", raw_length: 4176 }), "{\"type\":\"tool_arguments_undecodable\",\"step\":36,\"stream_id\":\"step-36\",\"tool\":\"WriteFile\",\"id\":\"call_9\",\"raw_length\":4176}")
     && golden(DoneEvent({ step: 1, output: "ok", source: "" }), "{\"type\":\"done\",\"step\":1,\"output\":\"ok\"}")
     && golden(DoneEvent({ step: 1, output: "ok", source: "ext_solver_accept" }), "{\"type\":\"done\",\"step\":1,\"output\":\"ok\",\"source\":\"ext_solver_accept\"}")

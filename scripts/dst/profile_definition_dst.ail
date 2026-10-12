@@ -168,7 +168,7 @@ pure func clean_manifest() -> ExecutionManifest {
     abi_version: "8.0",
     profile_id: "fixture_clean",
     profile_version: "1",
-    event_vocabulary_version: "event-vocabulary/3",
+    event_vocabulary_version: "event-vocabulary/4",
     normalized_configuration: "{}",
     -- WI-B4: `ai_step` LEFT this set at WI-B2b (widened to return AiStepOutcome,
     -- which carries next_state). 3 -> 2, zero member call sites tree-wide.
@@ -533,7 +533,7 @@ func exclusion_check() -> bool ! {IO} {
   let meta: ReplayMetadata =
     { source_revision: "HEAD", toolchain_version: "ailang 0.33.0",
       profile_id: "fixture_clean", profile_version: "1",
-      event_vocabulary_version: "event-vocabulary/3" };
+      event_vocabulary_version: "event-vocabulary/4" };
   let d = with_disclosure("gated", without(one_per_kind(), "tool_provider[0]"), only(one_per_kind(), "tool_provider[0]"));
   let violated =
     match routing_violation_at(d, "gated", "tool_provider[0]", 4, empty_ledger_trace(), meta) {

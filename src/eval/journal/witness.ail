@@ -48,7 +48,7 @@
 -- A7's findings are at `Aggregate("witness")`, named by the harness's
 -- `DiscoveryFinding` constructor, the class or key and counts in the detail.
 --
--- THE CENSUS. Thirteen rows, one per input `family_evidence` cannot speak
+-- THE CENSUS. Twelve rows, one per input `family_evidence` cannot speak
 -- for, each a count with its route assumption, computed from the trace, the
 -- log and the worlds — not through the family API:
 --
@@ -59,7 +59,6 @@
 --   extension_effects    extension-effect identities                           0
 --   retries              StreamErrorRetry records                              0
 --   injected_messages    InjectUserMessage decisions                           0
---   hybrid_extractions   HybridBashExtracted records                           0
 --   file_mutations       file write / remove / dir make identities             0 / 0 / 0
 --   exit_manifest        MOTOKO_EXIT_MANIFEST reads; publications that write
 --                        (reads served a non-empty name; no file class is
@@ -92,7 +91,7 @@ import src/core/dst_interaction (
 import src/core/phase_vocab (
   LedgerTrace, LedgerRecord, WireRecord, DecisionRecord, LedgerEvent,
   ProviderCallPrepared, CheckpointTaken, ExtToolHandled, ParkEntered, WakeReceived,
-  StreamErrorRetry, HybridBashExtracted
+  StreamErrorRetry
 )
 import src/core/dst_discovery (
   DiscoveryWitness, EnvExpectation, DiscoveryFinding, driver_env_keys, check_discovery,
@@ -202,7 +201,7 @@ export type CensusRow = { row: string, route: string, counts: [CensusCount], uno
 
 export pure func census_row_names() -> [string] {
   ["checkpoints", "stream_chunks", "approvals", "waits_parks_wakes", "extension_effects", "retries",
-   "injected_messages", "hybrid_extractions", "file_mutations", "exit_manifest", "capture_reads",
+   "injected_messages", "file_mutations", "exit_manifest", "capture_reads",
    "decisions", "not_observed"]
 }
 
@@ -272,8 +271,6 @@ export pure func census_of(e: ExpectedEnd, n: int, t: LedgerTrace, log: [Interac
      wt_count("retries", wt_events(t, \ev. match ev { StreamErrorRetry(_) => true, _ => false }), 0)]),
    wt_row("injected_messages", "no nudge or injected user message inside a segment (cutoff)", [
      wt_count("injected_messages", wt_decisions_named(t, "InjectUserMessage"), 0)]),
-   wt_row("hybrid_extractions", "a hybrid-step result is a cutoff", [
-     wt_count("hybrid_extractions", wt_events(t, \ev. match ev { HybridBashExtracted(_) => true, _ => false }), 0)]),
    wt_row("file_mutations", "empty registry: no routed file mutation", [
      wt_count("file_writes", wt_idents(log, \b. match b { FileWriteIdentity(_) => true, _ => false }), 0),
      wt_count("file_removes", wt_idents(log, \b. match b { FileRemoveIdentity(_) => true, _ => false }), 0),
@@ -519,7 +516,7 @@ pure func test_m11_census_zero_by_name_and_twins() -> bool
       && wt_strs_eq(List.map(\c. "${c.name}=${show(c.observed)}/${show(c.expected)}", census_counts(rows)), [
            "checkpoint_decisions=0/0", "checkpoint_records=0/0", "stream_chunks=0/0",
            "approval_reads=0/0", "approvals_consumed=0/0", "waits_opened=0/0", "parks=0/0", "wakes=0/0",
-           "extension_effects=0/0", "retries=0/0", "injected_messages=0/0", "hybrid_extractions=0/0",
+           "extension_effects=0/0", "retries=0/0", "injected_messages=0/0",
            "file_writes=0/0", "file_removes=0/0", "dir_makes=0/0",
            "exit_manifest_reads=0/0", "exit_manifest_writes=0/0", "capture_reads=0/0", "decisions=3/3"])
       && (match List.filter(\r. r.row == "not_observed", rows) {
@@ -536,7 +533,6 @@ pure func test_m11_census_zero_by_name_and_twins() -> bool
       && wt_nonzero_only(wt_rows_with(t, wt_log_plus(ExtensionEffectIdentity("x", "k", "c1")), wt_w0(), wt_w1()), "extension_effects", 1)
       && wt_nonzero_only(wt_rows_with(wt_plus(t, WireRecord(StreamErrorRetry({ step: 0, error: "e" }))), l, wt_w0(), wt_w1()), "retries", 1)
       && wt_nonzero_with(wt_rows_with(wt_plus(t, DecisionRecord({ step: 9, decision: "InjectUserMessage" })), l, wt_w0(), wt_w1()), "injected_messages", 1, true)
-      && wt_nonzero_only(wt_rows_with(wt_plus(t, WireRecord(HybridBashExtracted({ step: 0, cmd: "c" }))), l, wt_w0(), wt_w1()), "hybrid_extractions", 1)
       && wt_nonzero_only(wt_rows_with(t, wt_log_plus(FileWriteIdentity("p")), wt_w0(), wt_w1()), "file_writes", 1)
       && wt_nonzero_only(wt_rows_with(t, wt_log_plus(FileRemoveIdentity("p")), wt_w0(), wt_w1()), "file_removes", 1)
       && wt_nonzero_only(wt_rows_with(t, wt_log_plus(DirMakeIdentity("p")), wt_w0(), wt_w1()), "dir_makes", 1)
