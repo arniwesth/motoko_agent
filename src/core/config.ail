@@ -27,9 +27,14 @@ export type AgentConfig = {
   max_cost_millicents: int
 }
 
+-- cache_read / cache_write: prompt-cache token rates. -1 = not configured, which
+-- prices those tokens at the input rate -- what the cap charged before it knew
+-- about caching, and the conservative choice for a cap.
 export type CostRates = {
   input_per_1m_millicents: int,
-  output_per_1m_millicents: int
+  output_per_1m_millicents: int,
+  cache_read_per_1m_millicents: int,
+  cache_write_per_1m_millicents: int
 }
 
 export type BackendConfig = {
@@ -492,11 +497,15 @@ func load_cost_rates(core: Json) -> CostRates ! {Env} {
   let c = object_at(p, "cost");
   let profile_input  = json_int(c, "input_per_1m_millicents", 0);
   let profile_output = json_int(c, "output_per_1m_millicents", 0);
+  let profile_cache_read  = json_int(c, "cache_read_per_1m_millicents", -1);
+  let profile_cache_write = json_int(c, "cache_write_per_1m_millicents", -1);
   -- Env vars override profile values when set (and >0). Lets the AILANG
   -- eval harness inject pricing per-task without mutating profile config.
   {
     input_per_1m_millicents:  env_int("MOTOKO_COST_INPUT_PER_1M_MILLICENTS",  profile_input),
-    output_per_1m_millicents: env_int("MOTOKO_COST_OUTPUT_PER_1M_MILLICENTS", profile_output)
+    output_per_1m_millicents: env_int("MOTOKO_COST_OUTPUT_PER_1M_MILLICENTS", profile_output),
+    cache_read_per_1m_millicents:  env_int("MOTOKO_COST_CACHE_READ_PER_1M_MILLICENTS",  profile_cache_read),
+    cache_write_per_1m_millicents: env_int("MOTOKO_COST_CACHE_WRITE_PER_1M_MILLICENTS", profile_cache_write)
   }
 }
 

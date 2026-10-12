@@ -42,6 +42,7 @@ import src/core/tool_contract (call_to_json)
 import src/core/tool_dispatch_adapter (tool_call_to_envelope, fault_to_json)
 import src/core/types (Msg) import src/core/tool_fault (fault_key, denied_fault) -- 034 W1.4: `policy_denied_message`'s `fault`, joined onto this line so the five clock anchors do not move
 import src/core/config (CostRates)
+import src/core/cost_phase (step_cost_with_cache, cache_inclusive_route)
 import std/option (Option, Some, None)
 import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, ExtPorts, TokenTelemetry, ResponseInterceptDecision, FinalizeDecision, ExtWorld, NotReached, AiStepOutcome, ExtClockReading, ExtProcOutcome, ExtFileRead, ExtFileMutation, ExtPathStat, ExtDirListing, ExtPathKind, ExtPathMissing, ExtPathFile, ExtPathDir) -- WI-B2b; ExtClockReading WI-C5; ExtProcOutcome/ExtFileRead WI-D16; ExtFileMutation WI-D17; ExtPathStat/ExtDirListing WI-D18: ExtWorld/AiStepOutcome, on this line to limit A5 anchor drift
 import src/core/ext_world (world_to_token, token_to_world, clear_holder, adopt_world) -- WI-B2b: the ONLY place the opaque token is opened; see that module's header
@@ -3562,7 +3563,7 @@ func c2_loop(
                 },
                 Ok(result) => {
                   let n_calls = List.length(result.tool_calls);
-                  let step_cost = step_cost_millicents(result.input_tokens, result.output_tokens, cost_rates);
+                  let step_cost = step_cost_with_cache(result.input_tokens, result.output_tokens, result.cache_read_input_tokens, result.cache_creation_input_tokens, cache_inclusive_route(model), cost_rates);
                   let phase = phase_from_result(result, step_idx, n_calls, millicents_to_usd(step_cost), step_cost, estimate_tokens_messages(compacted_msgs));
                   let end_event = ThinkingStreamEnd({ step: step_idx, stream_id: stream_id, status: "completed" });
                   let _ = ledger_emit(session_id, end_event);

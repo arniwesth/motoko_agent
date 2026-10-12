@@ -436,7 +436,8 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
         kv("cost_rates", jo([
           kv("input_per_1m_millicents", jnum(_int_to_float(settings.cost_rates.input_per_1m_millicents))),
           kv("output_per_1m_millicents", jnum(_int_to_float(settings.cost_rates.output_per_1m_millicents)))
-        ]))
+        ] ++ (if settings.cost_rates.cache_read_per_1m_millicents < 0 then [] else [kv("cache_read_per_1m_millicents", jnum(_int_to_float(settings.cost_rates.cache_read_per_1m_millicents)))])
+          ++ (if settings.cost_rates.cache_write_per_1m_millicents < 0 then [] else [kv("cache_write_per_1m_millicents", jnum(_int_to_float(settings.cost_rates.cache_write_per_1m_millicents)))])))
       ]))
     ]))
   ])));

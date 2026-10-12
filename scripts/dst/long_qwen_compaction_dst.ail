@@ -79,7 +79,7 @@ let runtime_status_call_id = "runtime-status-after-compaction"
 type LongStats = { applied: int, rejected: int, prepared: int, provider_results: int, projection: [string], final_count: int, final_digest: string, runtime_status_ok: bool }
 
 func no_rates() -> CostRates {
-  { input_per_1m_millicents: 0, output_per_1m_millicents: 0 }
+  { input_per_1m_millicents: 0, output_per_1m_millicents: 0, cache_read_per_1m_millicents: -1, cache_write_per_1m_millicents: -1 }
 }
 
 func budget() -> BudgetPlan {

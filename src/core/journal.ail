@@ -772,7 +772,11 @@ pure func boot_of_json(j: Json, seq: int) -> Result[BootInputs, Refusal] {
                             Err(_) => Err(Entry(seq, "boot.cost_rates.input_per_1m_millicents")),
                             Ok(in_rate) => match at_int(cr, "output_per_1m_millicents", seq) {
                               Err(_) => Err(Entry(seq, "boot.cost_rates.output_per_1m_millicents")),
-                              Ok(out_rate) => {
+                              Ok(out_rate) => match opt_int(cr, "cache_read_per_1m_millicents", seq) {
+                               Err(_) => Err(Entry(seq, "boot.cost_rates.cache_read_per_1m_millicents")),
+                               Ok(cr_rate) => match opt_int(cr, "cache_write_per_1m_millicents", seq) {
+                                Err(_) => Err(Entry(seq, "boot.cost_rates.cache_write_per_1m_millicents")),
+                                Ok(cw_rate) => {
                                 let boot: BootInputs = {
                                   task: task,
                                   env_url: env_url,
@@ -783,10 +787,15 @@ pure func boot_of_json(j: Json, seq: int) -> Result[BootInputs, Refusal] {
                                   max_cost_millicents: max_cost,
                                   cost_rates: {
                                     input_per_1m_millicents: in_rate,
-                                    output_per_1m_millicents: out_rate
+                                    output_per_1m_millicents: out_rate,
+                                    -- Absent in journals written before cache-aware pricing: unset.
+                                    cache_read_per_1m_millicents: match cr_rate { Some(n) => n, None => -1 },
+                                    cache_write_per_1m_millicents: match cw_rate { Some(n) => n, None => -1 }
                                   }
                                 };
                                 Ok(boot)
+                                }
+                               }
                               }
                             }
                           }
@@ -1871,10 +1880,13 @@ export pure func boot_json(b: BootInputs) -> Json {
     kv("step_budget", jint(b.step_budget)),
     kv("ohmy_pi", jb(b.ohmy_pi)),
     kv("max_cost_millicents", jint(b.max_cost_millicents)),
+    -- The cache rates are written only when set, so a journal from a run that
+    -- configures none encodes byte-identically to one written before they existed.
     kv("cost_rates", jo([
       kv("input_per_1m_millicents", jint(b.cost_rates.input_per_1m_millicents)),
       kv("output_per_1m_millicents", jint(b.cost_rates.output_per_1m_millicents))
-    ]))
+    ] ++ (if b.cost_rates.cache_read_per_1m_millicents < 0 then [] else [kv("cache_read_per_1m_millicents", jint(b.cost_rates.cache_read_per_1m_millicents))])
+      ++ (if b.cost_rates.cache_write_per_1m_millicents < 0 then [] else [kv("cache_write_per_1m_millicents", jint(b.cost_rates.cache_write_per_1m_millicents))])))
   ])
 }
 
@@ -1898,7 +1910,7 @@ export pure func empty_boot() -> BootInputs {
     step_budget: 0,
     ohmy_pi: false,
     max_cost_millicents: 0,
-    cost_rates: { input_per_1m_millicents: 0, output_per_1m_millicents: 0 }
+    cost_rates: { input_per_1m_millicents: 0, output_per_1m_millicents: 0, cache_read_per_1m_millicents: -1, cache_write_per_1m_millicents: -1 }
   }
 }
 
@@ -2586,7 +2598,7 @@ pure func test_continuation_cumulative_is_the_sum_of_its_parts() -> bool
         step_budget: 3,
         ohmy_pi: false,
         max_cost_millicents: 0,
-        cost_rates: { input_per_1m_millicents: 60, output_per_1m_millicents: 208 }
+        cost_rates: { input_per_1m_millicents: 60, output_per_1m_millicents: 208, cache_read_per_1m_millicents: -1, cache_write_per_1m_millicents: -1 }
       }
     };
     c.cumulative.provider_calls_started == 6
@@ -2619,7 +2631,7 @@ pure func test_final_state_projects_the_continuation() -> bool
         step_budget: 1,
         ohmy_pi: false,
         max_cost_millicents: 0,
-        cost_rates: { input_per_1m_millicents: 0, output_per_1m_millicents: 0 }
+        cost_rates: { input_per_1m_millicents: 0, output_per_1m_millicents: 0, cache_read_per_1m_millicents: -1, cache_write_per_1m_millicents: -1 }
       }
     };
     let f = final_of_continuation(c);
