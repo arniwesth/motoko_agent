@@ -262,7 +262,7 @@ func report(label: string, traced: TracedSessionResult) -> () ! {IO} {
 func run(rt: ExtRuntime) -> TracedSessionResult
   ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2_session_traced(
-    rt, "task", "", false, budget(), "phase-c-model", history(), ".",
+    rt, "task", "", budget(), "phase-c-model", history(), ".",
     12, false, 0, zero_rates(), Scripted(script())
   )
 }

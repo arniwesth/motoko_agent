@@ -112,7 +112,6 @@ func compute_budget_plan(
   task: string,
   model: string,
   cwd: string,
-  hybrid_enabled: bool,
   step: int,
   settings: RunSettings
 ) -> BudgetPlan ! {Env, IO, Clock, FS} {
@@ -134,7 +133,7 @@ func compute_budget_plan(
     step: step,
     model: model,
     cwd: cwd,
-    hybrid_tools: hybrid_enabled,
+    hybrid_tools: false,
     budget: base,
     mode: if verifier_mode then "verifier" else "default",
     workdir: cwd,
@@ -277,7 +276,6 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
   let env_url = cfg.backend.url;
   let task = inv.task;
   let model = if inv.model_override != "" then inv.model_override else cfg.agent.model;
-  let hybrid_enabled = cfg.tools.hybrid;
   let ext_runtime = init_runtime_with_config(cfg);
   let ailang_built = inv.ailang_built;
   let cwd = if inv.workdir_override != "" then inv.workdir_override else cfg.agent.workdir;
@@ -311,7 +309,7 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
   -- journal's. So it does not wait in `await_first_task` — it folds, decides, and
   -- enters the conversation loop between turns (or holding the continuation), where
   -- the loop's own `readLine` is the wait. See `resume_from_journal`.
-  if inv.resume != "" then resume_from_journal(cfg, inv, ext_runtime, raw_system, cwd, env_url, hybrid_enabled)
+  if inv.resume != "" then resume_from_journal(cfg, inv, ext_runtime, raw_system, cwd, env_url)
   else {
   -- #237: at boot and before the wait, so a pre-warm spawn says so before a
   -- prompt is spent on it. See `reject_if_strict_and_limit_unknown`.
@@ -363,7 +361,7 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
     max_cost_millicents: cfg.agent.max_cost_millicents,
     cost_rates: cfg.cost_rates
   };
-  let budget = compute_budget_plan(ext_runtime, run_task, run_model, cwd, hybrid_enabled, 0, settings);
+  let budget = compute_budget_plan(ext_runtime, run_task, run_model, cwd, 0, settings);
   let remaining = budget.total;
   let system_with_agents = with_agents_context(raw_system, cwd);
   -- WI-D3, and see `compute_budget_plan` for why the reader is the ambient one.
@@ -373,7 +371,7 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
     step: 0,
     model: run_model,
     cwd: cwd,
-    hybrid_tools: hybrid_enabled,
+    hybrid_tools: false,
     budget: budget,
     mode: "default",
     workdir: cwd,
@@ -424,7 +422,9 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
       kv("boot", jo([
         kv("task", js(run_task)),
         kv("env_url", js(env_url)),
-        kv("hybrid_tools", jb(hybrid_enabled)),
+        -- Constant since 005 W3 (decision 7): hybrid mode is gone, and the
+        -- journal requires the field on decode, so it is still written.
+        kv("hybrid_tools", jb(false)),
         kv("budget", jo([
           kv("total", jnum(_int_to_float(budget.total))),
           kv("solver", jnum(_int_to_float(budget.solver))),
@@ -440,7 +440,7 @@ export func run_with_config(cfg: RuntimeConfig, inv: InvocationConfig) -> () ! {
       ]))
     ]))
   ])));
-  run_v2_with_conversation(ext_runtime, run_task, env_url, hybrid_enabled, budget, run_model, init, settings.workdir, budget.total, settings.ohmy_pi, settings.max_cost_millicents, settings.cost_rates, LiveAI, cfg.profile, resume_count_env())
+  run_v2_with_conversation(ext_runtime, run_task, env_url, budget, run_model, init, settings.workdir, budget.total, settings.ohmy_pi, settings.max_cost_millicents, settings.cost_rates, LiveAI, cfg.profile, resume_count_env())
   }
   }
 }
@@ -474,7 +474,7 @@ func run_settings_for(cfg: RuntimeConfig, task: string, ailang_built: string, cw
 -- the fresh path runs inline below (`with_agents_context`, the ambient context
 -- limit, `dispatch_build_system_prompt`). Shared by name with the resume path, so
 -- the prompt a resume compares is the prompt a fresh session would have built.
-func build_system_msg(ext_runtime: ExtRuntime, raw_system: string, task: string, model: string, cwd: string, hybrid_enabled: bool, budget: BudgetPlan, env_url: string) -> Msg ! {Env, IO, Clock, FS} {
+func build_system_msg(ext_runtime: ExtRuntime, raw_system: string, task: string, model: string, cwd: string, budget: BudgetPlan, env_url: string) -> Msg ! {Env, IO, Clock, FS} {
   let system_with_agents = with_agents_context(raw_system, cwd);
   let context_limit = resolve_context_limit(ambient_context_reader(), empty_world_state(), model).value;
   let system_ctx = {
@@ -482,7 +482,7 @@ func build_system_msg(ext_runtime: ExtRuntime, raw_system: string, task: string,
     step: 0,
     model: model,
     cwd: cwd,
-    hybrid_tools: hybrid_enabled,
+    hybrid_tools: false,
     budget: budget,
     mode: "default",
     workdir: cwd,
@@ -547,7 +547,7 @@ func refuse_resume(path: string, r: Refusal) -> () ! {IO} {
 --   5. `plan_resume` applies the compatibility rows and the head/boundary rules,
 --      and `run_v2_resume_with_conversation` emits `SessionResumed` and enters the
 --      loop.
-func resume_from_journal(cfg: RuntimeConfig, inv: InvocationConfig, ext_runtime: ExtRuntime, raw_system: string, cwd: string, env_url: string, hybrid_enabled: bool) -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+func resume_from_journal(cfg: RuntimeConfig, inv: InvocationConfig, ext_runtime: ExtRuntime, raw_system: string, cwd: string, env_url: string) -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let path = inv.resume;
   if not fileExists(path) then refuse_resume(path, Header)
   else match parse_journal_text(readFile(path)) {
@@ -561,8 +561,8 @@ func resume_from_journal(cfg: RuntimeConfig, inv: InvocationConfig, ext_runtime:
           let run_model = if inv.model_override != "" then inv.model_override else s.model;
           let _ = reject_if_strict_and_limit_unknown(cfg, ext_runtime, run_model);
           let settings = run_settings_for(cfg, task, inv.ailang_built, cwd);
-          let budget = compute_budget_plan(ext_runtime, task, run_model, cwd, hybrid_enabled, 0, settings);
-          let system_msg = build_system_msg(ext_runtime, raw_system, task, run_model, cwd, hybrid_enabled, budget, env_url);
+          let budget = compute_budget_plan(ext_runtime, task, run_model, cwd, 0, settings);
+          let system_msg = build_system_msg(ext_runtime, raw_system, task, run_model, cwd, budget, env_url);
           let system_message = match msgs_to_messages([system_msg]) { m :: _ => m, [] => { role: "system", content: "", tool_calls: [], tool_call_id: "", images: [] } };
           let resume_count = resume_count_env();
           let invocation: ResumeInvocation = {
@@ -573,7 +573,7 @@ func resume_from_journal(cfg: RuntimeConfig, inv: InvocationConfig, ext_runtime:
             boot: {
               task: task,
               env_url: env_url,
-              hybrid_tools: hybrid_enabled,
+              hybrid_tools: false,
               budget: budget,
               step_budget: budget.total,
               ohmy_pi: settings.ohmy_pi,
@@ -591,7 +591,7 @@ func resume_from_journal(cfg: RuntimeConfig, inv: InvocationConfig, ext_runtime:
           match plan_resume(s, invocation) {
             Err(r) => refuse_resume(path, r),
             Ok(plan) =>
-              run_v2_resume_with_conversation(ext_runtime, env_url, hybrid_enabled, budget, plan, cwd, budget.total, settings.ohmy_pi, settings.max_cost_millicents, settings.cost_rates, LiveAI, cfg.profile, resume_count)
+              run_v2_resume_with_conversation(ext_runtime, env_url, budget, plan, cwd, budget.total, settings.ohmy_pi, settings.max_cost_millicents, settings.cost_rates, LiveAI, cfg.profile, resume_count)
           }
         }
       }

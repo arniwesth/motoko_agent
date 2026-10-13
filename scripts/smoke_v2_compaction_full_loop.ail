@@ -144,7 +144,7 @@ func test_light_history_completes() -> bool ! {AI, Clock, Env, FS, IO, Net, Proc
   let history = mk_history(10);
   let script: [ScriptedStep] = [prose_step("ok")];
   let result = run_v2_with_scripted_world(
-    structural_rt(), "stub-test", "", false, mk_budget(),
+    structural_rt(), "stub-test", "", mk_budget(),
     "test/tiny", history, "/tmp", 4, false,
     0, no_rates(), catalog_world(script)
   );
@@ -161,7 +161,7 @@ func test_tier1_history_completes() -> bool ! {AI, Clock, Env, FS, IO, Net, Proc
   let history = mk_history(300);
   let script: [ScriptedStep] = [prose_step("ok")];
   let result = run_v2_with_scripted_world(
-    structural_rt(), "stub-test", "", false, mk_budget(),
+    structural_rt(), "stub-test", "", mk_budget(),
     "test/tiny", history, "/tmp", 4, false,
     0, no_rates(), catalog_world(script)
   );
@@ -180,7 +180,7 @@ func test_extreme_history_compacts() -> bool ! {AI, Clock, Env, FS, IO, Net, Pro
   let history = mk_history(385);
   let script: [ScriptedStep] = [prose_step("ok")];
   let result = run_v2_with_scripted_world(
-    structural_rt(), "stub-test", "", false, mk_budget(),
+    structural_rt(), "stub-test", "", mk_budget(),
     "test/tiny", history, "/tmp", 4, false,
     0, no_rates(), catalog_world(script)
   );
@@ -197,7 +197,7 @@ func test_unknown_model_fail_open() -> bool ! {AI, Clock, Env, FS, IO, Net, Proc
   let history = mk_history(1000);
   let script: [ScriptedStep] = [prose_step("ok")];
   let result = run_v2_with_scripted_world(
-    structural_rt(), "stub-test", "", false, mk_budget(),
+    structural_rt(), "stub-test", "", mk_budget(),
     "totally-unknown-model", history, "/tmp", 4, false,
     0, no_rates(), catalog_world(script)
   );
@@ -214,7 +214,7 @@ func test_multi_tool_tier1_elides() -> bool ! {AI, Clock, Env, FS, IO, Net, Proc
   let history = multi_tool_history();
   let script: [ScriptedStep] = [prose_step("ok")];
   let result = run_v2_with_scripted_world(
-    structural_rt(), "stub-test", "", false, mk_budget(),
+    structural_rt(), "stub-test", "", mk_budget(),
     "anthropic/claude-sonnet-4-6", history, "/tmp", 4, false,
     0, no_rates(), catalog_world(script)
   );

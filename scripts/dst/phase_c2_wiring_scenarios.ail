@@ -137,13 +137,13 @@ func assert_decisions(trace: LedgerTrace, expected: [string]) -> Result[(), Scen
 }
 
 func run_scripted(rt: ExtRuntime, script: [ScriptedStep]) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
-  Session.run_v2_session_traced(rt, "task", "", false, budget(), "phase-c-model", history(), ".", 8, false, 0, zero_rates(), Scripted(script))
+  Session.run_v2_session_traced(rt, "task", "", budget(), "phase-c-model", history(), ".", 8, false, 0, zero_rates(), Scripted(script))
 }
 
 -- Task-bearing runner for progress-contract scenarios: the guard reads ctx.task,
 -- and run_scripted hardcodes "task", so those scenarios need to inject a contract.
 func run_scripted_task(rt: ExtRuntime, task: string, script: [ScriptedStep]) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
-  Session.run_v2_session_traced(rt, task, "", false, budget(), "phase-c-model", history(), ".", 8, false, 0, zero_rates(), Scripted(script))
+  Session.run_v2_session_traced(rt, task, "", budget(), "phase-c-model", history(), ".", 8, false, 0, zero_rates(), Scripted(script))
 }
 
 func scenario_traced_prose_decisions() -> Result[(), ScenarioFailure] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
@@ -796,7 +796,7 @@ func scripted_exchange_reports_played_chunks_scenario() -> Scenario {
 -- `run_scripted_task` varies the task; this one varies the budget, which is
 -- the only knob the suspension needs.
 func run_scripted_with_budget(rt: ExtRuntime, step_budget: int, script: [ScriptedStep]) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
-  Session.run_v2_session_traced(rt, "task", "", false, budget(), "phase-c-model", history(), ".", step_budget, false, 0, zero_rates(), Scripted(script))
+  Session.run_v2_session_traced(rt, "task", "", budget(), "phase-c-model", history(), ".", step_budget, false, 0, zero_rates(), Scripted(script))
 }
 
 -- Five steps against a budget of three: the BUDGET ends the run, not the
@@ -1111,7 +1111,7 @@ func w2_rt(entries: [FixtureHooks]) -> ExtRuntime {
 }
 
 func w2_run(rt: ExtRuntime, steps: int, script: [ScriptedStep]) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
-  Session.run_v2_session_traced(rt, "task", "", false, budget(), "phase-c-model", history(), ".", steps, false, 0, zero_rates(), Scripted(script))
+  Session.run_v2_session_traced(rt, "task", "", budget(), "phase-c-model", history(), ".", steps, false, 0, zero_rates(), Scripted(script))
 }
 
 func w2_count_event(records: [LedgerRecord], wire: string) -> int {

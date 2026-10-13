@@ -300,7 +300,7 @@ func approval_rt(id: string) -> ExtRuntime {
 func run_recording(id: string, w: WorldState, step_budget: int) -> TracedSessionResult
   ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2_session_traced(
-    approval_rt(id), "task", "", false, budget(), "phase-c-model", history(), ".",
+    approval_rt(id), "task", "", budget(), "phase-c-model", history(), ".",
     step_budget, false, 0, zero_rates(), RecordingWorld(w)
   )
 }

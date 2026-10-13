@@ -61,7 +61,7 @@ import src/core/dst_interaction (
 import src/core/phase_vocab (
   LedgerTrace, LedgerRecord, WireRecord, DecisionRecord,
   ProviderCallPrepared, CheckpointTaken, ExtToolHandled, ParkEntered, WakeReceived,
-  StreamErrorRetry, HybridBashExtracted, HistoryAppended, HistoryAppendedInfo
+  StreamErrorRetry, HistoryAppended, HistoryAppendedInfo
 )
 import src/core/dst_driver_only (driver_only_manifest)
 import src/core/dst_result (unknown_replay_metadata)
@@ -145,7 +145,7 @@ pure func lt_count_lines(rows: [CensusRow]) -> [string] {
 pure func lt_zero_counts(decisions: int, exit_reads: int) -> [string] {
   ["checkpoint_decisions=0/0", "checkpoint_records=0/0", "stream_chunks=0/0",
    "approval_reads=0/0", "approvals_consumed=0/0", "waits_opened=0/0", "parks=0/0", "wakes=0/0",
-   "extension_effects=0/0", "retries=0/0", "injected_messages=0/0", "hybrid_extractions=0/0",
+   "extension_effects=0/0", "retries=0/0", "injected_messages=0/0",
    "file_writes=0/0", "file_removes=0/0", "dir_makes=0/0",
    "exit_manifest_reads=${show(exit_reads)}/${show(exit_reads)}", "exit_manifest_writes=0/0",
    "capture_reads=0/0", "decisions=${show(decisions)}/${show(decisions)}"]
@@ -189,7 +189,7 @@ func lt_t0(name: string, f: WorldFixture, calls: int, tools: int, clock: int, de
               && lt_strs_eq(a8.vacuous, ["checkpoint-history"])
               && List.length(List.filter(\e. e.family == "checkpoint-history" && e.evaluated && e.inputs > 0, a8.family_evidence)) == 1
               && lt_strs_eq(lt_count_lines(a8.census), lt_zero_counts(decisions, exit_reads))
-              && List.length(a8.census) == 13
+              && List.length(a8.census) == 12
               && List.length(List.filter(\l. l == "family evaluated replay-consistency false (NoReplay at admission)", a8.lines)) == 1
               && List.length(List.filter(\l. l == "family evaluated checkpoint-history true (vacuous: checkpoint_records=0)", a8.lines)) == 1)
         },
@@ -424,7 +424,6 @@ func m11_census_twins(lr: LiveRun) -> bool ! {IO} {
     { n: "extension_effects", ok: lt_twin_ok(lr, lt_plus_ident(run, ExtensionEffectIdentity("x", "k", "c1"), "{}"), w0, "extension_effects", 1, false) },
     { n: "retries", ok: lt_twin_ok(lr, lt_plus(run, WireRecord(StreamErrorRetry({ step: 0, error: "e" }))), w0, "retries", 1, false) },
     { n: "injected_messages", ok: lt_twin_ok(lr, lt_plus(run, DecisionRecord({ step: 9, decision: "InjectUserMessage" })), w0, "injected_messages", 1, true) },
-    { n: "hybrid_extractions", ok: lt_twin_ok(lr, lt_plus(run, WireRecord(HybridBashExtracted({ step: 0, cmd: "c" }))), w0, "hybrid_extractions", 1, false) },
     { n: "file_writes", ok: lt_twin_ok(lr, lt_plus_ident(run, FileWriteIdentity("p"), "{}"), w0, "file_writes", 1, false) },
     { n: "file_removes", ok: lt_twin_ok(lr, lt_plus_ident(run, FileRemoveIdentity("p"), "{}"), w0, "file_removes", 1, false) },
     { n: "dir_makes", ok: lt_twin_ok(lr, lt_plus_ident(run, DirMakeIdentity("p"), "{}"), w0, "dir_makes", 1, false) },
@@ -449,7 +448,7 @@ func m11_census_twins(lr: LiveRun) -> bool ! {IO} {
   ];
   let bad = List.map(\c. c.n, List.filter(\c. not c.ok, checks));
   let _ = println("census_twins: ${show(List.length(checks))} twins, failing=[${join(",", bad)}]");
-  lt_report("m11_census_twins_live", List.length(checks) == 19 && List.length(bad) == 0)
+  lt_report("m11_census_twins_live", List.length(checks) == 18 && List.length(bad) == 0)
 }
 
 export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {

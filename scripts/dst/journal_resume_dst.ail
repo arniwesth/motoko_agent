@@ -201,7 +201,7 @@ export func main() -> () ! {IO, AI, Clock, Env, FS, Net, Process, SharedMem, Str
   let _ = println("== journal_resume: ADR-003 D6's cross-process resume, through the harness ==");
 
   -- 1. The first run, to its 3-step budget.
-  let run1 = Session.run_v2_session_traced(rt, "task", "", false, budget(), model(), history(), ".", 3, false, 0, zero_rates(), Scripted(continuing_script()));
+  let run1 = Session.run_v2_session_traced(rt, "task", "", budget(), model(), history(), ".", 3, false, 0, zero_rates(), Scripted(continuing_script()));
   let hist1 = suspended_history(run1);
   let last1 = last_digest_after(run1.trace.records, "");
   let a = row("the first run suspends at its step budget holding 8 messages", length(hist1) == 8,

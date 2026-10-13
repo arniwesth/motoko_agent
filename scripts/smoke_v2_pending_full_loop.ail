@@ -139,7 +139,7 @@ func no_rates() -> CostRates {
 func test_pending_deny_default_on_eof() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let rt = mk_runtime(mk_hook("pending-deny", pending_deny_default));
   let result = run_v2_with_scripted_ports(
-    rt, "stub-test", "", false, mk_budget(),
+    rt, "stub-test", "", mk_budget(),
     "openrouter/z-ai/glm-5", [parity_system_message()], "/tmp", 4, false,
     0, no_rates(), script_with_one_call("tc1")
   );
@@ -156,7 +156,7 @@ func test_pending_deny_default_on_eof() -> bool ! {AI, Clock, Env, FS, IO, Net, 
 func test_pending_allow_default_on_eof() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let rt = mk_runtime(mk_hook("pending-allow", pending_allow_default));
   let result = run_v2_with_scripted_ports(
-    rt, "stub-test", "", false, mk_budget(),
+    rt, "stub-test", "", mk_budget(),
     "openrouter/z-ai/glm-5", [parity_system_message()], "/tmp", 4, false,
     0, no_rates(), script_with_one_call("tc2")
   );

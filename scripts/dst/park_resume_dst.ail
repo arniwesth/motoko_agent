@@ -397,7 +397,7 @@ pure func check_step(id: string) -> ScriptedStep { calls_step([check_call(id)]) 
 
 func run_scripted(label: string, rt: ExtRuntime, w: WorldState, steps: int) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("PARK_RESUME_BEGIN ${label}");
-  let t = Session.run_v2_session_traced(rt, "task", "", false, mk_budget(), model(),
+  let t = Session.run_v2_session_traced(rt, "task", "", mk_budget(), model(),
     [system_msg()], workdir(), steps, false, 0, zero_rates(), ScriptedWorld(w));
   let _ = println("PARK_RESUME_END ${label}");
   t

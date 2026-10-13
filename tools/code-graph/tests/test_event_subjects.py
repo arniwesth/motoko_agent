@@ -35,17 +35,17 @@ def _subjects(attributions):
 # --------------------------------------------------------------------------
 
 
-def test_table_has_the_twenty_eight_settled_rows() -> None:
-    assert len(es.RULES) == 28
-    assert len(es.RULES_BY_KEY) == 28, "duplicate record_key in the table"
+def test_table_has_the_twenty_seven_settled_rows() -> None:
+    assert len(es.RULES) == 27
+    assert len(es.RULES_BY_KEY) == 27, "duplicate record_key in the table"
 
 
 def test_rule_kind_tally_matches_the_note() -> None:
-    assert es.rule_kind_tally() == {"fixed": 17, "payload_routed": 10, "correlated": 1}
+    assert es.rule_kind_tally() == {"fixed": 16, "payload_routed": 10, "correlated": 1}
 
 
-def test_fourteen_rows_are_multi_subject() -> None:
-    assert len(es.multi_subject_keys()) == 14
+def test_thirteen_rows_are_multi_subject() -> None:
+    assert len(es.multi_subject_keys()) == 13
 
 
 def test_exactly_one_correlated_row_and_it_is_the_expected_one() -> None:
@@ -90,8 +90,8 @@ def test_fixed_rule_emits_its_subjects() -> None:
 
 
 def test_multi_subject_rule_fans_out() -> None:
-    got, _ = es.attribute("WireRecord:HybridBashExtracted", {}, TOOL_MAP, ERROR_SOURCES)
-    assert set(_subjects(got)) == {es.SESSION, es.PARSE}
+    got, _ = es.attribute("WireRecord:ScratchpadResult", {}, TOOL_MAP, ERROR_SOURCES)
+    assert set(_subjects(got)) == {es.TOOL_PHASE, es.ENV_CLIENT}
 
 
 def test_payload_routed_rule_adds_the_named_tool() -> None:

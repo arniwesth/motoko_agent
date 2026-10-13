@@ -69,7 +69,7 @@ export func admission_run(jw: JournalWorld, w0: WorldState, workdir: string) -> 
   let rt = admission_rt();
   let boot = jw.config.boot;
   Session.run_v2_session_traced(
-    rt, boot.task, boot.env_url, boot.hybrid_tools, boot.budget,
+    rt, boot.task, boot.env_url, boot.budget,
     jw.config.logical_model, jw.seed, workdir, List.length(jw.calls),
     boot.ohmy_pi, 0, admission_rates(jw),
     journal_provider(rt, w0))
