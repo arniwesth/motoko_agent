@@ -110,6 +110,18 @@ func repeat_envelope(n: int, tool: string, args: string, moving: bool) -> [Msg] 
   }
 }
 
+-- n polls of one delegate as herdr's `DelegateCheck` answers while the answer
+-- file is still missing: stdout and stderr are FIXED, and the only things that
+-- differ between two polls are the call's id and `metadata.elapsed_ms`.
+func repeat_poll_meta(n: int, name: string) -> [Msg] {
+  if n <= 0 then []
+  else {
+    let id = "m${intToStr(n)}";
+    let out = "{\"tool_call_id\":\"${id}\",\"tool\":\"DelegateCheck\",\"exit_code\":0,\"stdout\":\"Delegate `${name}` has not written its answer yet. Check again.\",\"stderr\":\"\",\"metadata\":{\"delegate\":\"${name}\",\"elapsed_ms\":${intToStr(n)}0000,\"waited_ms\":30000,\"settled\":false}}";
+    [assistant_call(id, "DelegateCheck", "{\"name\":\"${name}\"}"), tool_result(id, out)] ++ repeat_poll_meta(n - 1, name)
+  }
+}
+
 func check(label: string, ok: bool) -> bool ! {IO} {
   if ok then { println("OK: ${label}"); true } else { println("FAIL: ${label}"); false }
 }
@@ -266,7 +278,16 @@ export func main() -> () ! {IO} {
   let a20 = check("envelopes whose stdout moves are still polling, not a loop",
                   denied(decide_call(envmov, envelope("ailang_cli", cli_args))) == false);
 
+  -- 21. A REAL POLL MOVES ONLY IN ITS METADATA. herdr's still-waiting
+  --     `DelegateCheck` result has a fixed stdout; `metadata.elapsed_ms` is what
+  --     differs. Until the id stopped counting, the id alone kept every
+  --     extension poll out of rule A. Now this field does, so it is pinned:
+  --     a result key that normalised metadata away would deny live polling.
+  let pollm = ctx_of(repeat_poll_meta(12, "mot-dlg-1"));
+  let a21 = check("a poll whose only moving part is metadata.elapsed_ms is not a loop",
+                  denied(decide_call(pollm, envelope("DelegateCheck", "{\"name\":\"mot-dlg-1\"}"))) == false);
+
   if a1 && a2 && a3 && a4 && a5 && a6 && a7 && a8 && a9 && a10 && a11 && a12 && a13
-     && a14 && a15 && a16 && a17 && a18 && a19 && a20
+     && a14 && a15 && a16 && a17 && a18 && a19 && a20 && a21
   then () else exit(1)
 }
