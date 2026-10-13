@@ -81,3 +81,5 @@ tests.
 
 `compaction_ai_hostile_summary_control_capsule`, which needs a status result from the folded turns
 to appear in the capsule, still passes.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
