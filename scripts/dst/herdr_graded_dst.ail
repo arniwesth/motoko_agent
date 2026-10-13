@@ -254,7 +254,7 @@ func herdr_rt() -> ExtRuntime ! {Env, FS, AI, Clock, IO, Process, Rand} {
 func run_graded(w: WorldState) -> TracedSessionResult
   ! {AI, Clock, Env, FS, IO, Net, SharedMem, Stream, Trace, Rand, Process} {
   Session.run_v2_session_traced(
-    herdr_rt(), "spike", "", false, budget(), "phase-c-model", history(), ".",
+    herdr_rt(), "spike", "", budget(), "phase-c-model", history(), ".",
     12, false, 0, zero_rates(), RecordingWorld(w)
   )
 }

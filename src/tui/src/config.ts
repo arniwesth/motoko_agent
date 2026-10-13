@@ -31,7 +31,6 @@ export const CORE_MAP: ConfigMap = {
   "agent.openai_base_url": { env: "OPENAI_BASE_URL" },
   "agent.ai_options_json": { env: "MOTOKO_AI_OPTIONS_JSON" },
   "server.port": { env: "ENV_PORT" },
-  "tools.hybrid": { env: "HYBRID_TOOLS", serialize: boolTo01 },
   "tools.ohmy_pi": { env: "OHMY_PI_TOOLS", serialize: boolTo01 },
   "tools.scratchpad_ws_loopback": { env: "MOTOKO_SCRATCHPAD_WS_LOOPBACK", serialize: boolTo01 },
   "tools.snippet_caps": { env: "AILANG_SNIPPET_CAPS", serialize: CSV },
@@ -106,7 +105,6 @@ ai_options_json = ""                     # MOTOKO_AI_OPTIONS_JSON
 port = 8080                              # ENV_PORT
 
 [tools]
-hybrid = true                            # HYBRID_TOOLS
 ohmy_pi = false                          # OHMY_PI_TOOLS
 scratchpad_ws_loopback = false                 # MOTOKO_SCRATCHPAD_WS_LOOPBACK
 snippet_caps = ["IO", "FS", "Process"]   # AILANG_SNIPPET_CAPS
@@ -164,7 +162,6 @@ export const CORE_CONFIG_JSON_TEMPLATE = JSON.stringify(
       startup_timeout_ms: 5000,
     },
     tools: {
-      hybrid: true,
       ohmy_pi: false,
       scratchpad_ws_loopback: false,
       snippet_caps: ["IO", "FS", "Process"],

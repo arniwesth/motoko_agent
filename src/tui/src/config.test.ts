@@ -9,7 +9,6 @@ const ENV_KEYS = [
   "MOTOKO_CONFIG",
   "MODEL",
   "AI_MAX_STEPS",
-  "HYBRID_TOOLS",
   "OHMY_PI_TOOLS",
   "MOTOKO_SCRATCHPAD_WS_LOOPBACK",
   "AILANG_SNIPPET_CAPS",
@@ -54,7 +53,6 @@ max_steps = 12
 ai_options_json = '{"chat_template_kwargs":{"enable_thinking":true}}'
 
 [tools]
-hybrid = true
 scratchpad_ws_loopback = true
 snippet_caps = ["IO", "FS", "Process"]
 
@@ -70,7 +68,6 @@ jsonl_output = true
     expect(process.env.MODEL).toBe("openai/gpt-4o");
     expect(process.env.AI_MAX_STEPS).toBe("12");
     expect(process.env.MOTOKO_AI_OPTIONS_JSON).toBe('{"chat_template_kwargs":{"enable_thinking":true}}');
-    expect(process.env.HYBRID_TOOLS).toBe("1");
     expect(process.env.MOTOKO_SCRATCHPAD_WS_LOOPBACK).toBe("1");
     expect(process.env.AILANG_SNIPPET_CAPS).toBe("IO,FS,Process");
     expect(process.env.CORE_EXT_ORDER).toBe("compose,omnigraph");
@@ -81,7 +78,7 @@ jsonl_output = true
     loadMotokoConfig();
 
     expect(process.env.MODEL).toBeUndefined();
-    expect(process.env.HYBRID_TOOLS).toBeUndefined();
+    expect(process.env.OHMY_PI_TOOLS).toBeUndefined();
   });
 
   it("skips missing keys without injecting defaults", () => {
@@ -98,19 +95,19 @@ model = "anthropic/custom"
 
   it("does not override protected env vars", () => {
     process.env.MODEL = "shell/model";
-    process.env.HYBRID_TOOLS = "0";
+    process.env.OHMY_PI_TOOLS = "0";
     writeConfig(".motoko/config.toml", `
 [agent]
 model = "openai/gpt-4o"
 
 [tools]
-hybrid = true
+ohmy_pi = true
 `);
 
-    loadMotokoConfig({ protectedKeys: new Set(["MODEL", "HYBRID_TOOLS"]) });
+    loadMotokoConfig({ protectedKeys: new Set(["MODEL", "OHMY_PI_TOOLS"]) });
 
     expect(process.env.MODEL).toBe("shell/model");
-    expect(process.env.HYBRID_TOOLS).toBe("0");
+    expect(process.env.OHMY_PI_TOOLS).toBe("0");
   });
 
   it("overrides existing non-protected env vars from .env or .export", () => {

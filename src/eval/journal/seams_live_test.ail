@@ -157,7 +157,7 @@ pure func lt_program(log: [Interaction], w: WorldState) -> ExecutionProgram {
 func lt_c2_run(jw: JournalWorld, w: WorldState) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let rt = empty_rt();
   Session.run_v2_session_traced(
-    rt, jw.config.boot.task, "", jw.config.boot.hybrid_tools, lt_budget(),
+    rt, jw.config.boot.task, "", lt_budget(),
     jw.config.logical_model, jw.seed, ".", List.length(jw.calls), false, 0, lt_rates(),
     journal_provider(rt, w))
 }

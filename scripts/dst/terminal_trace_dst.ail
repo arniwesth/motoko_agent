@@ -118,7 +118,7 @@ func assert_terminal_trace(
 --    Finalize and the run terminates cleanly.
 func scenario_success() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let run = Session.run_v2_session_traced(
-    empty_rt(), "task", "", false, mk_budget(), "openrouter/z-ai/glm-5",
+    empty_rt(), "task", "", mk_budget(), "openrouter/z-ai/glm-5",
     [system_msg()], "/tmp", 4, false, 0, zero_rates(), Scripted([prose_step("done")])
   );
   assert_terminal_trace("success", "stop", true, run)
@@ -128,7 +128,7 @@ func scenario_success() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedM
 --    never finalize, so call_model_or_fail raises the step-budget Fail.
 func scenario_max_steps() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let run = Session.run_v2_session_traced(
-    deny_all_rt(), "task", "", false, mk_budget(), "openrouter/z-ai/glm-5",
+    deny_all_rt(), "task", "", mk_budget(), "openrouter/z-ai/glm-5",
     [system_msg()], "/tmp", 2, false, 0, zero_rates(), Scripted(steps_at_16400(6))
   );
   assert_terminal_trace("max_steps", "max_steps", false, run)
@@ -138,7 +138,7 @@ func scenario_max_steps() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, Share
 --    breach the cap before the step budget is reached.
 func scenario_budget() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let run = Session.run_v2_session_traced(
-    deny_all_rt(), "task", "", false, mk_budget(), "openrouter/z-ai/glm-5",
+    deny_all_rt(), "task", "", mk_budget(), "openrouter/z-ai/glm-5",
     [system_msg()], "/tmp", 10, false, 50000, glm5_rates(), Scripted(steps_at_16400(6))
   );
   assert_terminal_trace("budget", "cost_exhausted", false, run)
@@ -150,7 +150,7 @@ func scenario_budget() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMe
 --    WI-A9 — it now finalizes like every other path.
 func scenario_invalid_history() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let run = Session.run_v2_session_traced(
-    empty_rt(), "task", "", false, mk_budget(), "openrouter/z-ai/glm-5",
+    empty_rt(), "task", "", mk_budget(), "openrouter/z-ai/glm-5",
     [user_msg(), system_msg()], "/tmp", 4, false, 0, zero_rates(), Scripted([prose_step("done")])
   );
   assert_terminal_trace("invalid_history", "error", false, run)

@@ -95,7 +95,7 @@ func unseeded_tools_run() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedM
   let _ = println("world_state_poison: unseeded tool world, driving the real dispatcher");
   let w: WorldState = { empty_world_state() | script: [tool_step("BashExec", "{\"cmd\":\"true\"}", "p0"), prose_step("done")] };
   let traced = Session.run_v2_session_traced(
-    allow_rt(), "task", "", false, budget(), "phase-c-model", history(), ".",
+    allow_rt(), "task", "", budget(), "phase-c-model", history(), ".",
     4, false, 0, zero_rates(), ScriptedWorld(w)
   );
   let outcome = match traced.result { Ok(_) => "ok", Err(e) => "err ${e.code}" };
@@ -122,7 +122,7 @@ func unseeded_tools_run() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedM
 export func main_host_class() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("world_state_poison: driving the LIVE world with a host-read capability withheld");
   let traced = Session.run_v2_session_traced(
-    empty_rt(), "task", "", false, budget(), "phase-c-model", history(), ".",
+    empty_rt(), "task", "", budget(), "phase-c-model", history(), ".",
     2, false, 0, zero_rates(), LiveAI
   );
   let outcome = match traced.result { Ok(_) => "ok", Err(e) => "err ${e.code}" };
@@ -134,7 +134,7 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   else {
   let _ = println("world_state_poison: driving the LIVE world with a capability withheld");
   let traced = Session.run_v2_session_traced(
-    empty_rt(), "task", "", false, budget(), "phase-c-model", history(), ".",
+    empty_rt(), "task", "", budget(), "phase-c-model", history(), ".",
     2, false, 0, zero_rates(), LiveAI
   );
   let outcome = match traced.result { Ok(_) => "ok", Err(e) => "err ${e.code}" };

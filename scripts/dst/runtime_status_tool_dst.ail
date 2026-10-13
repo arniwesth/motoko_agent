@@ -60,7 +60,7 @@ func zero_rates() -> CostRates {
 }
 
 func run_scripted(rt: ExtRuntime, script: [ScriptedStep]) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
-  Session.run_v2_session_traced(rt, "task", "", false, budget(), "runtime-status-model", history(), ".", 8, false, 0, zero_rates(), Scripted(script))
+  Session.run_v2_session_traced(rt, "task", "", budget(), "runtime-status-model", history(), ".", 8, false, 0, zero_rates(), Scripted(script))
 }
 
 func status_call(id: string) -> ToolCall {
@@ -309,7 +309,7 @@ pure func disabled_world(script: [ScriptedStep]) -> WorldState {
 }
 
 func run_arm(model: string, world: WorldState) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
-  Session.run_v2_session_traced(empty_rt(), "task", "", false, budget(), model, history(), ".", 8, false, 0, zero_rates(), ScriptedWorld(world))
+  Session.run_v2_session_traced(empty_rt(), "task", "", budget(), model, history(), ".", 8, false, 0, zero_rates(), ScriptedWorld(world))
 }
 
 -- Witness 2: the returned trace. The limit record directly follows the seed,

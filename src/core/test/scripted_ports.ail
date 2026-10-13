@@ -79,7 +79,6 @@ export func run_v2_with_scripted_ports(
   rt: ExtRuntime,
   task: string,
   env_url: string,
-  hybrid_tools: bool,
   budget: BudgetPlan,
   model: string,
   history: [Message],
@@ -102,7 +101,7 @@ export func run_v2_with_scripted_ports(
   -- the same pair. Written as a delegation because the sibling below carries the
   -- comment claiming they cannot drift, and a claim like that should be enforced
   -- by there being one call rather than by two calls agreeing today.
-  run_v2_with_scripted_world(rt, task, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, scripted_world_state(script))
+  run_v2_with_scripted_world(rt, task, env_url, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, scripted_world_state(script))
 }
 
 -- WI-D4. The same entry point, taking the WHOLE WORLD instead of just a script.
@@ -134,7 +133,6 @@ export func run_v2_with_scripted_world(
   rt: ExtRuntime,
   task: string,
   env_url: string,
-  hybrid_tools: bool,
   budget: BudgetPlan,
   model: string,
   history: [Message],
@@ -145,7 +143,7 @@ export func run_v2_with_scripted_world(
   cost_rates: CostRates,
   world: WorldState
 ) -> Result[[Message], AIError] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
-  Session.run_v2_from_messages(rt, task, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, ScriptedWorld(world))
+  Session.run_v2_from_messages(rt, task, env_url, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, ScriptedWorld(world))
 }
 
 pure func tool_call() -> ToolCall {

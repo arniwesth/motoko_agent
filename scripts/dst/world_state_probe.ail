@@ -684,7 +684,7 @@ func assert_deterministic(label: string, a: TracedSessionResult, b: TracedSessio
 func run_with(rt: ExtRuntime, steps: int, s: [ScriptedStep]) -> TracedSessionResult
   ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2_session_traced(
-    rt, "task", "", false, budget(), "phase-c-model", history(), ".",
+    rt, "task", "", budget(), "phase-c-model", history(), ".",
     steps, false, 0, zero_rates(), Scripted(s)
   )
 }
@@ -758,7 +758,7 @@ func run_world(rt: ExtRuntime, steps: int, w: WorldState) -> TracedSessionResult
 func run_world_history(rt: ExtRuntime, steps: int, w: WorldState, h: [Message]) -> TracedSessionResult
   ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2_session_traced(
-    rt, "task", "", false, budget(), "phase-c-model", h, ".",
+    rt, "task", "", budget(), "phase-c-model", h, ".",
     steps, false, 0, zero_rates(), ScriptedWorld(w)
   )
 }
