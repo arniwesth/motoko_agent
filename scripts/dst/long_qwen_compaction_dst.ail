@@ -1373,7 +1373,9 @@ func scenario_artifact_cache_stable() -> Result[(), ScenarioFailure] ! {AI, FS, 
           if contains_summary_msg(out2, "CACHED-SUMMARY-A")
             && not contains_summary_msg(out2, "CACHE-MISS-FAIL")
             && contains_summary_msg(out2, "direct cache second task")
-            && contains_summary_msg(out2, "current_step_before_request: 12") then Ok(())
+            -- The re-applied summary must not carry the step: it would bust the
+            -- provider prompt cache on every request (2026-10-13).
+            && not contains_summary_msg(out2, "current_step_before_request") then Ok(())
           else Err({ failed_invariant: "same-segment artifact cache reuses summary", trace: ["second_len=${show(length(out2))}"] })
         }
       }

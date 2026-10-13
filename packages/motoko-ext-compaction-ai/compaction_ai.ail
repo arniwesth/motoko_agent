@@ -94,7 +94,9 @@ ${old_text}
 RECENT TURNS (keep these verbatim - ${show(recent_count)} messages):
 [... see recent context ...]
 
-Provide a concise summary that captures essential context for continuing the original task."
+Provide a concise summary that captures essential context for continuing the original task.
+
+Reply with the summary text only. Do not call any tools: you are summarizing, not acting."
 }
 
 func update_summarization_prompt(previous_summary: string, delta: [Msg], recent_turns: [Msg]) -> string {
@@ -109,7 +111,9 @@ ${previous_summary}
 NEW TURNS TO FOLD:
 ${format_msgs_for_summary(delta)}
 
-VERBATIM TAIL (${show(list_length(recent_turns))} messages) follows outside the summary."
+VERBATIM TAIL (${show(list_length(recent_turns))} messages) follows outside the summary.
+
+Reply with the summary text only. Do not call any tools: you are summarizing, not acting."
 }
 
 -- Number of summarizer attempts before giving up. A transient provider
@@ -341,6 +345,13 @@ func status_section(status: Option[string]) -> string {
   }
 }
 
+-- BYTE-STABLE ACROSS STEPS, ON PURPOSE. The summary is re-applied on every
+-- request after a fold and sits right after the system prompt, so anything in
+-- it that changes per step invalidates the provider prompt cache for the whole
+-- rest of the request. It used to carry `current_step_before_request`: measured
+-- 2026-10-12/13 on GLM-5.3-Flash, every run that compacted cached 23-59% of
+-- input (only the system prompt, a flat 30,720 tokens) against 95% for the run
+-- that never compacted and 92-98% for pi. Put nothing per-step in here.
 func summary_msg(ctx: AiCtx, summary: string, status: Option[string]) -> Msg {
   {
     role: "assistant",
@@ -352,7 +363,6 @@ ORIGINAL TASK:
 ${ctx.task}
 
 RUNTIME STATE:
-- current_step_before_request: ${show(ctx.step)}
 - model: ${ctx.model}
 - context_limit: ${show(ctx.context_limit)}
 - compaction: active; older turns were summarized for this request only
