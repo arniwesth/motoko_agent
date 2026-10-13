@@ -1318,6 +1318,13 @@ func contains_summary_msg(msgs: [Msg], text: string) -> bool {
   }
 }
 
+func summary_msg_content(msgs: [Msg]) -> string {
+  match msgs {
+    [] => "",
+    m :: rest => if m.role == "assistant" && contains(m.content, "[RUNTIME COMPACTION SUMMARY]") then m.content else summary_msg_content(rest)
+  }
+}
+
 func scenario_output_shape_valid() -> Result[(), ScenarioFailure] ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let input = direct_msgs();
   let cfg: CompactionAiConfig = {
@@ -1365,14 +1372,24 @@ func scenario_artifact_cache_stable() -> Result[(), ScenarioFailure] ! {AI, FS, 
       else match compact_with_ai(direct_ctx_with_task_step(100, summary_ports("CACHE-MISS-FAIL"), artifacts, "direct cache second task", 12), input, cfg).decision {
         PassThrough => Err({ failed_invariant: "second cache run compacts", trace: ["decision=PassThrough"] }),
         PassThroughObserved(code, _) => Err({ failed_invariant: "second cache run compacts", trace: ["decision=${code}"] }),
-        Compacted(out2, _, _) => {
-          if contains_summary_msg(out2, "CACHED-SUMMARY-A")
+        Compacted(out2, _, artifacts2) => {
+          if not (contains_summary_msg(out2, "CACHED-SUMMARY-A")
             && not contains_summary_msg(out2, "CACHE-MISS-FAIL")
             && contains_summary_msg(out2, "direct cache second task")
             -- The re-applied summary must not carry the step: it would bust the
             -- provider prompt cache on every request (2026-10-13).
-            && not contains_summary_msg(out2, "current_step_before_request") then Ok(())
-          else Err({ failed_invariant: "same-segment artifact cache reuses summary", trace: ["second_len=${show(length(out2))}"] })
+            && not contains_summary_msg(out2, "current_step_before_request")) then
+            Err({ failed_invariant: "same-segment artifact cache reuses summary", trace: ["second_len=${show(length(out2))}"] })
+          -- The same request one step later. The summary message must come out
+          -- identical: this is the property the line above stands for, and it
+          -- also catches a per-step value that returns under another name.
+          else match compact_with_ai(direct_ctx_with_task_step(100, summary_ports("CACHE-MISS-FAIL"), artifacts2, "direct cache second task", 13), input, cfg).decision {
+            PassThrough => Err({ failed_invariant: "third cache run compacts", trace: ["decision=PassThrough"] }),
+            PassThroughObserved(code, _) => Err({ failed_invariant: "third cache run compacts", trace: ["decision=${code}"] }),
+            Compacted(out3, _, _) =>
+              if summary_msg_content(out2) != "" && summary_msg_content(out2) == summary_msg_content(out3) then Ok(())
+              else Err({ failed_invariant: "re-applied summary is byte-stable across steps", trace: ["step_12_len=${show(string_length(summary_msg_content(out2)))}", "step_13_len=${show(string_length(summary_msg_content(out3)))}"] })
+          }
         }
       }
     }
