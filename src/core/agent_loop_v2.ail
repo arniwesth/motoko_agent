@@ -20,7 +20,6 @@ export func run_v2(
   rt: ExtRuntime,
   task: string,
   env_url: string,
-  hybrid_tools: bool,
   budget: BudgetPlan,
   model: string,
   initial_msgs: [Msg],
@@ -31,14 +30,13 @@ export func run_v2(
   cost_rates: CostRates,
   provider: StepProvider
 ) -> Result[[Message], AIError] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
-  Session.run_v2(rt, task, env_url, hybrid_tools, budget, model, initial_msgs, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider)
+  Session.run_v2(rt, task, env_url, budget, model, initial_msgs, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider)
 }
 
 export func run_v2_from_messages(
   rt: ExtRuntime,
   task: string,
   env_url: string,
-  hybrid_tools: bool,
   budget: BudgetPlan,
   model: string,
   history: [Message],
@@ -49,13 +47,12 @@ export func run_v2_from_messages(
   cost_rates: CostRates,
   provider: StepProvider
 ) -> Result[[Message], AIError] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
-  Session.run_v2_from_messages(rt, task, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider)
+  Session.run_v2_from_messages(rt, task, env_url, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider)
 }
 
 export func conversation_loop_v2(
   rt: ExtRuntime,
   env_url: string,
-  hybrid_tools: bool,
   budget: BudgetPlan,
   model: string,
   history: [Message],
@@ -67,7 +64,7 @@ export func conversation_loop_v2(
   provider: StepProvider,
   session_id: string
 ) -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
-  Session.conversation_loop_v2(rt, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id)
+  Session.conversation_loop_v2(rt, env_url, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, session_id)
 }
 
 -- ADR-003 v6.1 D5: `profile` and `resume_count` pass straight through. This
@@ -77,7 +74,6 @@ export func run_v2_with_conversation(
   rt: ExtRuntime,
   task: string,
   env_url: string,
-  hybrid_tools: bool,
   budget: BudgetPlan,
   model: string,
   initial_msgs: [Msg],
@@ -90,14 +86,13 @@ export func run_v2_with_conversation(
   profile: string,
   resume_count: int
 ) -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
-  Session.run_v2_with_conversation(rt, task, env_url, hybrid_tools, budget, model, initial_msgs, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, profile, resume_count)
+  Session.run_v2_with_conversation(rt, task, env_url, budget, model, initial_msgs, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, profile, resume_count)
 }
 
 export func run_v2_with_stub(
   rt: ExtRuntime,
   task: string,
   env_url: string,
-  hybrid_tools: bool,
   budget: BudgetPlan,
   model: string,
   history: [Message],
@@ -108,14 +103,13 @@ export func run_v2_with_stub(
   cost_rates: CostRates,
   script: [ScriptedStep]
 ) -> Result[[Message], AIError] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
-  Session.run_v2_from_messages(rt, task, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, Scripted(script))
+  Session.run_v2_from_messages(rt, task, env_url, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, Scripted(script))
 }
 
 export func run_v2_with_stub_port_adapter(
   rt: ExtRuntime,
   task: string,
   env_url: string,
-  hybrid_tools: bool,
   budget: BudgetPlan,
   model: string,
   history: [Message],
@@ -126,7 +120,7 @@ export func run_v2_with_stub_port_adapter(
   cost_rates: CostRates,
   script: [ScriptedStep]
 ) -> Result[[Message], AIError] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
-  Session.run_v2_from_messages(rt, task, env_url, hybrid_tools, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, Scripted(script))
+  Session.run_v2_from_messages(rt, task, env_url, budget, model, history, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, Scripted(script))
 }
 
 -- ADR-003 v6.1 D6's cross-process resume (PLAN-003 P3 Part 5), through the same
@@ -134,7 +128,6 @@ export func run_v2_with_stub_port_adapter(
 export func run_v2_resume_with_conversation(
   rt: ExtRuntime,
   env_url: string,
-  hybrid_tools: bool,
   budget: BudgetPlan,
   plan: ResumePlan,
   workdir: string,
@@ -146,5 +139,5 @@ export func run_v2_resume_with_conversation(
   profile: string,
   resume_count: int
 ) -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
-  Session.run_v2_resume_with_conversation(rt, env_url, hybrid_tools, budget, plan, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, profile, resume_count)
+  Session.run_v2_resume_with_conversation(rt, env_url, budget, plan, workdir, step_budget, ohmy_pi, max_cost_millicents, cost_rates, provider, profile, resume_count)
 }

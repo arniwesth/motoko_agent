@@ -13,7 +13,7 @@ clause 3, defining profile reachability. This is the **event-subject table**: it
 attributes *events to subject modules*. The two are not kin and this paragraph
 exists so no future reader assumes they are.
 
-Rules produce **subject sets**, not modules — 14 of 28 rows are multi-subject,
+Rules produce **subject sets**, not modules — 13 of 27 rows are multi-subject,
 typically ``{owning mechanism} ∪ {payload-named tool/ext module}``. `rule_kind`
 records *how* the subject was derived so downstream views can weight or filter by
 attribution quality without a fuzzy confidence number.
@@ -50,7 +50,6 @@ COMPACTION = "src/core/compaction"
 SESSION = "src/core/session"
 PHASE_VOCAB = "src/core/phase_vocab"
 ENV_CLIENT = "src/core/env_client"
-PARSE = "src/core/parse"
 EXT_RUNTIME = "src/core/ext/runtime"
 
 
@@ -79,13 +78,14 @@ class Rule:
 
 
 # ---------------------------------------------------------------------------
-# 28 of the NOTE's 30 rows, in the NOTE's order. Row numbers are the NOTE's.
+# 27 of the NOTE's 30 rows, in the NOTE's order. Row numbers are the NOTE's.
 # Row 10 was `Dp7VerifierRejected`; 005 WI-4 deleted that variant, and its row.
+# Row 18 was `HybridBashExtracted`; 005 W3-3 deleted that variant, and its row.
 # Row 22 was `PersistNudge`; 005 W2-2 deleted that variant, and its row.
 # ---------------------------------------------------------------------------
 
 RULES: tuple[Rule, ...] = (
-    # --- WireRecord: 26 LOGICAL variants -----------------------------------
+    # --- WireRecord: 25 LOGICAL variants -----------------------------------
     Rule("WireRecord:ProviderCallPrepared", FIXED, (MODEL_PHASE,),
          note="1. Call assembly; payload digests are replay identity (009/D8)"),
     Rule("WireRecord:ScratchpadResult", FIXED, (TOOL_PHASE, ENV_CLIENT),
@@ -121,8 +121,6 @@ RULES: tuple[Rule, ...] = (
     Rule("WireRecord:ExtInterceptHandled", PAYLOAD_ROUTED, (TOOL_PHASE,),
          route_field="tool", route_kind="tool",
          note="17. Projection is lossy (no stream_id/id) — recorded in the vocabulary, harmless here"),
-    Rule("WireRecord:HybridBashExtracted", FIXED, (SESSION, PARSE),
-         note="18. parse.extract_bash (parse.ail:118) called from session's c2 loop"),
     Rule("WireRecord:DoneEvent", FIXED, (SESSION,),
          note="19. Append-before/project-after site (WI-A14 finding)"),
     Rule("WireRecord:EmptyStopFinalize", FIXED, (SESSION,), note="20. Terminal path"),

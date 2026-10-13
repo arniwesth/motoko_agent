@@ -178,7 +178,6 @@ run_json_smoke smoke_v2_ext_fixture_parity scripts/smoke_v2_ext_fixture_parity.a
 run_json_smoke smoke_v2_compaction_chain scripts/smoke_v2_compaction_chain.ail "$FULL_CAPS" full normal
 run_json_smoke smoke_v2_stream_parity scripts/smoke_v2_stream_parity.ail "$FULL_CAPS" full normal
 run_json_smoke smoke_v2_handle scripts/smoke_v2_handle.ail "IO,Env,Clock" unit normal
-run_json_smoke smoke_v2_hybrid scripts/smoke_v2_hybrid.ail "IO,Env,Clock" unit normal
 
 echo "check scripts/smoke_v2_compaction_tiers.ail"
 ailang check scripts/smoke_v2_compaction_tiers.ail >/dev/null

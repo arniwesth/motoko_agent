@@ -710,7 +710,55 @@ check src/core/test/stub_step.ail 203 'now()' "the one remaining ambient clock (
 # `herdr_profile_version()`. File 8 is therefore a convention, kept at every
 # re-issue since v1, and nothing goes red when it is forgotten.
 
-for l in 1465 1724 1836 4020 4203; do
+# 005 W3 RE-BASELINED THE FIVE session.ail ANCHORS A FIFTEENTH TIME --
+# `1465/1724/1836/4020/4203 -> 1463/1722/1834/3834/4013` (-2, -2, -2, -186,
+# -190) -- UP A THIRD TIME. The drift is hybrid mode leaving core (005 ADR-001
+# Amendment 2, PLAN-finalize-policy-migration W3). Measured commit by commit,
+# from `d59c6a33`, the commit W3 is cut from:
+#
+#   W3-2 `3ea23319`  -2, -2, -2, -181, -181   the behaviour
+#   W3-3 `3d21d9d3`   0,  0,  0,    0,    0   the wire event (file not edited)
+#   W3-4 `ec567ac2`   0,  0,  0,   -5,   -9   the `hybrid_tools` parameter
+#
+# W3-2 took the `extract_bash` and `HybridBashExtracted` import lines from
+# above all five, and 179 lines from between the third and the fourth:
+# `synthesize_hybrid_bash_call`, `any_native_call`,
+# `session_emitted_native_tool_call` and its test, 113 lines, and the hybrid
+# branch of `c2_loop`, 66 net. W3-4 edits nothing above `:1904`, so the first
+# three stayed. Between the third and the fourth it took the parameter's line
+# from nine signatures and gave four lines back, where `mk_v2_ext_ctx` and
+# `c2_continuation` now write `false` under a two-line comment: five net.
+# Between the fourth and the fifth it took the line from four more signatures,
+# which is why those two did not move together. The plan priced ONE re-issue
+# for W3, here at W3-5, so the anchors were red from W3-2 to this commit on
+# purpose. All five failed the check; none re-pointed silently. The
+# tool_phase.ail, ext/runtime.ail and stub_step.ail anchors did not move (W3
+# does not edit those files) and were read again at their lines anyway.
+#
+# THE D4 JUDGEMENT, with the evidence: `grep -o 'clock_now.*'` over
+# `git show d59c6a33:src/core/session.ail` and over the tree is IDENTICAL
+# (thirteen hits, same text, same order), and all five anchored expressions are
+# byte-identical at their new offsets. No site was added, removed or re-routed.
+# Hybrid mode read no clock: no line W3 deleted from or added to session.ail
+# names one.
+#
+# WIDTH: THE EIGHT FILES OF THE W1 NOTE ABOVE, four profiles: driver_only v36 ->
+# v37, no_ops v25 -> v26, compose v17 -> v18, herdr v6 -> v7, and
+# `driver_plus_herdr/6` -> `/7`, twice, in scripts/dst/herdr_graded_dst.ail.
+# The table's content hash goes `sha256:0d4d166d...` -> `sha256:38d8a67e...`.
+# The plan's W3-5 says "the six-file form" again. It was written before W1 and
+# W2 measured eight, and this item was handed out as eight.
+#
+# MEASURED A THIRD TIME, IN THE SAME THREE STEPS, WITH THE SAME ANSWERS. Before
+# the re-baseline the four profile targets and `herdr_graded` were green and
+# `attribution_table` failed on the five anchors alone. With files 1 to 6
+# done, `anchors`, `attribution_table` and the first three profiles were green
+# and `make driver_plus_herdr` and `make herdr_graded` both exited 2 on
+# [attribution-identity-stale]. With file 7 done and file 8 not, both were
+# green and printed `driver_plus_herdr/6 rests on it` for a profile at v7.
+# File 8 is still a convention that no check enforces.
+
+for l in 1463 1722 1834 3834 4013; do
   check src/core/session.ail "$l" 'clock_now' "a routed core clock site"
 done
 check src/core/tool_phase.ail 484 'clock_now' "the FIFTH routed core clock site (D4's table says four)"

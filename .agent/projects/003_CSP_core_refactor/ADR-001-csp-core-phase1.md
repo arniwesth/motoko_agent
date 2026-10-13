@@ -93,6 +93,15 @@ radius, and this ADR no longer claims it:
   single-element hybrid batch, concurrency is moot but the cancellation / live-output / event-ordering
   contracts below still apply. (`invokes` records `loop_v2 → dispatch_calls` once and, being an
   unordered set, cannot show the multiplicity — source `:1341` and `:1454` establish the two sites.)
+
+  > **Superseded for the hybrid site, from 2026-10-10,** by
+  > [005 ADR-001](../005_harness_policy_boundary/ADR-001-harness-policy-boundary.md), Amendment 2
+  > (B1). Core has no hybrid arm: it builds no `BashExec` call from a prose answer. So there is
+  > no hybrid site at which to replace dispatch, and nothing to decide for a single-element
+  > hybrid batch. The decision for the tool-calls site is not touched by that amendment. Review
+  > finding B1 and its row in the author response, further down, record how the two-site
+  > decision was reached and are left as written, like the text above.
+
 - **`run_tool_select` is not a rename of `dispatch_calls`.** Today `dispatch_calls` routes tools
   through `dispatch_one` (native, via `tool_dispatch_adapter`), `dispatch_tool_handle` (extension),
   and `delegated_deferred_message` (delegated) — it does **not** call `dispatch_tool_envelope` (that

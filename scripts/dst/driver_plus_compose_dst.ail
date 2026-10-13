@@ -660,7 +660,7 @@ func compose_rt() -> ExtRuntime ! {Env, FS, AI, Clock, IO, Process, Rand} {
 func run_graded(w: WorldState) -> TracedSessionResult
   ! {AI, Clock, Env, FS, IO, Net, SharedMem, Stream, Trace, Rand, Process} {
   Session.run_v2_session_traced(
-    compose_rt(), "task", "", false, budget(), "phase-c-model", history(), ".",
+    compose_rt(), "task", "", budget(), "phase-c-model", history(), ".",
     12, false, 0, zero_rates(), RecordingWorld(w)
   )
 }
@@ -1102,7 +1102,7 @@ func scenario_exclusion_check() -> bool ! {IO} {
   let meta: ReplayMetadata =
     { source_revision: "HEAD", toolchain_version: "ailang 0.33.0",
       profile_id: compose_profile_id(), profile_version: compose_profile_version(),
-      event_vocabulary_version: "event-vocabulary/3" };
+      event_vocabulary_version: "event-vocabulary/4" };
   let d = driver_plus_compose();
   let sees_exclusion = is_excluded_hook(d, "compose", "tool_provider[0]");
   let sees_coverage = not is_excluded_hook(d, "compose", "response_interceptor[0]");

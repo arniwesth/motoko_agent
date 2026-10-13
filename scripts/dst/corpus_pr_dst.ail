@@ -377,7 +377,7 @@ export pure func bank_step_budget() -> int { 12 }
 func run_generated(id: string, w: WorldState) -> TracedSessionResult
   ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2_session_traced(
-    approval_rt(id), "task", "", false, budget(), "phase-c-model", history(), ".",
+    approval_rt(id), "task", "", budget(), "phase-c-model", history(), ".",
     bank_step_budget(), false, 0, zero_rates(), GeneratedWorld(w))
 }
 
@@ -387,7 +387,7 @@ func run_generated(id: string, w: WorldState) -> TracedSessionResult
 export func run_recording_at(id: string, w: WorldState, step_budget: int) -> TracedSessionResult
   ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2_session_traced(
-    approval_rt(id), "task", "", false, budget(), "phase-c-model", history(), ".",
+    approval_rt(id), "task", "", budget(), "phase-c-model", history(), ".",
     step_budget, false, 0, zero_rates(), RecordingWorld(w))
 }
 
@@ -409,14 +409,14 @@ func run_recording(id: string, w: WorldState) -> TracedSessionResult
 export func run_recording_allowing_at(id: string, w: WorldState, step_budget: int) -> TracedSessionResult
   ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2_session_traced(
-    rig_rt(id, allow_policy, no_solver), "task", "", false, budget(), "phase-c-model", history(), ".",
+    rig_rt(id, allow_policy, no_solver), "task", "", budget(), "phase-c-model", history(), ".",
     step_budget, false, 0, zero_rates(), RecordingWorld(w))
 }
 
 export func run_recording_continuing_at(id: string, w: WorldState, step_budget: int) -> TracedSessionResult
   ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2_session_traced(
-    rig_rt(id, pending_policy, continuing_solver), "task", "", false, budget(), "phase-c-model", history(), ".",
+    rig_rt(id, pending_policy, continuing_solver), "task", "", budget(), "phase-c-model", history(), ".",
     step_budget, false, 0, zero_rates(), RecordingWorld(w))
 }
 

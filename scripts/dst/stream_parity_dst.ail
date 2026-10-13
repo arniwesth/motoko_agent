@@ -369,7 +369,7 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
 
   -- Subject 1: the scripted adapter, which most of `make dst` drives.
   let scripted_run = Session.run_v2_session_traced(
-    empty_rt(), "task", "", false, mk_budget(), "openrouter/z-ai/glm-5",
+    empty_rt(), "task", "", mk_budget(), "openrouter/z-ai/glm-5",
     [system_msg()], "/tmp", 6, false, 0, zero_rates(), Scripted(script())
   );
     -- MEASURED, not assumed, and it is a real property of the adapter rather than
@@ -383,7 +383,7 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   -- third side above. Two subjects rather than one, per S14 — a single adapter
   -- would certify the bridge against the adapter it was written with.
   let recording_run = Session.run_v2_session_traced(
-    empty_rt(), "task", "", false, mk_budget(), "openrouter/z-ai/glm-5",
+    empty_rt(), "task", "", mk_budget(), "openrouter/z-ai/glm-5",
     [system_msg()], "/tmp", 6, false, 0, zero_rates(),
     RecordingWorld(scripted_world_state(script()))
   );

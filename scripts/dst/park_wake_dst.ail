@@ -389,7 +389,7 @@ pure func verify_step() -> ScriptedStep { calls_step([{ id: "cv-1", name: "Verif
 
 func run_scripted(label: string, rt: ExtRuntime, w: WorldState, steps: int) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("PARK_RUN_BEGIN ${label}");
-  let t = Session.run_v2_session_traced(rt, "task", "", false, mk_budget(), "phase-c-model",
+  let t = Session.run_v2_session_traced(rt, "task", "", mk_budget(), "phase-c-model",
     [system_msg()], "/tmp", steps, false, 0, zero_rates(), ScriptedWorld(w));
   let _ = println("PARK_RUN_END ${label}");
   t
@@ -397,7 +397,7 @@ func run_scripted(label: string, rt: ExtRuntime, w: WorldState, steps: int) -> T
 
 func run_recorded(label: string, rt: ExtRuntime, w: WorldState, steps: int) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("PARK_RUN_BEGIN ${label}");
-  let t = Session.run_v2_session_traced(rt, "task", "", false, mk_budget(), "phase-c-model",
+  let t = Session.run_v2_session_traced(rt, "task", "", mk_budget(), "phase-c-model",
     [system_msg()], "/tmp", steps, false, 0, zero_rates(), RecordingWorld(w));
   let _ = println("PARK_RUN_END ${label}");
   t

@@ -2,6 +2,17 @@
 
 ## Status
 
+closed — hybrid mode is removed from core, so there is no extraction left to gate.
+[005 ADR-001](../projects/005_harness_policy_boundary/ADR-001-harness-policy-boundary.md),
+Amendment 2 (accepted 2026-10-10), decided it, and workstream W3 of
+[`PLAN-finalize-policy-migration.md`](../projects/005_harness_policy_boundary/PLAN-finalize-policy-migration.md)
+is the removal. Core no longer turns a prose answer into a tool call, and nothing replaces that.
+The fix recorded below went with the mechanism: `extract_bash`,
+`session_emitted_native_tool_call` and
+`test_hybrid_extraction_stops_after_a_native_tool_call` no longer exist, and core does not read
+`tools.hybrid`. The non-goal at the foot of this file is superseded by the same amendment. What
+follows is the status as it stood from 2026-09-06, left as written.
+
 resolved — commit `PLAN-001 live-run fix 2: prose is prose once a session has
 emitted a native tool call` on `arniwesth/013-dst-architecture-adr` (2026-09-06).
 
@@ -103,3 +114,9 @@ with a ```bash fence must produce no `hybrid_bash_extracted` event.
 ## Non-goals
 
 - Do not remove hybrid mode. Its original consumers (models without typed tool calls) still exist.
+
+> **Superseded, from 2026-10-10,** by
+> [005 ADR-001](../projects/005_harness_policy_boundary/ADR-001-harness-policy-boundary.md),
+> Amendment 2, on the operator's ruling of 2026-10-09: "this needs to be removed as well". Hybrid
+> mode is removed. A profile for a model that writes shell blocks instead of typed calls can
+> register a `ResponseInterceptor` (B2 there). The text is left as written.

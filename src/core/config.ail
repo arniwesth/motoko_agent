@@ -43,7 +43,6 @@ export type BackendConfig = {
 }
 
 export type ToolConfig = {
-  hybrid: bool,
   ohmy_pi: bool,
   snippet_caps: [string],
   delegated_timeout_ms: int,
@@ -369,7 +368,6 @@ func load_backend(core: Json) -> BackendConfig {
 func load_tools(core: Json) -> ToolConfig {
   let t = object_at(core, "tools");
   {
-    hybrid: json_bool(t, "hybrid", true),
     ohmy_pi: json_bool(t, "ohmy_pi", false),
     snippet_caps: json_string_array(t, "snippet_caps", ["IO", "FS", "Process"]),
     delegated_timeout_ms: json_int(t, "delegated_timeout_ms", 30000),
@@ -649,7 +647,6 @@ func runtime_config_json(cfg: RuntimeConfig) -> Json =
       kv("auto_start", jb(cfg.backend.auto_start))
     ])),
     kv("tools", jo([
-      kv("hybrid", jb(cfg.tools.hybrid)),
       kv("ohmy_pi", jb(cfg.tools.ohmy_pi)),
       kv("snippet_caps", ja(json_strings(cfg.tools.snippet_caps))),
       kv("delegated_timeout_ms", jnum(_int_to_float(cfg.tools.delegated_timeout_ms))),

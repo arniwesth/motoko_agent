@@ -467,7 +467,7 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   let p1 = Scripted(tool_script());
   let _ = begin_frame("native", p1);
   let native = Session.run_v2_session_traced(
-    empty_rt(), "task", "", false, mk_budget(), "phase-c-model",
+    empty_rt(), "task", "", mk_budget(), "phase-c-model",
     [system_msg()], "/tmp", 6, false, 0, zero_rates(), p1
   );
   let f1 = end_frame("native", native);
@@ -478,7 +478,7 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   let p2 = Scripted(tool_script());
   let _ = begin_frame("denied", p2);
   let denied = Session.run_v2_session_traced(
-    deny_rt(), "task", "", false, mk_budget(), "phase-c-model",
+    deny_rt(), "task", "", mk_budget(), "phase-c-model",
     [system_msg()], "/tmp", 6, false, 0, zero_rates(), p2
   );
   let f2 = end_frame("denied", denied);
@@ -488,7 +488,7 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   let p3 = ScriptedWorld(approval_world());
   let _ = begin_frame("pending", p3);
   let pending = Session.run_v2_session_traced(
-    pending_rt(), "task", "", false, mk_budget(), "phase-c-model",
+    pending_rt(), "task", "", mk_budget(), "phase-c-model",
     [system_msg()], "/tmp", 6, false, 0, zero_rates(), p3
   );
   let f3 = end_frame("pending", pending);
@@ -498,7 +498,7 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   let p4 = Scripted(errored_script());
   let _ = begin_frame("errored", p4);
   let errored = Session.run_v2_session_traced(
-    empty_rt(), "task", "", false, mk_budget(), "phase-c-model",
+    empty_rt(), "task", "", mk_budget(), "phase-c-model",
     [system_msg()], "/tmp", 6, false, 0, zero_rates(), p4
   );
   let f4 = end_frame("errored", errored);
@@ -508,7 +508,7 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   let p5 = Scripted(metered_script());
   let _ = begin_frame("capped", p5);
   let capped = Session.run_v2_session_traced(
-    deny_rt(), "task", "", false, mk_budget(), "phase-c-model",
+    deny_rt(), "task", "", mk_budget(), "phase-c-model",
     [system_msg()], "/tmp", 6, false, 1, metered_rates(), p5
   );
   let f5 = end_frame("capped", capped);
@@ -518,7 +518,7 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   let p7 = Scripted(tool_script());
   let _ = begin_frame("handled", p7);
   let handled = Session.run_v2_session_traced(
-    handled_rt(), "task", "", false, mk_budget(), "phase-c-model",
+    handled_rt(), "task", "", mk_budget(), "phase-c-model",
     [system_msg()], "/tmp", 6, false, 0, zero_rates(), p7
   );
   let f7 = end_frame("handled", handled);
@@ -531,7 +531,7 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   let p8 = Scripted(delegated_script());
   let _ = begin_frame("delegated", p8);
   let delegated = Session.run_v2_session_traced(
-    empty_rt(), "task", "", false, mk_budget(), "phase-c-model",
+    empty_rt(), "task", "", mk_budget(), "phase-c-model",
     [system_msg()], "/tmp", 6, true, 0, zero_rates(), p8
   );
   let f8 = end_frame("delegated", delegated);
@@ -541,7 +541,7 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   let p9 = ScriptedWorld(parked_world());
   let _ = begin_frame("parked", p9);
   let parked = Session.run_v2_session_traced(
-    parked_rt(), "task", "", false, mk_budget(), "phase-c-model",
+    parked_rt(), "task", "", mk_budget(), "phase-c-model",
     [system_msg()], "/tmp", 8, false, 0, zero_rates(), p9
   );
   let f9 = end_frame("parked", parked);

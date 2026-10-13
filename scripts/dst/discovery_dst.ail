@@ -489,7 +489,7 @@ func approval_rt(id: string) -> ExtRuntime {
 func run_recording(id: string, w: WorldState) -> TracedSessionResult
   ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2_session_traced(
-    approval_rt(id), "task", "", false, budget(), "phase-c-model", history(), ".",
+    approval_rt(id), "task", "", budget(), "phase-c-model", history(), ".",
     12, false, 0, zero_rates(), RecordingWorld(w)
   )
 }
@@ -498,7 +498,7 @@ func run_recording(id: string, w: WorldState) -> TracedSessionResult
 func run_plain(id: string, w: WorldState) -> TracedSessionResult
   ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2_session_traced(
-    approval_rt(id), "task", "", false, budget(), "phase-c-model", history(), ".",
+    approval_rt(id), "task", "", budget(), "phase-c-model", history(), ".",
     12, false, 0, zero_rates(), ScriptedWorld(w)
   )
 }
@@ -1021,7 +1021,7 @@ func routing_rt(id: string) -> ExtRuntime {
 func run_routing(id: string, w: WorldState) -> TracedSessionResult
   ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2_session_traced(
-    routing_rt(id), "task", "", false, budget(), "phase-c-model", history(), ".",
+    routing_rt(id), "task", "", budget(), "phase-c-model", history(), ".",
     12, false, 0, zero_rates(), RecordingWorld(w)
   )
 }
@@ -1188,7 +1188,7 @@ func effect_rt(id: string) -> ExtRuntime {
 func run_effect(id: string, w: WorldState) -> TracedSessionResult
   ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2_session_traced(
-    effect_rt(id), "task", "", false, budget(), "phase-c-model", history(), ".",
+    effect_rt(id), "task", "", budget(), "phase-c-model", history(), ".",
     12, false, 0, zero_rates(), RecordingWorld(w)
   )
 }
@@ -1519,7 +1519,7 @@ func compose_rt() -> ExtRuntime ! {Env, FS, AI, Clock, IO, Process, Rand} {
 func run_compose(w: WorldState) -> TracedSessionResult
   ! {AI, Clock, Env, FS, IO, Net, SharedMem, Stream, Trace, Rand, Process} {
   Session.run_v2_session_traced(
-    compose_rt(), "task", "", false, budget(), "phase-c-model", history(), ".",
+    compose_rt(), "task", "", budget(), "phase-c-model", history(), ".",
     12, false, 0, zero_rates(), RecordingWorld(w)
   )
 }
@@ -1740,7 +1740,7 @@ func grep_rt(id: string) -> ExtRuntime {
 func run_grep(id: string, w: WorldState) -> TracedSessionResult
   ! {AI, Clock, Env, FS, IO, Net, SharedMem, Stream, Trace, Rand, Process} {
   Session.run_v2_session_traced(
-    grep_rt(id), "task", "", false, budget(), "phase-c-model", history(), ".",
+    grep_rt(id), "task", "", budget(), "phase-c-model", history(), ".",
     12, false, 0, zero_rates(), RecordingWorld(w)
   )
 }
@@ -1815,7 +1815,7 @@ func handle_rt(id: string) -> ExtRuntime {
 func run_handle(id: string, w: WorldState) -> TracedSessionResult
   ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2_session_traced(
-    handle_rt(id), "task", "", false, budget(), "phase-c-model", history(), ".",
+    handle_rt(id), "task", "", budget(), "phase-c-model", history(), ".",
     12, false, 0, zero_rates(), RecordingWorld(w)
   )
 }
@@ -1899,7 +1899,7 @@ func batch_rt(id: string) -> ExtRuntime {
 func run_batch(id: string, w: WorldState) -> TracedSessionResult
   ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   Session.run_v2_session_traced(
-    batch_rt(id), "task", "", false, budget(), "phase-c-model", history(), ".",
+    batch_rt(id), "task", "", budget(), "phase-c-model", history(), ".",
     12, false, 0, zero_rates(), RecordingWorld(w)
   )
 }
