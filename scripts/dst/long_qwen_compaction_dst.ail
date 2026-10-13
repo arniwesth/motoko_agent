@@ -1318,6 +1318,13 @@ func contains_summary_msg(msgs: [Msg], text: string) -> bool {
   }
 }
 
+func status_tail() -> [Msg] {
+  [
+    abi_assistant("call runtime status", [runtime_status_call()]),
+    abi_tool(runtime_status_call_id, "{\"tool\":\"MotokoRuntimeStatus\",\"current_step\":14,\"step_budget\":100}")
+  ]
+}
+
 func summary_msg_content(msgs: [Msg]) -> string {
   match msgs {
     [] => "",
@@ -1386,9 +1393,22 @@ func scenario_artifact_cache_stable() -> Result[(), ScenarioFailure] ! {AI, FS, 
           else match compact_with_ai(direct_ctx_with_task_step(100, summary_ports("CACHE-MISS-FAIL"), artifacts2, "direct cache second task", 13), input, cfg).decision {
             PassThrough => Err({ failed_invariant: "third cache run compacts", trace: ["decision=PassThrough"] }),
             PassThroughObserved(code, _) => Err({ failed_invariant: "third cache run compacts", trace: ["decision=${code}"] }),
-            Compacted(out3, _, _) =>
-              if summary_msg_content(out2) != "" && summary_msg_content(out2) == summary_msg_content(out3) then Ok(())
-              else Err({ failed_invariant: "re-applied summary is byte-stable across steps", trace: ["step_12_len=${show(string_length(summary_msg_content(out2)))}", "step_13_len=${show(string_length(summary_msg_content(out3)))}"] })
+            Compacted(out3, _, artifacts3) =>
+              if not (summary_msg_content(out2) != "" && summary_msg_content(out2) == summary_msg_content(out3)) then
+                Err({ failed_invariant: "re-applied summary is byte-stable across steps", trace: ["step_12_len=${show(string_length(summary_msg_content(out2)))}", "step_13_len=${show(string_length(summary_msg_content(out3)))}"] })
+              -- One step later again, with a MotokoRuntimeStatus result in the
+              -- tail. The tail is sent verbatim, so the summary message must
+              -- still be identical. The large tail budget keeps this on the
+              -- cache-reuse path.
+              else match compact_with_ai(direct_ctx_with_task_step(100, summary_ports("CACHE-MISS-FAIL"), artifacts3, "direct cache second task", 14), input ++ status_tail(), { cfg | keep_recent_tokens: 100000 }).decision {
+                -- Not compacting is the same failure: at this fixture's limit a
+                -- status excerpt added to the summary stops it relieving.
+                PassThrough => Err({ failed_invariant: "a status result in the tail leaves the re-applied summary unchanged", trace: ["decision=PassThrough"] }),
+                PassThroughObserved(code, _) => Err({ failed_invariant: "a status result in the tail leaves the re-applied summary unchanged", trace: ["decision=${code}"] }),
+                Compacted(out4, _, _) =>
+                  if summary_msg_content(out2) == summary_msg_content(out4) then Ok(())
+                  else Err({ failed_invariant: "a status result in the tail leaves the re-applied summary unchanged", trace: ["step_12_len=${show(string_length(summary_msg_content(out2)))}", "step_14_len=${show(string_length(summary_msg_content(out4)))}"] })
+              }
           }
         }
       }

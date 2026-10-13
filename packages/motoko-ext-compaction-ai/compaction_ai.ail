@@ -373,7 +373,7 @@ ACTIVE CONTROL OBLIGATIONS:
 - Preserve explicit stop conditions from ORIGINAL TASK.
 - If ORIGINAL TASK requires tool/status cadence, continue that cadence.
 
-LATEST RUNTIME STATUS:
+LATEST RUNTIME STATUS IN SUMMARIZED TURNS:
 ${status_section(status)}
 
 AI SUMMARY OF OLDER CONTEXT:
@@ -457,7 +457,11 @@ func cache_artifact(digest: string, summary: string, boundary_marker: int, step:
 -- Assemble the Compacted decision from a resolved summary (fresh or
 -- cached). Returns PassThrough if the summary fails to relieve pressure.
 func finalize_compaction(ctx: AiCtx, msgs: [Msg], prefix: [Msg], recent_turns: [Msg], old_count: int, digest: string, summary: string, boundary_marker: int, pct: int, refreshed: bool) -> PreStepDecision {
-  let status = latest_runtime_status_result(msgs);
+  -- The status is read from the folded turns only. The tail is sent verbatim,
+  -- so a status result in it is already in the request, and reading it here
+  -- would rewrite the summary message each time one arrives (see `summary_msg`).
+  let folded = split_at(split_prefix(msgs).rest, boundary_marker).old;
+  let status = latest_runtime_status_result(folded);
   let compacted = prefix ++ [summary_msg(ctx, summary, status)] ++ recent_turns;
   let new_pct = usage_percent(ctx, compacted, ctx.context_limit);
   if new_pct > pct then PassThroughObserved("compaction_ai.output_not_relieving", [
@@ -839,5 +843,49 @@ func test_latest_runtime_status_prefers_correlated_result() -> bool
     match latest_runtime_status_result(msgs) {
       None => false,
       Some(content) => contains(content, "\"current_step\":47") && not contains(content, "current_step bad")
+    }
+  }
+
+func summary_content(msgs: [Msg]) -> string {
+  match msgs {
+    [] => "",
+    m :: rest => if contains(m.content, "[RUNTIME COMPACTION SUMMARY]") then m.content else summary_content(rest)
+  }
+}
+
+-- A MotokoRuntimeStatus result that arrives after the fold is in the verbatim
+-- tail. It must not change the summary message, or every status call would
+-- cost a prompt-cache miss from the summary onward.
+func test_status_result_in_tail_leaves_summary_unchanged() -> bool ! {AI, IO, Trace}
+  tests [((), true)]{
+    let msgs = repeated_pairs(8, long_content());
+    -- The large tail budget keeps the second call on the cache-reuse path.
+    let reuse_cfg = { test_cfg(true) | keep_recent_tokens: 100000 };
+    match compact_with_ai(test_ctx_stub(10, 1000, jo([])), msgs, test_cfg(true)).decision {
+      Compacted(out1, _, artifacts) => {
+        let status = "{\"tool\":\"MotokoRuntimeStatus\",\"current_step\":11}";
+        let grown = msgs ++ [runtime_status_call_msg("status-tail"), tool_result_msg("status-tail", status)];
+        match compact_with_ai(test_ctx_stub(11, 1000, artifacts), grown, reuse_cfg).decision {
+          Compacted(out2, note, _) =>
+            contains(note, "AI-cache-reused")
+              && summary_content(out1) != ""
+              && summary_content(out1) == summary_content(out2)
+              && contains(canonical_msgs(out2), status),
+          _ => false
+        }
+      },
+      _ => false
+    }
+  }
+
+-- A status result inside the folded turns is the one the summarizer can lose,
+-- so the capsule still mirrors it.
+func test_status_result_in_folded_turns_is_mirrored() -> bool ! {AI, IO, Trace}
+  tests [((), true)]{
+    let status = "{\"tool\":\"MotokoRuntimeStatus\",\"current_step\":3}";
+    let msgs = [runtime_status_call_msg("status-old"), tool_result_msg("status-old", status)] ++ repeated_pairs(8, long_content());
+    match compact_with_ai(test_ctx_stub(10, 1000, jo([])), msgs, test_cfg(true)).decision {
+      Compacted(out, _, _) => contains(summary_content(out), "\"current_step\":3"),
+      _ => false
     }
   }
