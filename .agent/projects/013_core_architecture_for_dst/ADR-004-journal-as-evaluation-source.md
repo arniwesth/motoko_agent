@@ -1613,6 +1613,80 @@ the approval.
   names the same count twice (`:38`, `:114-115`). The loop state has no such field now. It went
   with the nudge, its only reader.
 
+### Change 3 (2026-10-13) — new journals record `hybrid_tools: false`, and the `hybrid extractions` census row is removed
+
+**Changes** the version history's item on hybrid extraction (`:287-292`), D1's T0 settings
+table, the row `hybrid_tools` (`:613`), and D3's census table, the row `hybrid extractions`
+(`:1020`).
+
+**What forced it.**
+[005 ADR-001](../005_harness_policy_boundary/ADR-001-harness-policy-boundary.md), Amendment 2,
+accepted 2026-10-10, removes hybrid mode from core and puts nothing in its place (B1, B2). The
+loop has no hybrid branch. A call-free response whose finish is not `tool_calls`, and which no
+extension intercepted, goes to `classify_candidate`. Core's
+`session_emitted_native_tool_call`, which the item and the settings row cite, no longer exists,
+and neither does `extract_bash`. The wire event `HybridBashExtracted`, which the census row
+counts, is gone too, and the vocabulary is `event-vocabulary/4`.
+
+**The change.**
+
+- *The setting (`:613`).* The row stays and its value moves. Core reports the journal header's
+  `boot.hybrid_tools` as the constant `false` (`src/core/rpc.ail`), and the host writes the
+  header from that report. A journal whose header is written after the removal reads "recorded
+  (`false`)", and only a journal recorded before it can read "recorded (`true`)". The row's
+  reason describes the driver that recorded the old journals. On the driver that replays them
+  no value of the setting starts an extraction, so the setting no longer decides which arm a
+  call-free response takes.
+- *The hybrid rules (`:287-292`).* Both stay, as the evaluator's rules for journals recorded
+  before the removal (Amendment 2, B3). A result whose id starts `hybrid-step-` is still the
+  `HybridExtraction` cutoff. A stop call under a header that records `hybrid_tools: true` is
+  still admitted only when the native-call predicate holds, and is `Refused(HybridPredicate)`
+  when it does not. Under a header that records `false` nothing is refused on the predicate.
+  It is still computed and still recorded in the settings. The evaluator runs its own copy of
+  the predicate, `ev_session_emitted_native_tool_call` (`src/eval/journal/stopping.ail`). The
+  function it was copied from is gone from core, and its name is still the refusal's field.
+- *The census row (`:1020`).* Removed: read the table without it. No trace can hold a
+  `HybridBashExtracted` record, so there is nothing to count. `census_row_names()` has twelve
+  rows where it had thirteen (`src/eval/journal/witness.ail`), and the live test checks 18
+  twins where it checked 19. The `HybridExtraction` cutoff does not rest on the row: it is
+  decided at extraction, from the recorded result ids, before any run. The "thirteen rows" in
+  the paragraph above the table (`:1003`) are `family_evidence`'s, a different count, and are
+  not changed.
+- *The entry (`:782-783`).* D2's entry calls `run_v2_session_traced` "with the recorded
+  `BootInputs`". That function has no `hybrid_tools` parameter now, so the entry passes the
+  other boot inputs and not that one. Two calls changed, both evaluator paths under D5 and
+  both in the commit that removed the parameter: `admission_run`
+  (`src/eval/journal/admission_run.ail`) and the live seam test
+  (`src/eval/journal/seams_live_test.ail`). The replay is the same, because the loop had
+  already stopped reading the value. Extraction still reads it from the journal, for the
+  predicate's assertion and for the settings record.
+
+**What stays.**
+
+- `BootInputs` keeps `hybrid_tools` (`:601-602`), and the evaluator's reader still requires
+  `boot.hybrid_tools` on decode (`src/eval/journal/reader.ail`). `T0Settings` keeps
+  `hybrid_tools` and `hybrid_predicate` (`:735`).
+- The cutoff `HybridExtraction` and the refusal `HybridPredicate` stay in their tables
+  (`:710`, `:721`), with shape 6 of the stopping contract (`:669-670`) and M4's two cases
+  (`:1527-1528`).
+- r2.1 records `hybrid_tools` true (`:602`) and its seed satisfies the predicate (`:666-668`).
+  It is admitted as before.
+- A session whose header was written before the removal keeps `hybrid_tools: true` when it is
+  resumed after it. If such a run ends on a stop with no native call before it, the journal is
+  `Refused(HybridPredicate)`, although nothing could have been extracted. Amendment 2 (B3)
+  leaves that refusal as it is, and so does this change.
+
+**Hybrid mode elsewhere in this record,** left as written:
+
+- The version history's v3 → v4 item 1 sends a call-free response "to hybrid extraction when
+  `hybrid_tools` is set and no native call has been emitted in the session" (`:168-170`).
+- D1's stopping contract has "Hybrid extraction stands between the result and
+  `classify_candidate`" in item 5, with core's predicate and its coordinates (`:661-668`), and
+  "the live run synthesised a call (`HybridBashExtracted`)" in item 6 (`:669-670`). On this
+  driver nothing stands between the two, and item 6 describes only a journal recorded before
+  the removal.
+- The marker table names the hybrid predicate among the questions D1 answers (`:409`).
+
 ## Cross-references
 
 - `REVIEW-adr004-v4-verdicts-codex.md`: the v4 review; its per-decision verdicts (§2), mechanism

@@ -106,6 +106,15 @@ import src/core/dst_event_vocabulary as Vocab (event_vocabulary_version)
 
 export pure func herdr_profile_id() -> string { "driver_plus_herdr" }
 
+-- v7 (2026-10-13, 005 W3, W3-5). RE-ISSUED under D4 because the attribution
+-- table's content hash moved: hybrid mode left core (005 ADR-001 Amendment 2)
+-- and all five session.ail anchors moved with it. Measured a third time, as at
+-- v5 and v6: with the other three re-issued and this one not,
+-- `make driver_plus_herdr` and `make herdr_graded` answered
+-- [attribution-identity-stale]. Nothing installed, covered, excluded, omitted
+-- or routed changes; the acceptance script's `extension_profile` literal
+-- follows.
+--
 -- v6 (2026-10-11, 005 W2, the W2-6 follow-up). RE-ISSUED under D4 because the
 -- attribution table's content hash moved: the persist nudge left core (005
 -- ADR-001 Amendment 1, A5) and all five session.ail anchors moved with it.
@@ -151,7 +160,7 @@ export pure func herdr_profile_id() -> string { "driver_plus_herdr" }
 -- Neither changes what is installed, covered, excluded or routed.
 --
 -- v1. First issue; there is no predecessor to re-issue from.
-export pure func herdr_profile_version() -> string { "6" }
+export pure func herdr_profile_version() -> string { "7" }
 
 -- The revision the measurements below were taken at.
 export pure func measured_at() -> string { "8470c3f" }
@@ -183,7 +192,11 @@ export pure func herdr_attribution_ref() -> AttributionRef {
     -- sha256:c7500943bffc8be0c48521afc17fa4b70ea3740c65a049394081d2d6bf513c6d.
     -- An anchor re-measurement, not a table correction. See
     -- `driver_only_attribution_ref`.
-    content_hash: "sha256:0d4d166ddf960cb667345f26a7fb75cf5c17ba03d2ff5da6a678fbf23d1bc1e1" }
+    -- RE-RECORDED AT 005 W3 (W3-5) FOR v7, with the other three profiles', from
+    -- sha256:0d4d166ddf960cb667345f26a7fb75cf5c17ba03d2ff5da6a678fbf23d1bc1e1.
+    -- An anchor re-measurement, not a table correction. See
+    -- `driver_only_attribution_ref`.
+    content_hash: "sha256:38d8a67e903a949a9d07ac8e5b4a9eda4e786ab0ca879d1e4d6992424b316940" }
 }
 
 export pure func installed_extension_ids() -> [string] { ["herdr"] }

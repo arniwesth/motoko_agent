@@ -236,7 +236,11 @@ export pure func compose_profile_id() -> string { "driver_plus_compose" }
 -- ADR-001 Amendment 1, A5) and all five session.ail anchors moved with it.
 -- Nothing installed, covered, excluded, omitted or routed changes. See
 -- `compose_attribution_ref`.
-export pure func compose_profile_version() -> string { "17" }
+-- v18 (2026-10-13, 005 W3, W3-5). RE-ISSUED because the attribution table's
+-- content hash moved: hybrid mode left core (005 ADR-001 Amendment 2) and all
+-- five session.ail anchors moved with it. Nothing installed, covered,
+-- excluded, omitted or routed changes. See `compose_attribution_ref`.
+export pure func compose_profile_version() -> string { "18" }
 
 -- The same attribution table both predecessors bind, at the same identity.
 -- THREE profiles referring to one table: D4's rule now re-issues three, and the
@@ -407,7 +411,13 @@ export pure func compose_attribution_ref() -> AttributionRef {
     -- removal of the persist nudge (005 ADR-001 Amendment 1, A5). An anchor
     -- re-measurement, not a table correction. See
     -- `driver_only_attribution_ref`.
-    content_hash: "sha256:0d4d166ddf960cb667345f26a7fb75cf5c17ba03d2ff5da6a678fbf23d1bc1e1" }
+    -- 005 W3 (W3-5): re-recorded with both predecessors', from
+    -- sha256:0d4d166ddf960cb667345f26a7fb75cf5c17ba03d2ff5da6a678fbf23d1bc1e1.
+    -- All five session anchors moved -2/-2/-2/-186/-190, pulled up by the
+    -- removal of hybrid mode (005 ADR-001 Amendment 2). An anchor
+    -- re-measurement, not a table correction. See
+    -- `driver_only_attribution_ref`.
+    content_hash: "sha256:38d8a67e903a949a9d07ac8e5b4a9eda4e786ab0ca879d1e4d6992424b316940" }
 }
 
 -- ---------------------------------------------------------------------------

@@ -264,6 +264,14 @@ correlation patch → transcript invariants; scratchpad's hard-coded dispatch
 (`Native | Delegated | HandledByExt | WsLoopback | StreamIsland`); the mid-dispatch approval
 `readLine()` (`:769`) → `AwaitApproval` decision performed by the driver.
 
+> **Superseded in part, from 2026-10-10,** by
+> [005 ADR-001](../005_harness_policy_boundary/ADR-001-harness-policy-boundary.md), Amendment 2
+> (B1, B2). The clause "hybrid-bash synthesis → response interpreter, with its correlation patch
+> → transcript invariants" no longer holds. Core does not build a tool call from a prose answer,
+> so there is no synthesis to place and no correlation patch for it. What a prose answer means
+> is an extension's decision, at the `ResponseInterceptor` seam. This note marks what Amendment 2
+> supersedes and nothing else. The text is left as written.
+
 **Approval protocol contract** (review P1-R5/P2-R5 — the live flow's ordering invariants,
 `agent_loop_v2.ail:758-790`, are preserved normatively): `ApprovalRequest` carries the
 `PolicyDefault` (`default_allow`), the `stream_id` and `call_id` the `tool_pending` event

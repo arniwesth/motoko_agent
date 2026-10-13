@@ -539,7 +539,14 @@ export pure func driver_only_id() -> string { "driver_only" }
 -- them. D4 re-issues every profile that refers to the table. Installed,
 -- covered, waived, classified and omitted: all as v35 had them. The account is
 -- at `driver_only_attribution_ref`.
-export pure func driver_only_version() -> string { "36" }
+--
+-- v36 → v37 AT 005 W3 (2026-10-13), AN ATTRIBUTION RE-ISSUE. No claim changed.
+-- Hybrid mode left core (005 ADR-001 Amendment 2), all five session.ail
+-- anchors moved with it, and the table's content hash moved with them. D4
+-- re-issues every profile that refers to the table. Installed, covered,
+-- waived, classified and omitted: all as v36 had them. The account is at
+-- `driver_only_attribution_ref`.
+export pure func driver_only_version() -> string { "37" }
 
 -- The attribution table this profile was issued against. Literals by design —
 -- see the header. Re-issuing the profile after a table correction means bumping
@@ -897,7 +904,19 @@ export pure func driver_only_attribution_ref() -> AttributionRef {
     -- identical against `git show da88a088:`, thirteen hits, and all five
     -- anchored expressions byte-identical at their new offsets. The tool_phase
     -- anchors did not move.
-    content_hash: "sha256:0d4d166ddf960cb667345f26a7fb75cf5c17ba03d2ff5da6a678fbf23d1bc1e1" }
+    -- 005 W3 (W3-5): re-recorded with all three successors', from
+    -- sha256:0d4d166ddf960cb667345f26a7fb75cf5c17ba03d2ff5da6a678fbf23d1bc1e1.
+    -- All five session anchors moved — 1465/1724/1836/4020/4203 ->
+    -- 1463/1722/1834/3834/4013 (-2, -2, -2, -186, -190) — up a third time: 005
+    -- ADR-001 Amendment 2 takes hybrid mode out of core. Two import lines went
+    -- from above all five; the three hybrid helpers and their test, the hybrid
+    -- branch of `c2_loop` and, net, five lines of the `hybrid_tools` parameter
+    -- went from above the last two; four more parameter lines went from
+    -- between them. NOT A TABLE CORRECTION: `clock_now` text identical against
+    -- `git show d59c6a33:`, thirteen hits, and all five anchored expressions
+    -- byte-identical at their new offsets. The tool_phase anchors did not
+    -- move.
+    content_hash: "sha256:38d8a67e903a949a9d07ac8e5b4a9eda4e786ab0ca879d1e4d6992424b316940" }
 }
 
 -- ---------------------------------------------------------------------------

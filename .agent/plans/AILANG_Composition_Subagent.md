@@ -897,6 +897,19 @@ Mitigations:
    hybrid-disabled flow; falling back to inline for this session`)
    and silently uses the inline path. No mid-session switching.
 
+   > **Overtaken, 2026-10-10.** Compose no longer reads the flag: W3-7 of
+   > [`PLAN-finalize-policy-migration.md`](../projects/005_harness_policy_boundary/PLAN-finalize-policy-migration.md)
+   > (`ef5cd5f6`, #255), decided as OQ-B2 of Amendment 2 to
+   > [005 ADR-001](../projects/005_harness_policy_boundary/ADR-001-harness-policy-boundary.md).
+   > The composition mode comes from the extension's own config alone,
+   > and subagent mode allows the `Compose` tool under either value. The
+   > legacy step this answer was written for was deleted on 2026-05-06
+   > (`6350b7ad`), and every session has had typed tool calls since.
+   > Hybrid mode itself has left core (W3 of the same plan), and the host
+   > writes `hybrid_tools: false` into every context view, so the
+   > fallback above would now switch subagent mode off wherever Compose
+   > is loaded. The text is left as written.
+
 4. **Sub-composition**: can the subagent's snippet itself emit a
    `Compose` call (via a tool written in AILANG)? No. Snippets have
    no tool loop. If a composition is too big for one snippet, the
