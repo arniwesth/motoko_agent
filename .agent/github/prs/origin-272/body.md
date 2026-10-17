@@ -20,6 +20,7 @@ Documents only. No code, no ABI change, and no change to line R.
 - docs(031): addendum A v5 — the three findings of the v4 review
 - docs(031): addendum A v6 — operator-turn provenance becomes prerequisite P-OT
 - docs(031): addendum A v7 — R5, what `complete` means; two staging nits
+- docs(031): addendum A v7 — the two wording nits of the v7 review
 
 1 file changed: `.agent/projects/031_system_one_decisions/PLAN-001-addendum-progress-guard-on-jev.md`. #271's merged PR record is left as it was.
 
@@ -104,6 +105,6 @@ Nothing changes at runtime. The addendum on `main` becomes v7: five stages and *
 - **Review of v5:** the reviewer wrote the full text to a scratch file. It re-ran the checkpoint, seed and bounds cases. It exercised the real `wake_message`, `SessionJournal.record` and an ABI 8.0 `ailang check`.
 - **v6 anchors:** checked at `78f615a7`: `types.ail:1395`, `phase_vocab.ail:1109`, `journal.ail:854`, `session-journal.ts:666`, `session.ail:2850` and `:5043-5044`, `runtime.ail:879-882`.
 - **v7 anchors:** `journal.ail:1403` (`path_up`), `:1453` (`fold_append`) and `:1490` (`fold_replace`), checked at `78f615a7`; `git diff --check` clean.
-- **Not done:** v7 has not been re-reviewed yet. `src/core/config.ail:130` (what `--resume-force` overrides) was read at `78f615a7`. Nothing here was executed: the design is a plan, and A0's tests are its first executable evidence.
+- **Review of v7: ACCEPT-WITH-NITS.** In the reviewer's words: "the addendum is now acceptable to merge as a plan document." It found no blocking issues. It re-ran the sibling-branch, replacement and stub-path reproductions against R5, and checked all 18 file:line anchors at `78f615a7`. Its two non-blocking wording nits are applied: compaction is not supersession (R5), and an incomplete session can become complete again once the over-long turn is superseded (§4). Accepting the plan does not approve live enforcement or certify P-OT. `src/core/config.ail:130` (what `--resume-force` overrides) was read at `78f615a7`. Nothing here was executed: the design is a plan, and A0's tests are its first executable evidence.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
