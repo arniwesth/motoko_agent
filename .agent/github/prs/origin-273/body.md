@@ -8,15 +8,17 @@ title: "docs(034): ADR-001 accepted as amended; PLAN-001 for effect disclosure"
 
 ## Summary
 
-ADR-001 for project 034 (effect disclosure for tool faults) moves from Proposed to **Accepted, as amended**. Before the operator ruled on 2026-10-17, it was re-grounded at `e69aaad7` on AILANG v0.52.5. The PR adds that re-grounding, the operator's five rulings, probe evidence on the pinned binary, and **PLAN-001**: 26 tasks with a `dagr` graph. Phase 0, the live change that gives every tool fault the model reads a `fault` object with `effects: none | unknown`, is ready to implement. An independent review by Codex Sol found one blocking defect and seven others in the plan. All eight were reproduced and are fixed in `fb2d28b8` (*Review*, below). Docs and evidence only; no source changes.
+ADR-001 for project 034 (effect disclosure for tool faults) moves from Proposed to **Accepted, as amended**. Before the operator ruled on 2026-10-17, it was re-grounded at `e69aaad7` on AILANG v0.52.5. The PR adds that re-grounding, the operator's five rulings, probe evidence on the pinned binary, and **PLAN-001**: 26 tasks with a `dagr` graph. Phase 0, the live change that gives every tool fault the model reads a `fault` object with `effects: none | unknown`, is ready to implement. Two independent reviews followed. Codex Sol found 8 issues, fixed in `fb2d28b8` (v1.1). Claude Opus 5.5 found 19, fixed in `bc386843` (v1.2). Each review had one blocking finding, and every finding that could be checked against the code was reproduced (*Review*, below). Docs and evidence only; no source changes.
 
 ## Changes
 
 - docs(034): ADR-001 accepted as amended; PLAN-001 for effect disclosure
 - chore(github): PR #273 record
 - docs(034): PLAN-001 v1.1 — the eight findings of the Codex Sol review
+- chore(github): PR #273 record — an independent review by Codex Sol: one blocking finding and seven others, all fixed in fb2d28b8
+- docs(034): PLAN-001 v1.2 — the nineteen findings of the Claude Opus 5.5 review
 
-7 files changed.
+8 files changed.
 
 - **ADR-001**
   - The status line now reads Accepted.
@@ -35,8 +37,9 @@ ADR-001 for project 034 (effect disclosure for tool faults) moves from Proposed 
   - Phase 0's mutants (m01–m15) and live witness rows are named in advance.
   - Five choices the ADR left open (C1–C5) are argued. C1 keeps `tool_phase.ail` out of Phase 0, so the anchor/profile-hash cascade is paid once, in Phase 1.
 - **NOTE**: the status line points at the accepted ADR.
-- **REVIEW-001-plan-001-codex-gpt-6.1-sol.md** (new): the independent review, kept beside the plan.
-  The plan's *Review* section gives each finding's reproduction and disposition.
+- **REVIEW-001-plan-001-codex-gpt-6.1-sol.md** and **REVIEW-002-plan-001-claude-opus-5.5.md**
+  (new): the two independent reviews, kept beside the plan. The plan's *Review* section gives each
+  finding's reproduction and disposition.
 
 Filed upstream the same day, under ruling 4: sunholo-data/ailang#1878, #1879, #1880.
 
@@ -61,7 +64,7 @@ Filed upstream the same day, under ruling 4: sunholo-data/ailang#1878, #1879, #1
 
 ## Test evidence
 
-- `dagr check .agent/projects/034_ambiguous_tool_outcomes/PLAN-001.dagr.json --strict` → `✓ clean — 26 tasks, 0 attempts, 0 events` (dagr 0.3.1), at `fb2d28b8`.
+- `dagr check .agent/projects/034_ambiguous_tool_outcomes/PLAN-001.dagr.json --strict` → `✓ clean — 26 tasks, 0 attempts, 0 events` (dagr 0.3.1), at `fb2d28b8` and at `bc386843`.
 - `bash .agent/projects/034_ambiguous_tool_outcomes/evidence/exec_probe.sh` on AILANG v0.52.5 (`7200786`):
   - cases 1–12 match the v0.47.2 results recorded in the NOTE and ADR;
   - the full table is in `RESULTS-v0.52.5.md`.
@@ -69,10 +72,13 @@ Filed upstream the same day, under ruling 4: sunholo-data/ailang#1878, #1879, #1
   - cases 13–14 return `NotAllowed` with no launch trace;
   - cases 15–17 and 20–21 return `PermissionDenied`, and the target program never ran;
   - cases 18–19 return `Ok`.
+- `NotFound` under `DEBUG_PROCESS=1` on v0.52.5: both cases return `Err(NotFound(...))` with no `[process] start` line, and the marker is absent. This is recorded in `RESULTS-v0.52.5.md`.
 - Standalone reproductions for the upstream issues were run on v0.52.5. One case is new: exit 7 with a held pipe returns `Ok exitCode=7`, while exit 0 with a held pipe returns `SpawnFailed`. This is recorded in `RESULTS-v0.52.5.md`.
 - No source changed, so `make check_core` / `make dst` were not run. Phase 0's W0.1 records them as the baseline.
 
 ## Review
+
+### First review
 
 An independent review by Codex Sol (`gpt-6.1-sol`, reasoning effort xhigh) on 2026-10-17, of head `2cf82955`. It ran in its own detached worktree, read-only, and was given none of the author's conclusions: `.agent/projects/034_ambiguous_tool_outcomes/REVIEW-001-plan-001-codex-gpt-6.1-sol.md`.
 
@@ -90,5 +96,29 @@ An independent review by Codex Sol (`gpt-6.1-sol`, reasoning effort xhigh) on 20
 | 6 | **Minor.** W3.1 listed counts that the new `AlwaysApplicable` rows do not move. | Yes. | **Fixed.** |
 | 7 | **Minor.** The plan and the graph disagreed on whether witness rows e and f, unevaluated under root, block the gate. | Yes. | **Fixed.** Merge acceptance needs a run as a non-root user. |
 | 8 | **Minor.** ADR §7 said 31 `generator_version` sites; there are 17. | Yes. | **Fixed** in ADR §7 and W1.6. |
+
+### Second review
+
+An independent review by Claude Opus 5.5 (`claude-opus-5-5`, effort xhigh) on 2026-10-17, of head `25748655` (v1.1). The file is `.agent/projects/034_ambiguous_tool_outcomes/REVIEW-002-plan-001-claude-opus-5.5.md`.
+
+- **How it ran.** In its own detached worktree, read-only. It left out this description, and drafted its findings before reading the first review.
+- **Verdict:** **merge after the listed fixes.**
+- **Phase 0:** sound and implementable now.
+- **v1.1's fixes:** first-review findings 2 and 6 fixed completely; 3 and 7 right; 1, 4, 5 and 8 incomplete.
+
+All 19 findings are addressed in `bc386843`. Each one I could check against the code at `e69aaad7` reproduced. Findings 10 and 15, and finding 5's matrix outcome, are the reviewer's own inferences.
+
+| # | Severity | Finding | Disposition |
+|---|---|---|---|
+| 1 | **blocking** | Every native dispatch round-trips the world through the extension token (`tool_phase.ail:436-437`, `ext_world.ail`), so `applied` and the effect log would be reset mid-run. | W1.3: world truth never enters the token. It is re-seated from the pre-hook world after adoption. New round-trip rows and mutants v19–v21. |
+| 2 | should-fix | The bank's denials come from `session.ail`'s `policy_denied_message`, not `tool_phase`'s builder. | W1.4 covers five builders. W0.3 adds the defensive dispatch arm. W2.1 names the builders P1's presence check covers. |
+| 3 | should-fix | The world-truth encoding and where its rejections run were unstated. | W1.2: a version-gated required line. Stage-dependent rejections run in `world_state_of`. |
+| 4 | should-fix | W1.2 needed W1.3's outputs. | The two tasks are re-cut. |
+| 5 | should-fix | ADR-004 protected symbols and journal files; `eval_matrix` rows would move unpredicted. | The surface names them. W1.1 predicts the rows and arranges `manifest-A`; W1.8 checks the list. |
+| 6 | should-fix | The journal remedy had no fixture. | W1.4: a pre-W1 journal fixture, admitted by A2 and K7. |
+| 7 | should-fix | The duplicate-effect metric would read 0 where it matters. | W1.3 logs every applied effect. W3.1 drops the live/journal claim. |
+| 8 | should-fix | The canary's "next version" would equal the current one. | W1.6: the pair moves to versions 2 and 3. |
+| 9 | should-fix | Mutation gaps remained after v1.1. | m30–m35 and row p; v12 rewritten; v15–v22; ws1–ws5. |
+| 10–19 | minor | P3 and provider-reused ids; row o reachable; test mechanics; recording details; the gate scope; the lexical guard's home; the stage default's reason; `make dst` cost; prose/graph mismatches; comment lines cited as sites. | All addressed. The plan's Review section has a row for each. |
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
