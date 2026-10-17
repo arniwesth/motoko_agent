@@ -577,15 +577,15 @@ RUN version="$(sed -nE 's/^DAGR_VERSION \?= ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' /tm
 # ordinary herdr agent in its own space. Open it with `herdr plugin action invoke open --plugin herdr-projects`.
 # Needs herdr 0.9.3 or newer, which is why herdr is no longer pinned (see the herdr block above).
 #
-# UNPINNED, like herdr and the agent CLIs: no --ref, so the plugin's default is installed, and
-# AGENTS_CACHE_BUST (declared with the agent CLIs above, a fresh timestamp from every `agent.sh build`) is
-# read in the RUN so the layer is re-run instead of served from cache. Without that, the instruction text
-# never changes and the image keeps whatever was current the day the layer was first built.
+# PINNED to a release tag, unlike herdr itself: this is third-party code that runs inside the container
+# holding the working tree, the API keys and the bot's push token, and `--yes` skips the source preview
+# `plugin install` would otherwise show (ADR-001 D7). The pin is the review boundary - bump it when someone
+# has read the diff.
+ARG HERDR_PROJECTS_REF=v1.2.1
 # The plugin's build step downloads its one program from the GitHub release for this platform (curl is in
 # the image); it falls back to building from source, and there is no Rust toolchain here, so a failed
 # download fails the build rather than leaving a plugin with no program.
-RUN echo "installing herdr-projects (cache-bust: ${AGENTS_CACHE_BUST:-none})" \
-    && herdr plugin install eliasstravik/herdr-projects --yes \
+RUN herdr plugin install eliasstravik/herdr-projects --ref "${HERDR_PROJECTS_REF}" --yes \
     && herdr plugin list | grep -q herdr-projects
 
 
