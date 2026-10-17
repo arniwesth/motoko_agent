@@ -10,7 +10,7 @@ Status: scope only. No ADR, plan, or code yet.
 Updated 2026-10-02 at HEAD `4023bf08`: §6 adds live probes (`evidence/exec_probe.sh`). They add
 `OutputLimitExceeded` to Phase 0, show the fault is reachable in ordinary use, and test a
 Motoko-side deadline that keeps partial output. §0–§5 are as written except where marked.
-Superseded in part by `ADR-001-effect-disclosure-for-tool-faults.md` (Proposed, 2026-10-02): its §5
+Superseded in part by `ADR-001-effect-disclosure-for-tool-faults.md` (Proposed 2026-10-02, accepted as amended 2026-10-17): its §5
 lists where this note did not hold. In particular Phase 0's `SpawnFailed` and `PermissionDenied`
 → `none` is unsound; the ADR's D2 makes them `unknown` (probe cases 8–12).
 
