@@ -70,7 +70,9 @@ command -v "$HERDR_BIN" >/dev/null 2>&1 || die "dagr-pane: no herdr binary (\`$H
 # THE PLUGIN MUST BE PINNED. An unpinned `herdr plugin install` builds from
 # main and needs Cargo, which this container does not have; the pin is the
 # difference between "installs" and "fails on a machine without a toolchain".
-if ! ls "$HOME"/.config/herdr/plugins/github/herdr-dagr-*/bin/dagr >/dev/null 2>&1; then
+# Ask herdr rather than globbing its plugin directory: the layout changed in
+# 0.9 (plugins/github/ became plugins/github-installations/.../checkout).
+if ! "$HERDR_BIN" plugin list 2>/dev/null | grep -q herdr-dagr; then
   die "dagr-pane: the herdr-dagr plugin is not installed. Install it pinned:
   $PLUGIN_PIN"
 fi
