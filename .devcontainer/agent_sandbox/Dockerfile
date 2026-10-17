@@ -553,7 +553,10 @@ RUN herdr plugin link /opt/herdr-sidebar \
 # and refuses the skip with DAGR_REQUIRED=1). This re-reads it from the build context
 # rather than carrying a second version literal, so the two cannot drift. The symlink
 # puts `dagr` on PATH so `command -v dagr` - the first thing Makefile DAGR_BIN probes -
-# resolves without knowing the plugin's hashed install directory.
+# resolves without knowing the plugin's hashed install directory. The target comes from
+# `plugin list --json` (plugin_root), not a glob: herdr 0.9 moved installs from
+# plugins/github/herdr-dagr-*/ to plugins/github-installations/<id>-<hash>/<n>/checkout/,
+# and the old glob matched nothing, so `ln` got an empty target and failed the build.
 #
 # The --chown is LOAD-BEARING, not tidiness. COPY lands as root:root whatever USER is in
 # effect, /tmp carries the sticky bit, and the `rm` below runs as ${USERNAME} - which is
@@ -567,9 +570,9 @@ RUN version="$(sed -nE 's/^DAGR_VERSION \?= ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' /tm
     && test -n "$version" \
     && herdr plugin install aemrebarut/herdr-dagr --ref "v${version}" --yes \
     && rm -f /tmp/motoko_Makefile.pin \
-    && herdr plugin list | grep -q herdr-dagr \
-    && ln -sf "$(ls /home/${USERNAME}/.config/herdr/plugins/github/herdr-dagr-*/bin/dagr | head -n1)" \
-         /home/${USERNAME}/.local/bin/dagr \
+    && root="$(herdr plugin list --json | jq -er '.result.plugins[] | select(.plugin_id == "herdr-dagr") | .plugin_root')" \
+    && test -x "${root}/bin/dagr" \
+    && ln -sf "${root}/bin/dagr" /home/${USERNAME}/.local/bin/dagr \
     && /home/${USERNAME}/.local/bin/dagr --version
 
 # ---------------------------------------------------------------------------- herdr-projects (install)
