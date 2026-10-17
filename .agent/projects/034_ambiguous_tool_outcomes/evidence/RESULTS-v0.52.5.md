@@ -49,6 +49,10 @@ catch-all. Filed as sunholo-data/ailang#1879.
 | 20 | sandbox cwd with mode 600 | `Err(PermissionDenied(bash))` | `fork/exec /usr/bin/bash: permission denied` | no |
 | 21 | sandbox cwd under a mode-000 parent | `Err(PermissionDenied(bash))` | `chdir …: permission denied` | no |
 
+- **`NotFound` also returns with no launch** (10, 11). Re-run 2026-10-17 with `DEBUG_PROCESS=1`:
+  `Err(NotFound(...))`, no `[process] start` line, marker absent, for both the missing command
+  and the mode-644 script by relative name. Its `none` therefore rests on a launch trace, not only
+  on the absent marker. (Found by the plan's second review, and reproduced.)
 - **`NotAllowed` is refused before any launch** (13, 14). Reading the v0.52.5 source agrees: it
   comes only from the allowlist and `confine`, before `exec.CommandContext`. D2's rule for `none`
   is met, and the ruling of 2026-10-17 renders it `none`.

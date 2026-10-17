@@ -164,6 +164,8 @@ tools: `tool_result_item_to_json` (`src/core/tool_dispatch_adapter.ail:95–160`
   world's truth.
 - `fault` is emitted before `stdout` and `stderr`. Tool messages are cut from the front at 65,536
   bytes (`src/core/phase_vocab.ail:1559–1568`), and Phase 0b makes large faulted results possible.
+  *(Tightened by PLAN-001 W0.3 after its review: `fault` comes right after `tool`, before `cmd`
+  too, because `cmd` is unbounded and renders first. The example above predates that.)*
 - `exit_code` stays `1` on a harness-reported fault. `tool_result_exit_code`
   (`tool_dispatch_adapter.ail:72–82`) feeds typed consumers; changing it is not this decision.
 - `BashExec`'s description (`src/core/tool_catalog.ail:54`) promises truncation past the cap. It is
@@ -397,11 +399,12 @@ arms on v0.52.5, and every probe result is the same (`evidence/RESULTS-v0.52.5.m
 - **P3 is not covered** by 011's `DriverStepRepeated`, and adding P1 and P3 moves
   `invariant-set/2` to `/3` and the constructor count from 42 to 44 (§2).
 - **`generator_version` is not a field of `dst_generator.ail`.** It is a literal `"1"`. 17 lines
-  match `generator_version: "1"` or define `generator_version()`: 15 under `scripts/dst` (e.g.
-  `corpus_pr_dst.ail:299`), plus `dst_generator.ail:15` and `dst_replay.ail:1135`. Some are
-  producer versions and some are fixture literals. §4's "bump `generator_version`" means the
-  producers. *(Corrected 2026-10-17 after the plan's review, finding 8. The first count, 31, was
-  wrong.)*
+  match `generator_version: "1"` or define `generator_version()`. 15 are code: 14 under
+  `scripts/dst` (e.g. `corpus_pr_dst.ail:299`) and `dst_replay.ail:1135`. 2 are comments:
+  `dst_generator.ail:15` and `seeded_generator_dst.ail:597`. Some code sites are producer versions
+  and some are fixture literals. §4's "bump `generator_version`" means the producers. *(Corrected
+  2026-10-17 after the plan's two reviews: the first count, 31, was wrong, and the second listed
+  two comments as sites.)*
 - **The tool-message cap counts code points**, not bytes (`Str.length`). D3's "emit `fault`
   first" stands: the cap keeps the head.
 - **The `/5` claim stands.** `dst_program.ail:132` is still `/4`, and 031 P2.1 is unlanded and
