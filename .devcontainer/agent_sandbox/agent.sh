@@ -212,8 +212,20 @@ resolve_herdr() {
   command -v python3 >/dev/null || die "python3 is not on PATH, and resolving the latest herdr needs it.
 Install the Xcode command line tools (xcode-select --install), or export HERDR_VERSION and HERDR_SHA256."
   local out
-  # Python rather than jq: jq is not on macOS by default. Fails loudly; there is no pin to fall back to.
-  out="$(python3 - "$target" <<'PY'
+  out="$(fetch_herdr_manifest "$target")" \
+    || die "build aborted — could not resolve the latest herdr from https://herdr.dev/latest.json"
+  HERDR_VERSION="$(sed -n 1p <<<"$out")"
+  HERDR_SHA256="$(sed -n 2p <<<"$out")"
+  [[ -n "$HERDR_VERSION" && -n "$HERDR_SHA256" ]] || die "herdr manifest gave an empty version or sha256"
+  export HERDR_VERSION HERDR_SHA256
+}
+
+# Print herdr's latest version and the sha256 for target $1, one per line. Python rather than jq: jq is not
+# on macOS by default. Fails loudly; there is no pin to fall back to. A function of its own, not a heredoc
+# inside "$(...)": macOS /bin/bash 3.2 mis-parses quotes in a heredoc there (an apostrophe in a comment broke
+# `agent.sh build` with "unexpected EOF while looking for matching `"'").
+fetch_herdr_manifest() {
+  python3 - "$1" <<'PY'
 import json, sys, urllib.request
 
 # An explicit User-Agent, not decoration: herdr.dev answers 403 to urllib's default `Python-urllib/3.x`
@@ -229,11 +241,6 @@ except Exception as exc:                                     # network, DNS, TLS
 print(version)
 print(sha)
 PY
-)" || die "build aborted — could not resolve the latest herdr from https://herdr.dev/latest.json"
-  HERDR_VERSION="$(sed -n 1p <<<"$out")"
-  HERDR_SHA256="$(sed -n 2p <<<"$out")"
-  [[ -n "$HERDR_VERSION" && -n "$HERDR_SHA256" ]] || die "herdr manifest gave an empty version or sha256"
-  export HERDR_VERSION HERDR_SHA256
 }
 
 # Resolve the current release of the pinned part (agent-browser) and print the new file to stdout.
