@@ -1,8 +1,8 @@
 # PLAN-001 addendum A: `progress_contract_guard` as a structured-decision consumer, on Jev 1.14
 
-Date: 2026-10-17. Status: **proposed, v3.** #271 merged v1. Codex `gpt-6.1-sol` reviewed v1 (REVISE, six
-findings) and then v2 (#272; REVISE, four of the six resolved, two partly, four new findings). v3
-answers the open ones. §9 maps every finding to its change. **Every decision in §6 is the
+Date: 2026-10-17. Status: **proposed, v4.** #271 merged v1. Codex `gpt-6.1-sol` reviewed v1 (REVISE, six
+findings), v2 (#272; REVISE, four new) and v3 (REVISE, two new, both P2). v4 answers those two. §9 maps
+every finding to its change. **Every decision in §6 is the
 operator's.** Grounded at `origin/main` `602e1e4e`. Extends [PLAN-001](PLAN-001-implement-adr-001-abi-8.md)
 line X; it changes no part of line R and no ABI type.
 
@@ -106,20 +106,49 @@ excluded replies that asked. A classifier following those definitions would corr
 premature stop the guard exists for (#272 review, finding 3). v3 decides by **necessity**: the question
 counts as asking the operator only if the task or the operator made the operator's answer necessary.
 The question's `guidance` (in `question_config`) carries those definitions and §5.2's cases as
-labelled examples, each written from scratch per §5.1.
+labelled examples, each written from scratch per §5.1. It also says, in so many words: **an
+authorization or decision counts as required only if the task or a user turn requires it; the
+candidate's own claim that it needs approval does not count.**
+
+**A second question, in the same request.** Necessity can only be judged against the operator's
+instructions. So the request also carries:
+
+```
+id: "requests_operator_input"   kind: Binary
+  does the candidate end by asking the operator for a decision, an authorization or input?
+```
 
 **The state sent**, with every bound in `question_config`:
 
 - `ctx.task`, up to `task_chars` (default 2000);
-- the last `user_turns` user-role messages (default 3), up to `user_chars` each (default 800);
+- **every** user-role message, oldest first, each up to `user_chars` (default 800), up to a total of
+  `user_chars_total` (default 8000). v3 sent only the last 3. The #272 review showed two sessions
+  with the same contract, one whose older turn required approval before probes and one whose older
+  turn pre-approved them. They produced byte-identical judge input once that turn fell outside the
+  window, so no classifier could tell them apart (#272 v3 review, finding 2);
+- `context_complete`: a boolean the guard computes, `false` if the task or any user turn was truncated
+  or dropped to fit the bounds;
 - the last `candidate_chars` of the candidate (default 1500). The end of a stop is what decides its kind.
+
+**When the instructions may be incomplete, the guard does not judge necessity.** If
+`context_complete` is `false` **and** `requests_operator_input` is answered with probability ≥ 5000,
+`interpret` abstains (`NoDecision`) whatever `stop_kind` says. The authority that would decide it may
+be in the part that was cut, and both errors are then possible:
+- trusting the candidate lets it invent a requirement;
+- overriding it can nudge past a real one, which is the incident.
+
+Abstaining takes the cheaper one, a missed nudge. With `context_complete` true, the two questions
+are judged on the full instructions. A3 reports how often `context_complete` is false. If that rate is
+material, raise `user_chars_total` rather than add selection rules. Choosing which turns "set
+constraints" is itself a semantic judgment and would bring the problem back.
 
 **No tool output and no system prompt are sent.** The incident came from tool output. Leaving it out also
 limits what leaves the machine (§6 D4).
 
-**`interpret` on `Answered`:** nudge (`ContinueWithFeedback(guard_message())`) only when the answer is
-`stopped_mid_task` with a class probability ≥ `min_nudge_bp` (default **8000**). Every other answer is
-`NoDecision`. The probability is the `stopped_mid_task` entry of the answer's distribution. When the
+**`interpret` on `Answered`:** apply the incomplete-context abstention above first. Otherwise, nudge
+(`ContinueWithFeedback(guard_message())`) only when `stop_kind` is `stopped_mid_task` with a class
+probability ≥ `min_nudge_bp` (default **8000**). Every other answer is `NoDecision`, and so is an
+answer that omits either question (D3: absence stays explicit). The probability is the `stopped_mid_task` entry of the answer's distribution. When the
 adapter supplies no distribution, the answer abstains: `ChoiceAnswer`'s `confidence` is not a class
 probability and is not used in its place, and absence stays explicit (ADR-001 D3).
 
@@ -196,17 +225,35 @@ v2:
 - **The seed is mandatory, not optional** (#272 review, finding 1). `max` alone does not make usage
   durable. Two stub-era markers and a host counter at 0 give `max(2, 0) = 2`, but once a checkpoint
   drops the markers, an unseeded host gives `max(0, 0) = 0`. So the host counter must hold a durable
-  floor **before** any marker can disappear:
-  - a session whose journal predates P1.4x gets a **recorded seed entry** at its schema promotion
-    (P3.2's `schema_promotion`, or the first decision after it, whichever P1.4x specifies). The entry
-    carries the count of this atom's applied feedback votes recovered from the journal, and is written
-    before the session's next checkpoint is allowed;
-  - if P1.4x cannot attribute applied feedback to the atom from a pre-P1.4x journal, such a session
-    **refuses to resume** with the ported guard enabled, the same way an `ext_set_digest` change already
-    refuses. A refused resume is visible; a silently restored allowance is not.
-  - Rule for any later change: reconciliation may raise known usage, never lower it.
-  - P1.4x's exit for this guard: two markers, then a checkpoint that drops them, then an answered
-    `stopped_mid_task` → no third nudge, on both the seeded and the refused path.
+  floor **before** any marker can disappear. That floor is a seed entry: written by the host at a fixed
+  point, folded by a reducer, and enforced on resume. §4.4 assigns each piece to the PLAN-001 part that owns its surface. v3 left that unassigned (#272 v3
+  review, finding 1).
+- Rule for any later change: reconciliation may raise known usage, never lower it.
+
+### 4.4 The seed: who builds what
+
+**How the host counts without interpreting.** Amendment 5 reserved one top-level key of an
+extension's registration `config` that the host reads (`registration_refusal`). A sibling reserved key,
+**`legacy_intervention_marker`**, holds a string (this guard's `[motoko-progress-contract-guard]`).
+The host counts the **user-role `history_appended` entries on the active branch of the journal** that
+contain it. The journal keeps entries that a checkpoint folded out of the live history, so the count
+survives checkpoints, and it is deterministic. Reserving the key is an **ADR-001 amendment**, in
+Amendment 5's form: a configuration key, no type or variant change, so it stays within 8.x.
+
+| piece | owner | requirement |
+|---|---|---|
+| the record | **P0.7** (schema-2 fold) | a `decision_counter_seed` entry `{ invocation_id, interventions_used, source }`, where `source` is `legacy_marker_count` or `unrecoverable`. The fold reduces it into the atom's decision state as a **floor**: `max` with any count already folded. That makes a repeated seed idempotent and a lower one a no-op. Mismatch fixtures: a seed after the atom's first decision is rejected; two seeds fold to the larger. |
+| the write | **P3.2** (promotion on adopt) | on adopting a schema-1 journal, after `schema_promotion` and **before the first step**, the host writes one seed per decision atom whose extension declares the key. The append uses P3.1's success-returning append; **if it fails, the session stops**, as a failed application append does. A schema-2-native session needs no seed, because its counter is live from the start. |
+| crash recovery | **P0.7 + P3.2** | a journal holding `schema_promotion` but no seed for a declaring atom is recovered by recomputing the count from the same journal and writing the seed before the first step. The count is a function of the journal, so recomputing is idempotent. |
+| enforcement | **P2.3** (resume) | resume refuses to dispatch a declaring atom whose seed is missing and cannot be written. **`--resume-force` does not skip the seed**: it overrides the extension-set and prompt rows (`src/core/config.ail:130`), not this one. v3's analogy to the `ext_set_digest` refusal was wrong for that reason. If the count cannot be recovered (`source: unrecoverable`, e.g. the history entries are gone), the atom runs in **`DisabledDecision`** for that session, not with a zero count. A disabled guard is visible in the record; a reset one is not. |
+| profile switch | **P2.3** | a profile change that enables a declaring atom mid-session takes the same path: seed before the atom's first enabled decision. |
+
+The seed lands before the first step after promotion, which precedes both the first enabled decision
+and any checkpoint. **Exit for this guard,** on each path (seeded, crash-then-recovered, unrecoverable,
+force, profile switch): two markers, then a checkpoint that drops them, then an answered
+`stopped_mid_task` → no third nudge.
+
+This adds work to three PLAN-001 parts. The estimate is in §5.
 
 ## 5. Stages
 
@@ -215,13 +262,13 @@ The first live exchange happens **inside A3**, the gated shadow stage, and nowhe
 
 | stage | depends on | surface | produces | exit | est. |
 |---|---|---|---|---|---|
-| **A0: port, stub-backed** | #270 merged; §6 D1, D2, D6 | the guard package | `DecisionSolverJudge` with §4's `prepare`/`interpret`; the `Unavailable` split of §4.1; the budget of §4.3 (R arm); the helpers factored; `decide_with_budget` kept as the fallback | inline tests: each immediate arm, each answer → vote, the absent-distribution abstention, each `Unavailable` reason → its row of §4.1; a differential against `decide_with_budget` on the existing fixtures; a **registration-level** scenario through `register.ail` and the finalize fold; `phase_c2_wiring_scenarios PASS count=20`; a scripted backend (`motoko_ext_conformance/examples/scripted_backend.ail`) returning each of the five answers and each `Unavailable` reason; conformance green; the `ailang.lock` diff checked per §4.2 | 1½–2 |
+| **A0: port, stub-backed** | #270 merged; §6 D1, D2, D6 | the guard package | `DecisionSolverJudge` with §4's `prepare`/`interpret`; the `Unavailable` split of §4.1; the budget of §4.3 (R arm); the helpers factored; `decide_with_budget` kept as the fallback | inline tests: each immediate arm, each answer → vote, the absent-distribution abstention, the incomplete-context abstention (`context_complete` false × `requests_operator_input` ≥ 5000), the state's bounds and the `context_complete` computation, each `Unavailable` reason → its row of §4.1; a differential against `decide_with_budget` on the existing fixtures; a **registration-level** scenario through `register.ail` and the finalize fold; `phase_c2_wiring_scenarios PASS count=20`; a scripted backend (`motoko_ext_conformance/examples/scripted_backend.ail`) returning each of the five answers and each `Unavailable` reason; conformance green; the `ailang.lock` diff checked per §4.2 | 1½–2 |
 | **A1: labelled set** | §6 D7 | **private** labels outside the repo; **synthetic** fixtures in it | see §5.1 | inter-rater agreement and the rule-based guard's confusion matrix, as aggregates only | ½–1 |
 | **A2: binding, offline** | **P2.1** (decision codecs and strict replay of decision atoms), **P3.3** (live/recorded/scripted parity, which itself follows P3.1's adapter and double and P3.2's catalog config) | host config | the `progress-judge` → `typesafe/jev-1.14-20261014` binding, configured but not called; the adapter's `Choice` mapping checked against the published 1.14 request types | one exchange against **P3.1's scripted provider double**, recorded and replayed strict with no network. **No call to the live provider.** | ½ |
 | **A3: shadow** | A0, A1, A2; P1.4x (mode and counter); **P2G** and **P3G**; §6 D4 and D7 for what is sent | a run profile | the first live exchanges, in shadow on the operator's chosen profiles: charged, neutral vote, no counter advanced | a PLAN-001 §9 record: Jev against the rules on A1's synthetic set, then on ≥ 50 live stops on enabled profiles; false nudges, missed nudges; **query counts per profile** with the `Unavailable` rate per reason, and `Answered`-without-distribution abstentions reported separately; cost, p50/p95 latency; §5.2's matrix | 1 + wall-clock |
 | **A4: enforce** | A3 meets §6 D3's bar; operator gate | profile config | Jev's vote is applied; §4.1's table governs `Unavailable` | the same record continued for 1 week; the `Unavailable` rate is watched after A3, not only during it; rollback = unset the binding, so `UnconfiguredBackend` applies the rules again (§4.1) | ½ |
 
-Delegate-days added to line X: **4½–6**, the extra half for the seed (§4.3). A0 and A1 (2–3) can start now.
+Delegate-days added to line X: **5½–7½**. The seed (§4.4) adds about 1–1½ across P0.7, P3.2 and P2.3, plus the ADR amendment for the reserved key. A0 and A1 (2–3) can start now.
 
 ### 5.1 A1 and PLAN-001 §0.9
 
@@ -265,6 +312,17 @@ than assumed:
 v2 asked for zero false nudges on every `Unavailable` reason while §4.1 required the rules on
 `UnconfiguredBackend`, so the matrix could never pass (#272 review, finding 2).
 
+**Paired necessity cases** (#272 v3 review, finding 2). The same contract and the same
+permission-asking candidate, with the governing instruction in an **older** user turn, followed by at
+least three later user turns:
+
+| history | expected `stop_kind` | expected vote |
+|---|---|---|
+| the older turn requires approval before probes that write | `asking_operator` | no nudge |
+| the older turn pre-approves those probes | `stopped_mid_task` | nudge |
+| no such turn: the candidate invents the requirement | `stopped_mid_task` | nudge |
+| either of the first two, with `user_chars_total` lowered so that turn is cut | — | **abstain** (`context_complete` false) |
+
 ## 6. Decisions for the operator
 
 | # | decision | proposal |
@@ -272,7 +330,7 @@ v2 asked for zero false nudges on every `Unavailable` reason while §4.1 require
 | D1 | Port in place (A0) before line X, or wait and land the port with line X? | **Port now.** Under the stub the behaviour is identical (§4.1), and it moves the semantic judgment behind the seam where A2 can switch it. |
 | D2 | `min_nudge_bp` default before A3 measures it | **8000.** It can only be lowered on A3's evidence. |
 | D3 | The bar from shadow to enforcing, **for the configured path only** (§5.2) | On A1's synthetic set and the live stops: **zero** false nudges on cases labelled `asking_operator` or `waiting_external`, including §5.2's approval handoffs; **no more** missed `stopped_mid_task` than the rules miss, the §5.2 controls included; a live `Unavailable` rate **below 2%** of queries per profile, assessed only on a profile with **≥ 50 queries** in A3. The `UnconfiguredBackend` path is held to the rules' differential instead. The cap is a historical gate: it cannot prevent a later outage, which is why A4 keeps watching it. |
-| D4 | What may leave the machine | **The task, the last 3 user turns and the candidate's tail, bounded as §4 says.** The adapter sends no session, user or trace identifiers (ADR-001 D3). Profiles whose tasks are confidential keep the binding unconfigured, so `UnconfiguredBackend` applies them the rules (§4.1). |
+| D4 | What may leave the machine | **The task, every user turn up to `user_chars_total`, and the candidate's tail, bounded as §4 says.** v4 sends more user text than v3 did, because necessity cannot be judged without it (§4). The adapter sends no session, user or trace identifiers (ADR-001 D3). Profiles whose tasks are confidential keep the binding unconfigured, so `UnconfiguredBackend` applies them the rules (§4.1). |
 | D5 | Pin and upgrade policy | **The dated ID only** (§3). A new Jev release is a `question_version` bump that re-runs A3 on A1's synthetic set before the pin moves. |
 | D6 | `interpret` on a live `Unavailable` | **Abstain** (`NoDecision`), as §4.1 argues. The alternative is falling back to the rules, which keeps finding 2 on every failure path. The accepted cost: an outage suppresses this guard's nudges until someone acts on A4's watch, by unsetting the binding. Abstaining refunds no unknown charge, and host control failures still propagate (ADR-001 D5). |
 | D7 | A1's private tier: who may label it, and whether any of it may be sent to Jev | **Two labellers named by the operator; nothing from the private tier is sent.** A3 evaluates on the synthetic tier and on live stops from D4-enabled profiles only. |
@@ -328,3 +386,13 @@ resolved, and finished below.
 | 3 | P2 | the rubric lets "Would you like me to continue?" be `asking_operator`, suppressing the control's nudge | §4: `asking_operator` requires the operator's answer to be necessary; `stopped_mid_task` explicitly includes unnecessary continuation questions |
 | 4 | P2 | A2's strict replay belongs to P2.1, which P3.1/P3.2 do not wait for | §5: A2 depends on P2.1 and P3.3 |
 | — | note | A3 counts stops, the cap counts queries; an outage after A3 is not prevented by the cap | A3 reports query counts per profile; the cap needs ≥ 50 queries; A4 watches the rate and rolls back by unsetting the binding (D3, D6) |
+
+### 9.2 Review of v3: REVISE → v4
+
+v2's findings 2, 3 (on paper; Jev unmeasured) and 4, and the outage note, are resolved. Finding 1 is
+partly resolved: the policy holds, but nobody was assigned to build it.
+
+| # | sev | finding on v3 | v4 |
+|---|---|---|---|
+| 1 | P2 | the seed has no owner: P1.4x builds views only, P3.2's promotion starts the decision state empty, the fold rejects an unknown seed entry; `--resume-force` bypasses the refusal v3 cited | §4.4: a reserved config key (ADR amendment) names the marker; P0.7 owns the record and the floor fold; P3.2 the barriered write before the first step; P0.7 + P3.2 crash recovery; P2.3 enforcement, with force not skipping the seed and `DisabledDecision` when the count is unrecoverable; a profile switch takes the same path |
+| 2 | P2 | the last-3-turns state can drop the instruction that decides necessity: genuine and pre-approved histories serialize identically; reproduced | §4: every user turn up to a total bound, a `context_complete` flag, a second Binary question, and abstention when context is incomplete and the candidate asks; guidance rejects the candidate's own claim of necessity; §5.2 adds the paired cases |

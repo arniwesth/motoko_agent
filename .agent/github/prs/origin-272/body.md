@@ -16,6 +16,7 @@ Documents only. No code, no ABI change, and no change to line R.
 
 - docs(031): addendum A v2 — the six findings of the #271 review
 - docs(031): addendum A v3 — the four findings of the #272 review
+- docs(031): addendum A v4 — the two findings of the v3 review
 
 1 file changed: `.agent/projects/031_system_one_decisions/PLAN-001-addendum-progress-guard-on-jev.md`. #271's merged PR record is left as it was.
 
@@ -42,6 +43,13 @@ According to the review, v1's findings 2, 4, 5 and 6 were resolved and 1 and 3 p
 | 4 | P2 | A2's strict replay belongs to P2.1, which P3.1/P3.2 don't wait for | §5: A2 depends on P2.1 and P3.3 |
 | — | note | A3 counts stops while the cap counts queries; the cap can't prevent a later outage | query counts per profile; the cap needs ≥ 50 queries; A4 watches the rate and rolls back by unsetting the binding |
 
+### Review of v3: REVISE (two P2) → v4
+
+| # | sev | finding on v3 | v4 |
+|---|---|---|---|
+| 1 | P2 | the mandatory seed had no owner, and `--resume-force` bypasses the refusal v3 cited | §4.4: a reserved config key (`legacy_intervention_marker`, an ADR amendment in Amendment 5's form) lets the host count the marker in the journal; P0.7 owns the record and the floor fold; P3.2 the barriered write before the first step; P0.7 + P3.2 crash recovery; P2.3 enforcement, with force not skipping the seed and `DisabledDecision` when the count is unrecoverable |
+| 2 | P2 | the last-3-turns state can drop the instruction that decides necessity; genuine and pre-approved histories serialized identically | §4: every user turn up to a total bound, a `context_complete` flag, a second Binary question (`requests_operator_input`), and abstention when context is incomplete and the candidate asks; §5.2 adds the paired genuine/pre-approved/invented cases |
+
 ## Governing docs
 
 - `.agent/projects/031_system_one_decisions/PLAN-001-implement-adr-001-abi-8.md`: §0.9 (privacy), §1a (lines R/X), P1.3x, P1.4x, P2G, P3.1–P3.3, P3G, P4.1, §7 Q4, §8 (no live inference before a shadow run).
@@ -50,13 +58,14 @@ According to the review, v1's findings 2, 4, 5 and 6 were resolved and 1 and 3 p
 
 ## Predicted outcome
 
-Nothing changes at runtime. The addendum on `main` becomes v3: five stages and **seven** operator decisions (§6). D6 (abstain on live `Unavailable`) and D7 (A1's private tier) are new. A0 (the stub-backed port) and A1 (the labelled set, in tiers) can still start now. A2 (offline), A3 (shadow, the first live call) and A4 (enforce) wait on line X.
+Nothing changes at runtime. The addendum on `main` becomes v4: five stages and **seven** operator decisions (§6). D6 (abstain on live `Unavailable`) and D7 (A1's private tier) are new. A0 (the stub-backed port) and A1 (the labelled set, in tiers) can still start now. A2 (offline), A3 (shadow, the first live call) and A4 (enforce) wait on line X.
 
 ## Test evidence
 
 - **Review of v1:** Codex `gpt-6.1-sol` at high effort, read-only and unsandboxed. It returned REVISE with the six findings above. Findings 2 and 5 and the `ext_set_digest` claim were reproduced on temporary copies, and its `git status` was clean afterwards. It confirmed every other anchor and link at `602e1e4e`, the D3 fit of the Choice question, and the Jev 1.14 facts against OpenRouter, ZenMux and the SDK guide.
 - **v2 anchors:** re-checked at `602e1e4e`. `types.ail:1981` is `| DecisionSolverJudge(`, and `runtime.ail:1578` is `ext_set_digest_sees_the_decision_variant_test`. The package's `[effects] max` is declared in its `ailang.toml`, which is consistent with finding 5.
 - **Review of v2:** the same reviewer re-ran its reproductions. Results are in the table above. Its prototype also confirmed the threshold behaviour (8000 nudges, 7999 abstains, no distribution abstains even at confidence 10000) and that A0's registration-level scenario closes the direct-call gap.
-- **Not done:** v3 has not been re-reviewed yet. Nothing here was executed: the design is a plan, and A0's tests are its first executable evidence.
+- **Review of v3:** v2's findings 2, 3 (on paper; Jev unmeasured) and 4, and the outage note, are resolved; 1 partly, now finished in v4. The reviewer re-ran the matrix and budget cases on a scripted reference interpreter, not Jev.
+- **Not done:** v4 has not been re-reviewed yet. `src/core/config.ail:130` (what `--resume-force` overrides) was read at `78f615a7`. Nothing here was executed: the design is a plan, and A0's tests are its first executable evidence.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
