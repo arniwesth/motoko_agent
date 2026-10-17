@@ -396,9 +396,12 @@ arms on v0.52.5, and every probe result is the same (`evidence/RESULTS-v0.52.5.m
   keeps its reason: the wrapper is still the only route to partial output on a deadline.
 - **P3 is not covered** by 011's `DriverStepRepeated`, and adding P1 and P3 moves
   `invariant-set/2` to `/3` and the constructor count from 42 to 44 (§2).
-- **`generator_version` is not a field of `dst_generator.ail`.** It is a per-script literal
-  `"1"` across `scripts/dst` (31 sites, e.g. `corpus_pr_dst.ail:299`). §4's "bump
-  `generator_version`" means those literals.
+- **`generator_version` is not a field of `dst_generator.ail`.** It is a literal `"1"`. 17 lines
+  match `generator_version: "1"` or define `generator_version()`: 15 under `scripts/dst` (e.g.
+  `corpus_pr_dst.ail:299`), plus `dst_generator.ail:15` and `dst_replay.ail:1135`. Some are
+  producer versions and some are fixture literals. §4's "bump `generator_version`" means the
+  producers. *(Corrected 2026-10-17 after the plan's review, finding 8. The first count, 31, was
+  wrong.)*
 - **The tool-message cap counts code points**, not bytes (`Str.length`). D3's "emit `fault`
   first" stands: the cap keeps the head.
 - **The `/5` claim stands.** `dst_program.ail:132` is still `/4`, and 031 P2.1 is unlanded and

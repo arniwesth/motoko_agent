@@ -5,6 +5,9 @@ by the operator on 2026-10-17 (its §6, rulings 1 to 5).
 
 Status: **Phase 0 ready to implement.** Phases 0b, 1, 2 and 3 are planned to the task. Each opens
 with a re-grounding step, because each starts after the one before it has merged.
+Revised 2026-10-17 after an independent review by Codex Sol (`gpt-6.1-sol`), which found one
+blocking defect and seven others. All eight were reproduced and are addressed (*Review*, at the
+end).
 Pinned toolchain: AILANG **v0.52.5** (`ailang.lock`; `ailang.toml` requires `>=0.52.5`).
 Grounded at: `origin/main` **`e69aaad7`**. Every `file:line` below was read at that commit. ADR
 §7 lists what moved since the ADR's own grounding.
@@ -76,8 +79,10 @@ and the ADR does not state.
 `ToolCompleted.content`. Scripted DST tools pass `ScriptedTool.content` through
 (`ports.ail:1787`), and only the three typed faults reach `tool_fault_message`
 (`tool_phase.ail:277-304`). DST reaches the live renderer only when the tool queue is empty
-(`ports.ail:1744`), which fixtures and `generating_tool` (`:2269-2299`) prevent. So a change
-confined to the live renderer moves no DST pin. That is why Phase 0 is cheap to check.
+(`ports.ail:1744`), which fixtures and `generating_tool` (`:2269-2299`) prevent. The exception is
+the live witnesses `make world_state` runs (`exit_code_witness`), which compare two live
+renderings and pin no bytes. So a change confined to the live renderer moves no DST pin. That is
+why Phase 0 is cheap to check.
 
 **What a change to `tool_phase.ail` costs.** `tools/predicate-anchors/anchors.sh:110-111` and
 `:764` anchor `tool_phase.ail:388`, `:389` and `:484`, mirrored in `dst_attribution_table.ail:221`
@@ -137,16 +142,22 @@ so they render `unknown`.
 Proposed:
 
 ```json
-{"tool":"BashExec","cmd":"make build","exit_code":1,
+{"tool":"BashExec",
  "fault":{"kind":"output_limit","effects":"unknown","bytes":1000,
-          "note":"The tool started but did not report completion. Its effects may or may not have happened, and may still be happening. Check before running it again."},
- "stdout":"","stderr":"output limit exceeded: 1000 bytes","truncated":false}
+          "note":"The harness cannot confirm whether this tool's effects happened. They may have happened in full, not at all, or may still be happening. Check the current state before running it again."},
+ "cmd":"make build","exit_code":1,"stdout":"","stderr":"output limit exceeded: 1000 bytes","truncated":false}
 ```
 
 | `effects` | `note` |
 |---|---|
-| `none` | "The tool did not start: nothing was written, run or changed." |
-| `unknown` | "The tool started but did not report completion. Its effects may or may not have happened, and may still be happening. Check before running it again." |
+| `none` | "No change was made: the tool failed before it could write or change anything." |
+| `unknown` | "The harness cannot confirm whether this tool's effects happened. They may have happened in full, not at all, or may still be happening. Check the current state before running it again." |
+
+The sentences say only what the harness knows. `none` covers read-only failures, where a
+read-only process such as `rg` may have run but could change nothing (D2 row 4). So it speaks of
+change, not of whether anything ran. `unknown` covers `PermissionDenied`, where the target program
+almost certainly never ran (ruling 3). So it does not claim the tool started. *(Revised after
+review finding 3.)*
 
 `kind` names the observation, never the world's truth:
 
@@ -240,17 +251,28 @@ it runs.
 
 `tool_result_item_to_json` (`tool_dispatch_adapter.ail:95-160`):
 
-- `BashExecResult` and `RunTestsResult` emit `fault` when it is `Some`, after `exit_code` and
-  before `stdout` and `stderr`. Tool messages are cut from the end
-  (`cap_tool_message_content`, `phase_vocab.ail:1546-1555`; the cap counts code points), so the
-  object survives a large result.
-- `ToolErrorResult` always emits it, after `error`.
+- **On every faulted arm, `fault` comes immediately after `tool`**, before every field whose size
+  is not bounded, `cmd` included. `BashExecResult` and `RunTestsResult` emit it when it is `Some`.
+  `ToolErrorResult` always emits it. Tool messages are cut from the end
+  (`cap_tool_message_content`, `phase_vocab.ail:1546-1555`, applied at `:1588-1591`; the cap counts
+  code points). So only a field ahead of `fault` can push it out of the message, and today
+  `BashExecResult` renders an unbounded `cmd` before `exit_code` (`:136-142`). A command of 70,000
+  code points that passes the output cap would otherwise reach the model with no `fault` at all.
+  ADR D3 asked for `fault` before `stdout` and `stderr` for this reason; this applies the same
+  reason to `cmd`. *(Revised after review finding 2.)*
 - The `Ok` arm's JSON is byte-identical to today's. Hand-copied `Ok` shapes used as scripted
   content in `discovery_dst.ail`, `driver_plus_compose_dst.ail` and `herdr_graded_dst.ail` stay
   valid.
 
-The file has no tests. Add inline tests: one faulted `BashExecResult` with key order asserted, one
-`ToolErrorResult`, and one `Ok` result asserted byte-equal to its rendering before W0.
+The file has no tests. Add inline tests:
+
+- a faulted `BashExecResult` with key order asserted;
+- a `ToolErrorResult`;
+- an `Ok` result asserted byte-equal to its rendering before W0;
+- **the long-command case:** a faulted `BashExecResult` whose `cmd` is longer than the cap, passed
+  through the same cap the tool message gets. The complete `fault` object survives it;
+- the two `note` sentences, asserted verbatim from the one home, so a wording change is a visible
+  test change.
 
 **Gate:** `make check_core`, `make test_coverage`, and `make world_state`. Its existing
 `exit_code_witness` compares `dispatch_one` with `dispatch_one_typed` byte for byte, and both read
@@ -288,11 +310,27 @@ caps, run by `make world_state`. It has one row per case:
 | f | `EditFile` of a file in a directory with mode 555 (`atomic_write` fails) | `io_error`, `unknown` |
 | g | `EditFile` with a wrong `expected_sha256` | `refused`, `none` |
 | h | `ReadFile` of a directory | `io_error`, `none` |
+| i | an unknown tool name (`:248`) | `refused`, `none` |
+| j | `ReadFile` of a path that escapes the workspace (`path_error`, `:404`) | `refused`, `none` |
+| k | `Search` with an empty pattern (`:590`) | `refused`, `none` |
+| l | `EditFile` of a path that does not exist (`:870`) | `refused`, `none` |
+| m | `EditFile` with no edits (`:872`) | `refused`, `none` |
+| n | `EditFile` whose edit does not apply (`:880`) | `refused`, `none` |
+| o | `BashExec` with `streaming: true` (`:987`) | `refused`, `none` |
 
-Rows e and f depend on permissions, which root ignores. If the entry runs as root, it reports
-those two rows as not evaluated, never as passed.
+Rows i to o give each refusal site its own row, so each has a mutant in W0.6 *(added after review
+finding 4)*. Row o's site may be unreachable from native dispatch: `needs_delegation_for_process`
+routes such a call away first (`tool_runtime.ail:215`). If so, the row records that, with the
+coordinate, and m29 is a survivor by that sentence.
 
-**Gate:** `make world_state`, with every row green.
+**Rows e and f depend on permissions, which root ignores.** Nothing makes `mktemp`, `chmod` or `mv`
+fail for root, and a directory target is no substitute: `run_write_file` calls `readFile` on it,
+not `readFileResult` (`:690`). Run as root, the entry reports those two rows as not evaluated,
+never as passed. **That does not satisfy this gate or W0.6's m09 and m10. Merge acceptance needs a
+run as a non-root user.** *(Revised after review finding 7.)* Row d fails the same way for root.
+
+**Gate:** `make world_state` run as a non-root user, with every row green (row o green or recorded
+unreachable).
 
 ### W0.6 — mutation run
 
@@ -314,15 +352,28 @@ before the code exists. The implementer may add rows, and must not drop one.
 | m11 | D2 a refusal before the effect → `none` | `unknown` at `:877` | W0.5 row g |
 | m12 | D2 read-only failure → `none` | `unknown` at `:529` | W0.5 row h |
 | m13 | D1 a call that ran to its own exit carries no disclosure | emit `fault` on the `Ok` arm | W0.5 row c, and W0.3's byte-equal `Ok` test |
-| m14 | D3 `fault` precedes `stdout` and `stderr` | emit it after `stderr` | W0.3's key-order test |
+| m14 | D3, as tightened in W0.3: `fault` precedes every unbounded field | emit it after `cmd` | W0.3's long-command test |
 | m15 | D3 every harness-reported fault carries `effects` | drop `fault` from the `ToolErrorResult` rendering | W0.3's `ToolErrorResult` test |
+| m16-m22 | C3 the kind of each `ProcessError` arm, one mutant per arm | change that arm's kind to another kind | that arm's row in the kind mapping's tests |
+| m23 | D2 refusal → `none`, unknown tool | `unknown` at `:248` | W0.5 row i |
+| m24 | D2 refusal → `none`, `path_error` | `unknown` at `:404` | W0.5 row j |
+| m25 | D2 refusal → `none`, Search missing pattern | `unknown` at `:590` | W0.5 row k |
+| m26 | D2 refusal → `none`, EditFile no file | `unknown` at `:870` | W0.5 row l |
+| m27 | D2 refusal → `none`, EditFile no edits | `unknown` at `:872` | W0.5 row m |
+| m28 | D2 refusal → `none`, EditFile edits do not apply | `unknown` at `:880` | W0.5 row n |
+| m29 | D2 refusal → `none`, delegated backend | `unknown` at `:987` | W0.5 row o, or a survivor if row o is unreachable |
 
 No mutant is possible for "a new upstream arm is a compile error": the property is that no
 wildcard exists, and that is checked by reading the code. The table records it as a survivor with
-that sentence. Survival cases: W0.5 rows b, c, g and h must stay green on unmutated source.
+that sentence. Search's `rg` failure (`:596`) has no row: it is `Err` only when `rg` itself
+cannot be launched, which no portable fixture arranges. It is recorded as a survivor with that
+sentence. Survival cases: W0.5 rows b, c, g, h and i to n must stay green on unmutated source.
 
-**Gate:** `mutants.tsv` with 15 kills, or a survivor with a new test or a sentence saying why no
-input tells the two versions apart.
+The table was widened after review finding 4: kinds m16-m22, the refusal sites m23-m29, and m14
+moved to the stricter order.
+
+**Gate:** `mutants.tsv`, run as a non-root user, with every row a kill or a survivor carrying a new
+test or a sentence saying why no input tells the two versions apart.
 
 ### W0.7 — baseline after, and records
 
@@ -406,8 +457,9 @@ Mutants:
 | w2 | 124 classification | a command's own 124 is rendered as a deadline |
 | w3 | the absent-`timeout` fallback | the fallback is dropped |
 | w4 | a wrapper deadline is `unknown` | it renders `none` |
+| w5 | a wrapper deadline keeps the captured output (W0b.3) | drop `stdout` and `stderr` on that arm |
 
-Each expects the W0b.1-derived witness row for its case. W0.7's baseline procedure is repeated
+w5 was added after review finding 4. Each expects the W0b.1-derived witness row for its case. W0.7's baseline procedure is repeated
 against W0's head.
 
 ---
@@ -430,21 +482,49 @@ date, and #272 adds a second dependant. W1 takes the next version free when it l
 `/5`, W1.1 adds a note to 031's plan that its P2.1 renumbers. The same check applies to
 `fault-catalogue/3`, `invariant-set/3` (W2) and the profile versions.
 
-### W1.2 — `ScriptedTool` gains `applied` and a dispatch stage
+### W1.2 — `ScriptedTool` gains `applied` and a dispatch stage, and a program carries both
 
 - `ScriptedTool` (`ports.ail:599-606`) gains `applied: bool` and a stage: before or after dispatch.
-- Program schema to the next version (`dst_program.ail:132`, history `:63-131`, decodable versions
-  `:151-153`, pin test `:700-718`). Older versions decode to **after dispatch, not applied** (ADR
-  §4). That is the recorded meaning of every existing tool fault row ("did NOT occur",
-  `dst_fault_catalogue.ail:346`), so it is a default the S32 rule allows
-  (`009…/PLAN-implementation-deterministic-test-world.md:654`, `:715`).
-- The codec: `encode_tool_outcome` (`ports.ail:2577-2601`) and `decode_tool_outcome` (`:2608`).
-  The latter never sees the version, so either a presence read with the stated default (the
-  `exit_code` precedent, `:2638-2648`) or the version threaded through. Record which.
-- A frozen fixture of the new version, as `43bafa7c` added
-  `scripts/dst/fixtures/execution-program-v3.artifact`.
-- Validation rejects `applied` set on a before-dispatch fault (ADR D4).
-- Closest precedent: `ba272abc` (`/1` → `/2`, added `ScriptedTool.exit_code`, 21 files).
+- **The two travel by different routes, because one is an observation and one is not.**
+  - **The stage is an observation.** It goes in the served outcome payload, through
+    `encode_tool_outcome` (`ports.ail:2577-2601`) and `decode_tool_outcome` (`:2608`), and is
+    replayed as `code` and `exit_code` are. `decode_tool_outcome` never sees the version, so use
+    either a presence read with the stated default (the `exit_code` precedent, `:2638-2648`) or the
+    version threaded through. Record which.
+  - **`applied` is world truth and never enters the served payload.** Replay rebuilds every
+    `ScriptedTool` from served outcome payloads alone (`tools_of`, `dst_replay.ail:761-772`). So a
+    payload carrying the bit would be a carrier D4 forbids. It would also make property P2's
+    comparison, which keys on the payload (`dst_invariants.ail:2242-2244`), differ for every twin
+    by construction.
+- **`ExecutionProgram` (`dst_program.ail:243-252`) gains a world-truth field beside
+  `interactions`:** the ordinals of the tool interactions whose effect applied.
+  - *Recording.* The program builders that copy `w.log` (`corpus_pr_dst.ail:428-447`,
+    `seeded_generator_dst.ail:600-619`, and any other found at W1.1) also fill it, from W1.3's
+    effect log mapped to ordinals by call id.
+  - *Replay.* `tools_of` decodes outcomes as today, then sets `applied` on each `ScriptedTool`
+    whose ordinal is listed.
+  - *Twins.* Property P2's twin is the same program with one ordinal added to or removed from the
+    list. The served interactions are untouched.
+- **Versions.** Program schema to the next version (`dst_program.ail:132`, history `:63-131`,
+  decodable versions `:151-153`, pin test `:700-718`).
+  - *Legacy.* Older versions decode with the list empty and every stage **after dispatch**. "Not
+    applied" is the recorded meaning of every existing tool fault row ("did NOT occur",
+    `dst_fault_catalogue.ail:346`), so it is a default the S32 rule allows
+    (`009…/PLAN-implementation-deterministic-test-world.md:654`, `:715`).
+  - *Malformed new version.* A program at the new version must carry the field, though it may be
+    empty. A listed ordinal that is not a tool interaction, or whose outcome is completed or before
+    dispatch, is rejected. So is `applied` on a before-dispatch fault (ADR D4).
+- **A frozen fixture** of the new version, as `43bafa7c` added
+  `scripts/dst/fixtures/execution-program-v3.artifact`. It holds at least one applied call.
+- **Acceptance.**
+  - (a) A program with one applied call round-trips through persistence, decode and replay, and
+    replay reproduces the effect log.
+  - (b) Two programs that differ only in the world-truth list serve identical interactions,
+    payload and advance alike. Property P2 depends on this precondition.
+  - (c) Each rejection above has its own row.
+- Closest precedent: `ba272abc` (`/1` → `/2`, added `ScriptedTool.exit_code`, 21 files). It
+  carried an observation, so it needed only the codec. This change also needs the world-truth
+  field.
 
 ### W1.3 — the effect log, and `ToolFailed`'s stage
 
@@ -455,7 +535,8 @@ date, and #272 adds a second dependant. W1 takes the next version free when it l
 - `ToolFailed` (`ports.ail:649`) gains the dispatch stage, copied from `ScriptedTool`'s. It is an
   observation (D3). `ToolDeadlineExceeded` and `ToolCorrelationMismatch` gain nothing.
 - The served-interaction log `WorldState.log` (`:444-459`) is unchanged. W2's oracles read both
-  logs.
+  logs. The effect log is the source W1.2's recording step fills the program's world-truth field
+  from.
 
 ### W1.4 — the typed renderer and the harness's own fault messages emit `fault`
 
@@ -511,11 +592,23 @@ rule 5.
   `Late` arms, under its own salt. `draw` threads `g.rng` (`:433`), so the added draw re-phases
   every later choice. Property P2's twin is built by flipping one field of a program, not by the
   generator, so the re-phasing does not touch it.
-- The `generator_version` literal `"1"` → `"2"` at its 15 code sites (e.g. `corpus_pr_dst.ail:299`,
-  `:675`; `seeded_generator_dst.ail:255`; `dst_replay.ail:1135`). Axis K's equality check
-  (`seeded_generator_dst.ail:1135-1137`) moves with them. It has never been bumped before, so
-  check every reader `seed_state` (`dst_generator.ail:395`) and `dst_persistence.ail:346`, `:550`
-  and `:1247-1255` feed.
+- **The `generator_version` literal `"1"` → `"2"`.** At `e69aaad7`, 17 lines match
+  `generator_version: "1"` or define `generator_version()`: 15 under `scripts/dst` (e.g.
+  `corpus_pr_dst.ail:299`, `:675`; `seeded_generator_dst.ail:255`, `:597`), plus
+  `dst_generator.ail:15` and `dst_replay.ail:1135`. W1.1 re-derives the list and separates
+  producer versions from fixture literals; only producers move. Axis K's equality check
+  (`seeded_generator_dst.ail:1135-1137`) moves with them. The literal has never been bumped
+  before, so check every reader `seed_state` (`dst_generator.ail:395`) and
+  `dst_persistence.ail:346`, `:550` and `:1247-1255` feed.
+- **The seeded suite's version contrast keeps a different version.** The row named `versioned`
+  (`seeded_generator_dst.ail:1228`) hard-codes `"2"` as the version that differs from the current
+  one. After the bump it would be a same-version repeat, and the run-level version witness would be
+  lost silently. It moves to a version unequal to the new current one, and the suite asserts the
+  inequality, so the next bump cannot repeat this. *(Added after review finding 5.)*
+- **The rich fixture and the equal-count pair are re-swept** under the new generator: seed 110, and
+  132 against 12, in both `main` and `wire_witness` (`:1177-1180`, `:1224-1228`). The added draw
+  re-phases them, and `Makefile:1277-1281` refuses a pair that has lost its equal count. Keep each
+  one's stated property (richness; equal count with different contents) and re-pin.
 - **The canary is re-pinned by hand** (`pinned_canary_v1` and `_v2`, `dst_generator.ail:1274-1284`).
   Use a throwaway sweep of seeds 1..260 at both versions, keep pairwise-distinct rows, and delete
   the script (`:1248-1273`). There is no `--update`, by design.
@@ -523,8 +616,38 @@ rule 5.
   selections from a 260-seed sweep, now required to reach both world-only rows twice. Re-measure
   the cost constants (`dst_corpus.ail:347`, `:487`) if the median moves.
 - Any profile not already bumped in W1.4 is bumped here.
+- Cost: WI-D1's five artifacts, plus the two seeded fixtures above.
 
-### W1.7 — gate and records
+### W1.7 — mutation run
+
+*(Added after review finding 4: W1 states rules that need detectors, and the plan had no mutation
+task for them.)* One mutant per rule, with the expected test named before the run, as in W0.6:
+
+| # | Rule | Mutant | Expected to fail |
+|---|---|---|---|
+| v01 | W1.2 a legacy program decodes with an empty world-truth list | decode it as all applied | W1.2's legacy-fixture row |
+| v02 | W1.2 a new-version program must carry the field | accept its absence as empty | W1.2's missing-field rejection row |
+| v03 | W1.2 a listed ordinal must be an after-dispatch fault | accept a completed outcome's ordinal | W1.2's listed-ordinal rejection row |
+| v04 | D4 `applied` on a before-dispatch fault is rejected | accept it | W1.2's before-dispatch rejection row |
+| v05 | W1.2 replay sets `applied` from the list | ignore the list | W1.2 acceptance (a), the round trip |
+| v06 | W1.2 `applied` never enters the served payload | encode it in the outcome payload | W1.2 acceptance (b), equal served interactions |
+| v07 | W1.3 the effect log is appended only when `applied` | append on every scripted fault | W1.2 acceptance (a), the reproduced effect log |
+| v08 | D4 a world-only row's twin must exist | accept a missing twin | its `validate_catalogue` row |
+| v09 | D4 the twin must not be world-only | accept a world-only twin | its row |
+| v10 | D4 the twin's delivery constructor must match | accept a different constructor | its row |
+| v11 | D4 the twin's recovery branch must match | accept a different branch | its row |
+| v12 | D4 the lexical guard | disable it, then render a world-only id into one projected message | the guard's target |
+| v13 | W1.4 before-dispatch `ToolFailed` → `none` | `unknown` | its renderer test |
+| v14 | W1.4 after-dispatch `ToolFailed` → `unknown` | `none` | its renderer test |
+| v15 | W1.4 deadline and mismatch → `unknown` | `none` for the deadline | its renderer test |
+| v16 | W1.4 denial and undecodable arguments → `none` | `unknown` for the denial | the updated `denial_message` test |
+
+Survival: the unmutated bank, the legacy fixtures and the new frozen fixture all decode and replay
+clean.
+
+**Gate:** `mutants.tsv` with every row a kill, or a survivor with a new test or a sentence.
+
+### W1.8 — gate and records
 
 **Gate:**
 - the targets: `make check_core test_coverage seeded_generator fault_catalogue corpus_pr
@@ -570,6 +693,11 @@ Precedent: `c0f7eb02` (3 files, two rules).
   interactions.
 - The only existing caller of the discovery relation is a fixture (`invariants_dst.ail:1290-1313`),
   so this needs its own runner and target.
+- **It compares message contents, not record variants.** The discovery relation's
+  `trace_positions` compares only `record_variant` (`dst_invariants.ail:2251-2259`). Copied
+  unchanged, it would miss mutant p2, which leaks the bit into a message and changes nothing else.
+- Its twins come from W1.2's world-truth list, so their served interactions are equal by
+  construction (W1.2 acceptance b). Any difference the relation finds is the harness's.
 
 ### W2.3 — acceptance by mutant
 
@@ -607,15 +735,32 @@ Own worktree and pull request, after W1, beside W2 (C4). Surface: `dst_run_repor
 - **What does not:**
   - the branch counts are wire greps (`Makefile:1877-1895`), which would count a twin and its
     world-only row together;
-  - `documented_coverage()` (`run_report_dst.ail:280-292`) and `the_surviving_gaps` (`:329`) are
-    hand lists;
-  - the literals `conditional == 2` (`dst_run_report.ail:895`) and `all_reach_ids() == 5`
-    (`run_report_dst.ail:520`), and the variant-count awk (`Makefile:1726-1745`).
+  - `documented_coverage()` (`run_report_dst.ail:280-292`) is a hand list of reached classes.
+- **What stays as it is.** Both new rows are `AlwaysApplicable`, so these are not touched by adding
+  them:
+  - `conditional == 2` (`dst_run_report.ail:895`) counts conditional classes;
+  - `the_surviving_gaps` (`run_report_dst.ail:329-331`) names those two conditional classes;
+  - `all_reach_ids() == 5` (`:520`) counts reach statuses, not rows;
+  - the awk at `Makefile:1726-1745` counts reach-status and rejection constructors.
+
+  *(Corrected after review finding 6.)*
 - **A count of duplicate effect keys**, from the effect log. It is labelled as describing the
   generator in DST, because the scripted model is the generator. Over live or journal-derived
   sessions it is Havoc's `DESTRUCTIVE` measure (NOTE §1).
 
-### W3.2 — gate and records
+### W3.2 — mutation run
+
+*(Added after review finding 4.)*
+
+| # | Rule | Mutant | Expected to fail |
+|---|---|---|---|
+| r1 | a world-only row is counted from the effect log | count it from the typed outcome | the report test for a bank member that reaches it |
+| r2 | a twin and its world-only row are not counted together | count the world-only row's interaction under its twin too | the branch-count test on the same member |
+| r3 | duplicate effect keys are counted | count distinct keys | the metric's test on a fixture with one repeated key |
+
+Survival: a fixture with no repeated key reports 0.
+
+### W3.3 — gate and records
 
 **Gate:** `make run_report corpus_pr`, `ailang test src/core/dst_run_report.ail`, then `make dst`.
 
@@ -652,3 +797,30 @@ As ADR §3:
 - **The upstream answers.** If #1880 states that `PermissionDenied` is start-only, ruling 3 is
   revisited. If #1879 makes case A return `Ok`, the case leaves the `SpawnFailed` arm, and the
   mapping stays `unknown` for whatever remains there.
+
+## Review
+
+An independent review by Codex Sol (`gpt-6.1-sol`, reasoning effort xhigh) on 2026-10-17, of head
+`2cf82955`. It ran in its own detached worktree, read-only, and was given none of the author's
+conclusions: [`REVIEW-001-plan-001-codex-gpt-6.1-sol.md`](REVIEW-001-plan-001-codex-gpt-6.1-sol.md).
+Its verdict: **merge after the listed fixes.** It re-ran both probe scripts and every result
+matched.
+
+It records one limitation of its own. The brief told it to read the diff first, and that diff
+contained the PR record, so it saw the PR description before drafting. Its findings do not cite
+the description. The brief's error was the author's.
+
+| # | Finding | Reproduced by the author | Disposition |
+|---|---|---|---|
+| 1 | **Blocking.** W1 gave no route by which `applied` survives persistence and replay without entering the served payload. Replay rebuilds tools only from served outcome payloads, and property P2's comparison keys on the payload. | Yes. `ExecutionProgram` holds only `interactions` (`dst_program.ail:243-252`). `tools_of` decodes payloads (`dst_replay.ail:761-772`). `log_positions` keys on `outcome.payload` (`dst_invariants.ail:2242-2244`). | **Fixed in W1.2.** The stage travels in the payload. `applied` goes in a world-truth field of the program, with recording, replay, twin and version rules, and three acceptance rows. W1.3 and W2.2 follow it. |
+| 2 | **Should fix.** `fault` after `exit_code` can be cut from the message by a long `cmd`, which renders first. | Yes. `cmd` precedes `exit_code` (`tool_dispatch_adapter.ail:136-142`), and the cap keeps the head. | **Fixed in W0.3.** `fault` comes right after `tool` on every faulted arm. A long-command test is added, and m14 moves to it. |
+| 3 | **Should fix.** The `none` sentence said nothing ran, though read-only failures (`rg`) may have run. The `unknown` sentence said the tool started, though `PermissionDenied` almost certainly did not. | Yes, against D2 rows 4 and the `PermissionDenied` row, and `start_probe.sh` cases 15-17 and 20-21. | **Fixed in C3.** `none` now speaks of change. `unknown` no longer claims a launch. Both are pinned verbatim in W0.3's tests. |
+| 4 | **Should fix.** Several stated rules had no mutant: all of W1's validators and guard, W3's counting rules, W0's kind mapping and refusal sites, and W0b's output preservation. | Yes. The graph had no W1 or W3 mutation task. | **Fixed.** W0.6 gains m16-m29, with W0.5 rows i-o to catch them. W0b.4 gains w5. There are new tasks W1.7 (v01-v16) and W3.2 (r1-r3). The gates move to W1.8 and W3.3. |
+| 5 | **Should fix.** The generator cascade missed the seeded suite's `versioned` row, which hard-codes `"2"`, and the rich and equal-count fixtures. | Yes, `seeded_generator_dst.ail:1228`, `:1177-1180`, `:1224-1228`, and `Makefile:1277-1281`. | **Fixed in W1.6.** The contrast moves to a version unequal to the current one, with an asserted inequality. Both fixtures are re-swept. |
+| 6 | **Minor.** W3.1 listed `conditional == 2`, the reach-status count and the awk as moving. The new rows are `AlwaysApplicable`, so none of them moves. | Yes. | **Fixed in W3.1**: those are listed as staying. |
+| 7 | **Minor.** Rows e and f under root: the prose and the graph disagreed on whether an unevaluated row blocks the gate. | Yes. Nothing fails for root in `atomic_write`'s `mktemp`, `chmod` or `mv`. The directory alternative hits a non-`Result` `readFile` (`tool_runtime.ail:690`). | **Fixed in W0.5 and W0.6.** Merge acceptance needs a run as a non-root user. |
+| 8 | **Minor.** ADR §7 said 31 literal `generator_version` sites, and the plan said 15. | Yes. 17 lines match: 15 in `scripts/dst`, plus `dst_generator.ail:15` and `dst_replay.ail:1135`. | **Fixed** in ADR §7 and W1.6. W1.1 separates producers from fixture literals. |
+
+The review also confirmed that `run_process_result` drops `req.args` on its `bash -lc` arm (W0b.3
+takes it up). It noted that the existing discovery relation compares record variants only, which
+W2.2 now addresses.

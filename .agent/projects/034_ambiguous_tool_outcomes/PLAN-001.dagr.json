@@ -4,7 +4,7 @@
     "id": "034-PLAN-001",
     "title": "034 · effect disclosure for tool faults"
   },
-  "generated_at": "2026-10-17T17:41:53Z",
+  "generated_at": "2026-10-17T18:09:01Z",
   "plan": {
     "project": "034_ambiguous_tool_outcomes",
     "address": "034/PLAN-001",
@@ -73,7 +73,7 @@
       "deps": [
         "W0.2"
       ],
-      "criteria": "BashExecResult and RunTestsResult emit fault when Some, after exit_code and before stdout and stderr; ToolErrorResult always emits it after error. The Ok arm's JSON is byte-identical to before. New inline tests in tool_dispatch_adapter.ail: a faulted BashExecResult with key order asserted, a ToolErrorResult, and an Ok result byte-equal to its pre-W0 rendering. make check_core, make test_coverage and make world_state pass.",
+      "criteria": "On every faulted arm fault comes immediately after tool, before cmd and every other unbounded field; BashExecResult and RunTestsResult emit it when Some, ToolErrorResult always. The Ok arm's JSON is byte-identical to before. New inline tests in tool_dispatch_adapter.ail: faulted BashExecResult key order; ToolErrorResult; Ok byte-equal to its pre-W0 rendering; a faulted result whose cmd exceeds the 65,536 code-point cap keeps its complete fault through the tool-message cap; the two note sentences asserted verbatim from the one home. make check_core, make test_coverage and make world_state pass.",
       "note": "The file has no tests today. One task, one commit.",
       "refs": [
         "PLAN-001-effect-disclosure.md § W0.3"
@@ -103,7 +103,7 @@
       "deps": [
         "W0.3"
       ],
-      "criteria": "A new entry beside exit_code_witness in scripts/dst/world_state_probe.ail, run with full caps by make world_state, holds rows a-h of the plan's W0.5 table and reads the rendered message. Rows a and b are the ADR's one unknown and one none arm; c is the no-fault survival row. Rows e and f report not evaluated, never passed, when run as root. make world_state is green.",
+      "criteria": "A new entry beside exit_code_witness in scripts/dst/world_state_probe.ail, run with full caps by make world_state, holds rows a-o of the plan's W0.5 table and reads the rendered message. Rows a and b are the ADR's one unknown and one none arm; c is the no-fault survival row; i-o give each refusal site its own row (o recorded unreachable, with the coordinate, if native dispatch never reaches it). Rows e and f report not evaluated under root, which does not satisfy this task: make world_state is green when run as a non-root user.",
       "note": "Precedent: exit_code_witness (world_state_probe.ail:1128-1179), the live-arm witness ports.ail:1741-1743 names. One task, one commit.",
       "refs": [
         "PLAN-001-effect-disclosure.md § W0.5"
@@ -119,7 +119,7 @@
         "W0.4",
         "W0.5"
       ],
-      "criteria": "mutants.tsv, the script and the commit cover m01-m15 of the plan's W0.6 table, each with its expected test named before the run; a kill is that test failing, nothing else. Every row is a kill, or a survivor with a new test or a sentence why no input can tell the versions apart. The no-wildcard property is recorded as a survivor by construction. Tree clean afterwards.",
+      "criteria": "mutants.tsv, the script and the commit cover m01-m29 of the plan's W0.6 table, each with its expected test named before the run, run as a non-root user; a kill is that test failing, nothing else. Every row is a kill, or a survivor with a new test or a sentence why no input can tell the versions apart. The no-wildcard property and Search's rg launch failure are recorded as survivors with their sentences. Tree clean afterwards.",
       "note": "Meta-decision: mutate each stated rule once and see its test fail.",
       "refs": [
         "PLAN-001-effect-disclosure.md § W0.6"
@@ -195,7 +195,7 @@
       "deps": [
         "W0b.3"
       ],
-      "criteria": "Mutants w1-w4 of the plan's W0b.4 table killed by their named witness rows; make dst and make eval_matrix compared with W0's head, differences explained; records updated.",
+      "criteria": "Mutants w1-w5 of the plan's W0b.4 table killed by their named witness rows; make dst and make eval_matrix compared with W0's head, differences explained; records updated.",
       "note": "One worktree, one PR for W0b.",
       "refs": [
         "PLAN-001-effect-disclosure.md § W0b.4"
@@ -225,7 +225,7 @@
       "deps": [
         "W1.1"
       ],
-      "criteria": "ScriptedTool has applied and a before/after stage. The program schema is at the next version; older versions decode to after dispatch, not applied, by a stated presence rule or by threading the version into decode_tool_outcome. A frozen fixture of the new version exists. Validation rejects applied on a before-dispatch fault. make check_core and the program pin test pass.",
+      "criteria": "ScriptedTool has applied and a before/after stage. The stage travels in the served outcome payload; applied never does. ExecutionProgram carries a world-truth field (ordinals of tool interactions whose effect applied), filled at recording from the effect log and applied at replay by tools_of. Next program schema version; legacy versions decode with the list empty and every stage after dispatch; a new-version program without the field, a listed ordinal that is not an after-dispatch fault, and applied on a before-dispatch fault are each rejected by their own row. A frozen fixture of the new version holds an applied call. Acceptance rows: (a) one applied call round-trips through persistence, decode and replay, and replay reproduces the effect log; (b) two programs differing only in the list serve identical interactions, payload and advance. make check_core and the program pin test pass.",
       "note": "Precedent ba272abc (/1 to /2, 21 files). S30 and S32 govern the default.",
       "refs": [
         "PLAN-001-effect-disclosure.md § W1.2"
@@ -240,7 +240,7 @@
       "deps": [
         "W1.2"
       ],
-      "criteria": "WorldState has an append-only effect log of {call_id, effect_key}; only world_tool's scripted arm appends, and only when applied. scripted_tool_outcome reads neither applied nor the log. ToolFailed carries the dispatch stage; ToolDeadlineExceeded and ToolCorrelationMismatch are unchanged. make check_core and make world_state pass.",
+      "criteria": "WorldState has an append-only effect log of {call_id, effect_key}; only world_tool's scripted arm appends, and only when applied; W1.2's recording fills the program's world-truth list from it. scripted_tool_outcome reads neither applied nor the log. ToolFailed carries the dispatch stage; ToolDeadlineExceeded and ToolCorrelationMismatch are unchanged. make check_core and make world_state pass.",
       "note": "ADR D4: no carrier for applied in ToolOutcome.",
       "refs": [
         "PLAN-001-effect-disclosure.md § W1.3"
@@ -285,7 +285,7 @@
       "deps": [
         "W1.5"
       ],
-      "criteria": "choose_tool draws applied for after-dispatch Failed and Late under its own salt. generator_version is 2 at every code site and axis K. The canary is re-pinned by hand with the throwaway sweep deleted. fixed_bank() is re-derived and reaches both world-only rows twice; cost constants re-measured if the median moved. make seeded_generator and make corpus_pr pass.",
+      "criteria": "choose_tool draws applied for after-dispatch Failed and Late under its own salt. The producer generator_version sites (listed at W1.1) and axis K are at 2. The seeded suite's versioned contrast names a version unequal to the current one and asserts the inequality. The rich fixture and the equal-count pair are re-swept and re-pinned in main and wire_witness with their stated properties. The canary is re-pinned by hand with the throwaway sweep deleted. fixed_bank() is re-derived and reaches both world-only rows twice; cost constants re-measured if the median moved. make seeded_generator and make corpus_pr pass.",
       "note": "WI-D1: a five-artifact cascade, about 2 h. Budget one make dst per commit.",
       "refs": [
         "PLAN-001-effect-disclosure.md § W1.6"
@@ -293,17 +293,32 @@
     },
     {
       "id": "W1.7",
-      "title": "gate: Phase 1 targets, baseline comparison, records",
-      "kind": "gate",
+      "title": "test: Phase 1 mutation run",
+      "kind": "test",
       "project": "W1",
       "state": "queued",
       "deps": [
         "W1.6"
       ],
+      "criteria": "mutants.tsv, the script and the commit cover v01-v16 of the plan's W1.7 table (world-truth decode and rejection rows, replay, served-payload independence, effect-log append, the four twin-validator cases, the lexical guard, the typed and harness renderers), each with its expected test named before the run. Every row is a kill or a survivor with a new test or a sentence. The unmutated bank, legacy fixtures and the new frozen fixture decode and replay clean.",
+      "note": "Added after review finding 4.",
+      "refs": [
+        "PLAN-001-effect-disclosure.md § W1.7"
+      ]
+    },
+    {
+      "id": "W1.8",
+      "title": "gate: Phase 1 targets, baseline comparison, records",
+      "kind": "gate",
+      "project": "W1",
+      "state": "queued",
+      "deps": [
+        "W1.7"
+      ],
       "criteria": "make check_core test_coverage seeded_generator fault_catalogue corpus_pr run_report world_state invariants anchors attribution_table pass; make dst FAILED names equal the base's; every changed make eval_matrix row is explained. ADR and plan status updated.",
       "note": "One worktree, one PR for W1.",
       "refs": [
-        "PLAN-001-effect-disclosure.md § W1.7"
+        "PLAN-001-effect-disclosure.md § W1.8"
       ]
     },
     {
@@ -313,7 +328,7 @@
       "project": "W2",
       "state": "queued",
       "deps": [
-        "W1.7"
+        "W1.8"
       ],
       "criteria": "Both rules under ToolPairing with constructor, family arm, rule id, message, check and sample entry; count 44; invariant-set/3. The oracle reads the world-served log and the effect log against the projected message and never calls tool_outcome_message or its callees. Survival and rejection fixtures in invariants_dst.ail. make invariants and verify_classify_check pass.",
       "note": "Precedent c0f7eb02. The journal eval runs evaluate too.",
@@ -330,7 +345,7 @@
       "deps": [
         "W2.1"
       ],
-      "criteria": "A pair relation beside discovery_contract_findings, not a family. A runner over bank programs flips one after-dispatch call's applied and requires identical traces, outcomes and served interactions; it has its own make target.",
+      "criteria": "A pair relation beside discovery_contract_findings, not a family. A runner over bank programs builds each twin by changing one ordinal in W1.2's world-truth list, runs both, and requires identical traces (compared by message contents, not only record variants), outcomes and served interactions; it has its own make target.",
       "note": "dst_invariants.ail:2189-2195 says why it is not a family.",
       "refs": [
         "PLAN-001-effect-disclosure.md § W2.2"
@@ -373,9 +388,9 @@
       "project": "W3",
       "state": "queued",
       "deps": [
-        "W1.7"
+        "W1.8"
       ],
-      "criteria": "The run report counts world-only rows from the effect log without counting a twin and its world-only row together; documented_coverage, the_surviving_gaps and the pinned counts are updated. A duplicate-effect-key count is reported, labelled as a generator-side metric in DST.",
+      "criteria": "The run report counts world-only rows from the effect log without counting a twin and its world-only row together; documented_coverage is updated; conditional == 2, the_surviving_gaps, all_reach_ids() == 5 and the Makefile awk stay as they are. A duplicate-effect-key count is reported, labelled as a generator-side metric in DST.",
       "note": "Runs beside W2 (choice C4).",
       "refs": [
         "PLAN-001-effect-disclosure.md § W3.1"
@@ -383,17 +398,32 @@
     },
     {
       "id": "W3.2",
-      "title": "gate: Phase 3 targets and records",
-      "kind": "gate",
+      "title": "test: Phase 3 mutation run",
+      "kind": "test",
       "project": "W3",
       "state": "queued",
       "deps": [
         "W3.1"
       ],
+      "criteria": "mutants.tsv covers r1-r3 of the plan's W3.2 table, each killed by its named test; a fixture with no repeated effect key reports 0.",
+      "note": "Added after review finding 4.",
+      "refs": [
+        "PLAN-001-effect-disclosure.md § W3.2"
+      ]
+    },
+    {
+      "id": "W3.3",
+      "title": "gate: Phase 3 targets and records",
+      "kind": "gate",
+      "project": "W3",
+      "state": "queued",
+      "deps": [
+        "W3.2"
+      ],
       "criteria": "make run_report corpus_pr and ailang test src/core/dst_run_report.ail pass; make dst FAILED names equal the base's. Plan status updated.",
       "note": "One worktree, one PR for W3.",
       "refs": [
-        "PLAN-001-effect-disclosure.md § W3.2"
+        "PLAN-001-effect-disclosure.md § W3.3"
       ]
     }
   ]
