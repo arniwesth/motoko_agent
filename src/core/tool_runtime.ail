@@ -9,6 +9,7 @@ import std/fs      (readFile, writeFile, fileExists, mkdirAll, isDir, readFileRe
 import std/process (exec, ProcessError, ProcessOutput)
 import std/bytes   (toString)
 import std/crypto  (sha256Hex)
+import pkg/sunholo/motoko_ext_abi/path_guard (path_guard_script)
 import src/core/types   (ToolBackend, ProcessExecReq, ToolResultItem, ToolResultMeta, SearchMatch, TestFailure, EditOp)
 import src/core/tool_contract (ToolCallEnvelope)
 
@@ -465,14 +466,16 @@ func validate_path_common(tool: string, id: string, path: string, workdir: strin
       else if starts_with_root_dir(stripped) then
         Err(path_error(id, tool, "path appears absolute (missing leading slash): ${path}"))
       else {
-        let guard_script = "set -eu\nwd=$(realpath \"$1\")\nrel=\"$2\"\njoined=\"$wd/$rel\"\ntarget=$(realpath -m \"$joined\")\ncase \"$target\" in\n  \"$wd\"|\"$wd\"/*) ;;\n  *) exit 43 ;;\nesac\nif [ -e \"$joined\" ]; then\n  resolved=$(realpath \"$joined\")\n  case \"$resolved\" in\n    \"$wd\"|\"$wd\"/*) ;;\n    *) exit 44 ;;\n  esac\nfi\n";
-        -- exec is Ok for ANY exit code (Err only when bash cannot run), so the
-        -- guard's verdict is its exit code: 43/44 mean the path escapes. Any
-        -- other failure is let through as before: `realpath -m` is GNU-only,
-        -- and refusing on it would refuse every path where it is missing.
-        match exec("bash", ["-lc", guard_script, "motoko-path-guard", workdir, stripped]) {
-          Ok(out) => if out.exitCode == 43 || out.exitCode == 44 then Err(path_error(id, tool, "path escapes workspace: ${path}")) else Ok(()),
-          Err(_) => Err(path_error(id, tool, "path escapes workspace: ${path}"))
+        -- The shared guard (motoko_ext_abi/path_guard). FAIL CLOSED: any
+        -- non-zero exit refuses. Before, only 43/44 refused and every other
+        -- failure was let through, because `realpath -m` is GNU-only; on
+        -- macOS that let reads and writes follow a symlink out (#209).
+        match exec("bash", ["-c", path_guard_script(), "motoko-path-guard", workdir, stripped]) {
+          Ok(out) =>
+            if out.exitCode == 0 then Ok(())
+            else if out.exitCode == 43 || out.exitCode == 44 then Err(path_error(id, tool, "path escapes workspace: ${path}"))
+            else Err(path_error(id, tool, "path guard could not resolve the workspace (exit ${show(out.exitCode)}): ${path}")),
+          Err(_) => Err(path_error(id, tool, "path guard could not run: ${path}"))
         }
       }
     }
@@ -824,31 +827,26 @@ func atomic_write(path: string, content: string) -> Result[(), string] ! {FS, Pr
     Err(msg) => Err(msg),
     Ok(tmp) => {
       let _ = writeFile(tmp, content);
-      let chmod_result =
-        if fileExists(path) then
-          match exec("chmod", ["--reference", path, tmp]) {
-            Ok(out) => if out.exitCode == 0 then Ok(()) else Err("failed to preserve mode bits: ${trim(toString(out.stderr))}"),
-            Err(err) => Err("failed to preserve mode bits: ${process_error_to_string(err)}")
-          }
-        else Ok(());
-      match chmod_result {
-        Err(msg) => {
+      -- Best effort: give the temp file the original's mode bits. GNU stat
+      -- takes `-c %a`, BSD/macOS stat `-f %Lp`; `chmod --reference` is
+      -- GNU-only and, once its exit code was honoured (#202), failed every
+      -- EditFile on macOS. A failure here leaves the temp file's default mode
+      -- and never fails the edit; only the rename below can.
+      let _ = if fileExists(path) then {
+        let _ = exec("bash", ["-c", "m=$(stat -c %a \"$1\" 2>/dev/null || stat -f %Lp \"$1\") && chmod \"$m\" \"$2\"", "motoko-chmod", path, tmp]);
+        ()
+      } else ();
+      match exec("mv", ["-f", tmp, path]) {
+        Ok(out) =>
+          if out.exitCode == 0 then Ok(())
+          else {
+            let _ = exec("rm", ["-f", tmp]);
+            Err("atomic rename failed: ${trim(toString(out.stderr))}")
+          },
+        Err(err) => {
           let _ = exec("rm", ["-f", tmp]);
-          Err(msg)
-        },
-        Ok(_) =>
-          match exec("mv", ["-f", tmp, path]) {
-            Ok(out) =>
-              if out.exitCode == 0 then Ok(())
-              else {
-                let _ = exec("rm", ["-f", tmp]);
-                Err("atomic rename failed: ${trim(toString(out.stderr))}")
-              },
-            Err(err) => {
-              let _ = exec("rm", ["-f", tmp]);
-              Err("atomic rename failed: ${process_error_to_string(err)}")
-            }
-          }
+          Err("atomic rename failed: ${process_error_to_string(err)}")
+        }
       }
     }
   }
