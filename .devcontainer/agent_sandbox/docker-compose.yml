@@ -25,16 +25,19 @@ services:
       context: ../..
       dockerfile: .devcontainer/agent_sandbox/Dockerfile
       args:
-        # HERDR_VERSION, HERDR_SHA256 and AGENT_BROWSER_VERSION have no defaults, and that is the design.
-        # A pinned value baked into the Dockerfile does not track anything: the instruction text never
-        # changes, so Docker reuses the cached layer and the image keeps whatever was current the day it
-        # was first built, indefinitely and invisibly. agent.sh resolves each one on the HOST — herdr from
-        # https://herdr.dev/latest.json (version AND sha256), agent-browser from the npm registry — so the
-        # arg VALUE changes when upstream publishes, which is what invalidates the layer. Building with
-        # plain `docker compose` therefore FAILS here rather than silently producing an unpinned image; that
-        # is the point. Reproduce an old image by exporting the same values (see `agent.sh help`).
-        HERDR_VERSION: ${HERDR_VERSION:?resolved by agent.sh — build through it, or export it yourself}
-        HERDR_SHA256: ${HERDR_SHA256:?resolved by agent.sh from https://herdr.dev/latest.json}
+        # AGENT_BROWSER_VERSION has no default, and that is the design. A pinned value baked into the
+        # Dockerfile does not track anything: the instruction text never changes, so Docker reuses the cached
+        # layer and the image keeps whatever was current the day it was first built, indefinitely and
+        # invisibly. agent.sh supplies it from versions.env, so the arg VALUE changes when the pin moves,
+        # which is what invalidates the layer. Building with plain `docker compose` therefore FAILS here
+        # rather than silently producing an unpinned image; that is the point.
+        #
+        # HERDR_VERSION and HERDR_SHA256 are NOT pinned: `agent.sh build` resolves the latest release and its
+        # sha256 from https://herdr.dev/latest.json into these on every build, so the value changes when
+        # upstream publishes. They default to empty here only so that `stop`, `sessions` and `logs` can parse
+        # this file offline; the Dockerfile refuses to build with either empty.
+        HERDR_VERSION: ${HERDR_VERSION:-}
+        HERDR_SHA256: ${HERDR_SHA256:-}
         AGENT_BROWSER_VERSION: ${AGENT_BROWSER_VERSION:?resolved by agent.sh from the npm registry}
         # The agent CLIs (claude, codex, omp) float at npm `latest` instead — the Dockerfile installs them
         # unpinned, and AGENTS_CACHE_BUST is what invalidates that layer. agent.sh exports a fresh timestamp

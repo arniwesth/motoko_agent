@@ -364,7 +364,7 @@ on_host() {
   if [[ -f "${dir}/versions.env" ]]; then
     pass "pins: versions.env present ($(grep -c '^[A-Z]' "${dir}/versions.env") pinned values)"
   else
-    fail "pins: versions.env MISSING — the build cannot resolve HERDR_VERSION and will refuse"
+    fail "pins: versions.env MISSING — the build cannot resolve AGENT_BROWSER_VERSION and will refuse"
   fi
   if [[ -f "${repo_root}/.env" ]]; then
     pass "env: ${repo_root}/.env present (compose interpolates the environment block from it)"

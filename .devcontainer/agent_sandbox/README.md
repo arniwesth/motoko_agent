@@ -125,8 +125,8 @@ Note that herdr cannot *launch* Motoko (`agent start --kind` is a fixed list) �
 .devcontainer/agent_sandbox/agent.sh session=review kill
 .devcontainer/agent_sandbox/agent.sh shell            # a bash prompt, outside herdr
 .devcontainer/agent_sandbox/agent.sh run make test    # one-shot; dies with this terminal
-.devcontainer/agent_sandbox/agent.sh build            # rebuild: pins reproduced, CLIs re-resolved at latest
-.devcontainer/agent_sandbox/agent.sh upgrade          # re-resolve every pinned version, rewrite versions.env, rebuild
+.devcontainer/agent_sandbox/agent.sh build            # rebuild: herdr and the CLIs at latest, agent-browser as pinned
+.devcontainer/agent_sandbox/agent.sh upgrade          # move the agent-browser pin, rewrite versions.env, rebuild
 .devcontainer/agent_sandbox/agent.sh stop             # stop and remove the container
 .devcontainer/agent_sandbox/agent.sh check            # the R9 sweep
 .devcontainer/agent_sandbox/agent.sh help             # the header block of the script, coloured
@@ -135,25 +135,27 @@ Note that herdr cannot *launch* Motoko (`agent start --kind` is a fixed list) �
 A **session** is a whole herdr server with its own panes, sockets and persisted state. You usually want one,
 with several panes in it — a second session is for work that must be genuinely independent.
 
-### Versions: half pinned, half floating
+### Versions: herdr and the CLIs float, agent-browser is pinned
 
-[versions.env](./versions.env) carries herdr's version and sha256 and the agent-browser version, and is
-committed. The agent CLIs (claude, codex, omp) are deliberately NOT in it: the Dockerfile installs them at
-npm `latest` on every build, by decision 2026-09-06 — reproducibility of those three is not a goal.
+[versions.env](./versions.env) carries the agent-browser version, and is committed. Herdr and the agent CLIs
+(claude, codex, omp) are deliberately NOT in it: every `agent.sh build` takes the latest of each —
+herdr's version and sha256 from `https://herdr.dev/latest.json` (the download is still checked against that
+sha256), the CLIs from npm `latest`. Reproducibility of those is not a goal.
 
 Two things follow, both deliberate:
 
-* **`stop`, `sessions`, `logs` work with no network**, because nothing is resolved at run time.
-* **A harness upgrade is a commit** for the pinned half. `agent.sh upgrade` re-resolves each pinned line
-  from upstream, prints the diff, rewrites the file and rebuilds; that diff is the record of what the
-  agent now runs. `build` never re-resolves the pinned half — but it DOES re-resolve the CLIs, through a
-  fresh `AGENTS_CACHE_BUST` timestamp that invalidates the Dockerfile layer.
+* **`stop`, `sessions`, `logs` work with no network**, because only `build` and `upgrade` resolve anything.
+* **Moving the agent-browser pin is a commit.** `agent.sh upgrade` re-resolves it from the npm registry,
+  prints the diff, rewrites the file and rebuilds. `build` never re-resolves that pin — but it DOES
+  re-resolve herdr and the CLIs: herdr because its version is a build arg whose value changes, the CLIs
+  through a fresh `AGENTS_CACHE_BUST` timestamp that invalidates the Dockerfile layer.
+* **A build needs `herdr.dev` to be reachable.** There is no pinned herdr to fall back to.
 
 The bust exists because `RUN bun install -g …@latest` inside a Dockerfile does **not** track latest on its
 own — the instruction text never changes, so Docker reuses the cached layer and the image keeps whatever
 was current the day it was first built, indefinitely and invisibly. A build arg whose *value* changes is
-what invalidates the layer. Override a pin for a single command by exporting it:
-`HERDR_VERSION=0.8.1 agent.sh build`.
+what invalidates the layer. Build an older herdr for a single command by exporting both values:
+`HERDR_VERSION=0.8.2 HERDR_SHA256=<sha256 for your architecture> agent.sh build`.
 
 **The agent cannot upgrade itself**, and that is the same property as the missing `sudo`. herdr is installed
 root-owned in `/usr/local/bin`, `update.version_check` is off, and `GH_PROMPT_DISABLED=1` is set — but
@@ -167,8 +169,8 @@ plainly so nobody mistakes them for a boundary.
 | *"Run this on the HOST, not inside a dev container"* | you ran it from a terminal attached to a container. Use a terminal on your machine, or a VS Code window not reopened in a container |
 | *"missing …/.env"* | create the repository-root `.env` first — an empty file starts the container, but motoko will have no model keys |
 | `docker not found` | OrbStack / Docker Desktop is not running |
-| the build fails with *"HERDR_VERSION and HERDR_SHA256 are required"* | you ran `docker compose build` directly. Use `agent.sh build`, which exports the pinned values |
-| `agent.sh upgrade` fails with *403 Forbidden* | herdr.dev rejects some HTTP clients by User-Agent; the resolver sets one. If it still fails, the site is down — `agent.sh build` still works from the pinned file |
+| the build fails with *"HERDR_VERSION and HERDR_SHA256 are required"* | you ran `docker compose build` directly. Use `agent.sh build`, which resolves the latest herdr and exports both |
+| `agent.sh build` or `upgrade` fails with *could not resolve the latest herdr* (e.g. *403 Forbidden*) | herdr.dev rejects some HTTP clients by User-Agent; the resolver sets one. If it still fails, the site is down — export `HERDR_VERSION` and `HERDR_SHA256` for a release you know, and build again |
 | motoko fails at start-up on a missing module | `src/tui/node_modules` is not on the tree: `agent.sh bootstrap` |
 | the obsidian MCP server never connects | expected. What stops it is the **egress boundary**, at every layer: on the internal-only network the embedded resolver does not even serve `host.docker.internal` (on a routed network it does, with or without `extra_hosts`); there is no route to the host's address range regardless; and the proxy, which *can* resolve the name, refuses the destination by CIDR. See *Design* |
 | `claude` or `codex` asks you to log in again after a rebuild | expected: nothing mounts `/home/motoko`, so a subscription login dies with the container. Use the API keys, or uncomment the named-volume block in `docker-compose.yml` |
