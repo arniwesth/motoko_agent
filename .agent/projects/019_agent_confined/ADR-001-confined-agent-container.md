@@ -302,6 +302,15 @@ token with the bot's push rights; `herdr plugin install` normally shows a source
 and a build-time install would have to pass `--yes` and skip it for ever. **The pin is the review
 boundary**, and bumping it should mean someone read the diff.
 
+**Amendment (herdr unpinned).** Herdr is no longer pinned. `herdr-projects` needs 0.9.3 or newer, and the
+owner decided herdr should always be the latest release. `versions.env` now carries only agent-browser;
+`agent.sh build` and `upgrade` resolve herdr's version and sha256 from `https://herdr.dev/latest.json`
+(`resolve_herdr`), and the Dockerfile still checks the download against that sha256. As the Dockerfile
+already notes, the manifest supplies both, so this catches a corrupted download, not a compromised
+manifest. Consequences: `build` needs `herdr.dev`, the image is not reproducible for herdr, and
+`stop`, `sessions` and `logs` stay offline. An older release can still be built by exporting both
+`HERDR_VERSION` and `HERDR_SHA256`. Third-party plugins stay pinned, including `herdr-projects` (v1.2.1).
+
 ### D8 — `.devcontainer`, `.vscode` and `.git/hooks` are mounted read-only
 
 ```yaml

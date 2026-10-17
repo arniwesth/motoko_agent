@@ -151,8 +151,9 @@ WORKDIR /
 #
 # WHY NOT `curl https://herdr.dev/install.sh | sh`: that installer resolves "latest" at RUN time, which Docker
 # then caches forever — the image would silently keep whatever was current the day the layer was first built.
-# agent.sh resolves the version AND its published sha256 from https://herdr.dev/latest.json on the host and
-# passes both in, so the arg VALUE changes when upstream publishes, which is what invalidates this layer. The
+# agent.sh resolves the LATEST version AND its published sha256 from https://herdr.dev/latest.json on the host
+# on every build (herdr is deliberately not pinned) and passes both in, so the arg VALUE changes when upstream
+# publishes, which is what invalidates this layer. The
 # checksum is verified here rather than trusted: the same manifest supplies both, so this catches a corrupted
 # or truncated download, not a compromised manifest.
 #
@@ -570,6 +571,22 @@ RUN version="$(sed -nE 's/^DAGR_VERSION \?= ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' /tm
     && ln -sf "$(ls /home/${USERNAME}/.config/herdr/plugins/github/herdr-dagr-*/bin/dagr | head -n1)" \
          /home/${USERNAME}/.local/bin/dagr \
     && /home/${USERNAME}/.local/bin/dagr --version
+
+# ---------------------------------------------------------------------------- herdr-projects (install)
+# A work board for herdr (github.com/eliasstravik/herdr-projects): one task list, each task delegated to an
+# ordinary herdr agent in its own space. Open it with `herdr plugin action invoke open --plugin herdr-projects`.
+# Needs herdr 0.9.3 or newer, which is why herdr is no longer pinned (see the herdr block above).
+#
+# PINNED to a release tag, unlike herdr itself: this is third-party code that runs inside the container
+# holding the working tree, the API keys and the bot's push token, and `--yes` skips the source preview
+# `plugin install` would otherwise show (ADR-001 D7). The pin is the review boundary - bump it when someone
+# has read the diff.
+ARG HERDR_PROJECTS_REF=v1.2.1
+# The plugin's build step downloads its one program from the GitHub release for this platform (curl is in
+# the image); it falls back to building from source, and there is no Rust toolchain here, so a failed
+# download fails the build rather than leaving a plugin with no program.
+RUN herdr plugin install eliasstravik/herdr-projects --ref "${HERDR_PROJECTS_REF}" --yes \
+    && herdr plugin list | grep -q herdr-projects
 
 
 
