@@ -1282,6 +1282,7 @@ and 027's adoption of the draft §4 amendment.
 ## Cross-references
 
 - [ADR-001 v0.8](ADR-001-extension-owned-structured-decisions.md) — D2–D7, the freeze evidence and the acceptance rule
+- [Addendum A](PLAN-001-addendum-progress-guard-on-jev.md) — `progress_contract_guard` as a line-X consumer on Jev 1.14 (proposed 2026-10-17)
 - The seven reviews (`REVIEW-adr001-v0.1…v0.7-*.md`) — their appendices are the probe suite P0.2 commits
 - [NOTE-001](NOTE-001-effect-inference-gap.md) — the inference gap and its re-test procedure
 - [033/ADR-001 Release scope](../033_release/ADR-001-release-scope.md) — G5, G5b, G5e, G8
