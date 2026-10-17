@@ -1,8 +1,9 @@
 # PLAN-001 addendum A: `progress_contract_guard` as a structured-decision consumer, on Jev 1.14
 
-Date: 2026-10-17. Status: **proposed, v5.** #271 merged v1. Codex `gpt-6.1-sol` reviewed v1 (REVISE, six
-findings), v2 (#272; REVISE, four new), v3 (REVISE, two P2) and v4 (REVISE, one P2 and two P3). v5
-answers those three. §9 maps every finding to its change. **Every decision in §6 is the
+Date: 2026-10-17. Status: **proposed, v6.** #271 merged v1. Codex `gpt-6.1-sol` reviewed v1 (REVISE, six
+findings), v2 (#272; REVISE, four new), v3 (REVISE, two P2), v4 (REVISE, one P2 and two P3) and v5
+(REVISE, three P2). v6 answers those three, mainly by taking operator-turn provenance out of this
+addendum: it becomes a named prerequisite design, **P-OT** (§4.5). §9 maps every finding to its change. **Every decision in §6 is the
 operator's.** Grounded at `origin/main` `602e1e4e`. Extends [PLAN-001](PLAN-001-implement-adr-001-abi-8.md)
 line X; it changes no part of line R and no ABI type.
 
@@ -160,7 +161,7 @@ profile:
   and they count in D3's missed-nudge comparison.
 
 The remedy follows the reason: raise the bound that `incomplete_reason` names. A `record` failure is
-not a bound, so it goes back to §4.5's owners. Adding rules that pick which turns "set constraints"
+not a bound: it is P-OT's (§4.5). Adding rules that pick which turns "set constraints"
 is not a remedy: that choice is itself a semantic judgment and would bring the problem back.
 
 **The 5000 threshold on `requests_operator_input` is a policy cutoff, not a calibrated one.** A3
@@ -279,26 +280,38 @@ force, profile switch): two markers, then a checkpoint that drops them, then an 
 
 This adds work to three PLAN-001 parts. The estimate is in §5.
 
-### 4.5 The operator-turn record: who builds what
+### 4.5 Prerequisite P-OT: operator-turn provenance (a separate design)
 
 The guard needs the operator's instructions as the operator gave them, whatever the history has since
-been folded into. No view carries that today: `PureCtx` has `history_slice` and no provenance. v5 asks
-line X for a record in the shape the plan already uses for tool evidence. P1.3x gives `C2LoopState` a
-typed tool-evidence window, which is **incomplete on resume**. This is the same, for operator turns.
+been folded into. That needs a record of **who wrote each user-role message, kept durably and in
+order**. v5 tried to specify that record here. The v5 review showed it is a core change to how
+history is recorded, journalled and resumed, not part of this guard, and that three of v5's claims
+about it were wrong. v6 therefore states **what the guard requires**. The design is left to its own
+031 document, **P-OT**, not yet written, which owns the journal, host, fold, loop and ABI surfaces
+involved. This guard is P-OT's first consumer, and A3 depends on it.
 
-| piece | owner | requirement |
+**What P-OT must provide (its acceptance criteria).** Each is a v5 review finding or a requirement v5
+already stated correctly:
+
+| # | requirement | why: the evidence at `78f615a7` |
 |---|---|---|
-| the field | **ADR-001 amendment + ABI 8.1** | the views gain `operator_turns: { turns: [OperatorTurn], complete: bool }`, where `OperatorTurn = { seq: int, author: TurnAuthor, content: string }` and `TurnAuthor = Operator \| Loop \| Extension(string)`. A new field is an 8.x minor behind the view constructors (PLAN-001 §1a, the residual-risk paragraph). |
-| the record | **P1.3x** (`C2LoopState`, beside the tool-evidence window) | the loop appends every user-role message it adds to the history, at the moment it adds it. A checkpoint folds the history, **not** this record. `author` is known at that moment and is never inferred from text: operator input is `Operator`, the loop's own messages (wakes, `[motoko loop]`) are `Loop`, and a finalize or policy `InjectUserMessage` is `Extension(id)`. |
-| the view | **P1.4x** (evidence construction) | each view is stamped with the record. `complete` is `true` for a session that has run under the record since it started. |
-| on resume | **P2.3** | the record is rebuilt from the journal's user-role `history_appended` entries on the active branch. The journal keeps entries a checkpoint folded, as the seed (§4.4) already relies on. `complete` is `false` if the session predates the record, or if authorship cannot be recovered for some entry, as for the tool-evidence window. |
+| R1 | **Durable authorship and order.** Every user-role message, initial seeds included, is persisted with an author (`Operator`, `Loop` or `Extension(atom_key)`) and a sequence number. A resume recovers them. The record also says whether recording began at session start. | Today nothing stores an author: `HistoryAppendedInfo` (`src/core/phase_vocab.ail:1109`) and `AppendedEntry` (`src/core/journal.ail:854`) have none, and the host's writer selects only its known fields (`src/tui/src/session-journal.ts:666`). The review passed extra `author` fields through the real `SessionJournal.record`, and they were dropped. Without R1, `complete` would be false after every restart, not only for old sessions (v5 review, finding 1). |
+| R2 | **Operator input delivered by a wake is `Operator`.** The raw `OperatorInput` payload is recorded as an `Operator` turn and the synthetic wrapper as `Loop`, on the in-run and the resumed wake paths. Delegate, timer and status wakes are not operator turns. | `wake_message` (`src/core/session.ail:2850`) wraps the operator's text in a `[motoko loop]` message; the resumed path calls it too (`:5043-5044`). v5 labelled all wakes `Loop`, which dropped a real approval requirement typed while parked, with `complete` still true. The review reproduced the identical projection (v5 review, finding 2). |
+| R3 | **Feedback is attributed to its atom.** A finalize or policy feedback message carries the winning atom's `atom_key`, legacy `SolverJudge` winners included, threaded internally. | Today the finalize collector merges votes to feedback text and drops the owner. `FinalizeOutcome` (`packages/motoko-ext-abi/types.ail:1395`) has no constructor, so it cannot gain an owner field under the 8.x minor rule; the attribution has to be threaded inside core (v5 review, finding 1). |
+| R4 | **A view field under ABI 8.1** carrying the record and its `complete` flag, behind the exported view constructors (PLAN-001 §1a), whose **empty default reads as incomplete**. Constructors and projections preserve it. | The review confirmed the 8.x minor rule permits a new view field, on that condition. |
 
-The guard sends only turns with `author: Operator`. This also settles a point the #270 review raised:
-the user role alone does not prove the operator wrote a message.
+**P-OT's acceptance tests, from this guard's side:**
+- a new-format session, checkpointed, then resumed, recovers `complete = true` with the deciding turn present;
+- a session predating P-OT resumes with `complete = false`;
+- the parked-wake approval pair (R2) stays distinguishable, in run and after resume;
+- an injected feedback message carries its atom.
 
-**Before 8.1 lands, the configured path cannot run.** A0 is unaffected, because under the stub
-the rules decide and the state is never sent. A3 is the first stage that sends it, so A3 depends on 8.1
-and on P1.3x, P1.4x and P2.3 carrying the record (§5).
+**This addendum does not estimate P-OT.** v5's 1½–2 delegate-days did not include R1 or R3.
+
+**Until P-OT lands, the configured path cannot run,** and nothing here pretends otherwise. On ABI 8.0
+the guard has no record, so it treats the record as incomplete (`incomplete_reason: record`). Any
+configured use would then abstain on every stop that asks the operator. That is why A3 is gated on P-OT
+and on A0.1 (§5).
 
 ## 5. Stages
 
@@ -307,16 +320,18 @@ The first live exchange happens **inside A3**, the gated shadow stage, and nowhe
 
 | stage | depends on | surface | produces | exit | est. |
 |---|---|---|---|---|---|
-| **A0: port, stub-backed** | #270 merged; §6 D1, D2, D6 | the guard package | `DecisionSolverJudge` with §4's `prepare`/`interpret`; the `Unavailable` split of §4.1; the budget of §4.3 (R arm); the helpers factored; `decide_with_budget` kept as the fallback | inline tests: each immediate arm, each answer → vote, the absent-distribution abstention, the incomplete-context abstention (`context_complete` false × `requests_operator_input` ≥ 5000), the state's bounds and the `context_complete` computation, each `Unavailable` reason → its row of §4.1; a differential against `decide_with_budget` on the existing fixtures; a **registration-level** scenario through `register.ail` and the finalize fold; `phase_c2_wiring_scenarios PASS count=20`; a scripted backend (`motoko_ext_conformance/examples/scripted_backend.ail`) returning each of the five answers and each `Unavailable` reason; conformance green; the `ailang.lock` diff checked per §4.2 | 1½–2 |
+| **A0: port, stub-backed, on ABI 8.0** | #270 merged; §6 D1, D2, D6 | the guard package | `DecisionSolverJudge` with §4's `prepare`/`interpret`; the `Unavailable` split of §4.1; the budget of §4.3 (R arm); the helpers factored; `decide_with_budget` kept as the fallback. **The state builder reads only ABI 8.0 fields.** With no operator-turn record, it sends no operator turns and reports `context_complete = false`, `incomplete_reason: record`. That is truthful, and it compiles: the stub runs after `prepare` (`runtime.ail:879-882`), so `prepare` must type-check on 8.0, and reading `ctx.operator_turns` there fails `ailang check` (v5 review, finding 3) | inline tests: each immediate arm, each answer → vote, the absent-distribution abstention, the incomplete-context abstention (`context_complete` false × `requests_operator_input` ≥ 5000), the state's bounds and the `context_complete` computation, each `Unavailable` reason → its row of §4.1; a differential against `decide_with_budget` on the existing fixtures; a **registration-level** scenario through `register.ail` and the finalize fold; `phase_c2_wiring_scenarios PASS count=20`; a scripted backend (`motoko_ext_conformance/examples/scripted_backend.ail`) returning each of the five answers and each `Unavailable` reason; conformance green; the `ailang.lock` diff checked per §4.2 | 1½–2 |
+| **A0.1: the state builder on ABI 8.1** | **P-OT** landed (ABI 8.1, R1–R4) | the guard package | the builder reads `ctx.operator_turns`, sends `Operator` turns only, and takes `complete` from the record; the package re-pinned to ABI 8.1 and re-locked | inline tests: a complete record → turns sent; an incomplete one → `record`; non-`Operator` turns never sent; the §5.2 checkpointed and parked-wake pairs on a scripted backend | ½ |
 | **A1: labelled set** | §6 D7 | **private** labels outside the repo; **synthetic** fixtures in it | see §5.1 | inter-rater agreement and the rule-based guard's confusion matrix, as aggregates only | ½–1 |
 | **A2: binding, offline** | **P2.1** (decision codecs and strict replay of decision atoms), **P3.3** (live/recorded/scripted parity, which itself follows P3.1's adapter and double and P3.2's catalog config) | host config | the `progress-judge` → `typesafe/jev-1.14-20261014` binding, configured but not called; the adapter's `Choice` mapping checked against the published 1.14 request types | one exchange against **P3.1's scripted provider double**, recorded and replayed strict with no network. **No call to the live provider.** | ½ |
-| **A3: shadow** | A0, A1, A2; P1.4x (mode and counter); **P2G** and **P3G**; **ABI 8.1 and the operator-turn record (§4.5)**; §6 D4 and D7 for what is sent | a run profile | the first live exchanges, in shadow on the operator's chosen profiles: charged, neutral vote, no counter advanced | a PLAN-001 §9 record: Jev against the rules on A1's synthetic set, then on ≥ 50 live stops on enabled profiles; false nudges, missed nudges, **incomplete-context abstentions by `incomplete_reason`**, the Binary question's errors; **query counts per profile** with the `Unavailable` rate per reason, and `Answered`-without-distribution abstentions reported separately; cost, p50/p95 latency; §5.2's matrix | 1 + wall-clock |
+| **A3: shadow** | A0, **A0.1**, A1, A2; P1.4x (mode and counter); **P2G** and **P3G**; **P-OT** (§4.5); §6 D4 and D7 for what is sent | a run profile | the first live exchanges, in shadow on the operator's chosen profiles: charged, neutral vote, no counter advanced | a PLAN-001 §9 record: Jev against the rules on A1's synthetic set, then on ≥ 50 live stops on enabled profiles; false nudges, missed nudges, **incomplete-context abstentions by `incomplete_reason`**, the Binary question's errors; **query counts per profile** with the `Unavailable` rate per reason, and `Answered`-without-distribution abstentions reported separately; cost, p50/p95 latency; §5.2's matrix | 1 + wall-clock |
 | **A4: enforce** | A3 meets §6 D3's bar; operator gate | profile config | Jev's vote is applied; §4.1's table governs `Unavailable` | the same record continued for 1 week; the `Unavailable` rate is watched after A3, not only during it; rollback = unset the binding, so `UnconfiguredBackend` applies the rules again (§4.1) | ½ |
 
-Delegate-days added to line X: **7–9½**:
-- the seed (§4.4): about 1–1½ across P0.7, P3.2 and P2.3, plus the ADR amendment for the reserved key;
-- the operator-turn record (§4.5): about 1½–2 across the ABI 8.1 field, P1.3x, P1.4x and P2.3, plus its
-  ADR amendment. A0 and A1 (2–3) can start now.
+Delegate-days for this addendum's stages and the seed: **6–8**. That is the stages above, plus about
+1–1½ for the seed (§4.4) across P0.7, P3.2 and P2.3 and the ADR amendment for its reserved key.
+**P-OT is not included;** its own design estimates it (§4.5). A0 and A1 (2–3) can start now. A2 waits on
+P2.1 and P3.3, and A0.1 on P-OT. A2 builds its request directly; it does not exercise the guard's state
+builder, so it does not wait on A0.1.
 
 ### 5.1 A1 and PLAN-001 §0.9
 
@@ -370,13 +385,16 @@ least three later user turns:
 | the older turn pre-approves those probes | `stopped_mid_task` | nudge |
 | no such turn: the candidate invents the requirement | `stopped_mid_task` | nudge |
 | either of the first two, with `user_chars_total` lowered so that turn is cut | — | **abstain** (`context_complete` false, `total`) |
-| either of the first two, **after a checkpoint that folds the deciding turn** | as in the first two rows | as in the first two rows: the record still holds the turn (§4.5) |
-| either of the first two, after a checkpoint, in a session resumed from a journal that predates the record | — | **abstain** (`context_complete` false, `record`) |
+| either of the first two, **after a checkpoint that folds the deciding turn** (from A0.1) | as in the first two rows | as in the first two rows: P-OT's record still holds the turn (§4.5) |
+| either of the first two, with the deciding instruction **typed while parked** and delivered by a wake, in run and after resume (from A0.1) | as in the first two rows | as in the first two rows: the wake's payload is an `Operator` turn (R2) |
+| either of the first two, resumed from a journal that predates P-OT, or on ABI 8.0 | — | **abstain** (`context_complete` false, `record`) |
 
 **Long-session controls.** A true premature stop ("Would you like me to continue?" with nothing
 requiring approval) in a session with one operator turn over `user_chars`, and in one over
-`user_chars_total`. Expected: abstain, recorded as an incomplete-context missed nudge. These are what
-D3's missed-nudge comparison has to absorb.
+`user_chars_total`. Expected: abstain, recorded as an incomplete-context missed nudge. Each also comes
+in a **rule-positive** form that today's rules nudge, e.g. "Work remaining: … Would you like me to
+continue?". With both forms, the comparison measures what the abstention loses against the rules, not
+only the bare question. These are what D3's missed-nudge comparison has to absorb.
 
 ## 6. Decisions for the operator
 
@@ -464,3 +482,16 @@ the amendment form and the owners checked out. The instruction finding was partl
 | 2 | P3 | the seed keyed by `invocation_id` would break once line X adds the occurrence | §4.4: `atom_key` = owner/site/local ID, the line-R form, as ADR D5/D6 retain counters |
 | 3 | P3 | raising only the total bound cannot repair truncation caused by the task or a single turn; the abstentions are `Answered`, unseen by the `Unavailable` cap | §4: `incomplete_reason` names the bound; the remedy follows it; the defaults are about 4× higher; A3 reports abstentions by reason and counts mislabelled ones as missed nudges; §5.2 adds long-session controls; D3 counts them |
 | — | note | the 5000 threshold is a policy cutoff; D4 consent must cover historical text | §4: A3 measures the Binary errors; D4 says the consent covers historical operator text, which is sent unredacted |
+
+### 9.4 Review of v5: REVISE → v6
+
+The seed key and truncation findings were resolved. The checkpoint finding was partly resolved: a
+separate record keeps the paired sessions apart through the real checkpoint, but v5's record could not
+be built as specified.
+
+| # | sev | finding on v5 | v6 |
+|---|---|---|---|
+| 1 | P2 | the journal stores no author, and the host drops extra fields (reproduced through `SessionJournal.record`), so rebuilding the record on resume recovers nothing and `complete` is false after every restart; feedback's extension is not known where the loop adds the message | §4.5: provenance becomes **P-OT**, a separate design; R1 (durable authorship, order, seeds, start-of-session) and R3 (feedback attributed to its atom, threaded internally since `FinalizeOutcome` cannot gain a field) are its acceptance criteria; v5's estimate is withdrawn |
+| 2 | P2 | operator input delivered by a wake is wrapped as `[motoko loop]`, so labelling wakes `Loop` drops a real approval requirement with `complete` still true; reproduced with the real `wake_message` | §4.5 R2: the wake's raw `OperatorInput` is an `Operator` turn, on in-run and resumed paths; §5.2 adds the parked-wake pair |
+| 3 | P2 | A0's `prepare` reads `ctx.operator_turns`, which fails `ailang check` on ABI 8.0 (reproduced); the stub runs after `prepare`, so absence of a provider does not avoid it | §5: A0 builds the state from 8.0 fields and truthfully reports `record`; a new stage **A0.1** moves the builder to 8.1 after P-OT; A3 depends on A0.1; A2 builds its request directly and does not |
+| — | note | add rule-positive long-session controls | §5.2: each long-session control also in a rule-positive form |

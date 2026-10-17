@@ -18,6 +18,7 @@ Documents only. No code, no ABI change, and no change to line R.
 - docs(031): addendum A v3 — the four findings of the #272 review
 - docs(031): addendum A v4 — the two findings of the v3 review
 - docs(031): addendum A v5 — the three findings of the v4 review
+- docs(031): addendum A v6 — operator-turn provenance becomes prerequisite P-OT
 
 1 file changed: `.agent/projects/031_system_one_decisions/PLAN-001-addendum-progress-guard-on-jev.md`. #271's merged PR record is left as it was.
 
@@ -61,6 +62,16 @@ Seed ownership was resolved on paper. Sol ran the real checkpoint on the real jo
 | 2 | P3 | the seed keyed by `invocation_id` breaks once line X adds the occurrence | §4.4: `atom_key` = owner/site/local ID |
 | 3 | P3 | raising only the total bound can't fix truncation by the task or one turn; those abstentions are invisible to the `Unavailable` cap | §4: `incomplete_reason`, defaults about 4×, A3 reports abstentions by reason and counts them as missed nudges; §5.2 long-session controls |
 
+### Review of v5: REVISE (three P2) → v6
+
+v5 tried to specify an operator-turn record inside the addendum, and the review showed three of its claims were wrong. v6 takes provenance out as a named prerequisite design, **P-OT**, with the findings as its acceptance criteria. P-OT's design and estimate are left to its own 031 document.
+
+| # | sev | finding on v5 | v6 |
+|---|---|---|---|
+| 1 | P2 | the journal stores no author, and the host drops extra fields (reproduced through `SessionJournal.record`); feedback's extension isn't known where the loop adds the message | §4.5 P-OT R1 (durable authorship, order, seeds, start-of-session) and R3 (feedback attributed to its atom, threaded inside core) |
+| 2 | P2 | operator input delivered by a wake is wrapped as `[motoko loop]`, so labelling wakes `Loop` drops it; reproduced with the real `wake_message` | P-OT R2: the wake's raw `OperatorInput` is an `Operator` turn, in run and after resume; §5.2 parked-wake pair |
+| 3 | P2 | A0's `prepare` reading `ctx.operator_turns` fails `ailang check` on ABI 8.0 (reproduced) | A0 builds on 8.0 and reports `record` truthfully; new stage A0.1 moves it to 8.1 after P-OT; A3 depends on A0.1 |
+
 ## Governing docs
 
 - `.agent/projects/031_system_one_decisions/PLAN-001-implement-adr-001-abi-8.md`: §0.9 (privacy), §1a (lines R/X), P1.3x, P1.4x, P2G, P3.1–P3.3, P3G, P4.1, §7 Q4, §8 (no live inference before a shadow run).
@@ -69,7 +80,7 @@ Seed ownership was resolved on paper. Sol ran the real checkpoint on the real jo
 
 ## Predicted outcome
 
-Nothing changes at runtime. The addendum on `main` becomes v5: five stages and **seven** operator decisions (§6). D6 (abstain on live `Unavailable`) and D7 (A1's private tier) are new. A0 (the stub-backed port) and A1 (the labelled set, in tiers) can still start now. A2 (offline), A3 (shadow, the first live call) and A4 (enforce) wait on line X.
+Nothing changes at runtime. The addendum on `main` becomes v6: five stages and **seven** operator decisions (§6). D6 (abstain on live `Unavailable`) and D7 (A1's private tier) are new. A0 (the stub-backed port) and A1 (the labelled set, in tiers) can still start now. A2 (offline), A3 (shadow, the first live call) and A4 (enforce) wait on line X.
 
 ## Test evidence
 
@@ -79,6 +90,8 @@ Nothing changes at runtime. The addendum on `main` becomes v5: five stages and *
 - **Review of v3:** v2's findings 2, 3 (on paper; Jev unmeasured) and 4, and the outage note, are resolved; 1 partly, now finished in v4. The reviewer re-ran the matrix and budget cases on a scripted reference interpreter, not Jev.
 - **Review of v4:** the full text was written by the reviewer to a scratch file and relayed. It checked the reserved-key amendment against Amendment 5, the owners against PLAN-001, and `--resume-force`'s consumers.
 - **v5 anchors:** checked at `78f615a7`: `session.ail:1940` (`history_slice`), `runtime.ail:327-328` and `:372` (`invocation_id`), and PLAN-001 P1.3x/P1.4x.
-- **Not done:** v5 has not been re-reviewed yet. `src/core/config.ail:130` (what `--resume-force` overrides) was read at `78f615a7`. Nothing here was executed: the design is a plan, and A0's tests are its first executable evidence.
+- **Review of v5:** the reviewer wrote the full text to a scratch file. It re-ran the checkpoint, seed and bounds cases. It exercised the real `wake_message`, `SessionJournal.record` and an ABI 8.0 `ailang check`.
+- **v6 anchors:** checked at `78f615a7`: `types.ail:1395`, `phase_vocab.ail:1109`, `journal.ail:854`, `session-journal.ts:666`, `session.ail:2850` and `:5043-5044`, `runtime.ail:879-882`.
+- **Not done:** v6 has not been re-reviewed yet. `src/core/config.ail:130` (what `--resume-force` overrides) was read at `78f615a7`. Nothing here was executed: the design is a plan, and A0's tests are its first executable evidence.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
