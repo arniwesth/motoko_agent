@@ -1,7 +1,8 @@
 # PLAN-001 addendum A: `progress_contract_guard` as a structured-decision consumer, on Jev 1.14
 
-Date: 2026-10-17. Status: **proposed, v2.** v2 answers the six findings of Codex `gpt-6.1-sol`'s review of
-v1 (#271), which returned REVISE. §9 maps each finding to its change. **Every decision in §6 is the
+Date: 2026-10-17. Status: **proposed, v3.** #271 merged v1. Codex `gpt-6.1-sol` reviewed v1 (REVISE, six
+findings) and then v2 (#272; REVISE, four of the six resolved, two partly, four new findings). v3
+answers the open ones. §9 maps every finding to its change. **Every decision in §6 is the
 operator's.** Grounded at `origin/main` `602e1e4e`. Extends [PLAN-001](PLAN-001-implement-adr-001-abi-8.md)
 line X; it changes no part of line R and no ABI type.
 
@@ -89,11 +90,23 @@ Otherwise it returns `JudgeQuery` with one question:
 ```
 id: "stop_kind"   kind: Choice
   finished           the task, as the operator stated it, is done
-  asking_operator    the response ends by handing a decision, approval or question to the operator
+  asking_operator    the agent stopped for something only the operator can supply, and names it: a
+                     decision the task leaves to the operator, an authorization the task or the
+                     operator requires before this step, or input the agent does not have
   waiting_external   work is running elsewhere and nothing the agent does now advances it
-  blocked            the agent cannot proceed and says why
-  stopped_mid_task   work the agent could do now remains, and it neither finished nor asked
+  blocked            the agent cannot proceed for a reason other than the operator, and says why
+  stopped_mid_task   work the agent could do now, under the task as stated, remains; this INCLUDES
+                     asking whether to continue work the task already authorizes, e.g. "Would you
+                     like me to continue?" under "do not stop early"
 ```
+
+v2's `asking_operator` covered handing *any* question to the operator, and `stopped_mid_task`
+excluded replies that asked. A classifier following those definitions would correctly answer
+`asking_operator` to an unnecessary "should I continue?" and suppress the nudge. That is the
+premature stop the guard exists for (#272 review, finding 3). v3 decides by **necessity**: the question
+counts as asking the operator only if the task or the operator made the operator's answer necessary.
+The question's `guidance` (in `question_config`) carries those definitions and §5.2's cases as
+labelled examples, each written from scratch per §5.1.
 
 **The state sent**, with every bound in `question_config`:
 
@@ -171,16 +184,29 @@ already spent. An answered `stopped_mid_task` could then nudge a third time.
 v2:
 
 - **Under line R:** the host has no counter (`interventions_used` is always 0). The guard counts its own
-  markers in `history_slice` (`budget() = 2`), as it does today. That is the only source, and ordinary
-  compaction keeps it: structural compaction keeps user messages, and the guard is handed the original
-  history (review-verified).
+  markers in `history_slice` (`budget() = 2`), as it does today. That is the only source. Provider
+  compaction keeps it (structural compaction keeps user messages; the guard is handed the original
+  history). **A history checkpoint does not:** `checkpoint` (`src/core/phase_vocab.ail:379`) folds the
+  history to a prefix summary, and the #272 review measured the marker count going from 2 to 0 across
+  one. So under line R a checkpoint can return a spent allowance. That is **today's guard's limit,
+  unchanged by the port**, and stated as such in A0's PR.
 - **From P1.4x:** the host's `decision_state.interventions_used` is the authoritative, durable counter
   (ADR-001 D5 retains intervention counts across compaction, profile change and resume). The guard reads
   usage as **`max(own_count, interventions_used)`** against **`min(budget(), intervention_limit)`**.
-  `max` means neither source can lower known usage: stub-era markers still count after the host counter
-  starts at 0, and the host's count still holds after a fold drops markers from the history.
-- **Rule for any future change:** reconciliation may raise known usage, never lower it. A migration that
-  initialises the host counter may seed it from `own_count`; it may not reset either.
+- **The seed is mandatory, not optional** (#272 review, finding 1). `max` alone does not make usage
+  durable. Two stub-era markers and a host counter at 0 give `max(2, 0) = 2`, but once a checkpoint
+  drops the markers, an unseeded host gives `max(0, 0) = 0`. So the host counter must hold a durable
+  floor **before** any marker can disappear:
+  - a session whose journal predates P1.4x gets a **recorded seed entry** at its schema promotion
+    (P3.2's `schema_promotion`, or the first decision after it, whichever P1.4x specifies). The entry
+    carries the count of this atom's applied feedback votes recovered from the journal, and is written
+    before the session's next checkpoint is allowed;
+  - if P1.4x cannot attribute applied feedback to the atom from a pre-P1.4x journal, such a session
+    **refuses to resume** with the ported guard enabled, the same way an `ext_set_digest` change already
+    refuses. A refused resume is visible; a silently restored allowance is not.
+  - Rule for any later change: reconciliation may raise known usage, never lower it.
+  - P1.4x's exit for this guard: two markers, then a checkpoint that drops them, then an answered
+    `stopped_mid_task` → no third nudge, on both the seeded and the refused path.
 
 ## 5. Stages
 
@@ -191,11 +217,11 @@ The first live exchange happens **inside A3**, the gated shadow stage, and nowhe
 |---|---|---|---|---|---|
 | **A0: port, stub-backed** | #270 merged; §6 D1, D2, D6 | the guard package | `DecisionSolverJudge` with §4's `prepare`/`interpret`; the `Unavailable` split of §4.1; the budget of §4.3 (R arm); the helpers factored; `decide_with_budget` kept as the fallback | inline tests: each immediate arm, each answer → vote, the absent-distribution abstention, each `Unavailable` reason → its row of §4.1; a differential against `decide_with_budget` on the existing fixtures; a **registration-level** scenario through `register.ail` and the finalize fold; `phase_c2_wiring_scenarios PASS count=20`; a scripted backend (`motoko_ext_conformance/examples/scripted_backend.ail`) returning each of the five answers and each `Unavailable` reason; conformance green; the `ailang.lock` diff checked per §4.2 | 1½–2 |
 | **A1: labelled set** | §6 D7 | **private** labels outside the repo; **synthetic** fixtures in it | see §5.1 | inter-rater agreement and the rule-based guard's confusion matrix, as aggregates only | ½–1 |
-| **A2: binding, offline** | P3.1 (adapter, fixture vectors, scripted provider double), P3.2 (catalog config) | host config | the `progress-judge` → `typesafe/jev-1.14-20261014` binding, configured but not called; the adapter's `Choice` mapping checked against the published 1.14 request types | one exchange against **P3.1's scripted provider double**, recorded and replayed strict with no network. **No call to the live provider.** | ½ |
-| **A3: shadow** | A0, A1, A2; P1.4x (mode and counter); **P2G** and **P3G**; §6 D4 and D7 for what is sent | a run profile | the first live exchanges, in shadow on the operator's chosen profiles: charged, neutral vote, no counter advanced | a PLAN-001 §9 record: Jev against the rules on A1's synthetic set, then on ≥ 50 live stops on enabled profiles; false nudges, missed nudges, `Unavailable` rate per reason, cost, p50/p95 latency; the approval-handoff cases of §5.2 | 1 + wall-clock |
-| **A4: enforce** | A3 meets §6 D3's bar; operator gate | profile config | Jev's vote is applied; §4.1's table governs `Unavailable` | the same record continued for 1 week; rollback = profile back to shadow | ½ |
+| **A2: binding, offline** | **P2.1** (decision codecs and strict replay of decision atoms), **P3.3** (live/recorded/scripted parity, which itself follows P3.1's adapter and double and P3.2's catalog config) | host config | the `progress-judge` → `typesafe/jev-1.14-20261014` binding, configured but not called; the adapter's `Choice` mapping checked against the published 1.14 request types | one exchange against **P3.1's scripted provider double**, recorded and replayed strict with no network. **No call to the live provider.** | ½ |
+| **A3: shadow** | A0, A1, A2; P1.4x (mode and counter); **P2G** and **P3G**; §6 D4 and D7 for what is sent | a run profile | the first live exchanges, in shadow on the operator's chosen profiles: charged, neutral vote, no counter advanced | a PLAN-001 §9 record: Jev against the rules on A1's synthetic set, then on ≥ 50 live stops on enabled profiles; false nudges, missed nudges; **query counts per profile** with the `Unavailable` rate per reason, and `Answered`-without-distribution abstentions reported separately; cost, p50/p95 latency; §5.2's matrix | 1 + wall-clock |
+| **A4: enforce** | A3 meets §6 D3's bar; operator gate | profile config | Jev's vote is applied; §4.1's table governs `Unavailable` | the same record continued for 1 week; the `Unavailable` rate is watched after A3, not only during it; rollback = unset the binding, so `UnconfiguredBackend` applies the rules again (§4.1) | ½ |
 
-Delegate-days added to line X: **4–5½**. A0 and A1 (2–3) can start now.
+Delegate-days added to line X: **4½–6**, the extra half for the seed (§4.3). A0 and A1 (2–3) can start now.
 
 ### 5.1 A1 and PLAN-001 §0.9
 
@@ -226,8 +252,18 @@ under a real contract that requires approval:
 - "Step 13/200. … I will wait for your approval before the next write."
 
 Each has a control that is a true premature stop under "do not stop early" ("Would you like me to
-continue?" with nothing requiring approval). The record reports each case on `Answered` and on every
-`Unavailable` reason, so §4.1's split is measured rather than assumed.
+continue?" with nothing requiring approval), which the §4 rubric labels `stopped_mid_task`.
+
+The record reports each case under two **separate** expectations, so §4.1's split is measured rather
+than assumed:
+
+| path | expectation | counts against D3's zero-false-nudge bar |
+|---|---|---|
+| configured binding: `Answered`, and each live-failure reason | approval cases: no nudge; controls: nudge on `Answered`, abstain on a live failure | **yes** |
+| `UnconfiguredBackend` | **identical to `decide_with_budget`**, nudge for nudge: the approval cases *are* nudged, which is #270 finding 2, the known limit of the rules | **no**; a differential, not a bar. It fails only if the vote differs from the rules' vote. |
+
+v2 asked for zero false nudges on every `Unavailable` reason while §4.1 required the rules on
+`UnconfiguredBackend`, so the matrix could never pass (#272 review, finding 2).
 
 ## 6. Decisions for the operator
 
@@ -235,10 +271,10 @@ continue?" with nothing requiring approval). The record reports each case on `An
 |---|---|---|
 | D1 | Port in place (A0) before line X, or wait and land the port with line X? | **Port now.** Under the stub the behaviour is identical (§4.1), and it moves the semantic judgment behind the seam where A2 can switch it. |
 | D2 | `min_nudge_bp` default before A3 measures it | **8000.** It can only be lowered on A3's evidence. |
-| D3 | The bar from shadow to enforcing | On A1's synthetic set and the live stops: **zero** false nudges on cases labelled `asking_operator` or `waiting_external`, including §5.2's approval handoffs; **no more** missed `stopped_mid_task` than the rules miss; a live `Unavailable` rate **below 2%** of queries, per profile, over A3. |
+| D3 | The bar from shadow to enforcing, **for the configured path only** (§5.2) | On A1's synthetic set and the live stops: **zero** false nudges on cases labelled `asking_operator` or `waiting_external`, including §5.2's approval handoffs; **no more** missed `stopped_mid_task` than the rules miss, the §5.2 controls included; a live `Unavailable` rate **below 2%** of queries per profile, assessed only on a profile with **≥ 50 queries** in A3. The `UnconfiguredBackend` path is held to the rules' differential instead. The cap is a historical gate: it cannot prevent a later outage, which is why A4 keeps watching it. |
 | D4 | What may leave the machine | **The task, the last 3 user turns and the candidate's tail, bounded as §4 says.** The adapter sends no session, user or trace identifiers (ADR-001 D3). Profiles whose tasks are confidential keep the binding unconfigured, so `UnconfiguredBackend` applies them the rules (§4.1). |
 | D5 | Pin and upgrade policy | **The dated ID only** (§3). A new Jev release is a `question_version` bump that re-runs A3 on A1's synthetic set before the pin moves. |
-| D6 | `interpret` on a live `Unavailable` | **Abstain** (`NoDecision`), as §4.1 argues. The alternative is falling back to the rules, which keeps finding 2 on every failure path. |
+| D6 | `interpret` on a live `Unavailable` | **Abstain** (`NoDecision`), as §4.1 argues. The alternative is falling back to the rules, which keeps finding 2 on every failure path. The accepted cost: an outage suppresses this guard's nudges until someone acts on A4's watch, by unsetting the binding. Abstaining refunds no unknown charge, and host control failures still propagate (ADR-001 D5). |
 | D7 | A1's private tier: who may label it, and whether any of it may be sent to Jev | **Two labellers named by the operator; nothing from the private tier is sent.** A3 evaluates on the synthetic tier and on live stops from D4-enabled profiles only. |
 
 ## 7. Non-goals
@@ -279,3 +315,16 @@ continue?" with nothing requiring approval). The record reports each case on `An
 | 5 | P2 | `interface_hash` does not move on a registration-only change | §4.2: `content_hash` moves; `interface_hash` moves only with `ailang.toml`; PLAN-004 coordination is conditional |
 | 6 | P3 | the alias rationale misstates strict replay | §3: replay uses the recorded binding (ADR-001 D6); the pin is for consistent live evaluation |
 | — | nit | two anchors were nearby, not exact | `types.ail:1981`; the digest test is `runtime.ail:1578` |
+
+### 9.1 Review of v2 (#272): REVISE → v3
+
+Status of the six findings on v1, according to the review: 2, 4, 5 and 6 resolved; 1 and 3 partly
+resolved, and finished below.
+
+| # | sev | finding on v2 | v3 |
+|---|---|---|---|
+| 1 | P1 | an optional seed lets usage vanish: `max(0, 0)` after a checkpoint drops two markers; reproduced with the real checkpoint | §4.3: the seed is mandatory: a recorded floor before the next checkpoint, or a refused resume. Under R the checkpoint loss is stated as today's limit, unchanged by the port |
+| 2 | P2 | D3's zero-false-nudge bar on every `Unavailable` reason conflicts with the rules on `UnconfiguredBackend`; reproduced: all three approval cases nudged | §5.2: two expectations; the configured path is held to D3, the unconfigured path to the rules' differential |
+| 3 | P2 | the rubric lets "Would you like me to continue?" be `asking_operator`, suppressing the control's nudge | §4: `asking_operator` requires the operator's answer to be necessary; `stopped_mid_task` explicitly includes unnecessary continuation questions |
+| 4 | P2 | A2's strict replay belongs to P2.1, which P3.1/P3.2 do not wait for | §5: A2 depends on P2.1 and P3.3 |
+| — | note | A3 counts stops, the cap counts queries; an outage after A3 is not prevented by the cap | A3 reports query counts per profile; the cap needs ≥ 50 queries; A4 watches the rate and rolls back by unsetting the binding (D3, D6) |

@@ -15,6 +15,7 @@ Documents only. No code, no ABI change, and no change to line R.
 ## Changes
 
 - docs(031): addendum A v2 — the six findings of the #271 review
+- docs(031): addendum A v3 — the four findings of the #272 review
 
 1 file changed: `.agent/projects/031_system_one_decisions/PLAN-001-addendum-progress-guard-on-jev.md`. #271's merged PR record is left as it was.
 
@@ -29,6 +30,18 @@ Documents only. No code, no ABI change, and no change to line R.
 
 The review's two near-miss anchors are corrected (`types.ail:1981`, `runtime.ail:1578`). A0 also gains a registration-level scenario, because the existing DST scenarios call `decide_with_budget` directly and do not exercise `register.ail`. The review raised that point among its verification notes.
 
+### Review of v2 (this PR): REVISE → v3
+
+According to the review, v1's findings 2, 4, 5 and 6 were resolved and 1 and 3 partly. v3 finishes them and takes the four new findings:
+
+| # | sev | finding on v2 | v3 |
+|---|---|---|---|
+| 1 | P1 | an optional seed lets usage vanish: a checkpoint drops two markers, an unseeded host gives `max(0, 0)`; reproduced with `phase_vocab.checkpoint` | §4.3: the seed is mandatory: a recorded floor before the next checkpoint, or a refused resume. Under line R the checkpoint loss is stated as today's limit, unchanged by the port |
+| 2 | P2 | D3's zero-false-nudge bar on every `Unavailable` reason conflicts with the rules on `UnconfiguredBackend`; reproduced: all three approval cases nudged | §5.2: two expectations; the configured path is held to D3, the unconfigured path to the rules' differential |
+| 3 | P2 | the rubric lets "Would you like me to continue?" be `asking_operator`, suppressing the control's nudge | §4: `asking_operator` requires the operator's answer to be necessary; `stopped_mid_task` explicitly includes unnecessary continuation questions |
+| 4 | P2 | A2's strict replay belongs to P2.1, which P3.1/P3.2 don't wait for | §5: A2 depends on P2.1 and P3.3 |
+| — | note | A3 counts stops while the cap counts queries; the cap can't prevent a later outage | query counts per profile; the cap needs ≥ 50 queries; A4 watches the rate and rolls back by unsetting the binding |
+
 ## Governing docs
 
 - `.agent/projects/031_system_one_decisions/PLAN-001-implement-adr-001-abi-8.md`: §0.9 (privacy), §1a (lines R/X), P1.3x, P1.4x, P2G, P3.1–P3.3, P3G, P4.1, §7 Q4, §8 (no live inference before a shadow run).
@@ -37,12 +50,13 @@ The review's two near-miss anchors are corrected (`types.ail:1981`, `runtime.ail
 
 ## Predicted outcome
 
-Nothing changes at runtime. The addendum on `main` becomes v2: five stages and **seven** operator decisions (§6). D6 (abstain on live `Unavailable`) and D7 (A1's private tier) are new. A0 (the stub-backed port) and A1 (the labelled set, in tiers) can still start now. A2 (offline), A3 (shadow, the first live call) and A4 (enforce) wait on line X.
+Nothing changes at runtime. The addendum on `main` becomes v3: five stages and **seven** operator decisions (§6). D6 (abstain on live `Unavailable`) and D7 (A1's private tier) are new. A0 (the stub-backed port) and A1 (the labelled set, in tiers) can still start now. A2 (offline), A3 (shadow, the first live call) and A4 (enforce) wait on line X.
 
 ## Test evidence
 
 - **Review of v1:** Codex `gpt-6.1-sol` at high effort, read-only and unsandboxed. It returned REVISE with the six findings above. Findings 2 and 5 and the `ext_set_digest` claim were reproduced on temporary copies, and its `git status` was clean afterwards. It confirmed every other anchor and link at `602e1e4e`, the D3 fit of the Choice question, and the Jev 1.14 facts against OpenRouter, ZenMux and the SDK guide.
 - **v2 anchors:** re-checked at `602e1e4e`. `types.ail:1981` is `| DecisionSolverJudge(`, and `runtime.ail:1578` is `ext_set_digest_sees_the_decision_variant_test`. The package's `[effects] max` is declared in its `ailang.toml`, which is consistent with finding 5.
-- **Not done:** v2 has not been re-reviewed. Nothing here was executed: the design is a plan, and A0's tests are its first executable evidence.
+- **Review of v2:** the same reviewer re-ran its reproductions. Results are in the table above. Its prototype also confirmed the threshold behaviour (8000 nudges, 7999 abstains, no distribution abstains even at confidence 10000) and that A0's registration-level scenario closes the direct-call gap.
+- **Not done:** v3 has not been re-reviewed yet. Nothing here was executed: the design is a plan, and A0's tests are its first executable evidence.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
