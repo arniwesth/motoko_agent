@@ -1,9 +1,10 @@
 # PLAN-001 addendum A: `progress_contract_guard` as a structured-decision consumer, on Jev 1.14
 
-Date: 2026-10-17. Status: **proposed, v6.** #271 merged v1. Codex `gpt-6.1-sol` reviewed v1 (REVISE, six
-findings), v2 (#272; REVISE, four new), v3 (REVISE, two P2), v4 (REVISE, one P2 and two P3) and v5
-(REVISE, three P2). v6 answers those three, mainly by taking operator-turn provenance out of this
-addendum: it becomes a named prerequisite design, **P-OT** (§4.5). §9 maps every finding to its change. **Every decision in §6 is the
+Date: 2026-10-17. Status: **proposed, v7.** #271 merged v1. Codex `gpt-6.1-sol` reviewed v1 (REVISE, six
+findings), v2 (#272; REVISE, four new), v3 (REVISE, two P2), v4 (REVISE, one P2 and two P3), v5
+(REVISE, three P2) and v6 (REVISE, one P2 and two P3). v6 took operator-turn provenance out of this
+addendum as a named prerequisite design, **P-OT** (§4.5). v7 adds the applicability criterion v6
+lacked (R5). §9 maps every finding to its change. **Every decision in §6 is the
 operator's.** Grounded at `origin/main` `602e1e4e`. Extends [PLAN-001](PLAN-001-implement-adr-001-abi-8.md)
 line X; it changes no part of line R and no ABI type.
 
@@ -299,19 +300,31 @@ already stated correctly:
 | R2 | **Operator input delivered by a wake is `Operator`.** The raw `OperatorInput` payload is recorded as an `Operator` turn and the synthetic wrapper as `Loop`, on the in-run and the resumed wake paths. Delegate, timer and status wakes are not operator turns. | `wake_message` (`src/core/session.ail:2850`) wraps the operator's text in a `[motoko loop]` message; the resumed path calls it too (`:5043-5044`). v5 labelled all wakes `Loop`, which dropped a real approval requirement typed while parked, with `complete` still true. The review reproduced the identical projection (v5 review, finding 2). |
 | R3 | **Feedback is attributed to its atom.** A finalize or policy feedback message carries the winning atom's `atom_key`, legacy `SolverJudge` winners included, threaded internally. | Today the finalize collector merges votes to feedback text and drops the owner. `FinalizeOutcome` (`packages/motoko-ext-abi/types.ail:1395`) has no constructor, so it cannot gain an owner field under the 8.x minor rule; the attribution has to be threaded inside core (v5 review, finding 1). |
 | R4 | **A view field under ABI 8.1** carrying the record and its `complete` flag, behind the exported view constructors (PLAN-001 §1a), whose **empty default reads as incomplete**. Constructors and projections preserve it. | The review confirmed the 8.x minor rule permits a new view field, on that condition. |
+| R5 | **`complete` means applicable, not merely recorded.** Each view's record is the ordered operator history **on the selected branch** (the path `journal.path_up` folds), **up to the decision's boundary**: the same point as the decision's other evidence, so no later turn is included. A turn superseded by `replaces_previous`, or removed by an edit, a retraction or a whole-history replacement, is dropped or marked superseded under a policy P-OT states. It is never sent as current. If the record cannot establish the branch, the boundary or a turn's current standing, `complete` is **false**. **Scope:** `Operator` means one logical operator authority, across every operator channel P-OT accepts (typed input, wakes, and any other). If a profile's permissions depend on *which person* spoke, P-OT either carries enough authority context to tell, or reports `complete = false` for that profile. It does not add identity to the judge's wire request (ADR-001 D3). | A durable, attributed, ordered record is not necessarily the instructions that apply to this stop. The review used the real fold on synthetic journals. Two sibling leaves, one requiring approval and one pre-approving, are correctly separated by `path_up` (`src/core/journal.ail:1403`), but an all-branches record would send both identical input. A pre-approval superseded via `replaces_previous` is dropped by the fold (`fold_append` `:1453`, `fold_replace` `:1490`), but an append-only record would keep it as current (v6 review, finding 1). |
 
 **P-OT's acceptance tests, from this guard's side:**
 - a new-format session, checkpointed, then resumed, recovers `complete = true` with the deciding turn present;
 - a session predating P-OT resumes with `complete = false`;
 - the parked-wake approval pair (R2) stays distinguishable, in run and after resume;
-- an injected feedback message carries its atom.
+- an injected feedback message carries its atom;
+- **sibling branch** (R5): the active branch requires approval and a sibling pre-approves. The sibling's
+  turn is not in the record, so a permission-asking stop is `asking_operator` and is not nudged;
+- **replacement and retraction** (R5): a pre-approval replaced via `replaces_previous`, and one
+  retracted by a later turn, are not sent as current;
+- **boundary** (R5): an operator turn before a checkpoint is present, one after the decision's
+  boundary is not;
+- **multiple people** (R5): a profile whose approvals depend on who spoke, without authority context,
+  gives `complete = false`;
+- each R5 case gives the same result after resume.
 
 **This addendum does not estimate P-OT.** v5's 1½–2 delegate-days did not include R1 or R3.
 
 **Until P-OT lands, the configured path cannot run,** and nothing here pretends otherwise. On ABI 8.0
-the guard has no record, so it treats the record as incomplete (`incomplete_reason: record`). Any
-configured use would then abstain on every stop that asks the operator. That is why A3 is gated on P-OT
-and on A0.1 (§5).
+the guard has no record, so it treats the record as incomplete (`incomplete_reason: record`). On an
+`Answered` observation the guard would then abstain on every stop that asks the operator. The stub
+path is different: `UnconfiguredBackend` still gets the rules' vote (§4.1), because the
+incomplete-context abstention sits in the `Answered` arm, after the `Unavailable` dispatch. That is why
+A3 is gated on P-OT and on A0.1 (§5).
 
 ## 5. Stages
 
@@ -320,8 +333,8 @@ The first live exchange happens **inside A3**, the gated shadow stage, and nowhe
 
 | stage | depends on | surface | produces | exit | est. |
 |---|---|---|---|---|---|
-| **A0: port, stub-backed, on ABI 8.0** | #270 merged; §6 D1, D2, D6 | the guard package | `DecisionSolverJudge` with §4's `prepare`/`interpret`; the `Unavailable` split of §4.1; the budget of §4.3 (R arm); the helpers factored; `decide_with_budget` kept as the fallback. **The state builder reads only ABI 8.0 fields.** With no operator-turn record, it sends no operator turns and reports `context_complete = false`, `incomplete_reason: record`. That is truthful, and it compiles: the stub runs after `prepare` (`runtime.ail:879-882`), so `prepare` must type-check on 8.0, and reading `ctx.operator_turns` there fails `ailang check` (v5 review, finding 3) | inline tests: each immediate arm, each answer → vote, the absent-distribution abstention, the incomplete-context abstention (`context_complete` false × `requests_operator_input` ≥ 5000), the state's bounds and the `context_complete` computation, each `Unavailable` reason → its row of §4.1; a differential against `decide_with_budget` on the existing fixtures; a **registration-level** scenario through `register.ail` and the finalize fold; `phase_c2_wiring_scenarios PASS count=20`; a scripted backend (`motoko_ext_conformance/examples/scripted_backend.ail`) returning each of the five answers and each `Unavailable` reason; conformance green; the `ailang.lock` diff checked per §4.2 | 1½–2 |
-| **A0.1: the state builder on ABI 8.1** | **P-OT** landed (ABI 8.1, R1–R4) | the guard package | the builder reads `ctx.operator_turns`, sends `Operator` turns only, and takes `complete` from the record; the package re-pinned to ABI 8.1 and re-locked | inline tests: a complete record → turns sent; an incomplete one → `record`; non-`Operator` turns never sent; the §5.2 checkpointed and parked-wake pairs on a scripted backend | ½ |
+| **A0: port, stub-backed, on ABI 8.0** | #270 merged; §6 D1, D2, D6 | the guard package | `DecisionSolverJudge` with §4's `prepare`/`interpret`; the `Unavailable` split of §4.1; the budget of §4.3 (R arm); the helpers factored; `decide_with_budget` kept as the fallback. **The state builder reads only ABI 8.0 fields.** With no operator-turn record, it sends no operator turns and reports `context_complete = false`, `incomplete_reason: record`. That is truthful, and it compiles: the stub runs after `prepare` (`runtime.ail:879-882`), so `prepare` must type-check on 8.0, and reading `ctx.operator_turns` there fails `ailang check` (v5 review, finding 3) | inline tests: each immediate arm, each answer → vote, the absent-distribution abstention, the incomplete-context abstention (`context_complete` false × `requests_operator_input` ≥ 5000) **on `Answered` only**, with `UnconfiguredBackend` still giving the rules' vote under the same incomplete state, the state's bounds and the `context_complete` computation, each `Unavailable` reason → its row of §4.1; a differential against `decide_with_budget` on the existing fixtures; a **registration-level** scenario through `register.ail` and the finalize fold; `phase_c2_wiring_scenarios PASS count=20`; a scripted backend (`motoko_ext_conformance/examples/scripted_backend.ail`) returning each of the five answers and each `Unavailable` reason; conformance green; the `ailang.lock` diff checked per §4.2 | 1½–2 |
+| **A0.1: the state builder on ABI 8.1** | **A0**; **P-OT** landed (ABI 8.1, R1–R5) | the guard package | the builder reads `ctx.operator_turns`, sends `Operator` turns only, and takes `complete` from the record; the package re-pinned to ABI 8.1 and re-locked | inline tests: a complete record → turns sent; an incomplete one → `record`; non-`Operator` turns never sent; the §5.2 checkpointed, parked-wake, sibling-branch and replacement cases on a scripted backend | ½ |
 | **A1: labelled set** | §6 D7 | **private** labels outside the repo; **synthetic** fixtures in it | see §5.1 | inter-rater agreement and the rule-based guard's confusion matrix, as aggregates only | ½–1 |
 | **A2: binding, offline** | **P2.1** (decision codecs and strict replay of decision atoms), **P3.3** (live/recorded/scripted parity, which itself follows P3.1's adapter and double and P3.2's catalog config) | host config | the `progress-judge` → `typesafe/jev-1.14-20261014` binding, configured but not called; the adapter's `Choice` mapping checked against the published 1.14 request types | one exchange against **P3.1's scripted provider double**, recorded and replayed strict with no network. **No call to the live provider.** | ½ |
 | **A3: shadow** | A0, **A0.1**, A1, A2; P1.4x (mode and counter); **P2G** and **P3G**; **P-OT** (§4.5); §6 D4 and D7 for what is sent | a run profile | the first live exchanges, in shadow on the operator's chosen profiles: charged, neutral vote, no counter advanced | a PLAN-001 §9 record: Jev against the rules on A1's synthetic set, then on ≥ 50 live stops on enabled profiles; false nudges, missed nudges, **incomplete-context abstentions by `incomplete_reason`**, the Binary question's errors; **query counts per profile** with the `Unavailable` rate per reason, and `Answered`-without-distribution abstentions reported separately; cost, p50/p95 latency; §5.2's matrix | 1 + wall-clock |
@@ -387,7 +400,9 @@ least three later user turns:
 | either of the first two, with `user_chars_total` lowered so that turn is cut | — | **abstain** (`context_complete` false, `total`) |
 | either of the first two, **after a checkpoint that folds the deciding turn** (from A0.1) | as in the first two rows | as in the first two rows: P-OT's record still holds the turn (§4.5) |
 | either of the first two, with the deciding instruction **typed while parked** and delivered by a wake, in run and after resume (from A0.1) | as in the first two rows | as in the first two rows: the wake's payload is an `Operator` turn (R2) |
-| either of the first two, resumed from a journal that predates P-OT, or on ABI 8.0 | — | **abstain** (`context_complete` false, `record`) |
+| either of the first two, with the pre-approval on a **sibling branch** or **replaced/retracted** (from A0.1) | `asking_operator` for the approval-required history | no nudge: the superseded or off-branch turn is not sent (R5) |
+| either of the first two, resumed from a journal that predates P-OT, or on ABI 8.0, **with a scripted `Answered` observation** | — | **abstain** (`context_complete` false, `record`) |
+| the same, on the **real stub path** (`UnconfiguredBackend`) | — | the rules' vote, as in the `UnconfiguredBackend` row above. The approval cases are nudged; that is #270 finding 2, not a failure of A0 |
 
 **Long-session controls.** A true premature stop ("Would you like me to continue?" with nothing
 requiring approval) in a session with one operator turn over `user_chars`, and in one over
@@ -495,3 +510,16 @@ be built as specified.
 | 2 | P2 | operator input delivered by a wake is wrapped as `[motoko loop]`, so labelling wakes `Loop` drops a real approval requirement with `complete` still true; reproduced with the real `wake_message` | §4.5 R2: the wake's raw `OperatorInput` is an `Operator` turn, on in-run and resumed paths; §5.2 adds the parked-wake pair |
 | 3 | P2 | A0's `prepare` reads `ctx.operator_turns`, which fails `ailang check` on ABI 8.0 (reproduced); the stub runs after `prepare`, so absence of a provider does not avoid it | §5: A0 builds the state from 8.0 fields and truthfully reports `record`; a new stage **A0.1** moves the builder to 8.1 after P-OT; A3 depends on A0.1; A2 builds its request directly and does not |
 | — | note | add rule-positive long-session controls | §5.2: each long-session control also in a rule-positive form |
+
+### 9.5 Review of v6: REVISE (one P2, two P3) → v7
+
+All three v5 findings were resolved: two at plan level as P-OT's R1–R3, and A0's compile problem
+outright (its ABI 8.0 builder compiled and ran). The reviewer judged deferring P-OT's design and
+estimate legitimate, and found no remaining text that repeats v5's withdrawn claims. Its merge
+assessment named one minimum correction, finding 1.
+
+| # | sev | finding on v6 | v7 |
+|---|---|---|---|
+| 1 | P2 | R1–R4 don't define `complete` for the selected branch, the decision boundary, or edited and replaced history; reproduced with the real fold on sibling-branch and `replaces_previous` journals | §4.5 **R5**: the applicable operator history on the selected branch up to the decision boundary; superseded turns never sent as current; `complete` false when standing can't be established; one logical operator authority, or `complete` false where approvals depend on who spoke. Acceptance tests and §5.2 cases for sibling branch, replacement and retraction, boundary and multiple people, each after resume |
+| 2 | P3 | A0.1's dependencies omit A0 | §5: A0.1 depends on A0 and P-OT (R1–R5) |
+| 3 | P3 | the "abstain on ABI 8.0" row ignores the real stub path, where `UnconfiguredBackend` applies the rules | §4.5 and §5.2: the abstention is scoped to scripted `Answered` observations; a separate row keeps the stub path's rules differential; A0's tests check both under the same incomplete state |

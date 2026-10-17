@@ -19,6 +19,7 @@ Documents only. No code, no ABI change, and no change to line R.
 - docs(031): addendum A v4 — the two findings of the v3 review
 - docs(031): addendum A v5 — the three findings of the v4 review
 - docs(031): addendum A v6 — operator-turn provenance becomes prerequisite P-OT
+- docs(031): addendum A v7 — R5, what `complete` means; two staging nits
 
 1 file changed: `.agent/projects/031_system_one_decisions/PLAN-001-addendum-progress-guard-on-jev.md`. #271's merged PR record is left as it was.
 
@@ -72,6 +73,16 @@ v5 tried to specify an operator-turn record inside the addendum, and the review 
 | 2 | P2 | operator input delivered by a wake is wrapped as `[motoko loop]`, so labelling wakes `Loop` drops it; reproduced with the real `wake_message` | P-OT R2: the wake's raw `OperatorInput` is an `Operator` turn, in run and after resume; §5.2 parked-wake pair |
 | 3 | P2 | A0's `prepare` reading `ctx.operator_turns` fails `ailang check` on ABI 8.0 (reproduced) | A0 builds on 8.0 and reports `record` truthfully; new stage A0.1 moves it to 8.1 after P-OT; A3 depends on A0.1 |
 
+### Review of v6: REVISE (one P2, two P3) → v7
+
+All three v5 findings were resolved, and deferring P-OT was judged legitimate. The reviewer's merge assessment named one minimum correction:
+
+| # | sev | finding on v6 | v7 |
+|---|---|---|---|
+| 1 | P2 | R1–R4 don't define `complete` for the selected branch, the decision boundary, or edited and replaced history; reproduced with the real fold on sibling-branch and `replaces_previous` journals | §4.5 R5: the applicable operator history on the selected branch up to the decision boundary; superseded turns never sent as current; `complete` false otherwise; one logical operator authority. Tests for sibling branch, replacement and retraction, boundary and multiple people, each after resume |
+| 2 | P3 | A0.1's dependencies omit A0 | A0.1 depends on A0 and P-OT |
+| 3 | P3 | the "abstain on ABI 8.0" row ignores the stub path | scoped to scripted `Answered`; the stub path keeps the rules' differential |
+
 ## Governing docs
 
 - `.agent/projects/031_system_one_decisions/PLAN-001-implement-adr-001-abi-8.md`: §0.9 (privacy), §1a (lines R/X), P1.3x, P1.4x, P2G, P3.1–P3.3, P3G, P4.1, §7 Q4, §8 (no live inference before a shadow run).
@@ -80,7 +91,7 @@ v5 tried to specify an operator-turn record inside the addendum, and the review 
 
 ## Predicted outcome
 
-Nothing changes at runtime. The addendum on `main` becomes v6: five stages and **seven** operator decisions (§6). D6 (abstain on live `Unavailable`) and D7 (A1's private tier) are new. A0 (the stub-backed port) and A1 (the labelled set, in tiers) can still start now. A2 (offline), A3 (shadow, the first live call) and A4 (enforce) wait on line X.
+Nothing changes at runtime. The addendum on `main` becomes v7: five stages and **seven** operator decisions (§6). D6 (abstain on live `Unavailable`) and D7 (A1's private tier) are new. A0 (the stub-backed port) and A1 (the labelled set, in tiers) can still start now. A2 (offline), A3 (shadow, the first live call) and A4 (enforce) wait on line X.
 
 ## Test evidence
 
@@ -92,6 +103,7 @@ Nothing changes at runtime. The addendum on `main` becomes v6: five stages and *
 - **v5 anchors:** checked at `78f615a7`: `session.ail:1940` (`history_slice`), `runtime.ail:327-328` and `:372` (`invocation_id`), and PLAN-001 P1.3x/P1.4x.
 - **Review of v5:** the reviewer wrote the full text to a scratch file. It re-ran the checkpoint, seed and bounds cases. It exercised the real `wake_message`, `SessionJournal.record` and an ABI 8.0 `ailang check`.
 - **v6 anchors:** checked at `78f615a7`: `types.ail:1395`, `phase_vocab.ail:1109`, `journal.ail:854`, `session-journal.ts:666`, `session.ail:2850` and `:5043-5044`, `runtime.ail:879-882`.
-- **Not done:** v6 has not been re-reviewed yet. `src/core/config.ail:130` (what `--resume-force` overrides) was read at `78f615a7`. Nothing here was executed: the design is a plan, and A0's tests are its first executable evidence.
+- **v7 anchors:** `journal.ail:1403` (`path_up`), `:1453` (`fold_append`) and `:1490` (`fold_replace`), checked at `78f615a7`; `git diff --check` clean.
+- **Not done:** v7 has not been re-reviewed yet. `src/core/config.ail:130` (what `--resume-force` overrides) was read at `78f615a7`. Nothing here was executed: the design is a plan, and A0's tests are its first executable evidence.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
