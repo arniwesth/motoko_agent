@@ -17,6 +17,7 @@ Documents only. No code, no ABI change, and no change to line R.
 - docs(031): addendum A v2 — the six findings of the #271 review
 - docs(031): addendum A v3 — the four findings of the #272 review
 - docs(031): addendum A v4 — the two findings of the v3 review
+- docs(031): addendum A v5 — the three findings of the v4 review
 
 1 file changed: `.agent/projects/031_system_one_decisions/PLAN-001-addendum-progress-guard-on-jev.md`. #271's merged PR record is left as it was.
 
@@ -50,6 +51,16 @@ According to the review, v1's findings 2, 4, 5 and 6 were resolved and 1 and 3 p
 | 1 | P2 | the mandatory seed had no owner, and `--resume-force` bypasses the refusal v3 cited | §4.4: a reserved config key (`legacy_intervention_marker`, an ADR amendment in Amendment 5's form) lets the host count the marker in the journal; P0.7 owns the record and the floor fold; P3.2 the barriered write before the first step; P0.7 + P3.2 crash recovery; P2.3 enforcement, with force not skipping the seed and `DisabledDecision` when the count is unrecoverable |
 | 2 | P2 | the last-3-turns state can drop the instruction that decides necessity; genuine and pre-approved histories serialized identically | §4: every user turn up to a total bound, a `context_complete` flag, a second Binary question (`requests_operator_input`), and abstention when context is incomplete and the candidate asks; §5.2 adds the paired genuine/pre-approved/invented cases |
 
+### Review of v4: REVISE (one P2, two P3) → v5
+
+Seed ownership was resolved on paper. Sol ran the real checkpoint on the real journal: the live marker count went 2 → 0 and the journal count stayed at 2.
+
+| # | sev | finding on v4 | v5 |
+|---|---|---|---|
+| 1 | P2 | a checkpoint removes user turns before the guard sees them, so both paired sessions projected identically with `context_complete` true; reproduced through `phase_vocab.checkpoint` | §4.5: an operator-turn record that checkpoints don't fold, with authorship recorded when each turn is added (ABI 8.1 field + ADR amendment; P1.3x record, P1.4x view, P2.3 rebuild on resume). `context_complete` includes the record's `complete`; A3 depends on it |
+| 2 | P3 | the seed keyed by `invocation_id` breaks once line X adds the occurrence | §4.4: `atom_key` = owner/site/local ID |
+| 3 | P3 | raising only the total bound can't fix truncation by the task or one turn; those abstentions are invisible to the `Unavailable` cap | §4: `incomplete_reason`, defaults about 4×, A3 reports abstentions by reason and counts them as missed nudges; §5.2 long-session controls |
+
 ## Governing docs
 
 - `.agent/projects/031_system_one_decisions/PLAN-001-implement-adr-001-abi-8.md`: §0.9 (privacy), §1a (lines R/X), P1.3x, P1.4x, P2G, P3.1–P3.3, P3G, P4.1, §7 Q4, §8 (no live inference before a shadow run).
@@ -58,7 +69,7 @@ According to the review, v1's findings 2, 4, 5 and 6 were resolved and 1 and 3 p
 
 ## Predicted outcome
 
-Nothing changes at runtime. The addendum on `main` becomes v4: five stages and **seven** operator decisions (§6). D6 (abstain on live `Unavailable`) and D7 (A1's private tier) are new. A0 (the stub-backed port) and A1 (the labelled set, in tiers) can still start now. A2 (offline), A3 (shadow, the first live call) and A4 (enforce) wait on line X.
+Nothing changes at runtime. The addendum on `main` becomes v5: five stages and **seven** operator decisions (§6). D6 (abstain on live `Unavailable`) and D7 (A1's private tier) are new. A0 (the stub-backed port) and A1 (the labelled set, in tiers) can still start now. A2 (offline), A3 (shadow, the first live call) and A4 (enforce) wait on line X.
 
 ## Test evidence
 
@@ -66,6 +77,8 @@ Nothing changes at runtime. The addendum on `main` becomes v4: five stages and *
 - **v2 anchors:** re-checked at `602e1e4e`. `types.ail:1981` is `| DecisionSolverJudge(`, and `runtime.ail:1578` is `ext_set_digest_sees_the_decision_variant_test`. The package's `[effects] max` is declared in its `ailang.toml`, which is consistent with finding 5.
 - **Review of v2:** the same reviewer re-ran its reproductions. Results are in the table above. Its prototype also confirmed the threshold behaviour (8000 nudges, 7999 abstains, no distribution abstains even at confidence 10000) and that A0's registration-level scenario closes the direct-call gap.
 - **Review of v3:** v2's findings 2, 3 (on paper; Jev unmeasured) and 4, and the outage note, are resolved; 1 partly, now finished in v4. The reviewer re-ran the matrix and budget cases on a scripted reference interpreter, not Jev.
-- **Not done:** v4 has not been re-reviewed yet. `src/core/config.ail:130` (what `--resume-force` overrides) was read at `78f615a7`. Nothing here was executed: the design is a plan, and A0's tests are its first executable evidence.
+- **Review of v4:** the full text was written by the reviewer to a scratch file and relayed. It checked the reserved-key amendment against Amendment 5, the owners against PLAN-001, and `--resume-force`'s consumers.
+- **v5 anchors:** checked at `78f615a7`: `session.ail:1940` (`history_slice`), `runtime.ail:327-328` and `:372` (`invocation_id`), and PLAN-001 P1.3x/P1.4x.
+- **Not done:** v5 has not been re-reviewed yet. `src/core/config.ail:130` (what `--resume-force` overrides) was read at `78f615a7`. Nothing here was executed: the design is a plan, and A0's tests are its first executable evidence.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)

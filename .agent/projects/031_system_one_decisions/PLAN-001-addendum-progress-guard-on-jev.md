@@ -1,8 +1,8 @@
 # PLAN-001 addendum A: `progress_contract_guard` as a structured-decision consumer, on Jev 1.14
 
-Date: 2026-10-17. Status: **proposed, v4.** #271 merged v1. Codex `gpt-6.1-sol` reviewed v1 (REVISE, six
-findings), v2 (#272; REVISE, four new) and v3 (REVISE, two new, both P2). v4 answers those two. §9 maps
-every finding to its change. **Every decision in §6 is the
+Date: 2026-10-17. Status: **proposed, v5.** #271 merged v1. Codex `gpt-6.1-sol` reviewed v1 (REVISE, six
+findings), v2 (#272; REVISE, four new), v3 (REVISE, two P2) and v4 (REVISE, one P2 and two P3). v5
+answers those three. §9 maps every finding to its change. **Every decision in §6 is the
 operator's.** Grounded at `origin/main` `602e1e4e`. Extends [PLAN-001](PLAN-001-implement-adr-001-abi-8.md)
 line X; it changes no part of line R and no ABI type.
 
@@ -120,15 +120,25 @@ id: "requests_operator_input"   kind: Binary
 
 **The state sent**, with every bound in `question_config`:
 
-- `ctx.task`, up to `task_chars` (default 2000);
-- **every** user-role message, oldest first, each up to `user_chars` (default 800), up to a total of
-  `user_chars_total` (default 8000). v3 sent only the last 3. The #272 review showed two sessions
-  with the same contract, one whose older turn required approval before probes and one whose older
-  turn pre-approved them. They produced byte-identical judge input once that turn fell outside the
-  window, so no classifier could tell them apart (#272 v3 review, finding 2);
-- `context_complete`: a boolean the guard computes, `false` if the task or any user turn was truncated
-  or dropped to fit the bounds;
+- `ctx.task`, up to `task_chars` (default **4000**);
+- **every operator turn**, oldest first, each up to `user_chars` (default **2000**), up to a total of
+  `user_chars_total` (default **16000**). The turns come from the view's **operator-turn record**
+  (§4.5), **not** from `history_slice`. v3 sent only the last 3 user messages, and the #272 review
+  showed that an approval-required and a pre-approved session with the same contract produced
+  byte-identical judge input once the deciding turn fell outside that window (v3 review, finding 2).
+  v4 sent every user message in `history_slice`, but a checkpoint
+  (`src/core/phase_vocab.ail:379`) removes user turns from the history before the guard sees it, and
+  `history_slice` is built from the current history (`src/core/session.ail:1940`). The review ran
+  both sessions through the real checkpoint: both projected to identical input with no user turns and
+  `context_complete` still true (v4 review, finding 1);
+- `context_complete`: `true` only if **all** of these hold: the operator-turn record says it is
+  complete (§4.5), the task fits `task_chars`, every turn fits `user_chars`, and the turns fit
+  `user_chars_total`. Otherwise it is `false`, and the state also says which of those failed
+  (`incomplete_reason`: `record`, `task`, `turn` or `total`);
 - the last `candidate_chars` of the candidate (default 1500). The end of a stop is what decides its kind.
+
+The defaults are about four times v4's. The state is still about 6K tokens at most, roughly $0.00025
+per query at the listed price, and well inside a 32K context.
 
 **When the instructions may be incomplete, the guard does not judge necessity.** If
 `context_complete` is `false` **and** `requests_operator_input` is answered with probability ≥ 5000,
@@ -138,9 +148,23 @@ be in the part that was cut, and both errors are then possible:
 - overriding it can nudge past a real one, which is the incident.
 
 Abstaining takes the cheaper one, a missed nudge. With `context_complete` true, the two questions
-are judged on the full instructions. A3 reports how often `context_complete` is false. If that rate is
-material, raise `user_chars_total` rather than add selection rules. Choosing which turns "set
-constraints" is itself a semantic judgment and would bring the problem back.
+are judged on the full instructions.
+
+**The abstention has a cost, and A3 measures it.** Once a session crosses a bound, it stays
+incomplete, so from then on every stop that asks a question abstains. A single 2001-character turn
+does this at the default `user_chars`, whatever `user_chars_total` is (v4 review, finding 3). These
+are `Answered` abstentions, so the `Unavailable` cap does not see them. A3 therefore reports, per
+profile:
+- how often `context_complete` is false, by `incomplete_reason`;
+- the incomplete-context abstentions that were labelled `stopped_mid_task`. These are missed nudges,
+  and they count in D3's missed-nudge comparison.
+
+The remedy follows the reason: raise the bound that `incomplete_reason` names. A `record` failure is
+not a bound, so it goes back to §4.5's owners. Adding rules that pick which turns "set constraints"
+is not a remedy: that choice is itself a semantic judgment and would bring the problem back.
+
+**The 5000 threshold on `requests_operator_input` is a policy cutoff, not a calibrated one.** A3
+measures the Binary question's errors alongside the Choice question's.
 
 **No tool output and no system prompt are sent.** The incident came from tool output. Leaving it out also
 limits what leaves the machine (§6 D4).
@@ -242,7 +266,7 @@ Amendment 5's form: a configuration key, no type or variant change, so it stays 
 
 | piece | owner | requirement |
 |---|---|---|
-| the record | **P0.7** (schema-2 fold) | a `decision_counter_seed` entry `{ invocation_id, interventions_used, source }`, where `source` is `legacy_marker_count` or `unrecoverable`. The fold reduces it into the atom's decision state as a **floor**: `max` with any count already folded. That makes a repeated seed idempotent and a lower one a no-op. Mismatch fixtures: a seed after the atom's first decision is rejected; two seeds fold to the larger. |
+| the record | **P0.7** (schema-2 fold) | a `decision_counter_seed` entry `{ atom_key, interventions_used, source }`, where `source` is `legacy_marker_count` or `unrecoverable`. **`atom_key` is the stable atom identity, never an occurrence:** registered owner, site and local ID, encoded `"${owner}/${site}/${local_id}"`. That is the form `invocation_id` has under line R (`src/core/ext/runtime.ail:372`), before line X adds the occurrence to it (`:327-328`). ADR-001 D5/D6 retain counters by that tuple. Keyed by `invocation_id`, a line-X implementation would seed one occurrence and find 0 on the next (v4 review, finding 2). The fold reduces it into the atom's decision state as a **floor**: `max` with any count already folded. That makes a repeated seed idempotent and a lower one a no-op. Mismatch fixtures: a seed after the atom's first decision is rejected; two seeds fold to the larger. |
 | the write | **P3.2** (promotion on adopt) | on adopting a schema-1 journal, after `schema_promotion` and **before the first step**, the host writes one seed per decision atom whose extension declares the key. The append uses P3.1's success-returning append; **if it fails, the session stops**, as a failed application append does. A schema-2-native session needs no seed, because its counter is live from the start. |
 | crash recovery | **P0.7 + P3.2** | a journal holding `schema_promotion` but no seed for a declaring atom is recovered by recomputing the count from the same journal and writing the seed before the first step. The count is a function of the journal, so recomputing is idempotent. |
 | enforcement | **P2.3** (resume) | resume refuses to dispatch a declaring atom whose seed is missing and cannot be written. **`--resume-force` does not skip the seed**: it overrides the extension-set and prompt rows (`src/core/config.ail:130`), not this one. v3's analogy to the `ext_set_digest` refusal was wrong for that reason. If the count cannot be recovered (`source: unrecoverable`, e.g. the history entries are gone), the atom runs in **`DisabledDecision`** for that session, not with a zero count. A disabled guard is visible in the record; a reset one is not. |
@@ -255,6 +279,27 @@ force, profile switch): two markers, then a checkpoint that drops them, then an 
 
 This adds work to three PLAN-001 parts. The estimate is in §5.
 
+### 4.5 The operator-turn record: who builds what
+
+The guard needs the operator's instructions as the operator gave them, whatever the history has since
+been folded into. No view carries that today: `PureCtx` has `history_slice` and no provenance. v5 asks
+line X for a record in the shape the plan already uses for tool evidence. P1.3x gives `C2LoopState` a
+typed tool-evidence window, which is **incomplete on resume**. This is the same, for operator turns.
+
+| piece | owner | requirement |
+|---|---|---|
+| the field | **ADR-001 amendment + ABI 8.1** | the views gain `operator_turns: { turns: [OperatorTurn], complete: bool }`, where `OperatorTurn = { seq: int, author: TurnAuthor, content: string }` and `TurnAuthor = Operator \| Loop \| Extension(string)`. A new field is an 8.x minor behind the view constructors (PLAN-001 §1a, the residual-risk paragraph). |
+| the record | **P1.3x** (`C2LoopState`, beside the tool-evidence window) | the loop appends every user-role message it adds to the history, at the moment it adds it. A checkpoint folds the history, **not** this record. `author` is known at that moment and is never inferred from text: operator input is `Operator`, the loop's own messages (wakes, `[motoko loop]`) are `Loop`, and a finalize or policy `InjectUserMessage` is `Extension(id)`. |
+| the view | **P1.4x** (evidence construction) | each view is stamped with the record. `complete` is `true` for a session that has run under the record since it started. |
+| on resume | **P2.3** | the record is rebuilt from the journal's user-role `history_appended` entries on the active branch. The journal keeps entries a checkpoint folded, as the seed (§4.4) already relies on. `complete` is `false` if the session predates the record, or if authorship cannot be recovered for some entry, as for the tool-evidence window. |
+
+The guard sends only turns with `author: Operator`. This also settles a point the #270 review raised:
+the user role alone does not prove the operator wrote a message.
+
+**Before 8.1 lands, the configured path cannot run.** A0 is unaffected, because under the stub
+the rules decide and the state is never sent. A3 is the first stage that sends it, so A3 depends on 8.1
+and on P1.3x, P1.4x and P2.3 carrying the record (§5).
+
 ## 5. Stages
 
 The first live exchange happens **inside A3**, the gated shadow stage, and nowhere before it (PLAN-001
@@ -265,10 +310,13 @@ The first live exchange happens **inside A3**, the gated shadow stage, and nowhe
 | **A0: port, stub-backed** | #270 merged; §6 D1, D2, D6 | the guard package | `DecisionSolverJudge` with §4's `prepare`/`interpret`; the `Unavailable` split of §4.1; the budget of §4.3 (R arm); the helpers factored; `decide_with_budget` kept as the fallback | inline tests: each immediate arm, each answer → vote, the absent-distribution abstention, the incomplete-context abstention (`context_complete` false × `requests_operator_input` ≥ 5000), the state's bounds and the `context_complete` computation, each `Unavailable` reason → its row of §4.1; a differential against `decide_with_budget` on the existing fixtures; a **registration-level** scenario through `register.ail` and the finalize fold; `phase_c2_wiring_scenarios PASS count=20`; a scripted backend (`motoko_ext_conformance/examples/scripted_backend.ail`) returning each of the five answers and each `Unavailable` reason; conformance green; the `ailang.lock` diff checked per §4.2 | 1½–2 |
 | **A1: labelled set** | §6 D7 | **private** labels outside the repo; **synthetic** fixtures in it | see §5.1 | inter-rater agreement and the rule-based guard's confusion matrix, as aggregates only | ½–1 |
 | **A2: binding, offline** | **P2.1** (decision codecs and strict replay of decision atoms), **P3.3** (live/recorded/scripted parity, which itself follows P3.1's adapter and double and P3.2's catalog config) | host config | the `progress-judge` → `typesafe/jev-1.14-20261014` binding, configured but not called; the adapter's `Choice` mapping checked against the published 1.14 request types | one exchange against **P3.1's scripted provider double**, recorded and replayed strict with no network. **No call to the live provider.** | ½ |
-| **A3: shadow** | A0, A1, A2; P1.4x (mode and counter); **P2G** and **P3G**; §6 D4 and D7 for what is sent | a run profile | the first live exchanges, in shadow on the operator's chosen profiles: charged, neutral vote, no counter advanced | a PLAN-001 §9 record: Jev against the rules on A1's synthetic set, then on ≥ 50 live stops on enabled profiles; false nudges, missed nudges; **query counts per profile** with the `Unavailable` rate per reason, and `Answered`-without-distribution abstentions reported separately; cost, p50/p95 latency; §5.2's matrix | 1 + wall-clock |
+| **A3: shadow** | A0, A1, A2; P1.4x (mode and counter); **P2G** and **P3G**; **ABI 8.1 and the operator-turn record (§4.5)**; §6 D4 and D7 for what is sent | a run profile | the first live exchanges, in shadow on the operator's chosen profiles: charged, neutral vote, no counter advanced | a PLAN-001 §9 record: Jev against the rules on A1's synthetic set, then on ≥ 50 live stops on enabled profiles; false nudges, missed nudges, **incomplete-context abstentions by `incomplete_reason`**, the Binary question's errors; **query counts per profile** with the `Unavailable` rate per reason, and `Answered`-without-distribution abstentions reported separately; cost, p50/p95 latency; §5.2's matrix | 1 + wall-clock |
 | **A4: enforce** | A3 meets §6 D3's bar; operator gate | profile config | Jev's vote is applied; §4.1's table governs `Unavailable` | the same record continued for 1 week; the `Unavailable` rate is watched after A3, not only during it; rollback = unset the binding, so `UnconfiguredBackend` applies the rules again (§4.1) | ½ |
 
-Delegate-days added to line X: **5½–7½**. The seed (§4.4) adds about 1–1½ across P0.7, P3.2 and P2.3, plus the ADR amendment for the reserved key. A0 and A1 (2–3) can start now.
+Delegate-days added to line X: **7–9½**:
+- the seed (§4.4): about 1–1½ across P0.7, P3.2 and P2.3, plus the ADR amendment for the reserved key;
+- the operator-turn record (§4.5): about 1½–2 across the ABI 8.1 field, P1.3x, P1.4x and P2.3, plus its
+  ADR amendment. A0 and A1 (2–3) can start now.
 
 ### 5.1 A1 and PLAN-001 §0.9
 
@@ -321,7 +369,14 @@ least three later user turns:
 | the older turn requires approval before probes that write | `asking_operator` | no nudge |
 | the older turn pre-approves those probes | `stopped_mid_task` | nudge |
 | no such turn: the candidate invents the requirement | `stopped_mid_task` | nudge |
-| either of the first two, with `user_chars_total` lowered so that turn is cut | — | **abstain** (`context_complete` false) |
+| either of the first two, with `user_chars_total` lowered so that turn is cut | — | **abstain** (`context_complete` false, `total`) |
+| either of the first two, **after a checkpoint that folds the deciding turn** | as in the first two rows | as in the first two rows: the record still holds the turn (§4.5) |
+| either of the first two, after a checkpoint, in a session resumed from a journal that predates the record | — | **abstain** (`context_complete` false, `record`) |
+
+**Long-session controls.** A true premature stop ("Would you like me to continue?" with nothing
+requiring approval) in a session with one operator turn over `user_chars`, and in one over
+`user_chars_total`. Expected: abstain, recorded as an incomplete-context missed nudge. These are what
+D3's missed-nudge comparison has to absorb.
 
 ## 6. Decisions for the operator
 
@@ -329,8 +384,8 @@ least three later user turns:
 |---|---|---|
 | D1 | Port in place (A0) before line X, or wait and land the port with line X? | **Port now.** Under the stub the behaviour is identical (§4.1), and it moves the semantic judgment behind the seam where A2 can switch it. |
 | D2 | `min_nudge_bp` default before A3 measures it | **8000.** It can only be lowered on A3's evidence. |
-| D3 | The bar from shadow to enforcing, **for the configured path only** (§5.2) | On A1's synthetic set and the live stops: **zero** false nudges on cases labelled `asking_operator` or `waiting_external`, including §5.2's approval handoffs; **no more** missed `stopped_mid_task` than the rules miss, the §5.2 controls included; a live `Unavailable` rate **below 2%** of queries per profile, assessed only on a profile with **≥ 50 queries** in A3. The `UnconfiguredBackend` path is held to the rules' differential instead. The cap is a historical gate: it cannot prevent a later outage, which is why A4 keeps watching it. |
-| D4 | What may leave the machine | **The task, every user turn up to `user_chars_total`, and the candidate's tail, bounded as §4 says.** v4 sends more user text than v3 did, because necessity cannot be judged without it (§4). The adapter sends no session, user or trace identifiers (ADR-001 D3). Profiles whose tasks are confidential keep the binding unconfigured, so `UnconfiguredBackend` applies them the rules (§4.1). |
+| D3 | The bar from shadow to enforcing, **for the configured path only** (§5.2) | On A1's synthetic set and the live stops: **zero** false nudges on cases labelled `asking_operator` or `waiting_external`, including §5.2's approval handoffs; **no more** missed `stopped_mid_task` than the rules miss, counting incomplete-context abstentions and the §5.2 controls, the long-session ones included; a live `Unavailable` rate **below 2%** of queries per profile, assessed only on a profile with **≥ 50 queries** in A3. The `UnconfiguredBackend` path is held to the rules' differential instead. The cap is a historical gate: it cannot prevent a later outage, which is why A4 keeps watching it. |
+| D4 | What may leave the machine | **The task, every user turn up to `user_chars_total`, and the candidate's tail, bounded as §4 says.** v4 sends more user text than v3 did, because necessity cannot be judged without it (§4). v5 sends only `Operator`-authored turns, but **older turns are sent as written**: omitting identifier metadata does not redact identifiers or secrets inside the text, so the consent this decision records has to cover historical operator text, not only the current turn. The adapter sends no session, user or trace identifiers (ADR-001 D3). Profiles whose tasks are confidential keep the binding unconfigured, so `UnconfiguredBackend` applies them the rules (§4.1). |
 | D5 | Pin and upgrade policy | **The dated ID only** (§3). A new Jev release is a `question_version` bump that re-runs A3 on A1's synthetic set before the pin moves. |
 | D6 | `interpret` on a live `Unavailable` | **Abstain** (`NoDecision`), as §4.1 argues. The alternative is falling back to the rules, which keeps finding 2 on every failure path. The accepted cost: an outage suppresses this guard's nudges until someone acts on A4's watch, by unsetting the binding. Abstaining refunds no unknown charge, and host control failures still propagate (ADR-001 D5). |
 | D7 | A1's private tier: who may label it, and whether any of it may be sent to Jev | **Two labellers named by the operator; nothing from the private tier is sent.** A3 evaluates on the synthetic tier and on live stops from D4-enabled profiles only. |
@@ -396,3 +451,16 @@ partly resolved: the policy holds, but nobody was assigned to build it.
 |---|---|---|---|
 | 1 | P2 | the seed has no owner: P1.4x builds views only, P3.2's promotion starts the decision state empty, the fold rejects an unknown seed entry; `--resume-force` bypasses the refusal v3 cited | §4.4: a reserved config key (ADR amendment) names the marker; P0.7 owns the record and the floor fold; P3.2 the barriered write before the first step; P0.7 + P3.2 crash recovery; P2.3 enforcement, with force not skipping the seed and `DisabledDecision` when the count is unrecoverable; a profile switch takes the same path |
 | 2 | P2 | the last-3-turns state can drop the instruction that decides necessity: genuine and pre-approved histories serialize identically; reproduced | §4: every user turn up to a total bound, a `context_complete` flag, a second Binary question, and abstention when context is incomplete and the candidate asks; guidance rejects the candidate's own claim of necessity; §5.2 adds the paired cases |
+
+### 9.3 Review of v4: REVISE → v5
+
+Seed ownership was resolved on paper. Sol ran the real checkpoint on the real journal: the live marker
+count went 2 → 0 and the journal count stayed at 2. Its reference paths all blocked a third nudge, and
+the amendment form and the owners checked out. The instruction finding was partly resolved.
+
+| # | sev | finding on v4 | v5 |
+|---|---|---|---|
+| 1 | P2 | `context_complete` ignores turns a checkpoint already removed: both paired sessions projected identically with `context_complete` true; reproduced through `phase_vocab.checkpoint` | §4.5: an operator-turn record that checkpoints do not fold, with authorship known when each turn is added (ABI 8.1 + ADR amendment; P1.3x, P1.4x, P2.3); `context_complete` includes the record's own `complete`; §5.2 adds the checkpointed pair; A3 depends on it |
+| 2 | P3 | the seed keyed by `invocation_id` would break once line X adds the occurrence | §4.4: `atom_key` = owner/site/local ID, the line-R form, as ADR D5/D6 retain counters |
+| 3 | P3 | raising only the total bound cannot repair truncation caused by the task or a single turn; the abstentions are `Answered`, unseen by the `Unavailable` cap | §4: `incomplete_reason` names the bound; the remedy follows it; the defaults are about 4× higher; A3 reports abstentions by reason and counts mislabelled ones as missed nudges; §5.2 adds long-session controls; D3 counts them |
+| — | note | the 5000 threshold is a policy cutoff; D4 consent must cover historical text | §4: A3 measures the Binary errors; D4 says the consent covers historical operator text, which is sent unredacted |
