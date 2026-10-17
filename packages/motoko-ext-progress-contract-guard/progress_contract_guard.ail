@@ -1,6 +1,6 @@
 module sunholo/motoko_ext_progress_contract_guard/progress_contract_guard
 
-import std/string (trim, contains, toLower)
+import std/string (trim, contains, toLower, replaceMany)
 import std/json (jo, ja, js, asArray)
 import std/option (Option, Some, None)
 import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, ProcessCtx, pure_ctx, process_ctx, WorkItem, FinalizeDecision, ContinueWithFeedback, NoDecision, Msg)
@@ -76,23 +76,33 @@ export pure func has_progress_contract(ctx: ProcessCtx, _candidate: string) -> b
 -- Narrow "I am still going" self-report. The triggering candidate contains both
 -- `Continuing Phase 52` and `Step 53/200`, so both branches catch it.
 --
--- `not done` and `not complete` are matched only where they describe the task.
--- The bare substrings also matched "What I have not done:" and "what I have not
--- completed", which are a report of what was left for the operator to decide,
--- not a claim that work is still running (the 2026-10-17 session again).
+-- `not done` and `not complete` are read with retrospective headings blanked
+-- out first. "What I have not done:" heads a list of what was left for the
+-- operator to decide, not a claim that work is still running (the 2026-10-17
+-- session again). Narrowing the phrases instead, to "is not done" and the like,
+-- lost real reports such as "I am not done with phase 3" and "I have not
+-- completed phase 3" (#270 review, finding 1); only the heading is removed.
+-- "haven't done" needs no entry: it never contains the substring "not done".
+pure func without_retrospective_headings(t: string) -> string {
+  replaceMany(t, [
+    ("what i have not done", ""),
+    ("what i've not done", ""),
+    ("what i’ve not done", ""),
+    ("what i have not completed", "")
+  ])
+}
+
 export pure func candidate_self_reports_incomplete(candidate: string) -> bool {
   let t = toLower(candidate);
+  let r = without_retrospective_headings(t);
   contains(t, "continuing")
   || contains(t, "continue with")
   || contains(t, "continue to")
   || contains(t, "next phase")
   || contains(t, "context is growing")
   || contains(t, "remaining")
-  || contains(t, "is not complete")
-  || contains(t, "not yet complete")
-  || contains(t, "not complete yet")
-  || contains(t, "is not done")
-  || contains(t, "not done yet")
+  || contains(r, "not complete")
+  || contains(r, "not done")
   || contains(t, "below target")
   || (contains(t, "step ") && contains(t, "/"))
 }
@@ -556,8 +566,24 @@ pure func test_not_done_heading_is_not_incomplete() -> bool
   {
     not candidate_self_reports_incomplete(asking_operator_candidate())
       && not candidate_self_reports_incomplete("Summary of what I have not completed: nothing.")
+      && not candidate_self_reports_incomplete("What I’ve not done: the probe.")
       && candidate_self_reports_incomplete("The task is not done yet.")
       && candidate_self_reports_incomplete("Phase 9 is not complete.")
+  }
+
+-- #270 review, finding 1: the first version of this fix narrowed the phrases
+-- and lost these. The heading is blanked, not the words, so a real report
+-- next to a heading still counts.
+pure func test_real_incomplete_reports_still_count() -> bool
+  tests [((), true)]
+  {
+    candidate_self_reports_incomplete("I am not done with phase 3.")
+      && candidate_self_reports_incomplete("I have not completed phase 3.")
+      && candidate_self_reports_incomplete("What I have not done: nothing. But I am not done with phase 3.")
+      && match decide_with_budget(test_ctx(contract_task(), []), "I am not done with phase 3.", 2) {
+           ContinueWithFeedback(_) => true,
+           _ => false
+         }
   }
 
 pure func test_live_false_positive_does_not_nudge() -> bool
