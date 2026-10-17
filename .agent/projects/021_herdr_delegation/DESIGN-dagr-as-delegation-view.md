@@ -734,3 +734,16 @@ The path that makes A1 cheap without the supply-chain trade is upstreaming `appl
 deliberately shaped for it (additive, no reformatting of upstream code, `main.rs` +84/−0) and no PR
 has been opened yet. If it is accepted and released, the table above collapses back to one column
 and A1 becomes straightforward, which is what the original sentence predicted.
+
+### 10.7 The fork is adopted (2026-10-04)
+
+The operator ruled on 2026-10-04 that the tree moves to `motoko-agent/herdr-dagr`, pinned, and that
+no upstream pull request is opened for now. §10.6's recommendation, to stay on the pinned upstream
+release, no longer holds. What prompted it, what the first fork release contains, and the tool that
+lets an operator's answer reach the run file are in
+[`ADR-002`](ADR-002-verified-writes-to-dagr-files.md), with the work in
+[`PLAN-001`](PLAN-001-implement-adr-002.md).
+
+This does not promote A1. The extension keeps sole ownership of its run file and still never writes
+a plan. `apply` is for the writers that are not the extension. Whether the extension itself should
+publish through `apply` is left open in ADR-002 §5.
