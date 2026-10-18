@@ -433,6 +433,16 @@ row records it. Registry publication (033 G8) may start from here.
 
 ### P2.1 — `execution-program/5` (3–3½ days, `dst_interaction.ail`, `dst_program.ail`, `dst_replay`, `dst_persistence`, `world_ordinal`)
 
+> **Renumbered, 2026-10-18 (034 PLAN-001 W1.1).** 034's Phase 1 takes `execution-program/5` for
+> `ScriptedTool.applied`, `ToolFailed`'s dispatch stage and the program's world-truth line
+> (`../034_ambiguous_tool_outcomes/PLAN-001-effect-disclosure.md` W1.2). It was checked at
+> `a94204aa`: `src/core/dst_program.ail:132` is `/4`, and no branch or pull request writes `/5`. This
+> part therefore moves the program schema to **the next version free when it lands**, `/6` if
+> nothing else lands first. Its "v4" below means the version before it, and "v5" the version it
+> writes. The other `/5` mentions in this plan (`:92`, `:116`) and addendum A's A2 dependency name
+> this part, not the number. §0 item 5's "`execution-program/4` … stays" reads as "the current
+> version stays".
+
 The decision interaction class: identity (a new `IdentityBody` constructor — which alone would move no
 version, `dst_interaction.ail:96-110`), the **observation payload** and scripts that force `/5`
 (`dst_program.ail:117-133` is the precedent), request/observation codecs over the D3 integer vocabulary,
