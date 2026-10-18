@@ -1,0 +1,18 @@
+fault_disclosure_witness: 034 W0.5 — a live tool fault reaches the model with its effects disclosed
+  ✓ row a: BashExec killed by signal 9 renders fault kind signal, effects unknown, signal 9, and exit_code 1
+  ✓ row b: BashExec renders fault kind not_found, effects none, and exit_code 1
+  ✓ row c: BashExec that ran to its own exit 3 renders no fault key, and exit_code 3
+  ✓ row d: WriteFile renders fault kind io_error, effects unknown, and exit_code 1
+  ✓ row e: WriteFile renders fault kind io_error, effects unknown, and exit_code 1
+  ✓ row f: EditFile renders fault kind io_error, effects unknown, and exit_code 1
+  ✓ row g: EditFile renders fault kind refused, effects none, and exit_code 1
+  ✓ row h: ReadFile renders fault kind io_error, effects none, and exit_code 1
+  ✓ row i: MotokoW05NoSuchTool renders fault kind refused, effects none, and exit_code 1
+  ✓ row j: ReadFile renders fault kind refused, effects none, and exit_code 1
+  ✗ row k: Search renders fault kind refused, effects none, and exit_code 1 — the rendered message was: {"tool":"Search","fault":{"kind":"refused","effects":"unknown","note":"The harness cannot confirm whether this tool's effects happened. They may have happened in full, not at all, or may still be happening. Check the current state before running it again."},"error":true,"message":"missing pattern","exit_code":1}
+  ✓ row l: EditFile renders fault kind refused, effects none, and exit_code 1
+  ✓ row m: EditFile renders fault kind refused, effects none, and exit_code 1
+  ✓ row n: EditFile renders fault kind refused, effects none, and exit_code 1
+  ✓ row o: BashExec renders fault kind refused, effects none, and exit_code 1
+  ✓ row p: RunTests killed by signal 9 renders fault kind signal, effects unknown, signal 9, and exit_code 1
+fault_disclosure_witness FAIL

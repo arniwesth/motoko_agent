@@ -1,0 +1,11 @@
+--- a/src/core/tool_runtime.ail
++++ b/src/core/tool_runtime.ail
+@@ -871,7 +871,7 @@
+     Ok(_) => {
+       let resolved = resolve_workdir_path(workdir, path);
+       if not fileExists(resolved) then
+-        ToolErrorResult({ id: id, tool: "EditFile", fault: refused_fault(), message: "path does not exist: ${path}" })
++        ToolErrorResult({ id: id, tool: "EditFile", fault: { kind: refused_fault().kind, effects: EffectsUnknown }, message: "path does not exist: ${path}" })
+       else if list_len(edits) <= 0 then
+         ToolErrorResult({ id: id, tool: "EditFile", fault: refused_fault(), message: "missing edits" })
+       else {

@@ -1,0 +1,11 @@
+--- a/src/core/tool_runtime.ail
++++ b/src/core/tool_runtime.ail
+@@ -949,7 +949,7 @@
+   let stderr = toString(out.stderr);
+   BashExecResult({
+     id: id,
+-    fault: None,
++    fault: Some(io_error_fault(EffectsUnknown)),
+     cmd: cmd_string(req.cmd, req.args),
+     stdout: stdout,
+     stderr: stderr,

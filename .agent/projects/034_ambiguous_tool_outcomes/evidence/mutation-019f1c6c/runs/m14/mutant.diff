@@ -1,0 +1,14 @@
+--- a/src/core/tool_dispatch_adapter.ail
++++ b/src/core/tool_dispatch_adapter.ail
+@@ -149,10 +149,9 @@
+     ]),
+ 
+     BashExecResult(r) => jo(
+-      [kv("tool", js("BashExec"))]
++      [kv("tool", js("BashExec")), kv("cmd", js(r.cmd))]
+       ++ fault_field(r.fault)
+       ++ [
+-        kv("cmd", js(r.cmd)),
+         kv("exit_code", jnum(_int_to_float(tool_result_exit_code(item)))),
+         kv("stdout", js(r.stdout)),
+         kv("stderr", js(r.stderr)),

@@ -1,0 +1,11 @@
+--- a/src/core/tool_fault.ail
++++ b/src/core/tool_fault.ail
+@@ -129,7 +129,7 @@
+   match err {
+     NotAllowed(_) => EffectsNone,
+     NotFound(_) => EffectsNone,
+-    PermissionDenied(_) => EffectsUnknown,
++    PermissionDenied(_) => EffectsNone,
+     SpawnFailed(_) => EffectsUnknown,
+     Timeout(_) => EffectsUnknown,
+     OutputLimitExceeded(_) => EffectsUnknown,

@@ -1,0 +1,11 @@
+--- a/src/core/tool_runtime.ail
++++ b/src/core/tool_runtime.ail
+@@ -881,7 +881,7 @@
+           ToolErrorResult({ id: id, tool: "EditFile", fault: refused_fault(), message: "expected_sha256 mismatch" })
+         else
+           match apply_edits(before, edits, 1) {
+-            Err(msg) => ToolErrorResult({ id: id, tool: "EditFile", fault: refused_fault(), message: msg }),
++            Err(msg) => ToolErrorResult({ id: id, tool: "EditFile", fault: { kind: refused_fault().kind, effects: EffectsUnknown }, message: msg }),
+             Ok(applied) => {
+               let after = applied.content;
+               let diff = build_edit_file_diff(path, before, after, true);

@@ -1,0 +1,11 @@
+--- a/src/core/tool_dispatch_adapter.ail
++++ b/src/core/tool_dispatch_adapter.ail
+@@ -278,7 +278,7 @@
+   match results {
+     [r] => { content: encode(tool_result_item_to_json(r)), exit_code: tool_result_exit_code(r) },
+     _ => { content: encode(jo([
+-             kv(fault_key(), fault_to_json(io_error_fault(EffectsUnknown))),
++             kv(fault_key(), fault_to_json(io_error_fault(EffectsNone))),
+              kv("error", jb(true)),
+              kv("message", js("internal: dispatcher returned 0 or >1 results for single call"))
+            ])),

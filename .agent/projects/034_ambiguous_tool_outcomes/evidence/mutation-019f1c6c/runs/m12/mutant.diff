@@ -1,0 +1,11 @@
+--- a/src/core/tool_runtime.ail
++++ b/src/core/tool_runtime.ail
+@@ -527,7 +527,7 @@
+       -- violation) get caught here as a structured ToolErrorResult
+       -- instead of escaping as a runtime panic that kills the agent.
+       match readFileResult(resolved) {
+-        Err(msg) => ToolErrorResult({ id: id, tool: "ReadFile", fault: io_error_fault(EffectsNone), message: msg }),
++        Err(msg) => ToolErrorResult({ id: id, tool: "ReadFile", fault: io_error_fault(EffectsUnknown), message: msg }),
+         Ok(content) => {
+           let lines = split(content, "\n");
+           let total = line_count_of(content);

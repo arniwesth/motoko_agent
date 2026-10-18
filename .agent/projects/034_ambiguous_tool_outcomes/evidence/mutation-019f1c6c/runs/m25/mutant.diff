@@ -1,0 +1,11 @@
+--- a/src/core/tool_runtime.ail
++++ b/src/core/tool_runtime.ail
+@@ -588,7 +588,7 @@
+ 
+ func run_search(id: string, pattern: string, dir: string, workdir: string) -> ToolResultItem ! {Process} {
+   if pattern == "" then
+-    ToolErrorResult({ id: id, tool: "Search", fault: refused_fault(), message: "missing pattern" })
++    ToolErrorResult({ id: id, tool: "Search", fault: { kind: refused_fault().kind, effects: EffectsUnknown }, message: "missing pattern" })
+   else {
+     let raw_dir = if dir == "" then "." else dir;
+     let target = resolve_workdir_path(workdir, raw_dir);

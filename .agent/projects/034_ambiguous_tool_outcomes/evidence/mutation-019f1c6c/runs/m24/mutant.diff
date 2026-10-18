@@ -1,0 +1,11 @@
+--- a/src/core/tool_runtime.ail
++++ b/src/core/tool_runtime.ail
+@@ -402,7 +402,7 @@
+   }
+ 
+ func path_error(id: string, tool: string, message: string) -> ToolResultItem {
+-  ToolErrorResult({ id: id, tool: tool, fault: refused_fault(), message: message })
++  ToolErrorResult({ id: id, tool: tool, fault: { kind: refused_fault().kind, effects: EffectsUnknown }, message: message })
+ }
+ 
+ -- Strip "${workdir}/" prefix from path if path lives genuinely under workdir.

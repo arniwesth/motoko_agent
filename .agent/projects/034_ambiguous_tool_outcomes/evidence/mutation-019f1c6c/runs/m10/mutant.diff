@@ -1,0 +1,11 @@
+--- a/src/core/tool_runtime.ail
++++ b/src/core/tool_runtime.ail
+@@ -900,7 +900,7 @@
+                 })
+               else
+                 match atomic_write(resolved, after) {
+-                  Err(msg) => ToolErrorResult({ id: id, tool: "EditFile", fault: io_error_fault(EffectsUnknown), message: msg }),
++                  Err(msg) => ToolErrorResult({ id: id, tool: "EditFile", fault: io_error_fault(EffectsNone), message: msg }),
+                   Ok(_) =>
+                     EditFileResult({
+                       id: id,
