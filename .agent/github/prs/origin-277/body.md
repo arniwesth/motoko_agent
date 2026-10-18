@@ -27,6 +27,7 @@ This is Phase 0 of 034 ADR-001 (`034/PLAN-001` workstream W0, tasks `034/PLAN-00
 - fix(core): Search reads only, the unknown tool name is cut (#277 review)
 - test(034): mutation follow-up at d3047dd1, m36-m39 all killed; s-rg was false
 - test(034): baseline after the #277 review follow-up matches W0.1 (034 W0.7)
+- ci: install ripgrep for the DST gates; plan records the Search mutant (#277)
 
 What each part does:
 
@@ -41,8 +42,9 @@ What each part does:
   1. *[High] Search could report `effects: none` after changing state.* `rg` read `RIPGREP_CONFIG_PATH`, whose config can set `--pre=<program>`. The pattern was passed positionally, so a pattern such as `--pre=/tmp/x` was read as an option. `search_argv` now runs `rg -n --no-heading --color never --no-config -e <pattern> -- <target>`. That invocation only reads, so D2 row 4 (`none` for a read-only tool) holds as ruled. Witnesses: W0.5 row q (a pattern `--pre=<helper>` is found as text, and the helper does not run) and the inline test `t_search_argv_reads_only`.
   2. *[Medium] A long unknown tool name pushed `fault` out of the message.* `unknown_tool_refusal` echoes the name through `echoed_tool_name(name, 200)`: at most 200 characters, then `...[tool name cut]`. That is a new pure func with an `ensures`, classified substantive, and the register is regenerated. Witnesses: the adapter test `t_long_unknown_tool_keeps_fault` (a 102,400-character name through `tool_result_message`'s cap) and W0.5 row s (a 70,000-character name down the live path).
   3. *[Medium] The Search survivor's reason was false.* W0.5 row r searches an 11 MiB matching file. `rg` launches, its output passes the 10 MiB cap, and the message reads `output_limit`, `none`, `bytes` 10485760. Mutant m36 (that arm discloses `unknown`) is killed by row r. Its measured result replaces the survivor's reason in `mutants.tsv`, `mutate.py` and the README. m37 to m39 mutate the two fixes, and all three are killed.
+- **CI's ripgrep, `f32a1061`.** Rows q and r run a live Search, and the CI runner image has no `rg`, so at `2a11f47e` both returned `not found: rg` and DST gates (heavy) failed. `.github/actions/dst-setup` now installs `ripgrep` beside Z3, so CI exercises Search for the first time. The same commit corrects PLAN-001 W0.6, which still said Search's `rg` failure had no mutant row.
 
-The diff counts 253 files changed. Most are evidence files: the per-mutant run logs under `evidence/mutation-019f1c6c/runs/`, and the three baseline directories.
+The diff counts 254 files changed. Most are evidence files: the per-mutant run logs under `evidence/mutation-019f1c6c/runs/`, and the three baseline directories.
 
 ## Governing docs
 
