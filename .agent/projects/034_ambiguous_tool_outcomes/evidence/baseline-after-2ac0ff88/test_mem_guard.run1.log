@@ -1,0 +1,22 @@
+....................................................F..                  [100%]
+=================================== FAILURES ===================================
+___________________ test_verify_accepts_a_clean_pass_via_cli ___________________
+
+tmp_path = PosixPath('/tmp/pytest-of-motoko/pytest-7/test_verify_accepts_a_clean_pa0')
+
+    def test_verify_accepts_a_clean_pass_via_cli(tmp_path):
+        run = run_guard(tmp_path, ["true"])
+        verify = subprocess.run(
+            [sys.executable, str(GUARD), "--verify", str(run.record_path)], capture_output=True, text=True
+        )
+>       assert verify.returncode == mem_guard.EXIT_PASS, verify.stdout + verify.stderr
+E       AssertionError: mem_guard: reject monitor_gap /tmp/pytest-of-motoko/pytest-7/test_verify_accepts_a_clean_pa0/rec/guard.json
+E         
+E       assert 5 == 0
+E        +  where 5 = CompletedProcess(args=['/usr/bin/python3', '/workspaces/motoko_agent-034-w0/scripts/eval/mem_guard.py', '--verify', '/..._guard: reject monitor_gap /tmp/pytest-of-motoko/pytest-7/test_verify_accepts_a_clean_pa0/rec/guard.json\n', stderr='').returncode
+E        +  and   0 = mem_guard.EXIT_PASS
+
+scripts/eval/test_mem_guard.py:662: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/eval/test_mem_guard.py::test_verify_accepts_a_clean_pass_via_cli
+1 failed, 54 passed in 12.49s
