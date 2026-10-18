@@ -247,6 +247,8 @@ import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, Resp
   ToolPolicyDecision, ToolSchema
 )
 import src/core/test/ext_fixture (fixture_hooks)
+-- 034 W1.3: the builder reads the world-truth list off the effect log.
+import src/core/dst_replay (applied_faults_of_world)
 
 -- ---------------------------------------------------------------------------
 -- Reporting
@@ -444,9 +446,9 @@ pure func program_of(w: WorldState, initial: WorldState) -> ExecutionProgram {
     bounds: initial.gen.bounds,
     manifest: run_manifest(),
     interactions: w.log,
-    -- 034 W1.2: no world truth recorded yet. W1.3 fills this from the world's
-    -- effect log; W1.6 makes the generator draw `applied`.
-    applied_faults: [] }
+    -- 034 W1.3: the world's effect-log FAULT entries, by recorded ordinal. Empty
+    -- until W1.6 makes the generator draw `applied`.
+    applied_faults: applied_faults_of_world(w) }
 }
 
 export pure func store_root() -> string { ".ailang/dst-corpus" }

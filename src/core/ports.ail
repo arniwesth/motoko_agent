@@ -458,6 +458,38 @@ export type WorldState = {
   -- behaviour-preserving for every existing target.
   log: [Interaction],
 
+  -- 034 W1.3 (ADR-001 D4): THE EFFECT LOG. WORLD TRUTH, append-only: one entry
+  -- per scripted tool call whose effect APPLIED — every completed call, and every
+  -- fault whose `ScriptedTool.applied` is set. A fault that did not apply has no
+  -- entry, which is the whole content of "not applied".
+  --
+  --   ordinal     the INTERACTION ordinal of the call, recorded at append as
+  --               `List.length(log)`: the ordinal `record_interaction` is about
+  --               to give the call's interaction. It is recorded rather than
+  --               joined afterwards by call id, because that join is ambiguous
+  --               in exactly the case property P3 exists for: one id dispatched
+  --               twice (034 PLAN-001 review 2, finding 13).
+  --   call_id     the id the driver dispatched under.
+  --   effect_key  the tool and its arguments, as `tool:encoded-arguments`. A
+  --               canonical rendering rather than a hash, because this module
+  --               imports no hash and a new import changes 013 ADR-004's
+  --               protected `<imports:1>` span (034 RECORD-W1.1 §6). Two calls
+  --               with the same key are the same effect, which is all W3's
+  --               duplicate-effect count asks of it.
+  --
+  -- ONE WRITER: `world_tool`'s scripted arm. The live arm cannot know whether a
+  -- real effect applied, and `world_ext_effect` serves extension effects, which
+  -- answer no model tool call. `scripted_tool_outcome` does not read it.
+  --
+  -- NEVER IN THE WORLD TOKEN, like `ScriptedTool.applied`: carrying it would hand
+  -- world truth to every extension hook. `ext_world.adopt_world` re-seats it from
+  -- the pre-hook world wherever the driver adopts a hook's successor
+  -- (`tool_phase`'s tool-handle hook; `session`'s pre-step, intercept, solver
+  -- and exit-manifest hooks). Recording
+  -- builders read its fault entries into `ExecutionProgram.applied_faults`
+  -- (`dst_replay.applied_faults_of_world`), and replay rebuilds it by running.
+  effect_log: [{ ordinal: int, call_id: string, effect_key: string }],
+
   -- WI-A13 stage 4: D2's seeded generator, as EXPLICIT STATE.
   --
   -- D2 makes every discovery choice "a deterministic function of generator
@@ -857,7 +889,7 @@ export type PortedProvider = {
 -- non-scripted arm of `ported_provider`.
 export pure func empty_world_state() -> WorldState {
   { script: [], clock_ms: 0, approvals: [], wakes: [], env: [], files: [], tools: [],
-    ext_effects: [], holder_ext_id: "", log: [], gen: no_generator(),
+    ext_effects: [], holder_ext_id: "", log: [], effect_log: [], gen: no_generator(),
     ordinal: 0, pending: [] }
 }
 
@@ -1776,8 +1808,17 @@ export func world_tool(state: WorldState, inv: ToolInvocation) -> ToolExecution 
     -- that drives a real subprocess to a chosen code can see this binding.
     [] => { outcome: live_tool_outcome(inv), next_state: state },
     t :: rest => {
-      let advanced = { state | tools: rest, clock_ms: state.clock_ms + t.duration_ms };
-      { outcome: scripted_tool_outcome(inv, t), next_state: advanced }
+      let outcome = scripted_tool_outcome(inv, t);
+      -- 034 W1.3: the effect log's one append site. A completed call applied
+      -- by definition; a fault applied only when the world says so. The
+      -- outcome is computed first and without `t.applied`, so world truth
+      -- decides what is logged and never what is served.
+      let applied = match outcome { ToolCompleted(_) => true, _ => t.applied };
+      let entry = { ordinal: List.length(state.log), call_id: inv.call.id,
+                    effect_key: "${inv.call.tool}:${encode(inv.call.arguments)}" };
+      let advanced = { state | tools: rest, clock_ms: state.clock_ms + t.duration_ms,
+                               effect_log: if applied then state.effect_log ++ [entry] else state.effect_log };
+      { outcome: outcome, next_state: advanced }
     }
   }
 }

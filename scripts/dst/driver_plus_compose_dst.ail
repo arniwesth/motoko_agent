@@ -163,6 +163,7 @@ import src/core/dst_program (
   program_schema_version
 )
 import src/core/dst_replay (
+  applied_faults_of_world,
   ReplayMismatch,
   ReconstitutionFinding,
   world_state_of,
@@ -739,9 +740,9 @@ pure func graded_program(w: WorldState, initial: WorldState) -> ExecutionProgram
     },
     manifest: compose_manifest("HEAD", "ailang 0.33.0", "8.0", "{}", ["env_get"], [], "HEAD"),
     interactions: w.log,
-    -- 034 W1.2: no world truth recorded yet. W1.3 fills this from the world's
-    -- effect log, which stays empty unless the scenario scripts an applied fault.
-    applied_faults: []
+    -- 034 W1.3: the world's effect-log FAULT entries, by recorded ordinal; empty
+    -- unless the scenario scripts an applied fault.
+    applied_faults: applied_faults_of_world(w)
   }
 }
 

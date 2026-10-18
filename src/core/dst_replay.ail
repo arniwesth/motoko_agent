@@ -768,8 +768,14 @@ pure func approvals_of(xs: [Interaction]) -> [string] {
   }
 }
 
+-- 034 W1.3: `listed` is the program's world-truth list. The payload never
+-- carries `applied` (D4), so every decoded entry has it false, and it is set here
+-- from the list, by the ORDINAL of the interaction the entry is derived from —
+-- the one identity a listed ordinal and a queue entry share. Ignoring the list
+-- (034 W1.7 mutant v05) replays every applied fault as not applied, and the
+-- replayed effect log loses its fault entries.
 @allow_empty_ok("an empty interaction list is a legitimate replay tool set — no tool interactions to replay")
-pure func tools_of(xs: [Interaction]) -> Result[[ScriptedTool], ReplayRefusal] {
+pure func tools_of(xs: [Interaction], listed: [int]) -> Result[[ScriptedTool], ReplayRefusal] {
   match xs {
     [] => Ok([]),
     i :: rest =>
@@ -778,13 +784,21 @@ pure func tools_of(xs: [Interaction]) -> Result[[ScriptedTool], ReplayRefusal] {
           match decode_tool_outcome(i.outcome.payload, i.outcome.advance_ms) {
             ToolRecordUndecodable(why) => Err(ToolOutcomeUndecodable(i.identity.ordinal, why)),
             ToolRecordDecoded(t) =>
-              match tools_of(rest) {
+              match tools_of(rest, listed) {
                 Err(e) => Err(e),
-                Ok(tail) => Ok(t :: tail)
+                Ok(tail) => Ok({ t | applied: listed_ordinal(listed, i.identity.ordinal) } :: tail)
               }
           },
-        _ => tools_of(rest)
+        _ => tools_of(rest, listed)
       }
+  }
+}
+
+-- contracts: BLOCKED — RECURSIVE over the list.
+pure func listed_ordinal(xs: [int], ord: int) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if x == ord then true else listed_ordinal(rest, ord)
   }
 }
 
@@ -889,15 +903,14 @@ export pure func world_state_of(
   match first_structural_rule(p, known_class_ids) {
     Some(rule) => Err(ProgramStructurallyInvalid(rule)),
     None =>
-      -- 034 W1.2. The list is VALIDATED here and not yet READ: `tools_of`
-      -- decodes every entry with `applied: false`, and W1.3 sets it from the list.
+      -- 034 W1.2 validates the list here; W1.3 reads it, in `tools_of`.
       match applied_fault_refusal(p.interactions, p.applied_faults) {
         Some(r) => Err(r),
         None =>
       match script_of(p.interactions) {
         Err(e) => Err(e),
         Ok(script) =>
-          match tools_of(p.interactions) {
+          match tools_of(p.interactions, p.applied_faults) {
             Err(e) => Err(e),
             Ok(tools) =>
               match ext_effects_of(p.interactions) {
@@ -931,11 +944,86 @@ export pure func world_state_of(
                    -- reconstituted one would be whichever extension happened to
                    -- go last.
                    ext_effects: ext_effects })
+                   -- 034 W1.3. `effect_log` comes from `empty_world_state()`,
+                   -- empty, for `log`'s reason above: replay REBUILDS it by
+                   -- running. The queue now says which faults applied, so
+                   -- `world_tool` appends the completed calls and the listed
+                   -- faults as the replay reaches them, under the replay's own
+                   -- ordinals; `effect_ordinals_of` is what that must equal.
               }
           }
       }
       }
   }
+}
+
+-- ---------------------------------------------------------------------------
+-- 034 W1.3: the world-truth list, both directions
+-- ---------------------------------------------------------------------------
+--
+-- RECORDING. What every program builder 034 RECORD-W1.1 §3 lists writes into
+-- `ExecutionProgram.applied_faults`: the ordinals of the effect log's FAULT
+-- entries, in log order. The effect log holds completed calls too (W3 needs them
+-- to see an applied fault followed by a completing retry), and a completed call
+-- is never listed (W1.2's `replay-refused-applied-fault-completed`), so an entry
+-- is a fault entry exactly when the interaction recorded at its ordinal is not
+-- `OutcomeOk` — the recorder's own status, the observation W1.2's rule reads.
+--
+-- An entry whose ordinal names no interaction in `w.log` is NOT listed. It
+-- arises only from a world that ran `world_tool` without a recorder, where the
+-- ordinal names nothing; listing it would hand the validator an ordinal it must
+-- refuse, and a builder always records.
+-- contracts: BLOCKED — RECURSIVE over the effect log.
+export pure func applied_faults_of_world(w: WorldState) -> [int] {
+  match w.effect_log {
+    [] => [],
+    e :: rest => {
+      let tail = applied_faults_of_world({ w | effect_log: rest });
+      if recorded_fault_at(w.log, e.ordinal) then e.ordinal :: tail else tail
+    }
+  }
+}
+
+-- contracts: BLOCKED — RECURSIVE over the interaction list.
+pure func recorded_fault_at(xs: [Interaction], ord: int) -> bool {
+  match xs {
+    [] => false,
+    i :: rest =>
+      if i.identity.ordinal == ord then
+        match i.outcome.status { OutcomeOk => false, _ => true }
+      else recorded_fault_at(rest, ord)
+  }
+}
+
+-- REPLAY. The ordinals the replayed run's effect log must hold, in order: every
+-- driver tool interaction recorded `OutcomeOk` (a completed call applied by
+-- definition) and every listed fault. Derived from the PROGRAM alone, so a
+-- replay is compared against what was recorded and not against itself. Extension
+-- effects are not driver tool calls and have no entry (`WorldState.effect_log`).
+-- contracts: BLOCKED — calls `effect_ordinals_in`, RECURSIVE over the interaction list.
+export pure func effect_ordinals_of(p: ExecutionProgram) -> [int] {
+  effect_ordinals_in(p.interactions, p.applied_faults)
+}
+
+-- contracts: BLOCKED — RECURSIVE over the interaction list.
+pure func effect_ordinals_in(xs: [Interaction], listed: [int]) -> [int] {
+  match xs {
+    [] => [],
+    i :: rest =>
+      match i.identity.body {
+        ToolIdentity(_, _, _) =>
+          if (match i.outcome.status { OutcomeOk => true, _ => false }) || listed_ordinal(listed, i.identity.ordinal)
+          then i.identity.ordinal :: effect_ordinals_in(rest, listed)
+          else effect_ordinals_in(rest, listed),
+        _ => effect_ordinals_in(rest, listed)
+      }
+  }
+}
+
+-- The ordinals of an effect log, for comparing one against the above.
+-- contracts: BLOCKED — RECURSIVE over the effect log.
+export pure func effect_log_ordinals(xs: [{ ordinal: int, call_id: string, effect_key: string }]) -> [int] {
+  match xs { [] => [], e :: rest => e.ordinal :: effect_log_ordinals(rest) }
 }
 
 -- ---------------------------------------------------------------------------
@@ -1415,6 +1503,87 @@ pure func test_a_listed_deadline_fault_replays() -> bool
   tests [((), true)]
   {
     wt_rule(wt_program(late_i(1, "c1"), [1])) == "ok"
+  }
+
+-- 034 W1.3: REPLAY SETS `applied` FROM THE LIST (W1.7 mutant v05 fails here and
+-- in strict_replay_dst's end-to-end rows). The listed fault's queue entry is
+-- applied and nothing else is; the same program with the list empty has no
+-- applied entry. The queue is otherwise identical, field by field, which is the
+-- reconstitution half of acceptance (b).
+pure func applied_flags_of(xs: [ScriptedTool]) -> [bool] {
+  match xs { [] => [], t :: rest => t.applied :: applied_flags_of(rest) }
+}
+
+pure func eq_bool_list(a: [bool], b: [bool]) -> bool {
+  match a {
+    [] => (match b { [] => true, _ => false }),
+    x :: xr => match b { [] => false, y :: yr => x == y && eq_bool_list(xr, yr) }
+  }
+}
+
+pure func same_but_applied(a: [ScriptedTool], b: [ScriptedTool]) -> bool {
+  match a {
+    [] => (match b { [] => true, _ => false }),
+    x :: xr => match b {
+      [] => false,
+      y :: yr => x.tool_call_id == y.tool_call_id && x.duration_ms == y.duration_ms
+                   && x.code == y.code && x.message == y.message && x.content == y.content
+                   && x.exit_code == y.exit_code && x.after_dispatch == y.after_dispatch
+                   && same_but_applied(xr, yr)
+    }
+  }
+}
+
+pure func test_world_state_of_sets_applied_from_the_world_truth_list() -> bool
+  tests [((), true)]
+  {
+    let listed = world_state_of(wt_program(failed_i(1, "c1", true), [1]), [wt_class()]);
+    let unlisted = world_state_of(wt_program(failed_i(1, "c1", true), []), [wt_class()]);
+    match listed {
+      Err(_) => false,
+      Ok(a) => match unlisted {
+        Err(_) => false,
+        Ok(b) => eq_bool_list(applied_flags_of(a.tools), [true, false, false, false])
+                   && eq_bool_list(applied_flags_of(b.tools), [false, false, false, false])
+                   && same_but_applied(a.tools, b.tools)
+                   && List.length(a.effect_log) == 0
+      }
+    }
+  }
+
+-- The replay's expected effect log: the completed tool calls and the listed
+-- faults, in ordinal order — never an unlisted fault, never a provider or
+-- approval interaction.
+pure func eq_int_list(a: [int], b: [int]) -> bool {
+  match a {
+    [] => (match b { [] => true, _ => false }),
+    x :: xr => match b { [] => false, y :: yr => x == y && eq_int_list(xr, yr) }
+  }
+}
+
+pure func test_the_expected_effect_log_is_completed_calls_and_listed_faults() -> bool
+  tests [((), true)]
+  {
+    eq_int_list(effect_ordinals_of(wt_program(failed_i(1, "c1", true), [1])), [1, 4, 6, 8])
+      && eq_int_list(effect_ordinals_of(wt_program(failed_i(1, "c1", true), [])), [4, 6, 8])
+      && eq_int_list(effect_ordinals_of(fixture_program()), [1, 4, 6, 8])
+  }
+
+-- RECORDING: a builder lists the effect log's FAULT entries only. The world's
+-- log holds a completed call (#1), an applied fault (#4) and a non-applied
+-- fault (#6, no effect entry); the effect log also holds an entry whose ordinal
+-- names nothing recorded (#99), which is not listed.
+pure func test_a_builder_lists_only_the_effect_logs_fault_entries() -> bool
+  tests [((), true)]
+  {
+    let w = { empty_world_state() |
+              log: [provider_i(0, "s0"), tool_i(1, "c1"), approval_i(2, "c1", true),
+                    provider_i(3, "s1"), failed_i(4, "c2", true), failed_i(6, "c3", true)],
+              effect_log: [{ ordinal: 1, call_id: "c1", effect_key: "T:{}" },
+                           { ordinal: 4, call_id: "c2", effect_key: "T:{}" },
+                           { ordinal: 99, call_id: "c9", effect_key: "T:{}" }] };
+    eq_int_list(applied_faults_of_world(w), [4])
+      && eq_int_list(applied_faults_of_world(empty_world_state()), [])
   }
 
 -- The structural rules run FIRST, in `validate_program`: an ordinal that names

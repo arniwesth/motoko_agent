@@ -204,6 +204,7 @@ import src/core/dst_program (
   validate_bounds
 )
 import src/core/dst_replay (
+  applied_faults_of_world,
   ReplayMismatch,
   ReconstitutionFinding,
   ReplayRefusal,
@@ -617,9 +618,9 @@ pure func program_of(w: WorldState, initial: WorldState) -> ExecutionProgram {
     bounds: initial.gen.bounds,
     manifest: generated_manifest(),
     interactions: w.log,
-    -- 034 W1.2: no world truth recorded yet. W1.3 fills this from the world's
-    -- effect log; W1.6 makes the generator draw `applied`.
-    applied_faults: []
+    -- 034 W1.3: the world's effect-log FAULT entries, by recorded ordinal. Empty
+    -- until W1.6 makes the generator draw `applied`.
+    applied_faults: applied_faults_of_world(w)
   }
 }
 

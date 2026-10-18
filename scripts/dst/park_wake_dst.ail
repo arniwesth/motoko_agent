@@ -54,7 +54,7 @@ import src/core/dst_event_vocabulary (event_variant_id)
 import src/core/dst_interaction (Interaction, identity_kind)
 import src/core/dst_invariants (park_payload_findings)
 import src/core/dst_program (ExecutionProgram, program_schema_version)
-import src/core/dst_replay (world_state_of, reconstitution_balance, strict_replay_findings)
+import src/core/dst_replay (world_state_of, reconstitution_balance, strict_replay_findings, applied_faults_of_world)
 import src/core/dst_persistence (encode_artifact, decode_artifact, Encoded, EncodeRefused, ProgramDecoded, ProgramDecodeRefused)
 import src/core/dst_driver_only (driver_only_manifest, driver_only_version)
 import src/core/dst_profile (ExecutionManifest)
@@ -655,7 +655,7 @@ pure func w4_manifest() -> ExecutionManifest {
   driver_only_manifest("HEAD", "ailang 0.33.0", "8.0", "{}", ["ai_step", "env_get", "tool_handle"], ["clock_now"], "HEAD")
 }
 
-pure func program_of(log: [Interaction], initial: WorldState) -> ExecutionProgram {
+pure func program_of(w: WorldState, initial: WorldState) -> ExecutionProgram {
   {
     schema_version: program_schema_version(),
     generator_id: "hand_authored_park_wake",
@@ -677,10 +677,10 @@ pure func program_of(log: [Interaction], initial: WorldState) -> ExecutionProgra
       chunk_draw_hi: 3
     },
     manifest: w4_manifest(),
-    interactions: log,
-    -- 034 W1.2: no world truth recorded yet. W1.3 fills this from the world's
-    -- effect log, which stays empty unless the scenario scripts an applied fault.
-    applied_faults: []
+    interactions: w.log,
+    -- 034 W1.3: the world's effect-log FAULT entries, by recorded ordinal; empty
+    -- unless the scenario scripts an applied fault.
+    applied_faults: applied_faults_of_world(w)
   }
 }
 
@@ -688,7 +688,7 @@ func fixture_saved_program_replay() -> bool ! {AI, Clock, Env, FS, IO, Net, Proc
   let _ = println("saved-program replay through recording_wake:");
   let initial = w4_world(success_script(), success_wakes());
   let discovery = run_recorded("replay_discovery", w4_rt(), initial, 12);
-  let program = program_of(discovery.world.log, initial);
+  let program = program_of(discovery.world, initial);
   let saved = match encode_artifact(program) { Encoded(s) => s, EncodeRefused(_) => "" };
   match decode_artifact(saved) {
     ProgramDecodeRefused(_) => report("replay: the saved program decodes", false, "encoded=${show(saved != "")} and the decode refused"),

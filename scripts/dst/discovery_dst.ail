@@ -198,6 +198,7 @@ import src/core/dst_fault_catalogue (required_class_ids, fault_class_extension_e
 -- file needs the replay half. It is the only scenario here that does; the three
 -- older ones stop at the program.
 import src/core/dst_replay (
+  applied_faults_of_world,
   ReplayMismatch,
   world_state_of,
   reconstitution_balance,
@@ -839,9 +840,9 @@ pure func program_of(w: WorldState, initial: WorldState) -> ExecutionProgram {
     },
     manifest: discovered_manifest(),
     interactions: w.log,
-    -- 034 W1.2: no world truth recorded yet. W1.3 fills this from the world's
-    -- effect log, which stays empty unless the scenario scripts an applied fault.
-    applied_faults: []
+    -- 034 W1.3: the world's effect-log FAULT entries, by recorded ordinal; empty
+    -- unless the scenario scripts an applied fault.
+    applied_faults: applied_faults_of_world(w)
   }
 }
 

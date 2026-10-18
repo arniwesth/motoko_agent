@@ -44,7 +44,7 @@ import src/core/types (Msg)
 import src/core/config (CostRates)
 import std/option (Option, Some, None)
 import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, ExtPorts, TokenTelemetry, ResponseInterceptDecision, FinalizeDecision, ExtWorld, NotReached, AiStepOutcome, ExtClockReading, ExtProcOutcome, ExtFileRead, ExtFileMutation, ExtPathStat, ExtDirListing, ExtPathKind, ExtPathMissing, ExtPathFile, ExtPathDir) -- WI-B2b; ExtClockReading WI-C5; ExtProcOutcome/ExtFileRead WI-D16; ExtFileMutation WI-D17; ExtPathStat/ExtDirListing WI-D18: ExtWorld/AiStepOutcome, on this line to limit A5 anchor drift
-import src/core/ext_world (world_to_token, token_to_world, clear_holder) -- WI-B2b: the ONLY place the opaque token is opened; see that module's header
+import src/core/ext_world (world_to_token, token_to_world, clear_holder, adopt_world) -- WI-B2b: the ONLY place the opaque token is opened; see that module's header
 import src/core/compaction (estimate_tokens_messages, usage_percent_with_limit, exhaustion_pct, effective_input_limit)
 import src/core/context_usage (resolve_context_limit_sum)
 import src/core/context_limit (Bounded, Catalogue, is_bounded, raw_window_of, working_budget_for_ext) -- PLAN-001 P1: the sum's three int projections; nothing else erases the reason
@@ -2918,7 +2918,7 @@ type CandidateClass
 --                   approved as it stands, blank or not. A silent merge of the
 --                   judges (`NoDecision`) is one.
 --
--- THE WAITS-STAGE WORLD IS `token_to_world(clear_holder(ctx.world))`. No
+-- THE WAITS-STAGE WORLD IS `adopt_world(clear_holder(ctx.world), pre)`. No
 -- completion hook has run at that point, so there is no fold to take a
 -- successor from. `ctx.world` is the intercept's successor, already
 -- holder-cleared by `dispatch_response_intercept`, and `clear_holder` is
@@ -2933,16 +2933,16 @@ func classify_candidate(
   candidate: string,
   step_idx: int,
   session_id: string,
-  open_waits: [WaitDescriptor]
+  open_waits: [WaitDescriptor], pre: WorldState
 ) -> CandidateClass ! {Process, IO, Clock, Trace} {
   -- Stage 2 (PLAN-002 W4 Part 1).
-  if List.length(open_waits) > 0 then CandidateAwaitWake({ world: token_to_world(clear_holder(ctx.world)) })
+  if List.length(open_waits) > 0 then CandidateAwaitWake({ world: adopt_world(clear_holder(ctx.world), pre) })
   else {
     -- Stages 3 and 4. The solver's successor is the world from here on,
     -- whichever decision won (WI-B2b). The two `CandidateApproved` arms are
     -- stage 4: nothing runs between the completion policy and the approval.
     let finalized = dispatch_solver_candidate(rt, ctx, candidate);
-    let world = token_to_world(finalized.next_state);
+    let world = adopt_world(finalized.next_state, pre);
     match finalized.decision {
       Accept => CandidateApproved({ output: candidate, source: "ext_solver_accept", world: world }), -- 8.0: `Accept` is nullary; the judged candidate is what is finalized
       ContinueWithFeedback(feedback) => {
@@ -3430,14 +3430,14 @@ func c2_loop(
               let event = ErrorEvent({ source: "system_prompt", code: "SystemPromptEmpty", message: reason });
               let _ = ledger_emit(session_id, event);
               let result: Result[[Message], AIError] = Err({ code: "SystemPromptEmpty", message: reason, retryable: false });
-              c2_finalize(st.provider, token_to_world(chain.next_state), session_id, model, st.totals, step_idx, TermSystemPromptEmpty, reason, started_at_ms, ledger_append(trace_after_stages, WireRecord(event)), st.emissions, result, c2_final_state(st))
+              c2_finalize(st.provider, adopt_world(chain.next_state, st.world_state), session_id, model, st.totals, step_idx, TermSystemPromptEmpty, reason, started_at_ms, ledger_append(trace_after_stages, WireRecord(event)), st.emissions, result, c2_final_state(st))
             },
             -- Terminal: compaction exhausted.
             Err(SealExhausted(compaction_reason)) => {
               let event = CompactionExhausted({ step: step_idx, model: model, reason: compaction_reason });
               let _ = ledger_emit(session_id, event);
               let result: Result[[Message], AIError] = Err({ code: "ContextExhausted", message: compaction_reason, retryable: false });
-              c2_finalize(st.provider, token_to_world(chain.next_state), session_id, model, st.totals, step_idx, TermCompactionExhausted, compaction_reason, started_at_ms, ledger_append(trace_after_stages, WireRecord(event)), st.emissions, result, c2_final_state(st))
+              c2_finalize(st.provider, adopt_world(chain.next_state, st.world_state), session_id, model, st.totals, step_idx, TermCompactionExhausted, compaction_reason, started_at_ms, ledger_append(trace_after_stages, WireRecord(event)), st.emissions, result, c2_final_state(st))
             },
             Ok(payload) => {
               let compacted_msgs = payload_messages(payload);
@@ -3462,7 +3462,7 @@ func c2_loop(
               -- world the chain was entered with would re-serve whatever the
               -- chain already consumed. This is the pre-step half of the same
               -- threading the intercept and solver hooks do below.
-              let exchange = dispatch_step(st.provider, token_to_world(chain.next_state), provider_api_model(model, policy.step.provider_base_url), compacted_msgs, on_chunk);
+              let exchange = dispatch_step(st.provider, adopt_world(chain.next_state, st.world_state), provider_api_model(model, policy.step.provider_base_url), compacted_msgs, on_chunk); -- 034 W1.3: every adoption re-seats `applied` and the effect log from the pre-hook world (`ext_world.adopt_world`); the token never carries them (D4)
               -- WI-C3: THE READER. `exchange.emissions` had no consumer until
               -- this line; WI-A1 built the channel, WI-C1 made it non-empty on a
               -- live exchange, and this is where it is spent.
@@ -3627,7 +3627,7 @@ func c2_loop(
 	                        -- WI-B2b: the INTERCEPT's successor, not the model
 	                        -- step's. The hook ran after the exchange, so
 	                        -- `exchange.next_state` is stale by whatever it did.
-	                        world_state: token_to_world(intercepted.next_state),
+	                        world_state: adopt_world(intercepted.next_state, stepped.world),
                         pending_tool_calls: [],
                         pending_tool_context: [],
                         pending_tool_prefix: [],
@@ -3674,7 +3674,7 @@ func c2_loop(
 	                          ext_artifacts: chain.artifacts,
 	                          telemetry: applied.telemetry,
 	                          provider: st.provider,
-	                          world_state: token_to_world(intercepted.next_state), -- WI-D19
+	                          world_state: adopt_world(intercepted.next_state, stepped.world), -- WI-D19
                           pending_tool_calls: applied.pending_tool_calls,
                           pending_tool_context: msgs_with_assistant,
                           pending_tool_prefix: msgs_with_assistant,
@@ -3701,7 +3701,7 @@ func c2_loop(
                         -- PLAN-002 W2 Part 4 (ADR-002 D2). ONE classification, in stage
                         -- order: open waits before the completion policy. See
                         -- `classify_candidate`.
-                        let classified = classify_candidate(rt, { post_ctx | world: intercepted.next_state }, result.message.content, step_idx, session_id, st.open_waits); -- WI-D19
+                        let classified = classify_candidate(rt, { post_ctx | world: intercepted.next_state }, result.message.content, step_idx, session_id, st.open_waits, stepped.world); -- WI-D19
                         match classified {
                           CandidateApproved(approved) =>
                             c2_loop(rt, task, env_url, budget, policy, model, workdir, ohmy_pi, max_cost_millicents, cost_rates, session_id, identity, started_at_ms, c2_candidate_approved_state(session_id, identity, st, msgs_with_assistant, new_totals, chain.artifacts, applied.telemetry, approved.world, trace_after_model, emissions_after_call, artifacts_changed, step_idx, approved.output, approved.source)),
@@ -4581,7 +4581,7 @@ func publish_turn_exit_manifest(
   -- and failing a completed turn over a best-effort courtesy would be the
   -- wrong trade in the one direction that matters.
   let rendered = publish_exit_manifest(rt, ctx, named.value);
-  { world: token_to_world(rendered), trace: seen.trace }
+  { world: adopt_world(rendered, seen.world), trace: seen.trace }
 }
 
 export func conversation_loop_v2(
