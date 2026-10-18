@@ -119,6 +119,36 @@ export type SearchMatch = {
 
 export type TestFailure = { test: string, message: string }
 
+-- 034 ADR-001 D2/D3, PLAN-001 W0.2: what the harness can say about a tool
+-- fault's effects. `EffectsNone` only where it observed that nothing could
+-- have changed (D2's table); `EffectsUnknown` everywhere else.
+export type EffectDisclosure = EffectsNone | EffectsUnknown
+  deriving (Eq)
+
+-- The observation behind a fault (PLAN-001 C3), never the world's truth. The
+-- kind's numbers ride on its arm: `FaultDeadline(elapsed_ms)`,
+-- `FaultOutputLimit(bytes)`, `FaultSignal(signal, signal_name)`. The wire
+-- strings for every arm, the keys and the two sentences live in
+-- `src/core/tool_fault`, the one home every renderer imports. W1 adds the
+-- typed-path kinds (`failed`, `correlation_mismatch`, `denied`,
+-- `arguments_undecodable`) as new arms.
+export type FaultKind
+  = FaultNotAllowed
+  | FaultNotFound
+  | FaultPermissionDenied
+  | FaultSpawnFailed
+  | FaultDeadline(int)
+  | FaultOutputLimit(int)
+  | FaultSignal(int, string)
+  | FaultRefused
+  | FaultIoError
+  deriving (Eq)
+
+export type ToolFault = {
+  kind:    FaultKind,
+  effects: EffectDisclosure
+}
+
 export type ToolResultItem
   = ReadFileResult({
       id:         string,
@@ -151,8 +181,11 @@ export type ToolResultItem
       dry_run:            bool,
       match_strategy:     string
     })
+  -- `fault` is `None` on a result whose process ran to its own exit (any
+  -- exit code: D1), and `Some` when `exec` returned `Err` (D2).
   | BashExecResult({
       id:        string,
+      fault:     Option[ToolFault],
       cmd:       string,
       stdout:    string,
       stderr:    string,
@@ -161,6 +194,7 @@ export type ToolResultItem
     })
   | RunTestsResult({
       id:        string,
+      fault:     Option[ToolFault],
       cmd:       string,
       stdout:    string,
       stderr:    string,
@@ -170,9 +204,13 @@ export type ToolResultItem
       failures:  [TestFailure],
       meta:      ToolResultMeta
     })
+  -- Every harness-reported fault states its effects (D3), so `fault` is
+  -- required here: a construction site that does not state one does not
+  -- compile.
   | ToolErrorResult({
       id:      string,
       tool:    string,
+      fault:   ToolFault,
       message: string
     })
   deriving (Eq)
