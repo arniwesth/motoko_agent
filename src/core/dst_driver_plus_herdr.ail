@@ -106,6 +106,17 @@ import src/core/dst_event_vocabulary as Vocab (event_vocabulary_version)
 
 export pure func herdr_profile_id() -> string { "driver_plus_herdr" }
 
+-- v8 (2026-10-18, 034 PLAN-001 W1.4). RE-ISSUED under D4 because the
+-- attribution table's content hash moved: the three tool_phase.ail anchors moved +15 (388/389/484 -> 403/404/499)
+-- because W1.4 gives the harness's own fault messages the `fault` object
+-- (034 ADR-001 D2/D3), and the table's content hash moved with them. The
+-- same version also stands for W1's fault catalogue move to
+-- `fault-catalogue/3` (W1.5's two world-only rows): the four profile versions
+-- are released once, when W1's pull request merges (W1.1 record §2), so W1.5
+-- and W1.6 do not bump again.
+-- Nothing installed, covered, excluded, omitted or routed changes; the
+-- acceptance script's `extension_profile` literal and its PASS line follow.
+--
 -- v7 (2026-10-13, 005 W3, W3-5). RE-ISSUED under D4 because the attribution
 -- table's content hash moved: hybrid mode left core (005 ADR-001 Amendment 2)
 -- and all five session.ail anchors moved with it. Measured a third time, as at
@@ -160,7 +171,7 @@ export pure func herdr_profile_id() -> string { "driver_plus_herdr" }
 -- Neither changes what is installed, covered, excluded or routed.
 --
 -- v1. First issue; there is no predecessor to re-issue from.
-export pure func herdr_profile_version() -> string { "7" }
+export pure func herdr_profile_version() -> string { "8" }
 
 -- The revision the measurements below were taken at.
 export pure func measured_at() -> string { "8470c3f" }
@@ -196,7 +207,14 @@ export pure func herdr_attribution_ref() -> AttributionRef {
     -- sha256:0d4d166ddf960cb667345f26a7fb75cf5c17ba03d2ff5da6a678fbf23d1bc1e1.
     -- An anchor re-measurement, not a table correction. See
     -- `driver_only_attribution_ref`.
-    content_hash: "sha256:38d8a67e903a949a9d07ac8e5b4a9eda4e786ab0ca879d1e4d6992424b316940" }
+    -- 034 PLAN-001 W1.4 (2026-10-18): re-recorded with the other three profiles', from
+    -- sha256:38d8a67e903a949a9d07ac8e5b4a9eda4e786ab0ca879d1e4d6992424b316940.
+    -- The three tool_phase.ail anchors moved +15 (388/389/484 ->
+    -- 403/404/499), pushed by W1.4's `fault` object on the four builders
+    -- above them; the five session anchors did not move. NOT A TABLE
+    -- CORRECTION: the three anchored expressions are byte-identical against
+    -- `git show dd493a1a:` at their old offsets.
+    content_hash: "sha256:8c5302b39f91bb0b3da332e430694637bc26fd217d3450a66d288276c3e0d154" }
 }
 
 export pure func installed_extension_ids() -> [string] { ["herdr"] }

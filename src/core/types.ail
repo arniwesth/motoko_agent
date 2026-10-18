@@ -129,9 +129,12 @@ export type EffectDisclosure = EffectsNone | EffectsUnknown
 -- kind's numbers ride on its arm: `FaultDeadline(elapsed_ms)`,
 -- `FaultOutputLimit(bytes)`, `FaultSignal(signal, signal_name)`. The wire
 -- strings for every arm, the keys and the two sentences live in
--- `src/core/tool_fault`, the one home every renderer imports. W1 adds the
--- typed-path kinds (`failed`, `correlation_mismatch`, `denied`,
--- `arguments_undecodable`) as new arms.
+-- `src/core/tool_fault`, the one home every renderer imports. The last four
+-- arms are the typed path's (034 W1.4): `FaultFailed` is `ToolFailed`,
+-- `FaultCorrelationMismatch` is `ToolCorrelationMismatch`, `FaultDenied` is a
+-- policy or approval denial, `FaultArgumentsUndecodable` a call whose argument
+-- JSON did not parse. `ToolDeadlineExceeded` reuses `FaultDeadline`, and a
+-- delegated deferral reuses `FaultRefused`.
 export type FaultKind
   = FaultNotAllowed
   | FaultNotFound
@@ -142,6 +145,10 @@ export type FaultKind
   | FaultSignal(int, string)
   | FaultRefused
   | FaultIoError
+  | FaultFailed
+  | FaultCorrelationMismatch
+  | FaultDenied
+  | FaultArgumentsUndecodable
   deriving (Eq)
 
 export type ToolFault = {

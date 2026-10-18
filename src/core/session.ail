@@ -39,8 +39,8 @@ import std/crypto (sha256Hex)
 import std/trace as Trace
 import src/core/tool_catalog (tools_with_extensions)
 import src/core/tool_contract (call_to_json)
-import src/core/tool_dispatch_adapter (tool_call_to_envelope)
-import src/core/types (Msg)
+import src/core/tool_dispatch_adapter (tool_call_to_envelope, fault_to_json)
+import src/core/types (Msg) import src/core/tool_fault (fault_key, denied_fault) -- 034 W1.4: `policy_denied_message`'s `fault`, joined onto this line so the five clock anchors do not move
 import src/core/config (CostRates)
 import std/option (Option, Some, None)
 import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, ExtPorts, TokenTelemetry, ResponseInterceptDecision, FinalizeDecision, ExtWorld, NotReached, AiStepOutcome, ExtClockReading, ExtProcOutcome, ExtFileRead, ExtFileMutation, ExtPathStat, ExtDirListing, ExtPathKind, ExtPathMissing, ExtPathFile, ExtPathDir) -- WI-B2b; ExtClockReading WI-C5; ExtProcOutcome/ExtFileRead WI-D16; ExtFileMutation WI-D17; ExtPathStat/ExtDirListing WI-D18: ExtWorld/AiStepOutcome, on this line to limit A5 anchor drift
@@ -2056,12 +2056,12 @@ func tool_messages_to_result_jsons(msgs: [Message]) -> [Json] {
 -- Build a denial tool-role Message for a ToolCall the policy gate rejected.
 -- The model sees a structured `{denied_by_policy, reason, tool}` JSON in the
 -- tool result, correlated by tool_call_id, so it can correct course on the
--- next turn without ambiguity.
+-- next turn without ambiguity. 034 W1.4: an operator's denial is refused before the tool runs: `fault`, `effects: none`, kind `denied`.
 func policy_denied_message(call: ToolCall, reason: string) -> Message {
   let denial_payload = encode(jo([
     kv("error", jb(true)),
     kv("denied_by_policy", jb(true)),
-    kv("tool", js(call.name)),
+    kv("tool", js(call.name)), kv(fault_key(), fault_to_json(denied_fault())),
     kv("reason", js(reason))
   ]));
   {
@@ -5809,3 +5809,15 @@ func mk_v2_ext_ctx_carries_truthful_evidence_defaults_test() -> bool
     let state = match ctx.decision_state { None => true, _ => false };
     verification && records && ctx.tool_evidence.complete_from_session_start == false && omitted && state
   }
+
+-- 034 W1.4, PLAN-001 W1.7 mutant v16b: an approval denial (`ApprovalDenied`,
+-- the builder the PR bank reaches under `pending_policy`) carries `fault` with
+-- `effects: none`, kind `denied`, after `tool`, as `tool_phase.denial_message`.
+func test_w14_policy_denied_message_none() -> bool
+  tests [((), true)]
+  {
+    let m = policy_denied_message({ id: "tc", name: "BashExec", arguments: "{}" }, "no");
+    m.role == "tool" && m.tool_call_id == "tc"
+      && m.content == "{\"error\":true,\"denied_by_policy\":true,\"tool\":\"BashExec\",\"fault\":{\"kind\":\"denied\",\"effects\":\"none\",\"note\":\"No change was made: the tool failed before it could write or change anything.\"},\"reason\":\"no\"}"
+  }
+

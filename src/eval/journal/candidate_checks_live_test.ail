@@ -45,6 +45,13 @@
 -- "forbidden" score line, the findings and the diagnostic in its envelope
 -- (`lt_diverged`); the Refused case asserts no score and that nothing ran.
 --
+--   w14_pre_w1_k7             034 PLAN-001 W1.4: a journal recorded before W1
+--                             (`fxs_w14_pre_w1_messages`: a pre-W1
+--                             undecodable-argument message in the seed, a
+--                             pre-W1 denial at e14) admitted, then C = P on
+--                             it: K7 (A2's function) has no finding and the
+--                             verdict is Reproduced. `source_checks.ail`,
+--                             "PRE-W1 MESSAGES", states the remedy.
 --   m14_entry_records_round_trip  the entry records (`entry_json`, the one
 --                             entry-comparand codec, P1R C6) decode back to an
 --                             entry that gives C = P the same Reproduced
@@ -90,13 +97,14 @@ import src/eval/journal/world (fixture_journal_world)
 import src/eval/journal/admission (Identities, Comparators, SyntheticEntry, report_ok, normalized_configuration, profile_scan_roots)
 import src/eval/journal/admission_run (admit_with_evidence)
 import src/eval/journal/candidate_checks (
-  CandidateEntry, KRun, Candidate, Reproduced, Diverged, Refused,
+  CandidateEntry, KRun, Candidate, Reproduced, Diverged, Refused, check_k7,
   candidate_label, candidate_envelope, candidate_verdict, k_findings, k_finding_label, score_permitted,
   candidate_verdict_word, candidate_first_finding, candidate_position
 )
 import src/eval/journal/candidate_checks_run (entry_of_admission, candidate_world, candidate_run, k_run_of, evaluate_candidate, print_verdict, entry_json, decode_entry)
 import src/eval/journal/testdata/world_fixtures (WorldFixture, fxw_m3_selector_end, fxw_m4_stop_call_last)
 import src/eval/journal/testdata/admission_fixtures (fxa_all)
+import src/eval/journal/testdata/source_check_fixtures (SourceCheckFixture, fxs_w14_pre_w1_messages)
 
 func lt_report(name: string, ok: bool) -> bool ! {IO} {
   let _ = println("${if ok then "PASS" else "FAIL"} ${name}");
@@ -141,21 +149,29 @@ pure func lt_ids(jw: JournalWorld) -> Identities {
 }
 
 pure func lt_cmp(fixture: string) -> Comparators {
+  lt_cmp_with(lt_rederived(fixture))
+}
+
+pure func lt_cmp_with(rederived: string) -> Comparators {
   {
     revision_is_commit: true, assembled_tree: "t0", revision_tree: "t0",
     lock_abi_version: "8.0", pinned_classifier_2_set: ["env_get"], pinned_unrouted_fields: [],
     profile_scan_roots: profile_scan_roots(),
     leaf_files: ["src/core/session.ail", "src/core/tool_phase.ail", "src/core/context_usage.ail", "src/core/test/stub_step.ail"],
-    rederived_configuration: lt_rederived(fixture), e_pin: None, registry_used: []
+    rederived_configuration: rederived, e_pin: None, registry_used: []
   }
 }
 
 export type Admitted = { jw: JournalWorld, lines: [Json], entry: CandidateEntry }
 
 export func lt_admit(f: WorldFixture) -> Option[Admitted] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  lt_admit_with(f, lt_cmp(f.name))
+}
+
+func lt_admit_with(f: WorldFixture, cmp: Comparators) -> Option[Admitted] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   match (fixture_journal_world(f), parse_lines(f.journal)) {
     (Ok(jw), Ok(lines)) => {
-      let ev = admit_with_evidence("admission", SyntheticEntry, lt_ids(jw), lt_cmp(f.name), jw, lt_epoch(), lt_workdir());
+      let ev = admit_with_evidence("admission", SyntheticEntry, lt_ids(jw), cmp, jw, lt_epoch(), lt_workdir());
       match (ev.report.program, ev.witness, ev.a8) {
         (Some(p), Some(w), Some(a8)) =>
           if report_ok(ev.report) then Some({ jw: jw, lines: lines, entry: entry_of_admission(f.name, lines, jw, p, w, a8) })
@@ -444,6 +460,30 @@ func m14_k567(c: CRun) -> bool ! {IO} {
 }
 
 -- ============================================================================
+-- 034 PLAN-001 W1.4: K7 on a journal recorded before W1.
+-- ============================================================================
+
+func w14_pre_w1_k7() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let f = fxs_w14_pre_w1_messages();
+  let wf = { fxw_m3_selector_end() | name: f.name, journal: f.journal, log: f.log, leaf: f.leaf, run_id: f.run_id,
+                                     start: f.start, end_kind: f.end_kind, end_id: f.end_id };
+  match lt_admit_with(wf, lt_cmp_with(f.normalized_configuration)) {
+    None => lt_report("w14_pre_w1_k7", false),
+    Some(a) => match candidate_world(a.entry) {
+      Err(_) => lt_report("w14_pre_w1_k7", false),
+      Ok(w0) => {
+        let run = candidate_run(a.jw, w0, lt_workdir());
+        let r = k_run_of("candidate", a.entry, w0, run);
+        let k7 = List.map(k_finding_label, check_k7(a.entry, r.transcript));
+        let v = lt_verdict(a.entry, w0, run);
+        let _ = println("w14_pre_w1_k7: ${candidate_label(v)} k7=[${join(";", k7)}] all=[${join(";", lt_all(a.entry, w0, run))}]");
+        lt_report("w14_pre_w1_k7", List.length(k7) == 0 && lt_triple(v) == "reproduced|-|-")
+      }
+    }
+  }
+}
+
+-- ============================================================================
 -- The regression diagnostic never scores.
 -- ============================================================================
 
@@ -503,7 +543,8 @@ func main_checks() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
           let k5 = m14_k567(c);
           let dg = m14_diagnostic(c);
           let er = m14_entry_records(c);
-          k2 && mk && k1 && k3 && k4 && k5 && dg && er
+          let w14 = w14_pre_w1_k7();
+          k2 && mk && k1 && k3 && k4 && k5 && dg && er && w14
         }
       };
       if r1 && r2 && rest then println("candidate_checks_live_test: all checks passed")

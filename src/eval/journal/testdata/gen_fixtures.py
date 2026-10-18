@@ -2318,6 +2318,48 @@ def near_miss_pairs():
     ]
 
 
+# 034 PLAN-001 W1.4: a journal recorded BEFORE W1, whose messages carry the
+# denial and undecodable-argument bytes the harness wrote then (no `fault`
+# member), for the remedy ADR-001's W1.4 states: replay carries those bytes,
+# it never rebuilds them (source_checks.ail, "PRE-W1 MESSAGES"). Run A (the
+# seed) holds a call whose argument JSON was cut off and the message
+# `undecodable_arguments_message` gave it; run B's first tool result (e14) is
+# the message `denial_message` / `policy_denied_message` gave a denied call.
+# The bytes are those two builders' at `dd493a1a` (`std/json.encode`: compact,
+# keys in source order, non-ASCII raw); the live tests assert them equal to
+# the post-W1 builders' output with the `fault` member removed. The excerpt is
+# this journal's own (`build_log`): it is the live run that recorded it.
+PRE_W1_CUT_ARGUMENTS = "{\"command\":\"ls c1"
+
+
+def pre_w1_undecodable(tool_name, raw_length):
+    return json.dumps({"error": True, "tool": tool_name, "code": "arguments_undecodable", "raw_length": raw_length,
+                       "message": "The arguments for this call were not valid JSON and the tool was NOT run \u2014 "
+                                  "nothing was written, read or executed. " + str(raw_length) + " bytes arrived. "
+                                  "This is almost always the response being cut at the output-token limit part-way "
+                                  "through the argument JSON: emit the tool call FIRST, before any explanation, and "
+                                  "split a large `content` into several smaller calls."},
+                      ensure_ascii=False, separators=(",", ":"))
+
+
+def pre_w1_denial(tool_name, reason):
+    return json.dumps({"error": True, "denied_by_policy": True, "tool": tool_name, "reason": reason},
+                      ensure_ascii=False, separators=(",", ":"))
+
+
+def pre_w1_bodies():
+    b = m2_bodies()
+    b[4] = app(RUN_A, 1, msg("assistant", "", [call("c1", "BashExec", PRE_W1_CUT_ARGUMENTS)]))
+    b[5] = app(RUN_A, 1, tool("c1", pre_w1_undecodable("BashExec", len(PRE_W1_CUT_ARGUMENTS))))
+    b[14] = app(RUN_B, 1, tool("c2a", pre_w1_denial("BashExec", "denied by operator")))
+    return b
+
+
+def pre_w1_pairs():
+    jl = chain(pre_w1_bodies())
+    return [("w14_pre_w1_messages", "fxr_m2_clean", jl, build_log(jl, "e24"), M2_SEL)]
+
+
 def source_expectations(jl, lg, s):
     r = read(jl, s)
     path = r["path"]
@@ -2338,6 +2380,26 @@ def source_expectations(jl, lg, s):
         "normalized_configuration": normalized_configuration(jl, lg, s, ENV_DEFAULT),
         "live_payload": live, "replay_payload": replay, "first_request_divergence": first,
     }
+
+
+def source_fixture_lines(name, family, jl, lg, s):
+    x = source_expectations(jl, lg, s)
+    journal = [json.dumps(e, ensure_ascii=False, separators=(",", ":")) for e in jl]
+    fields = [
+        f"name: {lit(name)}, family: {lit(family)}",
+        f"journal: {ail_list([lit(t) for t in journal], 6)}",
+        f"log: {ail_list([lit(t) for t in log_text(lg)], 6)}",
+        f"leaf: {lit(s['leaf'])}, run_id: {lit(s['run_id'])}, start: {lit(s['start'])}, "
+        f"end_kind: {lit(s['end'][0])}, end_id: {lit(s['end'][1])}",
+        f"prefix_seq: {x['prefix_seq']}, prefix_digest: {lit(x['prefix_digest'])}",
+        f"append_seqs: {ail_ints(x['append_seqs'])}, append_digests: {ail_strings(x['append_digests'])}",
+        f"call_seqs: {ail_ints(x['call_seqs'])}, live_payload: {ail_strings(x['live_payload'])}",
+        f"replay_payload: {ail_strings(x['replay_payload'])}, "
+        f"first_request_divergence: {x['first_request_divergence']}",
+        f"normalized_configuration: {lit(x['normalized_configuration'])}",
+    ]
+    return [f"export pure func fxs_{name}() -> SourceCheckFixture {{", "  { " + ",\n      ".join(fields) + " }",
+            "}", ""]
 
 
 def render_source_checks():
@@ -2367,26 +2429,15 @@ def render_source_checks():
     ]
     names = []
     for name, family, jl, lg, s in near_miss_pairs():
-        x = source_expectations(jl, lg, s)
         names.append(name)
-        journal = [json.dumps(e, ensure_ascii=False, separators=(",", ":")) for e in jl]
-        fields = [
-            f"name: {lit(name)}, family: {lit(family)}",
-            f"journal: {ail_list([lit(t) for t in journal], 6)}",
-            f"log: {ail_list([lit(t) for t in log_text(lg)], 6)}",
-            f"leaf: {lit(s['leaf'])}, run_id: {lit(s['run_id'])}, start: {lit(s['start'])}, "
-            f"end_kind: {lit(s['end'][0])}, end_id: {lit(s['end'][1])}",
-            f"prefix_seq: {x['prefix_seq']}, prefix_digest: {lit(x['prefix_digest'])}",
-            f"append_seqs: {ail_ints(x['append_seqs'])}, append_digests: {ail_strings(x['append_digests'])}",
-            f"call_seqs: {ail_ints(x['call_seqs'])}, live_payload: {ail_strings(x['live_payload'])}",
-            f"replay_payload: {ail_strings(x['replay_payload'])}, "
-            f"first_request_divergence: {x['first_request_divergence']}",
-            f"normalized_configuration: {lit(x['normalized_configuration'])}",
-        ]
-        lines += [f"export pure func fxs_{name}() -> SourceCheckFixture {{", "  { " + ",\n      ".join(fields) + " }",
-                  "}", ""]
+        lines += source_fixture_lines(name, family, jl, lg, s)
     lines += ["export pure func fxs_all() -> [SourceCheckFixture] {",
               f"  {ail_list([f'fxs_{n}()' for n in names], 2)}", "}", ""]
+    # Not in `fxs_all()`: its rows are W1.4's (the A2/K7 remedy), not P1.7a's.
+    lines += ["-- 034 PLAN-001 W1.4: a pre-W1 journal (see `pre_w1_bodies` in the generator).",
+              "-- Not in `fxs_all()`; `family` is the journal it was derived from."]
+    for name, family, jl, lg, s in pre_w1_pairs():
+        lines += source_fixture_lines(name, family, jl, lg, s)
     return "\n".join(lines)
 
 
@@ -2399,7 +2450,7 @@ def print_normalized_configuration(name):
             print(normalized_configuration(jl, lg, s, env))
             return 0
     # a source-check fixture (P1.7a), as the runner serves it (P1R R1)
-    for fname, _family, jl, lg, s in near_miss_pairs():
+    for fname, _family, jl, lg, s in near_miss_pairs() + pre_w1_pairs():
         if fname == name:
             print(source_expectations(jl, lg, s)["normalized_configuration"])
             return 0

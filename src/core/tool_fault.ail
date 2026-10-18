@@ -21,7 +21,7 @@
 module src/core/tool_fault
 
 import std/process (ProcessError, NotAllowed, NotFound, PermissionDenied, SpawnFailed, Timeout, OutputLimitExceeded, AbnormalExit)
-import src/core/types (EffectDisclosure, EffectsNone, EffectsUnknown, FaultKind, FaultNotAllowed, FaultNotFound, FaultPermissionDenied, FaultSpawnFailed, FaultDeadline, FaultOutputLimit, FaultSignal, FaultRefused, FaultIoError, ToolFault)
+import src/core/types (EffectDisclosure, EffectsNone, EffectsUnknown, FaultKind, FaultNotAllowed, FaultNotFound, FaultPermissionDenied, FaultSpawnFailed, FaultDeadline, FaultOutputLimit, FaultSignal, FaultRefused, FaultIoError, FaultFailed, FaultCorrelationMismatch, FaultDenied, FaultArgumentsUndecodable, ToolFault)
 
 -- CONTRACTS (027 ADR-001 §4). Every function here is inside the solver's
 -- fragment, so each carries an `ensures` rather than a `-- contracts:` excuse.
@@ -139,6 +139,19 @@ export pure func fault_kind_refused() -> string
 export pure func fault_kind_io_error() -> string
   ensures { result != "" }
   { "io_error" }
+-- The typed path's kinds (034 W1.4).
+export pure func fault_kind_failed() -> string
+  ensures { result != "" }
+  { "failed" }
+export pure func fault_kind_correlation_mismatch() -> string
+  ensures { result != "" }
+  { "correlation_mismatch" }
+export pure func fault_kind_denied() -> string
+  ensures { result != "" }
+  { "denied" }
+export pure func fault_kind_arguments_undecodable() -> string
+  ensures { result != "" }
+  { "arguments_undecodable" }
 
 export pure func fault_kind_name(k: FaultKind) -> string
   ensures { result != "" }
@@ -152,7 +165,11 @@ export pure func fault_kind_name(k: FaultKind) -> string
     FaultOutputLimit(_) => fault_kind_output_limit(),
     FaultSignal(_, _) => fault_kind_signal(),
     FaultRefused => fault_kind_refused(),
-    FaultIoError => fault_kind_io_error()
+    FaultIoError => fault_kind_io_error(),
+    FaultFailed => fault_kind_failed(),
+    FaultCorrelationMismatch => fault_kind_correlation_mismatch(),
+    FaultDenied => fault_kind_denied(),
+    FaultArgumentsUndecodable => fault_kind_arguments_undecodable()
   }
 }
 
@@ -273,3 +290,66 @@ export pure func process_fault(err: ProcessError) -> ToolFault
 {
   { kind: process_error_fault_kind(err), effects: process_error_effects(err) }
 }
+
+-- ============================================================================
+-- Constructors for the typed path and the harness's own fault messages
+-- (034 W1.4, PLAN-001 C2): `tool_phase.tool_fault_message`, `denial_message`,
+-- `undecodable_arguments_message`, `delegated_deferred_message`, and
+-- `session.policy_denied_message`. Each states its disclosure here, once, so
+-- the five builders cannot disagree about it.
+-- ============================================================================
+
+-- `ToolFailed`: `none` only when the harness saw it fail before dispatch
+-- (`after_dispatch: false`); after dispatch the tool may have run. A program
+-- recorded before W1 decodes as after dispatch (W1.2), so it renders `unknown`.
+-- The contract is D2's safety direction only (after dispatch is never `none`);
+-- the `none` arm is pinned by the renderer's test, W1.7's mutant v13.
+export pure func failed_fault(after_dispatch: bool) -> ToolFault
+  ensures { not after_dispatch || result.effects == EffectsUnknown }
+{
+  { kind: FaultFailed, effects: if after_dispatch then EffectsUnknown else EffectsNone }
+}
+
+-- `ToolDeadlineExceeded`: the deadline fired while the tool was in flight.
+export pure func deadline_fault(elapsed_ms: int) -> ToolFault
+  ensures { result.effects == EffectsUnknown }
+{
+  { kind: FaultDeadline(elapsed_ms), effects: EffectsUnknown }
+}
+
+-- `ToolCorrelationMismatch`: an answer arrived for another call, so this
+-- call's own fate is not known.
+export pure func correlation_mismatch_fault() -> ToolFault
+  ensures { result.effects == EffectsUnknown }
+{
+  { kind: FaultCorrelationMismatch, effects: EffectsUnknown }
+}
+
+-- A policy `Deny` or an operator's `ApprovalDenied`: the tool was not run.
+export pure func denied_fault() -> ToolFault
+  ensures { result.effects == EffectsNone }
+{
+  { kind: FaultDenied, effects: EffectsNone }
+}
+
+-- Non-blank argument JSON that did not parse: the tool was not run.
+export pure func arguments_undecodable_fault() -> ToolFault
+  ensures { result.effects == EffectsNone }
+{
+  { kind: FaultArgumentsUndecodable, effects: EffectsNone }
+}
+
+func t_failed_before_dispatch() -> bool
+  tests [((), true)]
+  { failed_fault(false).kind == FaultFailed && failed_fault(false).effects == EffectsNone }
+func t_failed_after_dispatch() -> bool
+  tests [((), true)]
+  { failed_fault(true).kind == FaultFailed && failed_fault(true).effects == EffectsUnknown }
+func t_typed_kind_names() -> bool
+  tests [((), true)]
+  {
+    fault_kind_name(FaultFailed) == "failed"
+      && fault_kind_name(FaultCorrelationMismatch) == "correlation_mismatch"
+      && fault_kind_name(FaultDenied) == "denied"
+      && fault_kind_name(FaultArgumentsUndecodable) == "arguments_undecodable"
+  }
