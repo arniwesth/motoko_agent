@@ -20,6 +20,10 @@ ran. Three things caused it:
 
 This PR fixes all three, and adds `gemini-4-argon`'s context limit so its sessions compact.
 
+A review by codex `gpt-6.1-sol` at xhigh effort (`tmp/review-275-sol.md` in the shared checkout)
+found five ways the new "end your turn and park" guidance could strand or mislead an orchestrator.
+The third commit fixes them. The main fix bounds the two waits that never woke by themselves.
+
 ## Changes
 
 - fix(herdr): size DelegateCheck's wait under the process wall, and tell the model to park
@@ -41,7 +45,29 @@ This PR fixes all three, and adds `gemini-4-argon`'s context limit so its sessio
   `context_length` from `api/v1/models`, read 2026-10-18; max completion is 65536. The lookup strips
   `openrouter/`, so the bare id serves both spellings.
 
-5 files changed.
+- fix(herdr): bound the waits that never woke, forward the process wall, parse Go durations
+  - `wake-waiter.ts`, idle with no answer: a claude or codex delegate that settled with no answer
+    file never woke the park, because its row never goes away. Now `idleNoAnswerMs` of continuous
+    quiet wakes it as `lost`, and the core's wake sends the model to `DelegateCheck`. The default
+    is 60 min, set with `MOTOKO_WAKE_IDLE_NO_ANSWER_MS`.
+    - `working` resets the clock and returns to the settled-state wait. `blocked` resets it and
+      never times out.
+    - The bound is long because `DelegateCheck` closes an idle pane, and with it any background
+      job still running there.
+  - `wake-waiter.ts`, never registered: a row that was never seen was retried for ever as "not
+    registered yet". Now, after `registerTimeoutMs`, the waiter re-reads the answer and reports
+    `settled` or `lost`. The default is 2 min, set with `MOTOKO_WAKE_REGISTER_TIMEOUT_MS`.
+  - `buildChildEnv` forwards `MOTOKO_PROCESS_TIMEOUT`, trimmed. Before this the extension never
+    saw it.
+  - `process_wall_ms` follows Go's duration grammar: `10.0s`, `0.5s`, `1s500ms`, `1m30s`, `us`,
+    `ns`. Anything it still cannot parse is taken as a short 10 s wall.
+  - `code_hint("timeout")` no longer promises a park. Only start, prompt and get failures reach
+    it, and a failed Delegate opens no wait.
+  - The DelegateCheck description ("call it as often as you like") and the motoko launch result
+    now say to end the turn as well.
+  - The 034 prompt says what the two new `lost` wakes mean.
+
+10 files changed.
 
 ## Governing docs
 
@@ -72,6 +98,13 @@ This PR fixes all three, and adds `gemini-4-argon`'s context limit so its sessio
   `verify_herdr_check_answer`, `verify_herdr_delegate_wait`, `verify_wait_descriptor_fixtures`,
   `verify_herdr_owner_tag`, `verify_herdr_dagr_pane`, `verify_herdr_orchestrator`,
   `verify_delegate_kind`, `verify_dagr_producer`, `verify_exit_intent`, `verify_strict_context_limit`.
+- After the review fixes, these passed again with the counts that changed: `types.ail` 308,
+  `herdr.ail` 8, `progress_contract_guard.ail` 25, `verify_strict_context_limit` and the twelve
+  targets above.
+  - `bun test` passed 91: `wake-waiter`, `runtime-process.wake`, `herdr-child-env`,
+    `proxy-child-env`, `session-identity`, `harness-dst`. Five of the new tests are the waiter's
+    bounds and one is the forwarding.
+  - `tsc --noEmit` and `git diff --check` passed.
 - Not run: the full `make check_core` and `make dst`. The W0 delegate's heavy runs were using the
   machine, and the plan runs heavy targets one at a time.
 
