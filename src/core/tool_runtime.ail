@@ -246,8 +246,28 @@ func run_native_call(call: ToolCallEnvelope, workdir: string) -> ToolResultItem 
   else if call.tool == "RunTests" then
     run_process_result("RunTests", call.id, parse_exec_from_args(args))
   else
-    ToolErrorResult({ id: call.id, tool: call.tool, fault: refused_fault(), message: "${call.tool} requires extension capability and is not available in native runtime" })
+    unknown_tool_refusal(call.id, call.tool)
 }
+
+-- The refusal of a tool the native runtime does not have. It echoes the
+-- caller's name, which nothing bounds, and the renderer writes `tool` before
+-- `fault`: a 70,000-character name filled the capped tool message and cut
+-- `fault` off (#277 review, finding 2). So it is the one construction site
+-- whose `tool` is not a literal, and it echoes at most 200 characters.
+export func unknown_tool_refusal(id: string, name: string) -> ToolResultItem {
+  let shown = echoed_tool_name(name, 200);
+  ToolErrorResult({ id: id, tool: shown, fault: refused_fault(), message: "${shown} requires extension capability and is not available in native runtime" })
+}
+
+-- A name of at most `max` characters is echoed as it is; a longer one is cut
+-- to its first `max` and says so.
+export pure func echoed_tool_name(name: string, max: int) -> string
+  requires { max >= 0 }
+  ensures { length(result) <= max + 18 && (length(name) > max || result == name) }
+  {
+    if length(name) <= max then name
+    else concat_String(substring(name, 0, max), "...[tool name cut]")
+  }
 
 func mk_meta(stdout: string, stderr: string, truncated: bool) -> ToolResultMeta {
   {
@@ -586,16 +606,33 @@ func parse_search_lines(lines: [string]) -> [SearchMatch] {
   }
 }
 
+-- Search's `rg` argv, read-only as invoked: that is what lets its process
+-- errors disclose `none` (D2 row 4). `--no-config` stops `rg` reading
+-- `RIPGREP_CONFIG_PATH`, whose config can set `--pre=<program>` and run that
+-- program on every file searched. `-e` and `--` keep a pattern or a directory
+-- that begins with `-` from being read as an option. The cost: Search no
+-- longer applies the user's ripgrep config (#277 review, finding 1).
+func search_argv(pattern: string, target: string) -> [string] {
+  ["-n", "--no-heading", "--color", "never", "--no-config", "-e", pattern, "--", target]
+}
+
+func t_search_argv_reads_only() -> bool
+  tests [((), true)]
+  {
+    search_argv("--pre=/tmp/x", "-dir")
+      == ["-n", "--no-heading", "--color", "never", "--no-config", "-e", "--pre=/tmp/x", "--", "-dir"]
+  }
+
 func run_search(id: string, pattern: string, dir: string, workdir: string) -> ToolResultItem ! {Process} {
   if pattern == "" then
     ToolErrorResult({ id: id, tool: "Search", fault: refused_fault(), message: "missing pattern" })
   else {
     let raw_dir = if dir == "" then "." else dir;
     let target = resolve_workdir_path(workdir, raw_dir);
-    match exec("rg", ["-n", "--no-heading", "--color", "never", pattern, target]) {
-      -- `rg` only reads, so whatever the process error, there is no update
-      -- to apply (D2 row 4): the kind is the process mapping's, the
-      -- disclosure is not.
+    match exec("rg", search_argv(pattern, target)) {
+      -- `rg` only reads, as `search_argv` invokes it, so whatever the
+      -- process error, there is no update to apply (D2 row 4): the kind is
+      -- the process mapping's, the disclosure is not.
       Err(err) =>
         ToolErrorResult({ id: id, tool: "Search", fault: { kind: process_error_fault_kind(err), effects: EffectsNone }, message: process_error_to_string(err) }),
       Ok(out) => {

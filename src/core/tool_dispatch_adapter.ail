@@ -35,7 +35,7 @@ import std/string as Str (length)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/types (ToolResultItem, SearchMatch, ReadFileResult, SearchResult, WriteFileResult, EditFileResult, BashExecResult, RunTestsResult, ToolErrorResult, ToolFault, FaultKind, FaultNotAllowed, FaultNotFound, FaultPermissionDenied, FaultSpawnFailed, FaultDeadline, FaultOutputLimit, FaultSignal, FaultRefused, FaultIoError, EffectsNone, EffectsUnknown)
 import src/core/tool_fault (fault_key, fault_kind_key, fault_effects_key, fault_note_key, fault_elapsed_ms_key, fault_bytes_key, fault_signal_key, fault_signal_name_key, fault_kind_name, effects_value, effects_note, effects_note_none, effects_note_unknown, refused_fault, io_error_fault)
-import src/core/tool_runtime (run_native_batch)
+import src/core/tool_runtime (run_native_batch, unknown_tool_refusal)
 import src/core/phase_vocab (tool_result_message)
 
 -- Convert upstream ToolCall to motoko's ToolCallEnvelope.
@@ -169,6 +169,9 @@ export func tool_result_item_to_json(item: ToolResultItem) -> Json {
         kv("truncated", jb(r.meta.truncated))
       ]),
 
+    -- `tool` may precede `fault` because it is bounded at every construction
+    -- site: a literal, or, on the unknown-tool refusal, `echoed_tool_name`'s
+    -- at most 218 characters (#277 review, finding 2).
     ToolErrorResult(r) => jo([
       kv("tool", js(r.tool)),
       kv(fault_key(), fault_to_json(r.fault)),
@@ -434,6 +437,29 @@ func t_long_cmd_keeps_fault() -> bool
     Str.length(x1024) > 65536
       && Str.length(msg.content) == 65536
       && contains(msg.content, "\"fault\":${encode(fault_to_json(f))}")
+  }
+
+-- The unknown-tool refusal echoes the caller's name (#277 review, finding 2).
+-- A 102,400-character name, through the exported `tool_result_message`, which
+-- applies the cap: the message still holds the complete `fault`.
+func t_long_unknown_tool_keeps_fault() -> bool
+  tests [((), true)]
+  {
+    let x1 = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyzAB";
+    let x2 = "${x1}${x1}";
+    let x4 = "${x2}${x2}";
+    let x8 = "${x4}${x4}";
+    let x16 = "${x8}${x8}";
+    let x32 = "${x16}${x16}";
+    let x64 = "${x32}${x32}";
+    let x128 = "${x64}${x64}";
+    let x256 = "${x128}${x128}";
+    let x512 = "${x256}${x256}";
+    let x1024 = "${x512}${x512}";
+    let content = t_render(unknown_tool_refusal("call-6", x1024));
+    let msg = tool_result_message({ id: "call-6", name: x1024, arguments: "{}" }, content);
+    Str.length(x1024) > 65536
+      && contains(msg.content, "\"fault\":${encode(fault_to_json(refused_fault()))}")
   }
 
 -- `dispatch_one_typed`'s defensive branch, for 0 and for >1 results: kind
