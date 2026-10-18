@@ -14,6 +14,17 @@ plan's code anchors are at `e69aaad7`. This file adapts 005's
 whose W1 session shipped as #256. The herdr extension it was checked against has not changed
 since (`a7c77571`, 2026-10-08).
 
+Revised 2026-10-18, after the first session (`session_1792309035163`) busy-polled `DelegateCheck`
+instead of parking: *VERIFYING A DELEGATE* step 1 and the end-of-turn rule now tell the
+orchestrator to wait by ending its turn. The same pull request changes the herdr extension's
+tool texts to say so, sizes `DelegateCheck`'s wait under the shell's 30 s limit, and bounds
+the two waits that never woke on their own: a delegate that never registers (2 min) and one
+idle with no answer file (60 min). `MOTOKO_WAKE_REGISTER_TIMEOUT_MS` and
+`MOTOKO_WAKE_IDLE_NO_ANSWER_MS` change them. A `DelegateCheck` that finds a delegate still open
+carries its wait again, so a delegate that comes back after such a wake is parked on again. So
+does a check whose herdr call the shell's limit cut off, when the run file names the delegate's
+pane. Brief item 7 keeps a delegate's turn open while its own background job runs.
+
 ## Before you start
 
 Four steps.
@@ -158,15 +169,19 @@ order:
    Run `make dst` and `make eval_matrix` by themselves, never beside each other or
    another target: eval_matrix is under the 12 GiB memory rule. A gate that could not
    run is not a gate that passed: say which did not run and why."
-7. For W0.1: "Record the baseline at the commit the branch was cut from, before any
+7. "Do not end your turn while a job you started in the background is still running.
+   Keep checking it with tool calls until it finishes, then write the answer. A turn
+   that ends before the answer file is written leaves your pane idle, and a check that
+   finds a pane idle with no answer closes it, which kills the job."
+8. For W0.1: "Record the baseline at the commit the branch was cut from, before any
    source change: `make dst`, then `make eval_matrix`. Expect about 35 and 14 minutes.
    Commit the evidence directory the task names."
-8. For W0.5 and W0.6: "Run as a non-root user, and put the output of `id -u` in your
+9. For W0.5 and W0.6: "Run as a non-root user, and put the output of `id -u` in your
    answer. Under root, rows e and f are not evaluated and the task is not done."
-9. "If a gate is red for a reason this task does not name, or the task cannot be done
-   as written, stop and report. Do not widen the task, and do not change another
-   task's files to get a green gate."
-10. "Your answer: the commit hash; `git show --stat` of it; each gate command with its
+10. "If a gate is red for a reason this task does not name, or the task cannot be done
+    as written, stop and report. Do not widen the task, and do not change another
+    task's files to get a green gate."
+11. "Your answer: the commit hash; `git show --stat` of it; each gate command with its
     exit code and its last lines; what you did not do; every line reference that had
     moved."
 
@@ -199,11 +214,24 @@ SHIP STEPS, in W0.7's brief only, after the gate is green
 - Do not merge it, and do not wait for CI.
 
 VERIFYING A DELEGATE, before the next delegation
-1. DelegateCheck until it settles. Each call costs a step and blocks for about 45 s.
-   A delegate can show as blocked for a few seconds and then go on by itself. So if
-   DelegateCheck reports it blocked or waiting for input, check three more times. Only
-   if it is still blocked then, tell me the pane and what it is asking, and end your
-   turn. I will answer it.
+1. Wait by ending your turn, not by polling. After a Delegate call, reply with one
+   line, the task id, the handle and what it is running, and no tool call. The loop
+   then parks on the delegate and wakes you when its answer file lands or its pane is
+   gone. On the wake, call DelegateCheck once to collect the answer.
+   - Do not call DelegateCheck before the wake. Each call costs a step, and one that
+     finds a Claude delegate idle with no answer file closes its pane, which kills any
+     job the delegate left running in the background.
+   - If I write to you while you are parked, answer and end your turn again. The wait
+     stays open.
+   - A delegate blocked on a prompt does not wake you. I see it in herdr and answer it.
+   - A delegate that sits idle for an hour with no answer file wakes you as `lost`, and so
+     does one that never starts. Call DelegateCheck once. If it reports the delegate
+     still working or blocked, the wait is open again: end your turn. Otherwise follow
+     WHEN SOMETHING IS WRONG.
+   - If a DelegateCheck says the shell's time limit cut off one of its herdr calls
+     (`timeout after …ms`), that says nothing about the delegate. When it also says the
+     wait is open again, end your turn. When it is an error instead, no wait is open:
+     follow WHEN SOMETHING IS WRONG.
 2. From git: `git -C <worktree> log --oneline origin/main..HEAD` shows one new commit
    for the task; `git -C <worktree> status --short` is empty; `git status --short`
    here matches the list from step 0.
@@ -246,8 +274,9 @@ BUDGET AND HANDOFF
   tmp/034-orchestrator/HANDOFF-<date>.md: the worktree's branch and last commit, the
   tasks verified, the delegate handles in flight, the next ready task ids, and that
   the next session is this run's orchestrator and delegates.
-- End your turn only when W0's pull request is open and reported, or a rule above says
-  stop, or the budget rule applies. A response with no tool call ends the turn.
+- A response with no tool call ends the turn. End it to wait on a delegate (VERIFYING
+  step 1), and otherwise only when W0's pull request is open and reported, or a rule
+  above says stop, or the budget rule applies.
 ```
 
 ## Notes for the operator
@@ -273,8 +302,10 @@ BUDGET AND HANDOFF
   the one id in *DELEGATE CALLS*.
 - **The two long runs.** W0.1 and W0.7 each run `make dst` (2,085 s at `-j8` when last measured)
   and then `make eval_matrix` (821 s). Do not start other heavy targets on the machine while they
-  run. The orchestrator spends a step per `DelegateCheck`, about every 45 s, so each of those
-  tasks costs roughly 70 steps of waiting.
+  run. The orchestrator parks while a delegate works and is woken when the answer lands, so the
+  wait costs no steps. The first session, on 2026-10-18, was told to poll instead: one
+  `DelegateCheck` step every ~35 s, each resending ~107k tokens of context, until the operator
+  interrupted it.
 - **The step budget.** "Step 900" assumes the `default` profile's 1200 steps. Change the number if
   you start Motoko on another profile.
 - **The shell tool's limit.** A foreground command in a Motoko session is cut off after 30

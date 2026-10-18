@@ -32,7 +32,7 @@ module sunholo/motoko_ext_herdr/types
 --      them — a healthy agent has a populated `matched_rule` and a null
 --      `fallback_reason`. `explain_says_ready` is that test.
 
-import std/string (length, substring, contains, intToStr, join, replace, split, stringToInt, find)
+import std/string (length, substring, contains, intToStr, join, replace, split, stringToInt, find, trim, startsWith)
 import std/json (Json, decode, encode, get, asString, asNumber, asArray, jo, ja, js, kv)
 import std/option (Option, Some, None)
 import std/result (Ok, Err)
@@ -577,14 +577,200 @@ export pure func argv_wait_str(target: string, timeout_ms: int) -> string
 
 -- The whole point of the branch: `timeout` from a wait means STILL WORKING.
 -- Every other non-zero outcome is a real failure and must keep its own message.
+--
+-- TWO TIMEOUTS MEAN THAT, NOT ONE (2026-10-18). herdr's own is the JSON code.
+-- The other is the AILANG runtime's process wall (`--process-timeout`, 30s
+-- unless MOTOKO_PROCESS_TIMEOUT raises it) killing `herdr agent wait` before
+-- herdr's bound is reached; the tool runtime reports that as exit 1 and the
+-- plain text `timeout after <n>ms` (`tool_runtime.ail`'s
+-- `process_error_to_string`). Either way the wait observed nothing terminal,
+-- and the check that follows (`agent get`, then the answer file) is still the
+-- right next step. Read as a failure, it reported every check of a 45s wait
+-- under a 30s wall as `herdr_cli_rejected`: session_1792309035163, 21 checks.
 export pure func wait_elapsed(exit_code: int, stderr: string) -> bool
   tests [
     ((1, "{\"error\":{\"code\":\"timeout\",\"message\":\"timed out waiting for agent status\"},\"id\":\"cli:agent:wait\"}"), true),
+    ((1, "timeout after 30002ms"), true),
     ((1, "{\"error\":{\"code\":\"agent_not_found\",\"message\":\"agent target x not found\"}}"), false),
+    ((1, "timeout after a while"), false),
     ((0, ""), false),
     ((2, "herdr agent commands:"), false)
   ]
-  { if exit_code == 0 then false else failure_code(exit_code, stderr) == "timeout" }
+  {
+    if exit_code == 0 then false
+    else failure_code(exit_code, stderr) == "timeout" || process_wall_elapsed(stderr)
+  }
+
+-- The tool runtime's `Timeout(ms)` rendering, exactly: `timeout after <digits>ms`.
+export pure func process_wall_elapsed(stderr: string) -> bool
+  tests [
+    ("timeout after 30002ms", true),
+    ("timeout after 35005ms", true),
+    ("timeout after ms", false),
+    ("timeout after 3s", false),
+    ("{\"error\":{\"code\":\"timeout\"}}", false)
+  ]
+{
+  let pre = "timeout after ";
+  let n = length(stderr);
+  let p = length(pre);
+  if n <= p + 2 then false
+  else if substring(stderr, 0, p) != pre || substring(stderr, n - 2, n) != "ms" then false
+  else match stringToInt(substring(stderr, p, n - 2)) { Some(_) => true, None => false }
+}
+
+-- THE PROCESS WALL, in ms, from the value MOTOKO_PROCESS_TIMEOUT carries (a Go
+-- duration; the TUI passes the same trimmed string to `ailang run
+-- --process-timeout`). Unset is AILANG's default, 30s. Parsed with Go's
+-- grammar -- an optional sign, then `0` or one or more `<decimal><unit>`, units
+-- ns us µs μs ms s m h -- because the runtime accepts all of it (PR #275
+-- review, findings 4, R2-2, R2-3). The cases that are not a positive wall get
+-- an explicit answer, never a guess that could size a wait past the real one:
+--   unparseable, zero, negative  10s, the short wall; what the runtime does
+--                                with a non-positive timeout is not this
+--                                package's to assume
+--   positive, under 1ms          1ms
+-- Fixed-width arithmetic throughout: fractions past 9 digits (Go's own
+-- nanosecond precision) are dropped, and a sum past `duration_cap_ns` saturates.
+export pure func process_wall_ms(s: string) -> int
+  tests [
+    ("", 30000),
+    ("  ", 30000),
+    ("300s", 300000),
+    (" 300s ", 300000),
+    ("10m", 600000),
+    ("1h", 3600000),
+    ("1500ms", 1500),
+    ("10.0s", 10000),
+    ("0.5s", 500),
+    ("1s500ms", 1500),
+    ("1m30s", 90000),
+    ("2500000us", 2500),
+    ("2000000µs", 2000),
+    ("2000000μs", 2000),
+    ("+2s", 2000),
+    ("0.9999999999s", 999),
+    ("1.0000000000000000000000000000000000000000000000000000000000000000s", 1000),
+    ("0.5ms", 1),
+    ("1ns", 1),
+    ("99999999999999999999h", 2000000000000),
+    ("00000000000000000010s", 10000),
+    ("0000000000000000000000000.5s", 500),
+    ("000s", 10000),
+    ("0", 10000),
+    ("0s", 10000),
+    ("-1s", 10000),
+    ("fast", 10000),
+    ("10", 10000),
+    ("s", 10000),
+    (".s", 10000),
+    ("1.s", 1000)
+  ]
+{
+  let t = trim(s);
+  if t == "" then 30000
+  else {
+    let neg = startsWith(t, "-");
+    let body = if neg || startsWith(t, "+") then substring(t, 1, length(t)) else t;
+    if neg || body == "0" then 10000
+    else match duration_ns(body, 0, 0) {
+      Some(ns) => if ns <= 0 then 10000 else if ns < 1000000 then 1 else ns / 1000000,
+      None => 10000
+    }
+  }
+}
+
+pure func is_digit_at(s: string, i: int) -> bool {
+  i < length(s) && contains("0123456789", substring(s, i, i + 1))
+}
+
+pure func digits_end(s: string, i: int) -> int {
+  if is_digit_at(s, i) then digits_end(s, i + 1) else i
+}
+
+pure func pow10(n: int) -> int { if n <= 0 then 1 else 10 * pow10(n - 1) }
+
+pure func min_int(a: int, b: int) -> int { if a < b then a else b }
+
+-- Every partial sum is held under this, so no addition below can overflow.
+pure func duration_cap_ns() -> int { 2000000000000000000 }
+
+-- The unit at `i`, as (nanoseconds, its length); (0, 0) when there is none.
+-- Two-letter units are tried first, so `ms` is never read as `m`. The micro
+-- signs are matched as literals and measured with `length`, so this holds
+-- whatever unit `substring` counts in.
+pure func unit_at(s: string, i: int) -> (int, int) {
+  let rest = substring(s, i, length(s));
+  if startsWith(rest, "ns") then (1, 2)
+  else if startsWith(rest, "us") then (1000, 2)
+  else if startsWith(rest, "µs") then (1000, length("µs"))
+  else if startsWith(rest, "μs") then (1000, length("μs"))
+  else if startsWith(rest, "ms") then (1000000, 2)
+  else if startsWith(rest, "s") then (1000000000, 1)
+  else if startsWith(rest, "m") then (60000000000, 1)
+  else if startsWith(rest, "h") then (3600000000000, 1)
+  else (0, 0)
+}
+
+-- The fraction's digits as nanoseconds of `unit`: at most 9 are kept, padded
+-- to 9, so the product stays inside 64 bits for every unit (h: 3600 * 10^9).
+pure func frac_ns(digits: string, unit: int) -> int {
+  let kept = if length(digits) > 9 then substring(digits, 0, 9) else digits;
+  let nine = match stringToInt(kept) { Some(v) => v, None => 0 } * pow10(9 - length(kept));
+  if unit >= 1000000000 then nine * (unit / 1000000000) else nine * unit / 1000000000
+}
+
+-- The first index in `[i, j)` that is not a `0`, or `j`.
+pure func zeros_end(s: string, i: int, j: int) -> int {
+  if i < j && substring(s, i, i + 1) == "0" then zeros_end(s, i + 1, j) else i
+}
+
+-- `<decimal><unit>` terms from `i`, summed in nanoseconds and saturated at
+-- `duration_cap_ns`.
+pure func duration_ns(s: string, i: int, acc: int) -> Option[int] {
+  if i >= length(s) then (if i > 0 then Some(acc) else None)
+  else {
+    let j = digits_end(s, i);
+    let has_frac = j < length(s) && substring(s, j, j + 1) == ".";
+    let k = if has_frac then digits_end(s, j + 1) else j;
+    let frac_digits = if has_frac then substring(s, j + 1, k) else "";
+    if j == i && frac_digits == "" then None
+    else match unit_at(s, k) {
+      (0, _) => None,
+      (unit, n) => {
+        let cap = duration_cap_ns();
+        -- Saturates BEFORE multiplying: more than 18 digits may not parse, and
+        -- `v * unit` past `cap / unit` would wrap. The digits are counted after
+        -- the leading zeros, which Go accepts and which change nothing: counted
+        -- with them, `00000000000000000010s` saturated to the cap (PR #275
+        -- review 3, finding 2).
+        let z = zeros_end(s, i, j);
+        let whole =
+          if z == j then 0
+          else if j - z > 18 then cap
+          else match stringToInt(substring(s, z, j)) {
+            Some(v) => if v > cap / unit then cap else v * unit,
+            None => cap
+          };
+        let term = min_int(cap, whole + frac_ns(frac_digits, unit));
+        duration_ns(s, k + n, min_int(cap, acc + term))
+      }
+    }
+  }
+}
+
+-- DelegateCheck's default wait: 10s under the wall, because a herdr `--timeout`
+-- overruns (a 25s bound returned at 28.3s, M3), and never past 45s, because
+-- past that an operator cannot tell a blocking wait from a hang. A wall too
+-- short for that margin gets half of it.
+export pure func check_wait_default(wall_ms: int) -> int
+  tests [(30000, 20000), (300000, 45000), (50000, 40000), (10000, 5000), (1, 1)]
+{
+  if wall_ms - 10000 >= 45000 then 45000
+  else if wall_ms > 20000 then wall_ms - 10000
+  else if wall_ms >= 2 then wall_ms / 2
+  else 1
+}
 
 export pure func argv_get(target: string) -> [string]
   { ["agent", "get", target] }
@@ -1051,15 +1237,22 @@ export pure func failure_message(exit_code: int, stderr: string) -> string
 
 -- The hints are the measured part. Each says what the code MEANS operationally,
 -- which is the half the prose message leaves out.
+--
+-- `timeout` NEVER REACHES HERE FROM DelegateCheck's WAIT: `wait_elapsed` takes it
+-- first, as a poll interval. What does arrive is a start, prompt or `get` that
+-- timed out, and a failed Delegate opens no wait, so this hint must not send the
+-- model to park (PR #275 review, finding 5). Nor may it claim nothing was
+-- delivered: a timed-out prompt can have reached the agent, which is why
+-- `prompt_is_retryable` excludes `timeout` (`DESIGN-prompt-retry.md`; R2-4).
 export pure func code_hint(code: string) -> string
   tests [
-    ("timeout", " The wait elapsed; the delegate is still working. This is a poll interval, not a death — call DelegateCheck again."),
+    ("timeout", " herdr's time bound for this call elapsed before it returned, so whether the call took effect is unknown, and it registered no new wait. If it was a Delegate, the task may have been delivered and partly run before the extension gave up on it: check what it changed before re-delegating, since a re-sent task can run twice."),
     ("agent_not_found", " No agent with that name or pane is live. It has been closed, or it was never started."),
     ("unrecognised_code_xyz", "")
   ]
   {
     if code == "timeout" then
-      " The wait elapsed; the delegate is still working. This is a poll interval, not a death — call DelegateCheck again."
+      " herdr's time bound for this call elapsed before it returned, so whether the call took effect is unknown, and it registered no new wait. If it was a Delegate, the task may have been delivered and partly run before the extension gave up on it: check what it changed before re-delegating, since a re-sent task can run twice."
     else if code == "agent_prompt_stalled" then
       " The delegate accepted input but its state never changed, which in practice means it is not really at an agent prompt — check `agent explain`."
     else if code == "agent_not_found" then
@@ -1317,6 +1510,14 @@ export pure func agent_status_of(stdout: string) -> string
     ("", "")
   ]
   { nested_string(stdout, "result", "agent", "agent_status") }
+
+-- The agent kind herdr reports (`claude`, `codex`, ...), "" when absent.
+export pure func agent_kind_of(stdout: string) -> string
+  tests [
+    ("{\"id\":\"cli:agent:get\",\"result\":{\"agent\":{\"agent\":\"codex\",\"agent_status\":\"idle\"},\"type\":\"agent_info\"}}", "codex"),
+    ("", "")
+  ]
+  { nested_string(stdout, "result", "agent", "agent") }
 
 export pure func agent_pane_of(stdout: string) -> string
   tests [

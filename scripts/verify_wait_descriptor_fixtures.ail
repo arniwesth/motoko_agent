@@ -13,7 +13,10 @@
 --   * each `DelegateCheck` envelope's `settled` and `delegate` read as Part 3
 --     reads them: `check_done` and `check_lost` remove the matching wait (and do
 --     so idempotently), `check_pending`, `check_error_only` and
---     `check_arg_error` keep every wait.
+--     `check_arg_error` keep every wait;
+--   * `check_pending` carries its delegate's `wait` again (PR #275 review,
+--     R2-1), so applied after that wait was dropped -- a `lost` wake, a
+--     resumed run -- it re-opens it, idempotently.
 --
 -- W1b shipped only the fixtures and touched no core file, so the test lands
 -- with W2 (W1b landed first).
@@ -112,12 +115,16 @@ func check_delegate(name: string, kind: string) -> Result[WaitDescriptor, string
 
 -- A DelegateCheck row: apply to `before`, compare the surviving ids.
 func check_row(name: string, before: [WaitDescriptor], expected: string) -> int ! {FS, IO} {
+  check_row_as(name, name, before, expected)
+}
+
+func check_row_as(label: string, name: string, before: [WaitDescriptor], expected: string) -> int ! {FS, IO} {
   match load(name) {
-    Err(e) => report(name, false, e),
+    Err(e) => report(label, false, e),
     Ok(env) => {
       let after = apply_tool_lifecycle(before, call_for(env), env);
       let again = apply_tool_lifecycle(after, call_for(env), env);
-      report(name, ids(after) == expected && ids(again) == expected,
+      report(label, ids(after) == expected && ids(again) == expected,
         "(after=[${ids(after)}] again=[${ids(again)}] expected=[${expected}] settled-delegate=${str_or(env.metadata, "delegate")})")
     }
   }
@@ -138,6 +145,7 @@ export func main() -> () ! {IO, FS} {
           check_row("check_done", both, claude_id)
           + check_row("check_lost", both, claude_id)
           + check_row("check_pending", both, "${motoko_id},${claude_id}")
+          + check_row_as("check_pending_reopens", "check_pending", [claude], "${claude_id},${motoko_id}")
           + check_row("check_error_only", both, "${motoko_id},${claude_id}")
           + check_row("check_arg_error", both, "${motoko_id},${claude_id}");
         if fails == 0 then println("verify_wait_descriptor_fixtures: 7 envelopes, 0 failed")

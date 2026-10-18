@@ -550,6 +550,11 @@ export function buildChildEnv(
     MOTOKO_REPO: process.env.MOTOKO_REPO ?? "",
     MOTOKO_CAPTURE_FAILED_PAYLOAD: process.env.MOTOKO_CAPTURE_FAILED_PAYLOAD ?? "",
     MOTOKO_PROFILE_DIR: loaderProfileDir(workdir, profile),
+    // THE PROCESS WALL, as the same trimmed string `--process-timeout` is built from below.
+    // `motoko-ext-herdr` sizes DelegateCheck's `herdr agent wait` under it (`register.ail`); not
+    // forwarded, the extension read "" and sized every wait for the default 30s wall (PR #275
+    // review, finding 3).
+    MOTOKO_PROCESS_TIMEOUT: (process.env.MOTOKO_PROCESS_TIMEOUT ?? "").trim(),
     // THE RUN IDENTITY FOR F-5 OWNERSHIP, minted here and nowhere else.
     //
     // `motoko-ext-herdr` tags every delegate pane it spawns with `<pane>:<session ms>` so that an

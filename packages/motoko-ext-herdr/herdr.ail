@@ -46,7 +46,7 @@ import pkg/sunholo/motoko_ext_herdr/dagr (
   seed_from_plan, attach_to_task, has_task,
   add_note, touch, run_file_name, is_foreign_run_file, abandoned_tasks, abandoned_report,
   abandoned_ids, settle_abandoned, sweep_tmp, prunable_scratch, prune_report,
-  open_delegate_panes
+  open_delegate_panes, open_attempt_pane, open_attempt_kind
 )
 import pkg/sunholo/motoko_ext_herdr/orchestrator (OrchestratorMode, orchestrator_off, prompt_patch, decide, mode_json, mode_of)
 import pkg/sunholo/motoko_ext_herdr/types (
@@ -57,7 +57,7 @@ import pkg/sunholo/motoko_ext_herdr/types (
   allowed_kind_count, sole_allowed_kind,
   path_is_safe, path_within, argv_is_safe, show_argv, has_shell_tokens,
   argv_split, argv_start, argv_start_model, argv_prompt, argv_get, argv_explain, argv_close,
-  argv_wait, wait_elapsed, elapsed_note, format_ms, start_ms_of, elapsed_is_exact,
+  argv_wait, wait_elapsed, process_wall_elapsed, elapsed_note, format_ms, start_ms_of, elapsed_is_exact,
   is_motoko, motoko_kind, motoko_run_payload, motoko_payload_is_safe,
   argv_pane_run, argv_wait_until, motoko_handle, handle_is_motoko,
   handle_pane, handle_name,
@@ -66,7 +66,7 @@ import pkg/sunholo/motoko_ext_herdr/types (
   sweep_sentinel_path, owner_token_value, owner_token_key,
   argv_dagr_pane, plugin_pane_id, argv_pane_get, is_dagr_pane,
   failure_code, failure_message, means_agent_gone, explain_says_ready,
-  split_pane_id, agent_status_of, agent_pane_of, is_settled,
+  split_pane_id, agent_status_of, agent_pane_of, agent_kind_of, is_settled,
   bash_exec_tool, bash_exec_args, bash_field, bash_exit
 )
 
@@ -254,10 +254,10 @@ func check_params() -> string {
 export func describe_tools(allowed: string, must_choose: bool) -> [ToolSchema] {
   [
     { name: "Delegate",
-      description: "Hand a self-contained sub-task to a coding agent running in its own terminal pane. Returns a handle immediately; the delegate keeps working after this call returns. Poll with DelegateCheck — a typical task takes 20-30s and some take over a minute.",
+      description: "Hand a self-contained sub-task to a coding agent running in its own terminal pane. Returns a handle immediately; the delegate keeps working after this call returns. To wait for it, end your turn: the loop parks and wakes you when the answer lands or the delegate is lost. Then call DelegateCheck once to collect it. Do not poll DelegateCheck: each call costs a step.",
       parameters: delegate_params(allowed, must_choose) },
     { name: "DelegateCheck",
-      description: "Fetch a delegate's current state and its answer if it has landed. Cheap; call it as often as you like.",
+      description: "Collect a delegate's answer once the loop has woken you for it, or read its current state. Each call costs a step and can block for one wait (about 20s); do not poll it.",
       parameters: check_params() }
   ]
 }
@@ -306,13 +306,64 @@ pure func meta_delegate(name: string, pane: string, kind: string, answer: string
 -- other return. W2 removes the matching wait on `true` and keeps it on `false`,
 -- so an error that settled nothing (herdr unwell) must say `false`.
 pure func meta_timed(name: string, pane: string, now_ms: int, waited_ms: int, settled: bool) -> Json {
+  jo(timed_fields(name, pane, now_ms, waited_ms, settled))
+}
+
+pure func timed_fields(name: string, pane: string, now_ms: int, waited_ms: int, settled: bool) -> [{key: string, value: Json}] {
   let started = start_ms_of(name);
-  jo([kv("delegate", js(name)), kv("pane_id", js(pane)), kv("channel", js("answer-file")),
-      kv("started_ms", jnum(_int_to_float(started))),
-      kv("elapsed_ms", jnum(_int_to_float(if started > 0 then now_ms - started else 0))),
-      kv("waited_ms", jnum(_int_to_float(waited_ms))),
-      kv("elapsed_is_exact", jb(elapsed_is_exact(waited_ms))),
-      kv("settled", jb(settled))])
+  [kv("delegate", js(name)), kv("pane_id", js(pane)), kv("channel", js("answer-file")),
+   kv("started_ms", jnum(_int_to_float(started))),
+   kv("elapsed_ms", jnum(_int_to_float(if started > 0 then now_ms - started else 0))),
+   kv("waited_ms", jnum(_int_to_float(waited_ms))),
+   kv("elapsed_is_exact", jb(elapsed_is_exact(waited_ms))),
+   kv("settled", jb(settled))]
+}
+
+-- A check that found the delegate STILL OPEN (working, blocked, not yet
+-- written) carries its `wait` again, the same descriptor `meta_delegate` gave
+-- the launch. The core registers a wait from any successful result, and
+-- re-registering an open one replaces it in place (`phase_vocab.register_wait`),
+-- so this is a no-op while the wait is open. It matters when it is not: the
+-- host's idle bound wakes a park `lost` and removes the wait, and the check the
+-- wake asks for can then find the delegate working again or `unknown`. Without
+-- the wait back, ending the turn finalized the run over a live delegate (PR #275
+-- review, R2-1). It also re-opens a wait a resumed run dropped.
+-- herdr names the kind on every agent row; "claude", the default delegate
+-- kind, only if a row ever arrives without one. The host reads the kind only
+-- to tell motoko (pane-row gated) from everything else.
+pure func kind_or_claude(k: string) -> string { if k == "" then "claude" else k }
+
+pure func meta_pending(name: string, pane: string, now_ms: int, waited_ms: int, kind: string, answer: string) -> Json {
+  jo(timed_fields(name, pane, now_ms, waited_ms, false) ++ [kv("wait", delegate_wait(name, kind, pane, answer, run_key(name)))])
+}
+
+-- A HERDR CALL THE PROCESS WALL CUT OFF (PR #275 review 3, finding 1). The
+-- shell's limit killing `agent get` says nothing about the delegate, so the
+-- check reports it pending and carries the wait, exactly as a check that found
+-- the delegate still working does. As an error it carried none, and the core
+-- reads no wait from a failed result: after a `lost` wake had removed the wait,
+-- ending the turn finalized the run over a live delegate. Only the wall gets
+-- this. Any other herdr failure stays an error, so a herdr that is down cannot
+-- send the model round park and wake for ever.
+pure func wall_cut_pending(call_id: string, name: string, pane: string, now_ms: int, waited_ms: int,
+                           kind: string, answer: string, failure: string) -> ToolResultEnvelope {
+  { tool_call_id: call_id, tool: "DelegateCheck", exit_code: 0,
+    stdout: "${failure} The shell's time limit cut this herdr call off, which says nothing about the delegate: nothing was settled, and its wait is open again. To wait for it, end your turn: the loop parks and wakes you when the answer lands.",
+    stderr: "", metadata: meta_pending(name, pane, now_ms, waited_ms, kind, answer) }
+}
+
+-- The open attempt's pane and kind for `key`, from this session's run file.
+-- Empty when there is no run file, no such task, or its attempt is terminal.
+func recorded_attempt(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, workdir: string, key: string)
+  -> { pane: string, kind: string, next_state: ExtWorld } ! {IO, Process, FS} {
+  if cfg.session_ms == "" || path_within(workdir, cfg.dagr_dir) == false then
+    { pane: "", kind: "", next_state: w }
+  else {
+    let r = p.file_read(w, run_file(cfg.dagr_dir, cfg.own_pane, cfg.session_ms));
+    if r.present then
+      { pane: open_attempt_pane(r.content, key), kind: open_attempt_kind(r.content, key), next_state: r.next_state }
+    else { pane: "", kind: "", next_state: r.next_state }
+  }
 }
 
 func relaxation_note(kind: string) -> string {
@@ -1435,7 +1486,7 @@ func do_delegate(cfg: HerdrConfig, ctx: ProviderCtx, call: ToolCallEnvelope)
               let view = ensure_dagr_pane(cfg, p, rec.next_state, ctx.workdir);
               { result: {
                   tool_call_id: call.id, tool: "Delegate", exit_code: 0,
-                  stdout: "Delegate `${h}` is running motoko${model_note(kind, model)} in pane ${pane}. Starting it took ${format_ms(t.now_ms - clock.now_ms)}. A motoko delegate does not report readiness the way claude and codex do and it will not stop on its own, so DelegateCheck watches for the answer file rather than for the agent going idle. Call DelegateCheck with `${h}`.${plan.note}${tag.note}${rec.note}${view.note}",
+                  stdout: "Delegate `${h}` is running motoko${model_note(kind, model)} in pane ${pane}. Starting it took ${format_ms(t.now_ms - clock.now_ms)}. A motoko delegate does not report readiness the way claude and codex do and it will not stop on its own, so DelegateCheck watches for the answer file rather than for the agent going idle. If you have nothing else to do meanwhile, end your turn: the loop parks on this delegate and wakes you when its answer lands. Then call DelegateCheck with `${h}` once.${plan.note}${tag.note}${rec.note}${view.note}",
                   stderr: "", metadata: meta_delegate(h, pane, motoko_kind(), answer, run_key(h))
                 },
                 next_state: view.next_state }
@@ -1515,7 +1566,7 @@ func do_delegate(cfg: HerdrConfig, ctx: ProviderCtx, call: ToolCallEnvelope)
                     tool_call_id: call.id,
                     tool: "Delegate",
                     exit_code: 0,
-                    stdout: "Delegate `${name}` is running `${kind}`${model_note(kind, model)} in pane ${pane}${relaxation_note(kind)}. Starting it took ${format_ms(t.now_ms - clock.now_ms)}. It has the task and is working now; this call did not wait for it. Typical completion is 20-30s and some tasks take over a minute. Call DelegateCheck with name `${name}` to collect the answer.${plan.note}${tag.note}${rec.note}${view.note}",
+                    stdout: "Delegate `${name}` is running `${kind}`${model_note(kind, model)} in pane ${pane}${relaxation_note(kind)}. Starting it took ${format_ms(t.now_ms - clock.now_ms)}. It has the task and is working now; this call did not wait for it. Typical completion is 20-30s and some tasks take over a minute. If you have nothing else to do meanwhile, end your turn: the loop parks on this delegate and wakes you when its answer lands. Then call DelegateCheck with name `${name}` once to collect the answer.${plan.note}${tag.note}${rec.note}${view.note}",
                     stderr: "",
                     metadata: meta_delegate(name, pane, kind, answer, run_key(name))
                   },
@@ -1616,6 +1667,10 @@ func do_check_motoko(cfg: HerdrConfig, ctx: ProviderCtx, call: ToolCallEnvelope,
             next_state: rec.next_state }
         }
       }
+      else if process_wall_elapsed(g.err) then
+        { result: wall_cut_pending(call.id, handle, pane, t0.now_ms, 0, motoko_kind(), answer,
+                                   explain_failure("Reading motoko delegate in pane `${pane}`", argv_get(pane), g)),
+          next_state: g.next_state }
       else
         { result: err_result_meta(call.id, "DelegateCheck",
                                   explain_failure("Reading motoko delegate in pane `${pane}`", argv_get(pane), g),
@@ -1662,8 +1717,8 @@ func do_check_motoko(cfg: HerdrConfig, ctx: ProviderCtx, call: ToolCallEnvelope,
                              run_key(handle), cur_status);
         { result: {
             tool_call_id: call.id, tool: "DelegateCheck", exit_code: 0,
-            stdout: "Delegate `${handle}` has not written its answer yet (state `${cur_status}`, waited ${format_ms(waited)} for a transition to `${target}`). A motoko delegate reports idle at startup, so its state is not a completion signal — only the answer file is. Check again.${rec.note}",
-            stderr: "", metadata: meta_timed(handle, pane, t1.now_ms, waited, false)
+            stdout: "Delegate `${handle}` has not written its answer yet (state `${cur_status}`, waited ${format_ms(waited)} for a transition to `${target}`). A motoko delegate reports idle at startup, so its state is not a completion signal — only the answer file is. To wait for it, end your turn: the loop parks and wakes you when the answer lands.${rec.note}",
+            stderr: "", metadata: meta_pending(handle, pane, t1.now_ms, waited, motoko_kind(), answer)
           },
           next_state: rec.next_state }
       }
@@ -1762,13 +1817,22 @@ func do_check(cfg: HerdrConfig, ctx: ProviderCtx, call: ToolCallEnvelope)
     -- reaching a clean `done` having written nothing. Wait-then-check, never
     -- wait-instead-of-check.
     let g = run_herdr(cfg, p, t1.next_state, argv_get(name));
-    if g.code != 0 then {
+    -- The wall cut `agent get` off, so the pane and kind come from the run file.
+    let cut = if g.code != 0 && means_agent_gone(g.code, g.err) == false && process_wall_elapsed(g.err)
+              then recorded_attempt(cfg, p, g.next_state, ctx.workdir, run_key(name))
+              else { pane: "", kind: "", next_state: g.next_state };
+    if cut.pane != "" then
+      { result: wall_cut_pending(call.id, name, cut.pane, t1.now_ms, waited, kind_or_claude(cut.kind),
+                                 answer_path(cfg.work_dir, name),
+                                 explain_failure("Reading delegate `${name}`", argv_get(name), g)),
+        next_state: cut.next_state }
+    else if g.code != 0 then {
       let rec = if means_agent_gone(g.code, g.err)
-                then dagr_settle(cfg, p, g.next_state, ctx.workdir, t1.now_ms, run_key(name),
+                then dagr_settle(cfg, p, cut.next_state, ctx.workdir, t1.now_ms, run_key(name),
                                  "lost", "failed", "heuristic", "",
                                  "herdr reports agent_not_found and no answer file was written",
                                  false, "")
-                else { note: "", next_state: g.next_state };
+                else { note: "", next_state: cut.next_state };
       { result: err_result_meta(call.id, "DelegateCheck", explain_failure("Reading delegate `${name}`", argv_get(name), g),
                                 meta_timed(name, "", t1.now_ms, waited, means_agent_gone(g.code, g.err))),
         next_state: rec.next_state }
@@ -1804,7 +1868,7 @@ func do_check(cfg: HerdrConfig, ctx: ProviderCtx, call: ToolCallEnvelope)
         { result: {
             tool_call_id: call.id, tool: "DelegateCheck", exit_code: 0,
             stdout: "Delegate `${name}` is BLOCKED in pane ${pane}, waiting for someone to answer a prompt on its screen. It will not progress until that is answered. It has not been closed.${took}${rec.note}",
-            stderr: "", metadata: meta_timed(name, pane, t1.now_ms, waited, false)
+            stderr: "", metadata: meta_pending(name, pane, t1.now_ms, waited, kind_or_claude(agent_kind_of(g.out)), answer)
           },
           next_state: rec.next_state }
       }
@@ -1836,8 +1900,8 @@ func do_check(cfg: HerdrConfig, ctx: ProviderCtx, call: ToolCallEnvelope)
         let rec = dagr_alive(cfg, p, rd.next_state, ctx.workdir, t1.now_ms, run_key(name), status);
         { result: {
             tool_call_id: call.id, tool: "DelegateCheck", exit_code: 0,
-            stdout: "Delegate `${name}` is still `${status}` in pane ${pane} after ${format_ms(t1.now_ms - start_ms_of(name))}. No answer yet — this call already waited ${format_ms(waited)} server-side for it, so check again rather than assuming it is stuck.${rec.note}",
-            stderr: "", metadata: meta_timed(name, pane, t1.now_ms, waited, false)
+            stdout: "Delegate `${name}` is still `${status}` in pane ${pane} after ${format_ms(t1.now_ms - start_ms_of(name))}. No answer yet — this call already waited ${format_ms(waited)} server-side for it, so it is not stuck. To wait for it, end your turn: the loop parks and wakes you when the answer lands.${rec.note}",
+            stderr: "", metadata: meta_pending(name, pane, t1.now_ms, waited, kind_or_claude(agent_kind_of(g.out)), answer)
           },
           next_state: rec.next_state }
       }
@@ -1906,12 +1970,13 @@ export pure func fixture_check_done() -> string
 
 -- Not settled: the wait elapsed with no answer.
 export pure func fixture_check_pending() -> string
-  tests [((), "{\"tool_call_id\":\"tc-gate6-4\",\"tool\":\"DelegateCheck\",\"exit_code\":0,\"stdout\":\"Delegate `mot-dlg-1787475025027@w1:pA` has not written its answer yet. Check again.\",\"stderr\":\"\",\"metadata\":{\"delegate\":\"mot-dlg-1787475025027@w1:pA\",\"pane_id\":\"w1:pA\",\"channel\":\"answer-file\",\"started_ms\":1787475025027,\"elapsed_ms\":45730,\"waited_ms\":30000,\"elapsed_is_exact\":true,\"settled\":false}}")]
+  tests [((), "{\"tool_call_id\":\"tc-gate6-4\",\"tool\":\"DelegateCheck\",\"exit_code\":0,\"stdout\":\"Delegate `mot-dlg-1787475025027@w1:pA` has not written its answer yet. Check again.\",\"stderr\":\"\",\"metadata\":{\"delegate\":\"mot-dlg-1787475025027@w1:pA\",\"pane_id\":\"w1:pA\",\"channel\":\"answer-file\",\"started_ms\":1787475025027,\"elapsed_ms\":45730,\"waited_ms\":30000,\"elapsed_is_exact\":true,\"settled\":false,\"wait\":{\"id\":\"mot-dlg-1787475025027@w1:pA\",\"delegate_kind\":\"motoko\",\"locator\":{\"pane\":\"w1:pA\"},\"answer_path\":\"/tmp/mot/answer-mot-dlg-1787475025027.md\",\"run_key\":\"mot-dlg-1787475025027\"}}}")]
   {
   let h = fixture_handle();
   envelope_json({ tool_call_id: "tc-gate6-4", tool: "DelegateCheck", exit_code: 0,
                   stdout: "Delegate `${h}` has not written its answer yet. Check again.",
-                  stderr: "", metadata: meta_timed(h, "w1:pA", 1787475070757, 30000, false) })
+                  stderr: "", metadata: meta_pending(h, "w1:pA", 1787475070757, 30000, motoko_kind(),
+                                                     answer_path("/tmp/mot", handle_name(h))) })
 }
 
 -- Settled through a FAILURE envelope: the gone-and-lost arm, which used to
