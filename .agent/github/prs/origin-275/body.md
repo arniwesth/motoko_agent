@@ -25,6 +25,8 @@ found five ways the new "end your turn and park" guidance could strand or mislea
 The third commit fixes them. The main fix bounds the two waits that never woke by themselves.
 A second review (`tmp/review-275-sol-r2.md`) found four more problems in that fix. The fourth code
 commit fixes them.
+A third review (`tmp/review-275-sol-r3.md`) confirmed the earlier fixes and found two more. The
+fifth code commit fixes them.
 
 ## Changes
 
@@ -87,8 +89,20 @@ commit fixes them.
   - R2-4: the timeout hint no longer says that nothing was delegated, because a prompt that
     timed out may still have been delivered (`DESIGN-prompt-retry.md`).
   - 034: the `timeout after …ms` bullet no longer says the delegate is still working.
+- fix(herdr): a wall-cut check re-opens its wait, and leading zeros do not saturate
+  - R3-1: a check whose `agent get` the process wall cut off returned an error with no wait.
+    The core reads no wait from a failed result, so after a `lost` wake ending the turn finished
+    the run over a live delegate.
+    - That check now returns pending and carries the wait. The motoko path takes the pane from
+      the handle. The claude/codex path reads the open attempt's pane and kind from the run file,
+      and stays an error when the file has none.
+    - Only the wall gets this. Other herdr failures stay errors, so a herdr that is down cannot
+      cycle the model through park and wake.
+    - The 034 bullet no longer promises a wait it cannot see.
+  - R3-2: leading zeros counted toward the 18-digit guard, so `00000000000000000010s` saturated
+    and sized a 45 s wait under a 10 s wall. The guard now counts from the first non-zero digit.
 
-13 files changed.
+14 files changed.
 
 ## Governing docs
 
@@ -134,6 +148,11 @@ commit fixes them.
   - The other eleven herdr targets, `tsc --noEmit` and `git diff --check`.
   - `verify_herdr_gate`, run with `MOTOKO_PROCESS_TIMEOUT` set to the 64-zero value: exit 0, no
     `RT001`.
+- After the third review's fixes, these passed:
+  - `types.ail` 327, `herdr.ail` 8, `dagr.ail` 81, `progress_contract_guard.ail` 25.
+  - `verify_herdr_delegate_wait`, with three new cases. Two of them fail with the fix disabled.
+  - The other twelve herdr targets and `git diff --check`.
+  - Sol's repro, `process_wall_ms("00000000000000000010s")` under the real flag, now gives 10000.
 - Not run: the full `make check_core` and `make dst`. The W0 delegate's heavy runs were using the
   machine, and the plan runs heavy targets one at a time.
 
