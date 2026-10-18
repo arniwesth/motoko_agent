@@ -1,6 +1,6 @@
 module sunholo/motoko_ext_progress_contract_guard/progress_contract_guard
 
-import std/string (trim, contains, toLower)
+import std/string (trim, contains, toLower, replaceMany)
 import std/json (jo, ja, js, asArray)
 import std/option (Option, Some, None)
 import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, ProcessCtx, pure_ctx, process_ctx, WorkItem, FinalizeDecision, ContinueWithFeedback, NoDecision, Msg)
@@ -48,36 +48,61 @@ pure func text_has_contract(s: string) -> bool {
   || contains(t, "below the target")
 }
 
--- Scan history for a contract, excluding the trailing assistant message when it is
--- the current candidate. `ctx.history_slice` is `st.msgs ++ [assistant]`, so the
--- candidate must never be the sole source of its own progress contract (trap #1).
-func history_has_contract(msgs: [Msg], candidate: string) -> bool {
+-- Scan history for a contract in USER-ROLE MESSAGES ONLY. A contract is something
+-- the operator asked for, and the operator speaks in the task and in user turns.
+--
+-- Tool results are excluded because `MotokoRuntimeStatus` writes `current_step`
+-- and `step_budget` into every result it returns, so one status call made the
+-- rest of a session look contracted. That is how the guard fired on 2026-10-17
+-- (session_1792237668002-c09a3fc81a468129, step 13) on a model that had stopped
+-- to ask the operator before running a probe, and the nudge made it run the
+-- probe unasked.
+--
+-- Assistant messages are excluded for trap #1, widened: `ctx.history_slice` is
+-- `st.msgs ++ [assistant]`, and no model turn, the candidate or an earlier one,
+-- may write its own progress contract. The AI compaction summary is
+-- assistant-role, so it is excluded too; the task it quotes is `ctx.task`.
+func history_has_contract(msgs: [Msg]) -> bool {
   match msgs {
     [] => false,
-    m :: rest => {
-      let is_current_candidate = m.role == "assistant" && m.content == candidate;
-      let counts = not is_current_candidate && text_has_contract(m.content);
-      counts || history_has_contract(rest, candidate)
-    }
+    m :: rest => (m.role == "user" && text_has_contract(m.content)) || history_has_contract(rest)
   }
 }
 
-export pure func has_progress_contract(ctx: ProcessCtx, candidate: string) -> bool {
-  text_has_contract(ctx.task) || history_has_contract(ctx.history_slice, candidate)
+export pure func has_progress_contract(ctx: ProcessCtx, _candidate: string) -> bool {
+  text_has_contract(ctx.task) || history_has_contract(ctx.history_slice)
 }
 
 -- Narrow "I am still going" self-report. The triggering candidate contains both
 -- `Continuing Phase 52` and `Step 53/200`, so both branches catch it.
+--
+-- `not done` and `not complete` are read with retrospective headings blanked
+-- out first. "What I have not done:" heads a list of what was left for the
+-- operator to decide, not a claim that work is still running (the 2026-10-17
+-- session again). Narrowing the phrases instead, to "is not done" and the like,
+-- lost real reports such as "I am not done with phase 3" and "I have not
+-- completed phase 3" (#270 review, finding 1); only the heading is removed.
+-- "haven't done" needs no entry: it never contains the substring "not done".
+pure func without_retrospective_headings(t: string) -> string {
+  replaceMany(t, [
+    ("what i have not done", ""),
+    ("what i've not done", ""),
+    ("what i’ve not done", ""),
+    ("what i have not completed", "")
+  ])
+}
+
 export pure func candidate_self_reports_incomplete(candidate: string) -> bool {
   let t = toLower(candidate);
+  let r = without_retrospective_headings(t);
   contains(t, "continuing")
   || contains(t, "continue with")
   || contains(t, "continue to")
   || contains(t, "next phase")
   || contains(t, "context is growing")
   || contains(t, "remaining")
-  || contains(t, "not complete")
-  || contains(t, "not done")
+  || contains(r, "not complete")
+  || contains(r, "not done")
   || contains(t, "below target")
   || (contains(t, "step ") && contains(t, "/"))
 }
@@ -503,4 +528,74 @@ pure func test_assistant_prose_cannot_open_a_delegate() -> bool
   {
     not has_open_delegate(test_ctx(contract_task(),
       [assistant("It has the task and is working now; this call did not wait for it.")]))
+  }
+
+-- ---------------------------------------------------------------------------
+-- The 2026-10-17 false positive (session_1792237668002-c09a3fc81a468129, step
+-- 13). The task set no contract; the only contract words in the slice were a
+-- `MotokoRuntimeStatus` result's own field names; and the candidate's
+-- "incomplete" signal was the heading "What I have not done:". Each fix is
+-- pinned alone, then the live shape end to end.
+-- ---------------------------------------------------------------------------
+
+func status_result_msg() -> Msg {
+  tool("{\"tool\":\"MotokoRuntimeStatus\",\"current_step\":13,\"provider_calls_started\":90,\"steps_executed_so_far\":90,\"step_budget\":1200,\"finish_reason_so_far\":\"tool_calls\"}")
+}
+
+func asking_operator_candidate() -> string {
+  "What I have not done: I have not re-run P2.2's refusal probe to confirm whether the preflight still reports ToolchainUnpinned/PackagesUnpinned now that E-records exist. It is a cheap, non-corpus run, but it does write a probe directory, so I won't fire it unasked. Say the word and I'll run it."
+}
+
+pure func test_tool_result_is_not_a_contract() -> bool
+  tests [((), true)]
+  {
+    not has_progress_contract(test_ctx("Run a long demo of Motoko", [status_result_msg()]), "x")
+      && has_progress_contract(test_ctx("Run a long demo of Motoko", [user("Check MotokoRuntimeStatus every 10 steps.")]), "x")
+  }
+
+-- Trap #1, widened: an EARLIER model turn is no more the operator than the
+-- candidate is.
+pure func test_earlier_assistant_turn_is_not_a_contract() -> bool
+  tests [((), true)]
+  {
+    not has_progress_contract(test_ctx("plain task", [assistant("Step 5/200, continuing until 200 steps.")]), "done")
+  }
+
+pure func test_not_done_heading_is_not_incomplete() -> bool
+  tests [((), true)]
+  {
+    not candidate_self_reports_incomplete(asking_operator_candidate())
+      && not candidate_self_reports_incomplete("Summary of what I have not completed: nothing.")
+      && not candidate_self_reports_incomplete("What I’ve not done: the probe.")
+      && candidate_self_reports_incomplete("The task is not done yet.")
+      && candidate_self_reports_incomplete("Phase 9 is not complete.")
+  }
+
+-- #270 review, finding 1: the first version of this fix narrowed the phrases
+-- and lost these. The heading is blanked, not the words, so a real report
+-- next to a heading still counts.
+pure func test_real_incomplete_reports_still_count() -> bool
+  tests [((), true)]
+  {
+    candidate_self_reports_incomplete("I am not done with phase 3.")
+      && candidate_self_reports_incomplete("I have not completed phase 3.")
+      && candidate_self_reports_incomplete("What I have not done: nothing. But I am not done with phase 3.")
+      && match decide_with_budget(test_ctx(contract_task(), []), "I am not done with phase 3.", 2) {
+           ContinueWithFeedback(_) => true,
+           _ => false
+         }
+  }
+
+pure func test_live_false_positive_does_not_nudge() -> bool
+  tests [((), true)]
+  {
+    let history = [
+      user("Interestig - it looks like P3 might not have been implemented"),
+      status_result_msg(),
+      assistant(asking_operator_candidate())
+    ];
+    match decide_with_budget(test_ctx("Run a long demo of Motoko", history), asking_operator_candidate(), 2) {
+      NoDecision => true,
+      _ => false
+    }
   }
