@@ -18,7 +18,9 @@ is the only place they are stated (008 ADR-001 D2 and D3). A task's address is
 Naming: workstreams are W0, W0b, W1, W2 and W3, one per ADR phase (0, 0b, 1, 2, 3), and task ids
 are `W<phase>.<n>`. P1, P2 and P3 always mean the ADR's three properties (§2), never a phase.
 Who does the work: not assigned. Tasks carry no `owner`, so dagr shows them as unassigned until
-the operator names one. The one operator decision, W0b.2, is a task of kind `question` owned by
+the operator names one. To run W0 with Motoko as orchestrator, see
+[`PROMPT-motoko-plan-001-start.md`](PROMPT-motoko-plan-001-start.md) and
+[`start-orchestrator.sh`](start-orchestrator.sh); the prompt delegates to Claude Opus 5.5. The one operator decision, W0b.2, is a task of kind `question` owned by
 `operator`.
 
 ---
