@@ -1,9 +1,15 @@
 # ADR-001: Effect disclosure for tool faults whose effect may have happened
 
-Date: 2026-10-02. Status: **Proposed — the operator has ruled on nothing below; nothing is
-executed.** Grounded at HEAD `4023bf08` on `main`, installed AILANG v0.47.2. The local `ailang/`
+Date: 2026-10-02. Status: **Accepted 2026-10-17, as amended by the re-grounding of that day.**
+The operator accepted D1 to D9 with the amendments in §7, ruled `PermissionDenied` to `unknown`,
+had the three remaining upstream asks filed, and chose the deterministic suites as Phase 0's eval
+baselines (*§6 Rulings*). Nothing is executed. The plan is `PLAN-001-effect-disclosure.md`.
+Grounded at HEAD `4023bf08` on `main`, installed AILANG v0.47.2. The local `ailang/`
 checkout is `v0.33.1-87`; anything cited from its Go source is a claim about that checkout, not
 about the installed binary, and is marked "(checkout)".
+**Re-grounded 2026-10-17 at `e69aaad7`, AILANG v0.52.5** (§7). Eight of the cited source files
+are byte-identical to `4023bf08`; anchors that moved are listed in §7. Every probe was re-run on
+v0.52.5 with the same results (`evidence/RESULTS-v0.52.5.md`).
 
 Asked for by `NOTE-scope-effect-unknown-tool-faults.md` §5 item 4 (this folder). The note's
 analysis and its probe table (§6.1, `evidence/exec_probe.sh`) are the evidence and are not restated.
@@ -27,8 +33,10 @@ Every coordinate below was re-checked at `4023bf08`. §5 lists where the note di
 - **Order.** Phase 0 (the mapping and the object in the live renderer) ships alone and first, and
   moves the eval baselines. The upstream asks are filed in parallel; the deadline wrapper
   (Phase 0b) and the DST work (Phases 1–3) follow. (D5–D8, §4)
-- **Status.** Proposed. Nothing is ruled and nothing is executed; §6 lists the seven rulings asked
-  of the operator.
+- **Status.** Accepted 2026-10-17 as amended (§6, §7). `NotAllowed` is now measured and renders
+  `none`. `PermissionDenied` stays `unknown`. Upstream ask (b) was fixed in AILANG v0.54.14, and
+  (a), (c) and (d) are filed as sunholo-data/ailang#1878, #1879 and #1880. Phase 1 goes alone.
+  Nothing is executed.
 
 ## 0. The decision in brief
 
@@ -103,9 +111,9 @@ one-sided).
 | Validation refusal: path guard, missing argument, unknown tool, `expected_sha256` mismatch, edits that do not apply, delegated-backend refusal | `tool_runtime.ail:443–480`, `:590`, `:870–880`, `:248`, `:986–987` | `none` |
 | Any failure of `ReadFile` or `Search` | `tool_runtime.ail:520–529`, `:594–596` | `none` (no update to apply) |
 | `WriteFile` after `mkdirAllResult` or `writeFileResult` was called; `EditFile` after `atomic_write` | `tool_runtime.ail:700–703`, `:898–899` | `unknown` |
-| `NotFound` | cases B, C | `none` |
-| `NotAllowed` | returned before spawn at `ailang/internal/effects/process.go:104` (checkout); unmeasured on v0.47.2 | `none` once a probe row shows it; `unknown` until then |
-| `PermissionDenied` | classified by substring from the error of a call that both starts and waits, `process.go:200` (checkout); not produced by case C | `unknown` until upstream states it is start-only (D7) |
+| `NotFound` | cases B, C; re-run on v0.52.5 | `none` |
+| `NotAllowed` | returned before spawn at `ailang/internal/effects/process.go:104` (checkout); unmeasured on v0.47.2. **Measured 2026-10-17 on v0.52.5:** refused with no launch, cases 13 and 14 of `evidence/start_probe.sh` | `none` *(ruling 2)* |
+| `PermissionDenied` | classified by substring from the error of a call that both starts and waits, `process.go:200` (checkout); not produced by case C. **Measured 2026-10-17 on v0.52.5:** cases 15-17, 20 and 21; the target program never ran, but a forked child existed briefly in four of the five (inferred) | `unknown` until upstream states it is start-only (D7, sunholo-data/ailang#1880) *(ruling 3)* |
 | `SpawnFailed` | case A | `unknown` |
 | `Timeout`, `OutputLimitExceeded`, `AbnormalExit` | note §6.1 cases 2–4; case D | `unknown` |
 | `Ok`, any exit code | `tool_runtime.ail:1020–1022` | no disclosure |
@@ -156,6 +164,8 @@ tools: `tool_result_item_to_json` (`src/core/tool_dispatch_adapter.ail:95–160`
   world's truth.
 - `fault` is emitted before `stdout` and `stderr`. Tool messages are cut from the front at 65,536
   bytes (`src/core/phase_vocab.ail:1559–1568`), and Phase 0b makes large faulted results possible.
+  *(Tightened by PLAN-001 W0.3 after its review: `fault` comes right after `tool`, before `cmd`
+  too, because `cmd` is unbounded and renders first. The example above predates that.)*
 - `exit_code` stays `1` on a harness-reported fault. `tool_result_exit_code`
   (`tool_dispatch_adapter.ail:72–82`) feeds typed consumers; changing it is not this decision.
 - `BashExec`'s description (`src/core/tool_catalog.ail:54`) promises truncation past the cap. It is
@@ -203,6 +213,15 @@ needs no injection (note §6.1 case 4; case A). Waiting for P1 loses: P1 does no
 renderer (D3). Cost: every faulted tool message changes shape, which moves the prompt-sensitive eval
 baselines. They are measured before and after, once, together with 030's diagnostics.
 
+*Ruled 2026-10-17 (rulings 1 and 5).* No document in the repo said what "the eval baselines" are.
+They are the deterministic suites: `make dst` and `make eval_matrix`, recorded before and after
+Phase 0 in a baseline directory on 011's pattern
+(`011_improve_test_axises/evidence/judge-recoveries/baseline-59d5cbb9/`), with every row that
+differs explained. They measure what reaches the wire, not what a model does with it; no
+model-in-the-loop run is a gate. 030's diagnostics have no ADR, owner or schema at `e69aaad7`, so
+Phase 0 does not wait for them. The shared thing stays the object (D3): when 030 is decided, it
+adds kinds to this object rather than a second one.
+
 ### D6. The deadline wrapper is Phase 0b (note §6.5.6)
 
 Adopted. Phase 0 renders observations that already exist; the wrapper changes the observation
@@ -216,6 +235,13 @@ that reaches the process group; (c) a clean exit whose pipe outlives it returns 
 code and output, not `SpawnFailed` (case A); (d) a statement of which `ProcessError` arms are
 returned only before the child exists. Filing is outward-facing and waits for the ruling.
 
+*Ruled and done 2026-10-17 (ruling 4).* (b) was fixed upstream in v0.54.14 on 2026-10-16, from an
+upstream incident rather than an issue; for Motoko it is a pin move to `>=0.54.14`, which belongs
+to 012 and not to this project. (a), (c) and (d) were filed the same day as
+sunholo-data/ailang#1878, #1879 and #1880, with reproductions on v0.52.5. #1879 adds a contrast
+case A did not show: the same command exiting 7 returns `Ok`, so only a successful exit is
+reported as a spawn failure.
+
 ### D8. Batch Phase 1 with the knob widening (note §5.3), conditionally
 
 Adopted if the widening is scheduled. Both bump `generator_version`, re-pin the canary by hand and
@@ -223,6 +249,10 @@ re-derive the PR bank. But 013's note also says the widening should land after i
 question (`013_core_architecture_for_dst/NOTE-fdb-simulation-cross-check-2026-09-08.md:101–108`), so
 an unconditional batch puts Phase 1 behind that. If the widening has no date when Phase 1 is
 planned, Phase 1 goes alone. Phases 0 and 0b are not affected.
+
+*Ruled 2026-10-17 (ruling 1): the fallback is the operative branch.* At `e69aaad7` the widening has
+no plan, pull request or branch, and its prerequisites (013's seed-space question, 011 ADR-001)
+are open. Phase 1 goes alone.
 
 The note's `execution-program/4` → `/5` is not available as written: `/5` is claimed by 031
 `PLAN-001` P2.1 (`031_system_one_decisions/PLAN-001-implement-adr-001-abi-8.md:434`), unlanded at
@@ -261,7 +291,11 @@ has been seen red.
 | **P2** | Two programs differing only in one `applied` field produce identical traces, outcomes and served interactions. | A pair relation beside `discovery_contract_findings` (`src/core/dst_invariants.ail:2154–2168`); not a family, for the reason at `:2078–2081`. | Read `applied` from `next_state` into the message. |
 | **P3** | The driver dispatches no tool call id twice. | The world-served interaction log, as `DeniedCallDispatched` does (`dst_invariants.ail:395`, `:1429–1441`). | A retry-on-deadline in the driver. |
 
-P1 and P3 are findings under `ToolPairing` (`dst_invariants.ail:232`). P3 holds trivially today —
+P1 and P3 are findings under `ToolPairing` (`dst_invariants.ail:232`; `:238` at `e69aaad7`).
+Adding them moves `invariant_set_version` from `invariant-set/2` to `/3` and the constructor count
+from 42 to 44 (§7). 011's `DriverStepRepeated` (c0f7eb02) does not cover P3: it reads the step on
+each `ProviderCallPrepared` in the driver's own trace, not tool call ids in the world-served log.
+P3 holds trivially today —
 no retry path exists in `tool_phase`, `tool_stream_phase`, `tool_envelope_dispatch` or
 `tool_dispatch_adapter` — so its fixture is its only evidence. Duplicate effect keys from the model
 (new call id, same effect) are a run-report metric, not a verdict.
@@ -308,6 +342,8 @@ on v0.47.2 after the child exists; what the wrapper does in case A; the wording 
 ## Related records
 
 - `NOTE-scope-effect-unknown-tool-faults.md`, `evidence/exec_probe.sh` — scope and probes
+- `evidence/start_probe.sh`, `evidence/RESULTS-v0.52.5.md` — the probes on v0.52.5 and the two arms added (§7)
+- `PLAN-001-effect-disclosure.md`, `PLAN-001.dagr.json` — the plan
 - `mmd/README.md` — diagrams of this ADR: `mmd/effect-disclosure-decisions.svg` (the decisions by
   phase), `mmd/effect-disclosure-mapping.svg` (D1–D3, the live path),
   `mmd/effect-disclosure-world.svg` (D4 and §2, the deterministic world)
@@ -316,13 +352,66 @@ on v0.47.2 after the child exists; what the wrapper does in case A; the wording 
 - `013_core_architecture_for_dst/NOTE-fdb-simulation-cross-check-2026-09-08.md` §3.1 — the knob batch
 - `031_system_one_decisions/PLAN-001-implement-adr-001-abi-8.md` P2.1 — the other claim on `/5`
 
-## 6. For the operator to rule on
+## 6. Rulings
 
-1. **D2**: `SpawnFailed` and `PermissionDenied` render `unknown`, against the note.
-2. **D3**: the wire shape — a `fault` object with `effects` and a fixed sentence, shared with 030 —
-   and that Phase 0 leaves live faults as `ToolCompleted`.
-3. **D4**: two world-only catalogue rows and a visibility field on every row.
-4. **D5/D6**: Phase 0 alone and first, moving the eval baselines once; the wrapper as Phase 0b.
-5. **D7**: permission to file the four upstream asks.
-6. **D8**: batch Phase 1 with the knob widening, or let it go alone if the widening has no date.
-7. **D9**: the reading of 009 D3's "decorative fault" clause. If it is read the other way, D3 reopens.
+**Ruled by the operator on 2026-10-17**, in conversation, after the ADR had been re-grounded at
+`e69aaad7` (§7) and a recommendation given for each of the seven items this section asked, plus
+two the re-grounding raised. The operator chose the recommended option for each question:
+"Accept as amended", "unknown", "File now", "Deterministic gate".
+
+| # | Decides | Ruling |
+|---|---|---|
+| 1 | D1-D9 | Accepted as amended by §7. D1, D4 and D9 as written. D2 with rulings 2 and 3. D3 with Phase 0 not waiting on 030. D4 with the invariant-set bump. D5 and D6 as written, with the pin move to `>=0.54.14` left to 012. D7 per ruling 4. D8's fallback: Phase 1 goes alone. |
+| 2 | D2, `NotAllowed` | `none`. Cases 13 and 14 show it refused before any launch on v0.52.5, which meets D2's rule. |
+| 3 | D2, `PermissionDenied` | `unknown`. The target program never ran in any case produced, but the arm is a substring match on an error that merges start and wait, and a forked child existed in four of five cases. Revisited if upstream answers #1880. |
+| 4 | D7 | File the three asks that remain now. Done: sunholo-data/ailang#1878 (a), #1879 (c), #1880 (d). Ask (b) is fixed upstream in v0.54.14. |
+| 5 | D5, eval baselines | The deterministic suites, `make dst` and `make eval_matrix`, before and after Phase 0, on 011's baseline-directory pattern. No model-in-the-loop run is a gate. |
+
+## 7. Re-grounding at `e69aaad7` (2026-10-17)
+
+382 commits after `4023bf08`, with AILANG moved from v0.47.2 to v0.52.5 (#243, 2026-10-08).
+Nothing on `main` implements any part of this ADR.
+
+**Unchanged.** `tool_runtime.ail`, `types.ail`, `tool_dispatch_adapter.ail`, `tool_phase.ail`,
+`ports.ail`, `dst_fault_catalogue.ail`, `dst_program.ail` and `dst_generator.ail` are
+byte-identical to `4023bf08`, so every anchor in them holds. Still 13 `ToolErrorResult` and 4
+process-result construction sites, all in `tool_runtime.ail`. `ProcessError` has the same seven
+arms on v0.52.5, and every probe result is the same (`evidence/RESULTS-v0.52.5.md`).
+
+**Anchors that moved.**
+
+| Cited | At `e69aaad7` |
+|---|---|
+| `dst_invariants.ail:232` `ToolPairing` | `:238` |
+| `dst_invariants.ail:395` `DeniedCallDispatched`; check `:1429-1441` | `:403`, constructor `:341`; check `dispatched_after_denial` `:1446-1458` |
+| `dst_invariants.ail:2078-2081` "not a family"; `:2154-2168` `discovery_contract_findings` | `:2189-2192`; `:2265-2279` |
+| `phase_vocab.ail:1559-1568` message cap; `:1629` `handled_tool_message` | `cap_tool_message_content` `:1546-1555`; `:1616` |
+| `session.ail:1299` extension effect `timeout_ms: 0` | literal `:1372`, call `:1381` |
+| `runtime-process.ts:946-956` | `:1009-1022` |
+| `ports.ail:645-646` the `-1` comment | `:644-645` |
+
+**Facts the ADR did not have.**
+
+- **`NotAllowed` and `PermissionDenied` are measured** (cases 13-21). Rulings 2 and 3.
+- **Upstream v0.54.14 kills the process group on timeout.** After a pin move, the note's "extra
+  5 s" signal (§6.2) goes away, and so does case 3's late effect except under `setsid`. Phase 0b
+  keeps its reason: the wrapper is still the only route to partial output on a deadline.
+- **P3 is not covered** by 011's `DriverStepRepeated`, and adding P1 and P3 moves
+  `invariant-set/2` to `/3` and the constructor count from 42 to 44 (§2).
+- **`generator_version` is not a field of `dst_generator.ail`.** It is a literal `"1"`. 17 lines
+  match `generator_version: "1"` or define `generator_version()`. 15 are code: 14 under
+  `scripts/dst` (e.g. `corpus_pr_dst.ail:299`) and `dst_replay.ail:1135`. 2 are comments:
+  `dst_generator.ail:15` and `seeded_generator_dst.ail:597`. Some code sites are producer versions
+  and some are fixture literals. §4's "bump `generator_version`" means the producers. *(Corrected
+  2026-10-17 after the plan's two reviews: the first count, 31, was wrong, and the second listed
+  two comments as sites.)*
+- **The tool-message cap counts code points**, not bytes (`Str.length`). D3's "emit `fault`
+  first" stands: the cap keeps the head.
+- **The `/5` claim stands.** `dst_program.ail:132` is still `/4`, and 031 P2.1 is unlanded and
+  undated. D8's reading, "the next program schema version", stands.
+- **Overlap.** Open #234, stacked on #209, changes `validate_path_common` and `atomic_write` in
+  `tool_runtime.ail`, two of D2's construction sites. The plan sequences around it.
+- **Outside this ADR.** Five extension and eval copies of the error-to-string mapping exist. The
+  herdr extension's copy calls every `ProcessError` "a spawn that never reached a process", which
+  case A contradicts. `run_process_result` drops `req.args` on its `bash -lc` arm (read, not
+  run). Both are recorded in the plan as follow-ups.
