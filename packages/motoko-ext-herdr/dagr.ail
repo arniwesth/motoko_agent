@@ -1206,28 +1206,37 @@ export pure func open_delegate_panes_str(content: string) -> string
 -- no herdr row to read the pane or the kind from, and a wait the core accepts
 -- needs both. The run file recorded them when the delegate launched. Only an
 -- attempt still open counts: a terminal one is not waited on.
+-- AND ONLY THIS HANDLE'S (review 4). A linked retry appends its attempt to the
+-- first delegation's task and moves `owner` to the retry's handle, so the
+-- latest attempt belongs to `owner` and to no one else. Taken for the original
+-- handle, it put the retry's pane and kind beside the original's answer path
+-- in one wait.
 pure func open_attempt(content: string, key: string) -> Option[Json] {
   match decode(content) {
     Err(_) => None,
-    Ok(doc) => {
-      let id = task_of_key(doc, key);
-      if id == "" then None
-      else match latest_attempt(doc, id) {
-        None => None,
-        Some(a) => if attempt_is_terminal(sfield(a, "state")) then None else Some(a)
-      }
+    Ok(doc) => match find_task(tasks_of(doc), task_of_key(doc, key)) {
+      None => None,
+      Some(t) =>
+        if sfield(t, "owner") != key then None
+        else match last_of(arr_field(t, "attempts")) {
+          None => None,
+          Some(a) => if attempt_is_terminal(sfield(a, "state")) then None else Some(a)
+        }
     }
   }
 }
 
 export pure func open_attempt_pane(content: string, key: string) -> string
   tests [
-    (("{\"tasks\":[{\"id\":\"mot-dlg-5\",\"attempts\":[{\"state\":\"working\",\"actor\":\"codex\",\"locator\":{\"pane\":\"w1:p8\"}}]}]}", "mot-dlg-5"), "w1:p8"),
+    (("{\"tasks\":[{\"id\":\"mot-dlg-5\",\"owner\":\"mot-dlg-5\",\"attempts\":[{\"state\":\"working\",\"actor\":\"codex\",\"locator\":{\"pane\":\"w1:p8\"}}]}]}", "mot-dlg-5"), "w1:p8"),
     -- a terminal attempt is not waited on
-    (("{\"tasks\":[{\"id\":\"mot-dlg-5\",\"attempts\":[{\"state\":\"done\",\"actor\":\"codex\",\"locator\":{\"pane\":\"w1:p8\"}}]}]}", "mot-dlg-5"), ""),
-    -- only the latest attempt counts
-    (("{\"tasks\":[{\"id\":\"mot-dlg-5\",\"attempts\":[{\"state\":\"lost\",\"actor\":\"claude\",\"locator\":{\"pane\":\"w1:p7\"}},{\"state\":\"working\",\"actor\":\"codex\",\"locator\":{\"pane\":\"w1:p9\"}}]}]}", "mot-dlg-5"), "w1:p9"),
-    (("{\"tasks\":[{\"id\":\"mot-dlg-5\",\"attempts\":[{\"state\":\"working\",\"actor\":\"codex\",\"locator\":{\"pane\":\"w1:p8\"}}]}]}", "mot-dlg-6"), ""),
+    (("{\"tasks\":[{\"id\":\"mot-dlg-5\",\"owner\":\"mot-dlg-5\",\"attempts\":[{\"state\":\"done\",\"actor\":\"codex\",\"locator\":{\"pane\":\"w1:p8\"}}]}]}", "mot-dlg-5"), ""),
+    -- after a linked retry the open attempt is the retry's, never the original's
+    (("{\"tasks\":[{\"id\":\"mot-dlg-5\",\"owner\":\"mot-dlg-6\",\"attempts\":[{\"state\":\"settled_unverified\",\"actor\":\"claude\",\"locator\":{\"pane\":\"w1:p7\"}},{\"state\":\"working\",\"actor\":\"motoko\",\"locator\":{\"pane\":\"w1:p9\"}}]}]}", "mot-dlg-5"), ""),
+    (("{\"tasks\":[{\"id\":\"mot-dlg-5\",\"owner\":\"mot-dlg-6\",\"attempts\":[{\"state\":\"settled_unverified\",\"actor\":\"claude\",\"locator\":{\"pane\":\"w1:p7\"}},{\"state\":\"working\",\"actor\":\"motoko\",\"locator\":{\"pane\":\"w1:p9\"}}]}]}", "mot-dlg-6"), "w1:p9"),
+    -- a task that names no owner names no attempt
+    (("{\"tasks\":[{\"id\":\"mot-dlg-5\",\"attempts\":[{\"state\":\"working\",\"actor\":\"codex\",\"locator\":{\"pane\":\"w1:p8\"}}]}]}", "mot-dlg-5"), ""),
+    (("{\"tasks\":[{\"id\":\"mot-dlg-5\",\"owner\":\"mot-dlg-5\",\"attempts\":[{\"state\":\"working\",\"actor\":\"codex\",\"locator\":{\"pane\":\"w1:p8\"}}]}]}", "mot-dlg-7"), ""),
     (("not json", "mot-dlg-5"), "")
   ]
   { match open_attempt(content, key) { None => "", Some(a) => sfield(field(a, "locator"), "pane") } }
@@ -1235,9 +1244,10 @@ export pure func open_attempt_pane(content: string, key: string) -> string
 -- The kind the attempt was launched as: `actor` is the kind (`dagr_open`).
 export pure func open_attempt_kind(content: string, key: string) -> string
   tests [
-    (("{\"tasks\":[{\"id\":\"mot-dlg-5\",\"attempts\":[{\"state\":\"working\",\"actor\":\"codex\",\"locator\":{\"pane\":\"w1:p8\"}}]}]}", "mot-dlg-5"), "codex"),
-    (("{\"tasks\":[{\"id\":\"mot-dlg-5\",\"attempts\":[{\"state\":\"done\",\"actor\":\"codex\",\"locator\":{\"pane\":\"w1:p8\"}}]}]}", "mot-dlg-5"), ""),
-    (("{\"tasks\":[{\"id\":\"mot-dlg-5\",\"attempts\":[{\"state\":\"lost\",\"actor\":\"claude\",\"locator\":{\"pane\":\"w1:p7\"}},{\"state\":\"working\",\"actor\":\"codex\",\"locator\":{\"pane\":\"w1:p9\"}}]}]}", "mot-dlg-5"), "codex")
+    (("{\"tasks\":[{\"id\":\"mot-dlg-5\",\"owner\":\"mot-dlg-5\",\"attempts\":[{\"state\":\"working\",\"actor\":\"codex\",\"locator\":{\"pane\":\"w1:p8\"}}]}]}", "mot-dlg-5"), "codex"),
+    (("{\"tasks\":[{\"id\":\"mot-dlg-5\",\"owner\":\"mot-dlg-5\",\"attempts\":[{\"state\":\"done\",\"actor\":\"codex\",\"locator\":{\"pane\":\"w1:p8\"}}]}]}", "mot-dlg-5"), ""),
+    (("{\"tasks\":[{\"id\":\"mot-dlg-5\",\"owner\":\"mot-dlg-6\",\"attempts\":[{\"state\":\"settled_unverified\",\"actor\":\"claude\",\"locator\":{\"pane\":\"w1:p7\"}},{\"state\":\"working\",\"actor\":\"motoko\",\"locator\":{\"pane\":\"w1:p9\"}}]}]}", "mot-dlg-5"), ""),
+    (("{\"tasks\":[{\"id\":\"mot-dlg-5\",\"owner\":\"mot-dlg-6\",\"attempts\":[{\"state\":\"settled_unverified\",\"actor\":\"claude\",\"locator\":{\"pane\":\"w1:p7\"}},{\"state\":\"working\",\"actor\":\"motoko\",\"locator\":{\"pane\":\"w1:p9\"}}]}]}", "mot-dlg-6"), "motoko")
   ]
   { match open_attempt(content, key) { None => "", Some(a) => sfield(a, "actor") } }
 

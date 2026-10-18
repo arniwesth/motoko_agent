@@ -158,6 +158,15 @@ func publish_if(world: ExtWorld, publish_on: string, here: string) -> ExtWorld {
   if publish_on == here then put_file(world, the_answer(), answer_text()) else world
 }
 
+-- The run file `mk_cfg` names (`dagr.run_file`), holding one task the first
+-- delegation opened and a linked retry took over: `owner` is the retry's
+-- handle, the first attempt is terminal on w1:pA, the retry is open on w1:pB.
+func retried_run_file() -> string { "/tmp/.dagr/run-w1-p1-200.json" }
+
+func retried_run(first: string, retry: string) -> string {
+  "{\"tasks\":[{\"id\":\"${first}\",\"owner\":\"${retry}\",\"attempts\":[{\"state\":\"settled_unverified\",\"actor\":\"claude\",\"locator\":{\"pane\":\"w1:pA\"}},{\"state\":\"working\",\"actor\":\"codex\",\"locator\":{\"pane\":\"w1:pB\"}}]}]}"
+}
+
 -- The tool runtime's rendering of the process wall killing the call
 -- (`tool_runtime.ail`'s `Timeout(ms)` arm), not a herdr error.
 func wall_cut(world: ExtWorld) -> ExtProcOutcome {
@@ -423,10 +432,25 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMe
   let nc = claude_check(w0, n, "timeout", "wallcut", "");
   let c15 = report("claude agent get cut off with no run file -> error, settled false, no wait (review 3)",
                    nc.exit_code == 1 && settled_of(nc) == "false" && present(nc, "wait") == false, describe(nc));
+  -- Review 4: after a linked retry the open attempt is the retry's. Checking the
+  -- original handle must not borrow its pane and kind; checking the retry's
+  -- handle gets them, with the retry's own answer path.
+  let retry = "mot-dlg-1787475099999";
+  let retried = put_file(w0, retried_run_file(), retried_run(n, retry));
+  let ro = claude_check(retried, n, "timeout", "wallcut", "");
+  let c16 = report("wall-cut check of the original handle after a retry -> error, no borrowed wait (review 4)",
+                   ro.exit_code == 1 && present(ro, "wait") == false, describe(ro));
+  let rn = claude_check(retried, retry, "timeout", "wallcut", "");
+  let c17 = report("wall-cut check of the retry's handle -> its own pane, kind and answer path (review 4)",
+                   rn.exit_code == 0 && wait_field(rn, "id") == retry && wait_pane(rn) == "w1:pB"
+                     && wait_field(rn, "delegate_kind") == "codex"
+                     && wait_field(rn, "answer_path") == "/tmp/mot/answer-${retry}.md"
+                     && wait_field(rn, "run_key") == retry,
+                   describe(rn));
 
   if d1 && d1h && d1b && d2 && d2h && d3 && d4 && d5
      && m1 && m2 && m2b && m3 && m4 && m5 && m6 && m7 && m8 && m9
-     && c1 && c2 && c3 && c4 && c5 && c6 && c7 && c8 && c9 && c10 && c11 && c12 && c13 && c14 && c15
+     && c1 && c2 && c3 && c4 && c5 && c6 && c7 && c8 && c9 && c10 && c11 && c12 && c13 && c14 && c15 && c16 && c17
   then () else exit(1)
 }
 
