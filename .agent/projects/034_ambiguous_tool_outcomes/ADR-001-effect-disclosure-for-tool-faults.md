@@ -1,7 +1,7 @@
 # ADR-001: Effect disclosure for tool faults whose effect may have happened
 
 Date: 2026-10-02. Status: **Accepted 2026-10-17, as amended by the re-grounding of that day.
-Phase 0 implemented in #277.**
+Phase 0 implemented in #277. Phase 0b probed (W0b.1) and withdrawn at W0b.2 in #279.**
 The operator accepted D1 to D9 with the amendments in §7, ruled `PermissionDenied` to `unknown`,
 had the three remaining upstream asks filed, and chose the deterministic suites as Phase 0's eval
 baselines (*§6 Rulings*). Nothing is executed. The plan is `PLAN-001-effect-disclosure.md`.
@@ -229,6 +229,11 @@ Adopted. Phase 0 renders observations that already exist; the wrapper changes th
 (`Ok`/124 where there was `Err(Timeout)`). Its open points are the note's (§6.3). One more: case A
 has no deadline, so the wrapper is not expected to help it. That is untested.
 
+**Withdrawn 2026-10-18, in #279 (§6, ruling 6).** W0b.1 probed the wrapper through
+`run_process_result` (`evidence/RESULTS-W0b.1-wrapper-probe.md`). Case A under the wrapper was
+measured, and the wrapper does not help it (case 40). The operator then withdrew Phase 0b at W0b.2:
+W0b.3 and W0b.4 are canceled. No wrapper is built.
+
 ### D7. File the upstream asks (note §6.5.7)
 
 Adopted, four asks: (a) partial stdout and stderr on `Timeout` and `OutputLimitExceeded`; (b) a kill
@@ -367,6 +372,7 @@ two the re-grounding raised. The operator chose the recommended option for each 
 | 3 | D2, `PermissionDenied` | `unknown`. The target program never ran in any case produced, but the arm is a substring match on an error that merges start and wait, and a forked child existed in four of five cases. Revisited if upstream answers #1880. |
 | 4 | D7 | File the three asks that remain now. Done: sunholo-data/ailang#1878 (a), #1879 (c), #1880 (d). Ask (b) is fixed upstream in v0.54.14. |
 | 5 | D5, eval baselines | The deterministic suites, `make dst` and `make eval_matrix`, before and after Phase 0, on 011's baseline-directory pattern. No model-in-the-loop run is a gate. |
+| 6 | D6, PLAN-001 W0b.2 | **Ruled 2026-10-18**, on W0b.1's results (`evidence/RESULTS-W0b.1-wrapper-probe.md`): withdraw Phase 0b. W0b.3 and W0b.4 are canceled. The process-group kill is left to the pin move to AILANG `>=0.54.14` (012), and partial output on timeout to sunholo-data/ailang#1878. Recorded in #279. |
 
 ## 7. Re-grounding at `e69aaad7` (2026-10-17)
 

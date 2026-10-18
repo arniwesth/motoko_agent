@@ -176,12 +176,12 @@
       "title": "impl: the deadline wrapper in run_process_result",
       "kind": "impl",
       "project": "W0b",
-      "state": "queued",
+      "state": "canceled",
       "deps": [
         "W0b.2"
       ],
       "criteria": "As W0b.2 decides. Planned: both arms wrapped; deadline is timeout_secs clamped below the wall, otherwise just under the wall; a wrapper deadline renders kind deadline, effects unknown, with captured output; no timeout binary means no wrapper; the dropped req.args on the bash -lc arm fixed or shown not to be a defect. make check_core, make world_state pass.",
-      "note": "Surface: tool_runtime.ail:974-1025, tool_catalog.ail.",
+      "note": "Canceled: Phase 0b was withdrawn at W0b.2 after W0b.1's probe (evidence/RESULTS-W0b.1-wrapper-probe.md). Process-group kill is left to the AILANG >=0.54.14 pin move, partial output on timeout to sunholo-data/ailang#1878. Planned surface was tool_runtime.ail:974-1025, tool_catalog.ail.",
       "refs": [
         "PLAN-001-effect-disclosure.md § W0b.3"
       ]
@@ -191,12 +191,12 @@
       "title": "gate: wrapper mutants, baseline pass, records",
       "kind": "gate",
       "project": "W0b",
-      "state": "queued",
+      "state": "canceled",
       "deps": [
         "W0b.3"
       ],
       "criteria": "W0b.3's witness rows ws1-ws5 kill mutants w1-w5 of the plan's W0b.4 table, one each; make dst and make eval_matrix compared with W0's head, differences explained; records updated.",
-      "note": "One worktree, one PR for W0b.",
+      "note": "Canceled with W0b.3: Phase 0b was withdrawn at W0b.2 after W0b.1's probe (evidence/RESULTS-W0b.1-wrapper-probe.md).",
       "refs": [
         "PLAN-001-effect-disclosure.md § W0b.4"
       ]
