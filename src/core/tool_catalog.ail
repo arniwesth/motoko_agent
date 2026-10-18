@@ -51,7 +51,7 @@ pure func edit_file_schema() -> ToolSchema = {
 
 pure func bash_exec_schema() -> ToolSchema = {
   name: "BashExec",
-  description: "Run a shell command in the workdir with capability gating. Output is captured to stdout/stderr with truncation past a configured byte cap.",
+  description: "Run a shell command in the workdir with capability gating. Output is captured to stdout/stderr. If the command passes the runtime's output cap or time limit, its output is not returned and the result carries a `fault` whose `effects` is `unknown`: the command may still have done its work.",
   parameters: "{\"type\":\"object\",\"properties\":{\"cmd\":{\"type\":\"string\"},\"args\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"timeout_secs\":{\"type\":\"integer\"}},\"required\":[\"cmd\"]}"
 }
 
