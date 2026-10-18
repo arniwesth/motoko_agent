@@ -224,6 +224,8 @@ import src/core/dst_fault_catalogue (
   fault_class_tool_failed,
   fault_class_tool_correlation_mismatch,
   fault_class_tool_deadline_exceeded,
+  fault_class_tool_effect_applied_then_failed,
+  fault_class_tool_effect_applied_then_deadline,
   fault_class_provider_error_retryable,
   fault_class_provider_error_non_retryable,
   fault_class_provider_partial_stream_then_error,
@@ -239,7 +241,8 @@ import src/core/dst_corpus (
   has_corpus_rule, first_corpus_message, corpus_rules_of,
   required_non_waived, bank_classes, bank_branches,
   UnreachableClass, unreachable_by_search, unreachable_class_ids, expected_bank_coverage,
-  render_corpus, corpus_rules_version
+  render_corpus, corpus_rules_version,
+  world_only_ids_on_wire, tool_messages_on_wire
 )
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
   BudgetPlan, BudgetPatch, Delegate, PureCtx, AiCtx, ProviderCtx, InterceptCtx, ProcessCtx, ExtRuntime, FinalizeDecision, NoDecision, ContinueWithFeedback, NoIntercept, PassThrough, Pending, DenyAfterTimeout, Allow,
@@ -248,7 +251,8 @@ import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, Resp
 )
 import src/core/test/ext_fixture (fixture_hooks)
 -- 034 W1.3: the builder reads the world-truth list off the effect log.
-import src/core/dst_replay (applied_faults_of_world)
+import src/core/dst_replay (applied_faults_of_world, effect_log_ordinals)
+import src/core/phase_vocab (LedgerTrace)
 
 -- ---------------------------------------------------------------------------
 -- Reporting
@@ -464,6 +468,23 @@ pure func count_fault_class(xs: [Interaction], cls: string) -> int {
   }
 }
 
+-- 034 W1.5: the FIFTH observer, and the only one that reads world truth. A
+-- world-only class is delivered as its wire twin (ADR-001 D4), so the recorded
+-- `fault_class_id` of an applied `ToolFailed` IS `ToolFailed` and cannot tell
+-- the two apart; the world's effect log can. A tool interaction recorded under
+-- the twin's id whose ordinal the effect log holds is the world-only class; one
+-- the log does not hold is the twin. The two partition the twin's
+-- interactions: the twin's row says the update did NOT occur, so an applied
+-- fault is not a witness for it.
+pure func count_fault_class_applied(xs: [Interaction], applied: [int], cls: string, want: bool) -> int {
+  match xs {
+    [] => 0,
+    i :: rest =>
+      (if i.outcome.fault_class_id == cls && contains_int(applied, i.identity.ordinal) == want then 1 else 0)
+        + count_fault_class_applied(rest, applied, cls, want)
+  }
+}
+
 -- `approval_denied` is the world serving a DENY answer, and the answer is the
 -- payload — the operator's raw line, which `tool_phase.resolve_approval` parses
 -- into `ApprovalDenied`. There is no fault class id on this interaction and
@@ -544,12 +565,21 @@ pure func any_args_undecodable(cs: [ToolCall]) -> bool {
 -- header above says a sweep graded on that field alone can name only the three
 -- tool classes. That sentence was true when it was written and is no longer;
 -- the field now names seven.
-pure func observed_classes(xs: [Interaction]) -> [string] {
-  (if count_fault_class(xs, fault_class_tool_failed()) > 0 then [fault_class_tool_failed()] else [])
+--
+-- 034 W1.5: and the world's effect log names two more, which the field cannot
+-- (`count_fault_class_applied`). `ToolFailed` and `ToolDeadlineExceeded` now
+-- count only their NON-applied interactions.
+pure func observed_classes(xs: [Interaction], effects: [{ ordinal: int, call_id: string, effect_key: string }]) -> [string] {
+  let applied = effect_log_ordinals(effects);
+  (if count_fault_class_applied(xs, applied, fault_class_tool_failed(), false) > 0 then [fault_class_tool_failed()] else [])
+    ++ (if count_fault_class_applied(xs, applied, fault_class_tool_failed(), true) > 0
+        then [fault_class_tool_effect_applied_then_failed()] else [])
     ++ (if count_fault_class(xs, fault_class_tool_correlation_mismatch()) > 0
         then [fault_class_tool_correlation_mismatch()] else [])
-    ++ (if count_fault_class(xs, fault_class_tool_deadline_exceeded()) > 0
+    ++ (if count_fault_class_applied(xs, applied, fault_class_tool_deadline_exceeded(), false) > 0
         then [fault_class_tool_deadline_exceeded()] else [])
+    ++ (if count_fault_class_applied(xs, applied, fault_class_tool_deadline_exceeded(), true) > 0
+        then [fault_class_tool_effect_applied_then_deadline()] else [])
     ++ (if count_fault_class(xs, fault_class_provider_error_retryable()) > 0
         then [fault_class_provider_error_retryable()] else [])
     ++ (if count_fault_class(xs, fault_class_provider_error_non_retryable()) > 0
@@ -691,13 +721,19 @@ export type BuiltMember = {
   log: [Interaction],
   ended_ok: bool,
   persisted: string,
-  loaded_identity: string
+  loaded_identity: string,
+  -- 034 W1.5: what the wire guard found in this run's trace, and how many
+  -- tool-role messages it read there.
+  wire_leaks: [string],
+  tool_messages: int
 }
 
-func build(member_id: string, kind: MemberKind, p: ExecutionProgram, log: [Interaction], ended_ok: bool)
+func build(member_id: string, kind: MemberKind, p: ExecutionProgram, log: [Interaction],
+           effects: [{ ordinal: int, call_id: string, effect_key: string }], trace: LedgerTrace,
+           ended_ok: bool)
   -> BuiltMember ! {FS, IO} {
   let rows = fault_catalogue();
-  let classes = observed_classes(log);
+  let classes = observed_classes(log, effects);
   let branches = branches_for(classes, rows);
   let encoded = encode_artifact(p);
   let bytes_len = match encoded { Encoded(b) => Str.length(b), EncodeRefused(_) => 0 };
@@ -718,7 +754,8 @@ func build(member_id: string, kind: MemberKind, p: ExecutionProgram, log: [Inter
   };
   let m = member_of(member_id, kind, p, path, identity, bytes_len, classes, branches);
   { member: m, program: p, log: log, ended_ok: ended_ok,
-    persisted: persisted, loaded_identity: loaded_identity }
+    persisted: persisted, loaded_identity: loaded_identity,
+    wire_leaks: world_only_ids_on_wire(trace), tool_messages: tool_messages_on_wire(trace) }
 }
 
 -- A MEMBER'S RUN, AND THIS IS ITS ONLY HOME: the label, the world it starts
@@ -753,7 +790,7 @@ func build_seed(e: BankEntry)
   -> BuiltMember ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let m = run_seed_member(e);
   let ok = match m.run.result { Ok(_) => true, Err(_) => false };
-  build(m.label, e.kind, m.program, m.run.world.log, ok)
+  build(m.label, e.kind, m.program, m.run.world.log, m.run.world.effect_log, m.run.trace, ok)
 }
 
 func build_all(es: [BankEntry])
@@ -771,7 +808,7 @@ func build_constructed()
   -> BuiltMember ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let m = run_constructed_member();
   let ok = match m.run.result { Ok(_) => true, Err(_) => false };
-  build(m.label, constructed_kind(), m.program, m.run.world.log, ok)
+  build(m.label, constructed_kind(), m.program, m.run.world.log, m.run.world.effect_log, m.run.trace, ok)
 }
 
 pure func members_of(bs: [BuiltMember]) -> [CorpusMember] {
@@ -1032,6 +1069,40 @@ pure func constructed_classes(bs: [BuiltMember]) -> [string] {
          PromotedRegression(_) => []
        }) ++ constructed_classes(rest)
   }
+}
+
+-- 034 W1.5, STANDING RULE 6 (ADR-001 D4): no world-only class id reaches the
+-- wire. Read off every member's TRACE, the tool-role `HistoryAppended` entries
+-- the model was shown (`dst_corpus.world_only_ids_on_wire`), never this
+-- target's stdout: `render_corpus`'s `classes:` lines below list the world-only
+-- ids by design. The count row keeps the guard from passing over a bank whose
+-- traces hold no tool message. 034 PLAN-001 W1.7's v12 (the typed renderer puts
+-- a world-only id in `fault_class` for an applied fault) is killed here once
+-- W1.6's bank draws `applied`, and in `strict_replay_dst`'s world-truth run now.
+func scenario_no_world_only_id_reaches_the_wire(bs: [BuiltMember]) -> bool ! {IO} {
+  let _ = println("\n-- standing rule 6: no world-only class id in any projected tool message --");
+  let leaks = leaking_members(bs);
+  let n = count_tool_messages(bs);
+  let a = report("the guard read ${n} tool-role message(s) across ${List.length(bs)} member trace(s)",
+                 n > 0,
+                 "no member trace holds a tool-role HistoryAppended entry, so the guard below is vacuous");
+  let b = report("no projected tool message contains a world-only class id",
+                 List.length(leaks) == 0,
+                 "world-only id(s) on the wire: ${join_str(leaks)}");
+  a && b
+}
+
+pure func leaking_members(bs: [BuiltMember]) -> [string] {
+  match bs {
+    [] => [],
+    b :: rest =>
+      (match b.wire_leaks { [] => [], ls => ["${b.member.member_id}: ${join_str(ls)}"] })
+        ++ leaking_members(rest)
+  }
+}
+
+pure func count_tool_messages(bs: [BuiltMember]) -> int {
+  match bs { [] => 0, b :: rest => b.tool_messages + count_tool_messages(rest) }
 }
 
 -- The two keys, and the measurement that says one cannot stand for the other.
@@ -1304,10 +1375,11 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   let f = scenario_s7_the_bank_must_survive(bs);
   let g = scenario_every_rule_fires(bs);
   let h = scenario_the_minimum_is_selected_from_measured_cost(bs);
+  let w = scenario_no_world_only_id_reaches_the_wire(bs);
 
   let _ = println("\n${render_corpus(the_corpus(bs, 0))}");
 
-  if a && b && c && d && e && e2 && f && g && h then
+  if a && b && c && d && e && e2 && f && g && h && w then
     println("\n✓ WI-A15 commit 1: the blocking PR corpus")
   else {
     let _ = println("\n✗ WI-A15 commit 1 FAILED");

@@ -208,6 +208,8 @@ import src/core/dst_result (
 import src/core/dst_driver_only (driver_only, driver_only_manifest, driver_only_version)
 import src/core/dst_profile (ExecutionManifest, validate_manifest, replay_metadata_of)
 import src/core/dst_fault_catalogue (required_class_ids, fault_class_tool_failed)
+-- 034 W1.5: standing rule 6's wire guard, run on a trace that holds an applied fault.
+import src/core/dst_corpus (world_only_ids_on_wire, tool_messages_on_wire)
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
   BudgetPlan,
   BudgetPatch,
@@ -1278,6 +1280,15 @@ func world_truth_scenario() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, Sha
   let ok_listed = check("world_truth: the builder lists exactly the applied fault",
                         eq_ints(program.applied_faults, [t1]),
                         "applied_faults [${join_ints(program.applied_faults)}], expected [${show(t1)}]");
+  -- 034 W1.5, STANDING RULE 6 (ADR-001 D4). This run's second tool call is an
+  -- APPLIED fault, the world-only class `tool_effect_applied_then_failed`, and
+  -- the model must be shown its twin's bytes: no tool-role message in the trace
+  -- may contain a world-only id. Three tool calls, three tool messages read, so
+  -- the guard is not vacuous. 034 PLAN-001 W1.7's v12 target.
+  let leaks = world_only_ids_on_wire(discovery.trace);
+  let ok_wire = check("world_truth: no world-only class id in any projected tool message (standing rule 6), over ${show(tool_messages_on_wire(discovery.trace))} tool message(s)",
+                      List.length(leaks) == 0 && tool_messages_on_wire(discovery.trace) == 3,
+                      "world-only id(s) on the wire: [${join_strs(leaks)}]; tool messages read ${show(tool_messages_on_wire(discovery.trace))}, expected 3");
 
   match persist_round_trip(program) {
     Err(why) => check("world_truth: the program round-trips through the artifact codec", false, why),
@@ -1324,7 +1335,7 @@ func world_truth_scenario() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, Sha
                                         eq_ints(effect_log_ordinals(twin_run.world.effect_log), [t0])
                                           && eq_ints(applied_faults_of_world(twin_run.world), []),
                                         "twin effect log ${effect_log_line(twin_run.world.effect_log)}");
-              ok_shape && ok_log && ok_keys && ok_listed && ok_persisted && ok_flags
+              ok_shape && ok_log && ok_keys && ok_listed && ok_wire && ok_persisted && ok_flags
                 && ok_replay && ok_rebuilt && ok_twin && ok_twin_truth
             }
           }

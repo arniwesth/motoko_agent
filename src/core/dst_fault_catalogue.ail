@@ -34,10 +34,15 @@
 -- change; one vocabulary. The remaining eight classes have no pre-existing wire
 -- name and are named in the repo's ordinary snake_case.
 --
+-- 034 W1.5 added two more snake_case ids, `tool_effect_applied_then_failed` and
+-- `tool_effect_applied_then_deadline`, and their case is a statement: they are
+-- WORLD-ONLY (`Visibility`), the one kind of id that must never be a wire name.
+--
 module src/core/dst_fault_catalogue
 
 import std/list as List (length)
 import std/option (Option, Some, None)
+import std/string (contains)
 
 -- D8's compatibility rule applies: a change to any class id, field or required
 -- set is a version change, and old records are decoded or a runner is pinned,
@@ -52,7 +57,17 @@ import std/option (Option, Some, None)
 -- `applicability` is unchanged, so `conditional_class_ids()` and every
 -- profile's `waived_fault_classes` are unaffected: `driver_only`'s coverage
 -- does not move.
-export pure func fault_catalogue_version() -> string { "fault-catalogue/2" }
+--
+-- BUMPED TO /3 AT 034 W1.5 (ADR-001 D4), and this one IS a shape change: every
+-- row gains `visibility`, and two rows are added, `tool_effect_applied_then_failed`
+-- and `tool_effect_applied_then_deadline`. They are WORLD-ONLY: each says the
+-- tool's update DID occur and is delivered byte-identically to its wire twin
+-- (`ToolFailed`, `ToolDeadlineExceeded`), so its id must never reach the model.
+-- The existing rows are not edited — reading `ToolFailed`'s "did NOT occur" as
+-- "may have occurred" in place is the silent reinterpretation D8 forbids — and
+-- both new rows are `AlwaysApplicable`, so `conditional_class_ids()` and every
+-- profile's `waived_fault_classes` are again unaffected. Eleven rows → thirteen.
+export pure func fault_catalogue_version() -> string { "fault-catalogue/3" }
 
 -- ============================================================================
 -- The shared literals. These are the artifact's wire surface.
@@ -61,6 +76,17 @@ export pure func fault_catalogue_version() -> string { "fault-catalogue/2" }
 export pure func fault_class_tool_failed() -> string { "ToolFailed" }
 export pure func fault_class_tool_correlation_mismatch() -> string { "ToolCorrelationMismatch" }
 export pure func fault_class_tool_deadline_exceeded() -> string { "ToolDeadlineExceeded" }
+
+-- 034 W1.5: the two WORLD-ONLY tool classes (ADR-001 D4). Not wire names: no
+-- projected tool message may contain either (standing rule 6), which
+-- `dst_corpus.world_only_ids_on_wire` checks of a run's trace. They are
+-- exported for the class observers and that guard, which read world truth.
+export pure func fault_class_tool_effect_applied_then_failed() -> string
+  ensures { result != "" }
+  { "tool_effect_applied_then_failed" }
+export pure func fault_class_tool_effect_applied_then_deadline() -> string
+  ensures { result != "" }
+  { "tool_effect_applied_then_deadline" }
 
 -- WI-D24's row eleven, and it is the first accessor here whose consumer names
 -- the class in an IDENTITY rather than in an outcome. `ports.recording_ext_effect`
@@ -221,6 +247,27 @@ export pure func branch_id(r: RecoveryBranch) -> string {
   }
 }
 
+-- 034 W1.5 (ADR-001 D4): who may see the class id. `Wire` is every class D3's
+-- table names: its id is what the model is shown (the three tool ids inside
+-- `fault_class`) or names an observation the model can make. `WorldOnly(twin)`
+-- is a class the model must NOT be able to tell apart from its wire twin: it is
+-- delivered as the twin, by the twin's constructor, to the twin's branch, and
+-- differs only in world truth the harness holds. Every row carries the field,
+-- so all rows keep one shape; a field on the two world-only rows alone would be
+-- the per-row shape change D4 rejects.
+export type Visibility
+  = Wire
+  | WorldOnly(string)
+
+export pure func visibility_id(v: Visibility) -> string
+  ensures { result != "" }
+{
+  match v {
+    Wire => "wire",
+    WorldOnly(_) => "world_only"
+  }
+}
+
 -- One row. The five fields are exactly D3's: a stable class id; the
 -- applicability condition if the class is conditional; the production result or
 -- error constructor it is delivered as; the named recovery-branch id it is
@@ -231,13 +278,16 @@ export pure func branch_id(r: RecoveryBranch) -> string {
 -- availability for subsequent calls; deadline outcomes specify whether work
 -- completed before or after the observation." Timeout may not leave the
 -- simulator's logical state ambiguous, so every row says what happened.
+--
+-- 034 W1.5 adds a sixth field, `visibility` (above), outside D3's five.
 export type FaultClass = {
   class_id: string,
   boundary: FaultBoundary,
   applicability: Applicability,
   delivery_constructor: string,
   recovery_branch: RecoveryBranch,
-  logical_transition: string
+  logical_transition: string,
+  visibility: Visibility
 }
 
 -- ============================================================================
@@ -264,6 +314,10 @@ export pure func required_class_ids() -> [string] {
    "ToolFailed",
    "ToolCorrelationMismatch",
    "ToolDeadlineExceeded",
+   -- 034 W1.5, ADR-001 D4: the tool's update DID occur, then the same fault
+   -- was delivered. World-only; never on the wire.
+   "tool_effect_applied_then_failed",
+   "tool_effect_applied_then_deadline",
    -- Approval: explicit denial, and no response before a declared deadline
    "approval_denied",
    "approval_deadline_exceeded",
@@ -301,7 +355,8 @@ export pure func fault_catalogue() -> [FaultClass] {
       applicability: AlwaysApplicable,
       delivery_constructor: "AIError",
       recovery_branch: Branch("session.c2_loop/stream_error_retry"),
-      logical_transition: "No assistant message is appended and totals are unchanged; step_idx advances by one and the world advances to exchange.next_state, so the retry consumes step budget. Availability for subsequent calls is unchanged — the retry re-sends the same payload."
+      logical_transition: "No assistant message is appended and totals are unchanged; step_idx advances by one and the world advances to exchange.next_state, so the retry consumes step budget. Availability for subsequent calls is unchanged — the retry re-sends the same payload.",
+      visibility: Wire
     },
     {
       class_id: "provider_error_non_retryable",
@@ -309,7 +364,8 @@ export pure func fault_catalogue() -> [FaultClass] {
       applicability: AlwaysApplicable,
       delivery_constructor: "AIError",
       recovery_branch: Branch("session.c2_loop/provider_failure_finalize"),
-      logical_transition: "Terminal. No assistant message is appended; the run finalizes as TermProviderFailure with the provider's message, and the returned outcome is Err. The provider is unavailable for the remainder of this run by construction — there is no remainder."
+      logical_transition: "Terminal. No assistant message is appended; the run finalizes as TermProviderFailure with the provider's message, and the returned outcome is Err. The provider is unavailable for the remainder of this run by construction — there is no remainder.",
+      visibility: Wire
     },
     {
       class_id: "provider_protocol_inconsistent_result",
@@ -317,7 +373,8 @@ export pure func fault_catalogue() -> [FaultClass] {
       applicability: AlwaysApplicable,
       delivery_constructor: "ToolCall.arguments",
       recovery_branch: Branch("tool_dispatch_adapter.tool_call_to_envelope/malformed_arguments"),
-      logical_transition: "No logical update occurs for the malformed call: the arguments degrade to an empty JSON object and the per-tool argument extraction reports missing fields back to the model, so the loop continues with a tool-role error message. Delivered through the TYPED provider boundary, so it exercises session validation and claims no wire-parser coverage (D3)."
+      logical_transition: "No logical update occurs for the malformed call: the arguments degrade to an empty JSON object and the per-tool argument extraction reports missing fields back to the model, so the loop continues with a tool-role error message. Delivered through the TYPED provider boundary, so it exercises session validation and claims no wire-parser coverage (D3).",
+      visibility: Wire
     },
     {
       class_id: "provider_partial_stream_then_error",
@@ -325,7 +382,8 @@ export pure func fault_catalogue() -> [FaultClass] {
       applicability: AlwaysApplicable,
       delivery_constructor: "ProviderExchange",
       recovery_branch: Branch("session.c2_loop/stream_error_retry"),
-      logical_transition: "The emissions preceding the error were already projected to the wire during the callback, so the logical obligation is D6.4 PARITY rather than a state change: the projected sequence and the returned emission log must match in order and content. The retry or finalize transition is the one the accompanying AIError's class specifies."
+      logical_transition: "The emissions preceding the error were already projected to the wire during the callback, so the logical obligation is D6.4 PARITY rather than a state change: the projected sequence and the returned emission log must match in order and content. The retry or finalize transition is the one the accompanying AIError's class specifies.",
+      visibility: Wire
     },
     {
       class_id: "provider_empty_terminal_response",
@@ -333,7 +391,8 @@ export pure func fault_catalogue() -> [FaultClass] {
       applicability: AlwaysApplicable,
       delivery_constructor: "StepResult",
       recovery_branch: Branch("session.c2_loop/empty_stop_finalize"),
-      logical_transition: "Terminal, and NOT an error: an EmptyStopFinalize record is appended to the returned trace and projected, then the run finalizes as TermSuccess with an empty output. The history is unchanged beyond the empty assistant turn."
+      logical_transition: "Terminal, and NOT an error: an EmptyStopFinalize record is appended to the returned trace and projected, then the run finalizes as TermSuccess with an empty output. The history is unchanged beyond the empty assistant turn.",
+      visibility: Wire
     },
 
     -- ---- Tool boundary ----------------------------------------------------
@@ -343,7 +402,8 @@ export pure func fault_catalogue() -> [FaultClass] {
       applicability: AlwaysApplicable,
       delivery_constructor: "ToolFailed",
       recovery_branch: Branch("tool_phase.tool_outcome_message/ToolFailed"),
-      logical_transition: "The tool's all-or-nothing logical update did NOT occur — ports.world_tool returns the fault instead of reaching the dispatcher. The typed fault is rendered into a tool-role message carrying fault_class, code and message, and the loop continues; the model, not the driver, decides how to react."
+      logical_transition: "The tool's all-or-nothing logical update did NOT occur — ports.world_tool returns the fault instead of reaching the dispatcher. The typed fault is rendered into a tool-role message carrying fault_class, code and message, and the loop continues; the model, not the driver, decides how to react.",
+      visibility: Wire
     },
     {
       class_id: "ToolCorrelationMismatch",
@@ -351,7 +411,8 @@ export pure func fault_catalogue() -> [FaultClass] {
       applicability: AlwaysApplicable,
       delivery_constructor: "ToolCorrelationMismatch",
       recovery_branch: Branch("tool_phase.tool_outcome_message/ToolCorrelationMismatch"),
-      logical_transition: "No logical update occurs, and none is recorded against the REQUESTED call either: the world answered an id nobody asked for, so the requested call has no result. Checked before the deadline and before the code, so a misaddressed answer is never mistaken for a late or failed one."
+      logical_transition: "No logical update occurs, and none is recorded against the REQUESTED call either: the world answered an id nobody asked for, so the requested call has no result. Checked before the deadline and before the code, so a misaddressed answer is never mistaken for a late or failed one.",
+      visibility: Wire
     },
     {
       class_id: "ToolDeadlineExceeded",
@@ -359,7 +420,35 @@ export pure func fault_catalogue() -> [FaultClass] {
       applicability: AlwaysApplicable,
       delivery_constructor: "ToolDeadlineExceeded",
       recovery_branch: Branch("tool_phase.tool_outcome_message/ToolDeadlineExceeded"),
-      logical_transition: "The work did NOT complete before the observation — unambiguously, which is what D3 requires of a deadline outcome. ports.world_tool advances the virtual clock by the scripted duration and returns the fault WITHOUT reaching the dispatcher, so no logical update occurred. Enabling this class needs a positive MOTOKO_TOOL_TIMEOUT_MS, which the deterministic world supplies through the env class, so any profile can enable it and it is not conditional on anything outside the world."
+      logical_transition: "The work did NOT complete before the observation — unambiguously, which is what D3 requires of a deadline outcome. ports.world_tool advances the virtual clock by the scripted duration and returns the fault WITHOUT reaching the dispatcher, so no logical update occurred. Enabling this class needs a positive MOTOKO_TOOL_TIMEOUT_MS, which the deterministic world supplies through the env class, so any profile can enable it and it is not conditional on anything outside the world.",
+      visibility: Wire
+    },
+
+    -- ---- Tool boundary, world-only (034 W1.5, ADR-001 D4) ------------------
+    --
+    -- Each copies its twin's delivery constructor and recovery branch, and
+    -- `validate_catalogue` holds it to that: the model receives exactly the
+    -- twin's bytes, so the production branch the class reaches is the twin's.
+    -- What differs is the world, and only the harness can see it: `applied` on
+    -- the `ScriptedTool` and the entry `ports.world_tool` appends to
+    -- `WorldState.effect_log`.
+    {
+      class_id: "tool_effect_applied_then_failed",
+      boundary: ToolBoundary,
+      applicability: AlwaysApplicable,
+      delivery_constructor: "ToolFailed",
+      recovery_branch: Branch("tool_phase.tool_outcome_message/ToolFailed"),
+      logical_transition: "The tool's all-or-nothing logical update DID occur — ports.world_tool appends the call to WorldState.effect_log because the scripted entry has `applied` set — and the outcome then delivered is a ToolFailed BYTE-IDENTICAL to the ToolFailed class's: same constructor, same code and message, same rendered tool-role message, same recovery branch. The model cannot tell the two apart and must not be able to, so this id never reaches the wire. Only an after-dispatch fault can be applied; `applied` on a before-dispatch fault is rejected at replay.",
+      visibility: WorldOnly("ToolFailed")
+    },
+    {
+      class_id: "tool_effect_applied_then_deadline",
+      boundary: ToolBoundary,
+      applicability: AlwaysApplicable,
+      delivery_constructor: "ToolDeadlineExceeded",
+      recovery_branch: Branch("tool_phase.tool_outcome_message/ToolDeadlineExceeded"),
+      logical_transition: "The tool's work DID complete and its logical update DID occur — ports.world_tool appends the call to WorldState.effect_log because the scripted entry has `applied` set — but after the observation: the virtual clock advances by the scripted duration and the outcome delivered is a ToolDeadlineExceeded BYTE-IDENTICAL to the ToolDeadlineExceeded class's: same constructor, same elapsed and timeout, same rendered tool-role message, same recovery branch. The model cannot tell the two apart and must not be able to, so this id never reaches the wire.",
+      visibility: WorldOnly("ToolDeadlineExceeded")
     },
 
     -- ---- Approval boundary -------------------------------------------------
@@ -369,7 +458,8 @@ export pure func fault_catalogue() -> [FaultClass] {
       applicability: AlwaysApplicable,
       delivery_constructor: "ApprovalDenied",
       recovery_branch: Branch("session.c2_loop/approval_denied"),
-      logical_transition: "No tool executes, so no logical update occurs. A NativeToolDenied record is projected and a denial message is appended to the accumulated tool batch; the loop continues with the remaining calls in the plan."
+      logical_transition: "No tool executes, so no logical update occurs. A NativeToolDenied record is projected and a denial message is appended to the accumulated tool batch; the loop continues with the remaining calls in the plan.",
+      visibility: Wire
     },
     {
       class_id: "approval_deadline_exceeded",
@@ -377,7 +467,8 @@ export pure func fault_catalogue() -> [FaultClass] {
       applicability: ConditionalOn("the production approval policy declares a deadline AND the request's default_allow is false; with default_allow true the same input resolves to ApprovalAllowed and the class is not exercised"),
       delivery_constructor: "ApprovalDenied",
       recovery_branch: Branch("tool_phase.resolve_approval/eof"),
-      logical_transition: "No tool executes and no logical update occurs; the request resolves to the policy default. NOTE: no production policy declares a CLOCK-DRIVEN approval deadline today. The only reachable branch is channel closure, which resolve_approval itself reports as \"timeout — no approval received\". A profile claiming this class covers a timed deadline would be over-claiming — see catalogue_coverage_gaps()."
+      logical_transition: "No tool executes and no logical update occurs; the request resolves to the policy default. NOTE: no production policy declares a CLOCK-DRIVEN approval deadline today. The only reachable branch is channel closure, which resolve_approval itself reports as \"timeout — no approval received\". A profile claiming this class covers a timed deadline would be over-claiming — see catalogue_coverage_gaps().",
+      visibility: Wire
     },
 
     -- ---- Conformant extension effect --------------------------------------
@@ -387,7 +478,8 @@ export pure func fault_catalogue() -> [FaultClass] {
       applicability: ConditionalOn("the selected D5 profile installs an extension with an effectful hook that issues this world request; driver_only installs none, so it waives this class by construction (plan P4)"),
       delivery_constructor: "ExtPorts.ai_step",
       recovery_branch: Branch("compaction_ai.compact_with_ai/summarizer_failed"),
-      logical_transition: "REWRITTEN AT WI-B4, and the previous text was false rather than merely stale. It said session.ext_ai_step \"hands the port a FRESH EMPTY world (empty_world_state())\", so the empty script served terminal_step() and the extension was told the model answered — no fault, no transition, no branch. WI-B2b removed both halves of that. ext_ports_of's ai_step closure now decodes ctx.world (token_to_world) and hands the DRIVER's world to Ports.model_step, and ScriptedStep gained error_code/error_message, so a scripted entry can serve Err at this seam — before B2b, stub_step's world provider wrapped every entry in Ok(...) and the provider_error_* classes had no scripted delivery at all. The transition is now specified: a faulted script entry produces Err(\"code: message\") in AiStepOutcome.result, the successor world advances past the consumed entry via AiStepOutcome.next_state, and the extension's own recovery is reachable — summarize_attempt retries, exhausts, and compact_with_ai emits PassThroughObserved(\"compaction_ai.summarizer_failed\") at compaction_ai.ail:514. The class stays WAIVED by driver_only, and that is applicability rather than reachability: driver_only installs no extension, and per src/core/dst_driver_only.ail's header NO extension is installable under D5 on declared effect rows while on_budget_plan carries the ABI's closed ! {Env, FS} row. SECOND CLAUSE SUPERSEDED AT WI-D6 (2026-08-06), FIRST CLAUSE UNCHANGED, and the split is the point: D6 narrowed that ABI row after measuring all fifteen on_budget_plan bindings, so the sentence about on_budget_plan's closed row is no longer true. CORRECTED AT WI-D7 (2026-08-06), AND THE CORRECTION IS TO THE SENTENCE THAT FOLLOWED IT HERE. This reason used to continue \"so an extension IS now installable\", and that does not follow: on_budget_plan was ONE of FOUR unconditionally-dispatched slots and D5 forbids installing an extension with any of them excluded. WI-D7 measured the other three across all fifteen bindings each — on_pre_step is refused by compaction_ai (reached through ExtPorts.ai_step; WI-D7 recorded this as 'the full ten effects' and WI-D8 measured the port and found THREE — AI, IO, Trace, which is exactly Ports.model_step's row — so the slot narrowed to match and the barrier did NOT move, because a non-empty row fails criterion 1 at three effects as it did at ten), on_response_intercept by compose (Clock, FS, IO, Process on the inline path), on_solver_candidate by context_mode (Process, a node bridge spawned fire-and-forget) — and all three still declare non-empty rows, so all three still fail criterion 1 and NO EXTENSION IS INSTALLABLE. The WAIVER is unaffected either way, because it never rested on any of this — it rests on driver_only installing no extension, which is still the case. AND THE CONCENTRATION D6 RECORDED HERE DID NOT HAPPEN: D6 wrote that the waiver went from doubly secured (the profile's emptiness AND the ABI) to secured by the first alone, which was true only under the wrong installability conclusion. Both reasons still stand. Per plan rule S21 this item re-asked and found the count UNCHANGED rather than concentrated, which is the rule working rather than the rule finding nothing. So the branch exists and this profile does not walk it — which is a different sentence from the one that used to be here, and the difference is the whole point of D1's rule now having an instrument behind it."
+      logical_transition: "REWRITTEN AT WI-B4, and the previous text was false rather than merely stale. It said session.ext_ai_step \"hands the port a FRESH EMPTY world (empty_world_state())\", so the empty script served terminal_step() and the extension was told the model answered — no fault, no transition, no branch. WI-B2b removed both halves of that. ext_ports_of's ai_step closure now decodes ctx.world (token_to_world) and hands the DRIVER's world to Ports.model_step, and ScriptedStep gained error_code/error_message, so a scripted entry can serve Err at this seam — before B2b, stub_step's world provider wrapped every entry in Ok(...) and the provider_error_* classes had no scripted delivery at all. The transition is now specified: a faulted script entry produces Err(\"code: message\") in AiStepOutcome.result, the successor world advances past the consumed entry via AiStepOutcome.next_state, and the extension's own recovery is reachable — summarize_attempt retries, exhausts, and compact_with_ai emits PassThroughObserved(\"compaction_ai.summarizer_failed\") at compaction_ai.ail:514. The class stays WAIVED by driver_only, and that is applicability rather than reachability: driver_only installs no extension, and per src/core/dst_driver_only.ail's header NO extension is installable under D5 on declared effect rows while on_budget_plan carries the ABI's closed ! {Env, FS} row. SECOND CLAUSE SUPERSEDED AT WI-D6 (2026-08-06), FIRST CLAUSE UNCHANGED, and the split is the point: D6 narrowed that ABI row after measuring all fifteen on_budget_plan bindings, so the sentence about on_budget_plan's closed row is no longer true. CORRECTED AT WI-D7 (2026-08-06), AND THE CORRECTION IS TO THE SENTENCE THAT FOLLOWED IT HERE. This reason used to continue \"so an extension IS now installable\", and that does not follow: on_budget_plan was ONE of FOUR unconditionally-dispatched slots and D5 forbids installing an extension with any of them excluded. WI-D7 measured the other three across all fifteen bindings each — on_pre_step is refused by compaction_ai (reached through ExtPorts.ai_step; WI-D7 recorded this as 'the full ten effects' and WI-D8 measured the port and found THREE — AI, IO, Trace, which is exactly Ports.model_step's row — so the slot narrowed to match and the barrier did NOT move, because a non-empty row fails criterion 1 at three effects as it did at ten), on_response_intercept by compose (Clock, FS, IO, Process on the inline path), on_solver_candidate by context_mode (Process, a node bridge spawned fire-and-forget) — and all three still declare non-empty rows, so all three still fail criterion 1 and NO EXTENSION IS INSTALLABLE. The WAIVER is unaffected either way, because it never rested on any of this — it rests on driver_only installing no extension, which is still the case. AND THE CONCENTRATION D6 RECORDED HERE DID NOT HAPPEN: D6 wrote that the waiver went from doubly secured (the profile's emptiness AND the ABI) to secured by the first alone, which was true only under the wrong installability conclusion. Both reasons still stand. Per plan rule S21 this item re-asked and found the count UNCHANGED rather than concentrated, which is the rule working rather than the rule finding nothing. So the branch exists and this profile does not walk it — which is a different sentence from the one that used to be here, and the difference is the whole point of D1's rule now having an instrument behind it.",
+      visibility: Wire
     }
   ]
 }
@@ -450,6 +542,12 @@ export type CatalogueRejection
   | UnknownConstructor(string, string)
   | ConditionalWithoutCondition(string)
   | UnconditionalWithoutBranch(string)
+  -- 034 W1.5, ADR-001 D4: a world-only row against its twin. Each is
+  -- (class id, twin id).
+  | WorldOnlyTwinMissing(string, string)
+  | WorldOnlyTwinWorldOnly(string, string)
+  | WorldOnlyTwinConstructorDiffers(string, string)
+  | WorldOnlyTwinBranchDiffers(string, string)
 
 export pure func catalogue_rule(r: CatalogueRejection) -> string {
   match r {
@@ -459,7 +557,11 @@ export pure func catalogue_rule(r: CatalogueRejection) -> string {
     EmptyField(_, _) => "row-field-empty",
     UnknownConstructor(_, _) => "unknown-constructor",
     ConditionalWithoutCondition(_) => "conditional-without-condition",
-    UnconditionalWithoutBranch(_) => "unconditional-without-branch"
+    UnconditionalWithoutBranch(_) => "unconditional-without-branch",
+    WorldOnlyTwinMissing(_, _) => "world-only-twin-missing",
+    WorldOnlyTwinWorldOnly(_, _) => "world-only-twin-world-only",
+    WorldOnlyTwinConstructorDiffers(_, _) => "world-only-twin-constructor-differs",
+    WorldOnlyTwinBranchDiffers(_, _) => "world-only-twin-branch-differs"
   }
 }
 
@@ -478,7 +580,15 @@ export pure func catalogue_message(r: CatalogueRejection) -> string {
     ConditionalWithoutCondition(c) =>
       "[conditional-without-condition] class '${c}' is conditional but states no waiving condition; an unstated waiver is a coverage claim D3 does not grant",
     UnconditionalWithoutBranch(c) =>
-      "[unconditional-without-branch] class '${c}' is unconditionally applicable but names no reachable recovery branch; a decorative fault that cannot influence the production session does not satisfy D3"
+      "[unconditional-without-branch] class '${c}' is unconditionally applicable but names no reachable recovery branch; a decorative fault that cannot influence the production session does not satisfy D3",
+    WorldOnlyTwinMissing(c, t) =>
+      "[world-only-twin-missing] world-only class '${c}' names twin '${t}', which is not a row of this catalogue; a world-only class is delivered AS its twin, so without one it has no delivery at all (ADR-001 D4)",
+    WorldOnlyTwinWorldOnly(c, t) =>
+      "[world-only-twin-world-only] world-only class '${c}' names twin '${t}', which is itself world-only; the twin is the class the model sees, so it must be a wire class (ADR-001 D4)",
+    WorldOnlyTwinConstructorDiffers(c, t) =>
+      "[world-only-twin-constructor-differs] world-only class '${c}' names a delivery constructor different from its twin '${t}''s; a world-only class must reach the model as its twin's bytes, so the constructor is the twin's (ADR-001 D4)",
+    WorldOnlyTwinBranchDiffers(c, t) =>
+      "[world-only-twin-branch-differs] world-only class '${c}' names a recovery branch different from its twin '${t}''s; the model receives the twin's bytes, so the branch they reach is the twin's (ADR-001 D4)"
   }
 }
 
@@ -527,7 +637,60 @@ pure func validate_row(r: FaultClass) -> [CatalogueRejection] {
       },
     ConditionalOn(c) => if c == "" then [ConditionalWithoutCondition(r.class_id)] else []
   };
-  id_empty ++ ctor_empty ++ ctor_known ++ transition_empty ++ branch_empty ++ condition
+  let twin_empty = match r.visibility {
+    Wire => [],
+    WorldOnly(t) => if t == "" then [EmptyField(r.class_id, "visibility")] else []
+  };
+  id_empty ++ ctor_empty ++ ctor_known ++ transition_empty ++ branch_empty ++ condition ++ twin_empty
+}
+
+-- 034 W1.5, ADR-001 D4: a world-only row is delivered AS its twin, so the twin
+-- must be a row, must be a wire class, and must have the same delivery
+-- constructor and the same recovery branch. Checked against the WHOLE row set,
+-- not the row alone, which is why it is not in `validate_row`. A blank twin id
+-- is `validate_row`'s `row-field-empty`, and is not reported again here as a
+-- missing twin.
+-- contracts: BLOCKED — RECURSIVE over the rows.
+pure func validate_twins(rows: [FaultClass], each: [FaultClass]) -> [CatalogueRejection] {
+  match each {
+    [] => [],
+    r :: rest => twin_rejections(rows, r) ++ validate_twins(rows, rest)
+  }
+}
+
+-- contracts: BLOCKED — calls `find_class`, RECURSIVE over the rows.
+pure func twin_rejections(rows: [FaultClass], r: FaultClass) -> [CatalogueRejection] {
+  match r.visibility {
+    Wire => [],
+    WorldOnly(t) =>
+      if t == "" then []
+      else match find_class(rows, t) {
+        None => [WorldOnlyTwinMissing(r.class_id, t)],
+        Some(twin) => {
+          let world_only = match twin.visibility {
+            Wire => [],
+            WorldOnly(_) => [WorldOnlyTwinWorldOnly(r.class_id, t)]
+          };
+          let ctor =
+            if twin.delivery_constructor == r.delivery_constructor then []
+            else [WorldOnlyTwinConstructorDiffers(r.class_id, t)];
+          let branch =
+            if same_branch(twin.recovery_branch, r.recovery_branch) then []
+            else [WorldOnlyTwinBranchDiffers(r.class_id, t)];
+          world_only ++ ctor ++ branch
+        }
+      }
+  }
+}
+
+-- Two branches are the same when they are the same arm with the same text.
+pure func same_branch(a: RecoveryBranch, b: RecoveryBranch) -> bool
+  ensures { result == false || branch_id(a) == branch_id(b) }
+{
+  match a {
+    Branch(x) => match b { Branch(y) => x == y, NoReachableBranch(_) => false },
+    NoReachableBranch(x) => match b { NoReachableBranch(y) => x == y, Branch(_) => false }
+  }
 }
 
 pure func validate_rows(rows: [FaultClass]) -> [CatalogueRejection] {
@@ -565,6 +728,7 @@ pure func extra_and_duplicate_classes(present: [string], seen: [string]) -> [Cat
 export pure func validate_catalogue(rows: [FaultClass]) -> [CatalogueRejection] {
   let ids = class_ids(rows);
   validate_rows(rows)
+    ++ validate_twins(rows, rows)
     ++ missing_classes(ids, required_class_ids())
     ++ extra_and_duplicate_classes(ids, [])
 }
@@ -607,6 +771,32 @@ export pure func waiving_condition(rows: [FaultClass], class_id: string) -> Opti
   }
 }
 
+-- 034 W1.5: the ids no projected tool message may contain (standing rule 6),
+-- read off the rows rather than listed, so a third world-only row joins the
+-- guard by being written.
+-- contracts: BLOCKED — RECURSIVE over the rows.
+export pure func world_only_class_ids(rows: [FaultClass]) -> [string] {
+  match rows {
+    [] => [],
+    r :: rest =>
+      match r.visibility {
+        WorldOnly(_) => r.class_id :: world_only_class_ids(rest),
+        Wire => world_only_class_ids(rest)
+      }
+  }
+}
+
+-- The ids of `ids` that occur anywhere in `text`. LEXICAL on purpose: the guard
+-- does not parse the message, so a world-only id in any field, or in prose,
+-- is a hit.
+-- contracts: BLOCKED — RECURSIVE over the ids.
+export pure func ids_occurring_in(text: string, ids: [string]) -> [string] {
+  match ids {
+    [] => [],
+    i :: rest => (if contains(text, i) then [i] else []) ++ ids_occurring_in(text, rest)
+  }
+}
+
 -- ============================================================================
 -- Inline tests
 -- ============================================================================
@@ -625,7 +815,8 @@ pure func ok_row(id: string) -> FaultClass {
     applicability: AlwaysApplicable,
     delivery_constructor: "AIError",
     recovery_branch: Branch("session.c2_loop/stream_error_retry"),
-    logical_transition: "t"
+    logical_transition: "t",
+    visibility: Wire
   }
 }
 
@@ -724,6 +915,108 @@ pure func test_two_conditional_classes_carry_conditions() -> bool
          }
   }
 
+-- ----------------------------------------------------------------------------
+-- 034 W1.5, ADR-001 D4: the world-only rows against their twins. Each rejection
+-- row starts from the SHIPPED catalogue, which validates, and changes one field
+-- of one world-only row, so the rule named is the only rejection produced:
+-- `== 1` is what stops a row being green on another rule's finding. These are
+-- 034 PLAN-001 W1.7's v08-v11 targets.
+-- ----------------------------------------------------------------------------
+
+pure func replace_row(rows: [FaultClass], r: FaultClass) -> [FaultClass] {
+  match rows {
+    [] => [],
+    x :: rest => (if x.class_id == r.class_id then r else x) :: replace_row(rest, r)
+  }
+}
+
+pure func applied_failed_row() -> FaultClass {
+  match find_class(fault_catalogue(), fault_class_tool_effect_applied_then_failed()) {
+    Some(r) => r,
+    None => ok_row("<absent>")
+  }
+}
+
+pure func only_rule(rs: [CatalogueRejection], rule: string) -> bool {
+  List.length(rs) == 1 && has_rule(rs, rule)
+}
+
+-- The survival case the four below are mutations of: both world-only rows
+-- name a wire twin, carry its constructor and branch, and are the only two.
+pure func test_the_world_only_rows_copy_their_wire_twins() -> bool
+  tests [((), true)]
+  {
+    let rows = fault_catalogue();
+    let wo = world_only_class_ids(rows);
+    List.length(wo) == 2
+      && contains_str(wo, fault_class_tool_effect_applied_then_failed())
+      && contains_str(wo, fault_class_tool_effect_applied_then_deadline())
+      && List.length(validate_twins(rows, rows)) == 0
+      && match find_class(rows, fault_class_tool_effect_applied_then_failed()) {
+           Some(r) => match r.visibility { WorldOnly(t) => t == fault_class_tool_failed(), Wire => false },
+           None => false
+         }
+      && match find_class(rows, fault_class_tool_effect_applied_then_deadline()) {
+           Some(r) => match r.visibility { WorldOnly(t) => t == fault_class_tool_deadline_exceeded(), Wire => false },
+           None => false
+         }
+      -- and both are AlwaysApplicable, so the conditional count stays 2
+      && List.length(conditional_class_ids(rows)) == 2
+  }
+
+-- v08: the twin must exist.
+pure func test_world_only_twin_missing_fails() -> bool
+  tests [((), true)]
+  {
+    let bad: FaultClass = { applied_failed_row() | visibility: WorldOnly("no_such_class") };
+    only_rule(validate_catalogue(replace_row(fault_catalogue(), bad)), "world-only-twin-missing")
+  }
+
+-- v09: the twin must not be world-only. The row names ITSELF, so constructor
+-- and branch agree and the world-only rule is the only one that can fire.
+pure func test_world_only_twin_that_is_world_only_fails() -> bool
+  tests [((), true)]
+  {
+    let bad: FaultClass = { applied_failed_row() | visibility: WorldOnly(fault_class_tool_effect_applied_then_failed()) };
+    only_rule(validate_catalogue(replace_row(fault_catalogue(), bad)), "world-only-twin-world-only")
+  }
+
+-- v10: the twin's delivery constructor must match. `ToolCorrelationMismatch` is
+-- a known constructor, so `unknown-constructor` stays silent.
+pure func test_world_only_twin_constructor_differs_fails() -> bool
+  tests [((), true)]
+  {
+    let bad: FaultClass = { applied_failed_row() | delivery_constructor: "ToolCorrelationMismatch" };
+    only_rule(validate_catalogue(replace_row(fault_catalogue(), bad)), "world-only-twin-constructor-differs")
+  }
+
+-- v11: the twin's recovery branch must match.
+pure func test_world_only_twin_branch_differs_fails() -> bool
+  tests [((), true)]
+  {
+    let bad: FaultClass = { applied_failed_row() | recovery_branch: Branch("tool_phase.tool_outcome_message/ToolCorrelationMismatch") };
+    only_rule(validate_catalogue(replace_row(fault_catalogue(), bad)), "world-only-twin-branch-differs")
+  }
+
+-- A blank twin id is a row-field-empty, reported once and not again as a
+-- missing twin.
+pure func test_world_only_blank_twin_is_an_empty_field() -> bool
+  tests [((), true)]
+  {
+    let bad: FaultClass = { applied_failed_row() | visibility: WorldOnly("") };
+    only_rule(validate_catalogue(replace_row(fault_catalogue(), bad)), "row-field-empty")
+  }
+
+pure func test_ids_occurring_in_is_lexical() -> bool
+  tests [((), true)]
+  {
+    let wo = world_only_class_ids(fault_catalogue());
+    List.length(ids_occurring_in("{\"fault_class\":\"ToolFailed\"}", wo)) == 0
+      && ids_occurring_in("{\"fault_class\":\"tool_effect_applied_then_failed\"}", wo)
+           == [fault_class_tool_effect_applied_then_failed()]
+      && List.length(ids_occurring_in("prose naming tool_effect_applied_then_deadline", wo)) == 1
+  }
+
 -- The three ids adopted from the live wire surface must remain the strings
 -- tool_phase actually emits. If someone renames a class id here, this fails
 -- rather than the tree quietly carrying two vocabularies again.
@@ -792,7 +1085,8 @@ pure func test_required_ids_are_distinct() -> bool
   tests [((), true)]
   {
     no_duplicates(required_class_ids(), [])
-      && List.length(required_class_ids()) == 11
+      -- 034 W1.5: 11 -> 13, the two world-only tool rows (ADR-001 D4).
+      && List.length(required_class_ids()) == 13
   }
 
 pure func no_duplicates(xs: [string], seen: [string]) -> bool {

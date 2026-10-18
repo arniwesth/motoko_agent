@@ -35,12 +35,15 @@ import src/core/dst_fault_catalogue (
   CatalogueRejection,
   RecoveryBranch, Branch, NoReachableBranch,
   Applicability, AlwaysApplicable, ConditionalOn,
+  Visibility, Wire, WorldOnly,
   fault_catalogue,
   fault_catalogue_version,
   required_class_ids,
   validate_catalogue,
   catalogue_ok,
   catalogue_message,
+  catalogue_rule,
+  world_only_class_ids,
   find_class,
   branch_id,
   boundary_id,
@@ -50,7 +53,9 @@ import src/core/dst_fault_catalogue (
   physical_fault_reopen_triggers,
   fault_class_tool_failed,
   fault_class_tool_correlation_mismatch,
-  fault_class_tool_deadline_exceeded
+  fault_class_tool_deadline_exceeded,
+  fault_class_tool_effect_applied_then_failed,
+  fault_class_tool_effect_applied_then_deadline
 )
 import src/core/ports (
   ToolOutcome, ToolFailed, ToolCorrelationMismatch, ToolDeadlineExceeded
@@ -167,6 +172,73 @@ pure func wire_names_match() -> bool {
     && emitted_fault_class(sample_deadline()) == fault_class_tool_deadline_exceeded()
 }
 
+-- ---------------------------------------------------------------------------
+-- 034 W1.5, ADR-001 D4: the world-only rows against their twins
+-- ---------------------------------------------------------------------------
+--
+-- Each rejection row starts from the SHIPPED catalogue and changes one field of
+-- one world-only row; the rule it names must be the ONLY rejection, so the row
+-- cannot be green on another rule's finding. 034 PLAN-001 W1.7's v08-v11 are
+-- the mutants of these four rules, and these rows are their expected failures.
+
+pure func replace_row(rows: [FaultClass], r: FaultClass) -> [FaultClass] {
+  match rows {
+    [] => [],
+    x :: rest => (if x.class_id == r.class_id then r else x) :: replace_row(rest, r)
+  }
+}
+
+pure func rules_of(rs: [CatalogueRejection]) -> string {
+  match rs {
+    [] => "(none)",
+    r :: [] => catalogue_rule(r),
+    r :: rest => "${catalogue_rule(r)}, ${rules_of(rest)}"
+  }
+}
+
+func twin_row(label: string, bad: FaultClass, rule: string) -> bool ! {IO} {
+  let rs = validate_catalogue(replace_row(fault_catalogue(), bad));
+  let ok = List.length(rs) == 1 && catalogue_rule_is(rs, rule);
+  let _ = if ok then println("  ✓ ${label} → ${rule}")
+          else println("  ✗ ${label}: expected only '${rule}', the validator produced: ${rules_of(rs)}");
+  ok
+}
+
+pure func catalogue_rule_is(rs: [CatalogueRejection], rule: string) -> bool {
+  match rs { [] => false, r :: rest => if catalogue_rule(r) == rule then true else catalogue_rule_is(rest, rule) }
+}
+
+pure func twin_is(rows: [FaultClass], id: string, twin: string) -> bool {
+  match find_class(rows, id) {
+    None => false,
+    Some(r) => match r.visibility { WorldOnly(t) => t == twin, Wire => false }
+  }
+}
+
+func world_only_rows() -> bool ! {IO} {
+  let rows = fault_catalogue();
+  let wo = world_only_class_ids(rows);
+  let survive = List.length(wo) == 2
+    && twin_is(rows, fault_class_tool_effect_applied_then_failed(), fault_class_tool_failed())
+    && twin_is(rows, fault_class_tool_effect_applied_then_deadline(), fault_class_tool_deadline_exceeded());
+  let _ = if survive then println("  ✓ two world-only rows, each naming its wire twin: ${fault_class_tool_effect_applied_then_failed()} → ${fault_class_tool_failed()}, ${fault_class_tool_effect_applied_then_deadline()} → ${fault_class_tool_deadline_exceeded()}")
+          else println("  ✗ expected two world-only rows twinned with ToolFailed and ToolDeadlineExceeded, found ${show(List.length(wo))}");
+  match find_class(rows, fault_class_tool_effect_applied_then_failed()) {
+    None => { let _ = println("  ✗ the world-only row tool_effect_applied_then_failed is absent"); false },
+    Some(r) => {
+      let v08 = twin_row("v08: a world-only row whose twin is not a row",
+                         { r | visibility: WorldOnly("no_such_class") }, "world-only-twin-missing");
+      let v09 = twin_row("v09: a world-only row whose twin is itself world-only",
+                         { r | visibility: WorldOnly(fault_class_tool_effect_applied_then_failed()) }, "world-only-twin-world-only");
+      let v10 = twin_row("v10: a world-only row whose delivery constructor differs from its twin's",
+                         { r | delivery_constructor: "ToolCorrelationMismatch" }, "world-only-twin-constructor-differs");
+      let v11 = twin_row("v11: a world-only row whose recovery branch differs from its twin's",
+                         { r | recovery_branch: Branch("tool_phase.tool_outcome_message/ToolCorrelationMismatch") }, "world-only-twin-branch-differs");
+      survive && v08 && v09 && v10 && v11
+    }
+  }
+}
+
 export func main() -> () ! {IO} {
   let _ = println("=== fault_catalogue_dst (D3, ${fault_catalogue_version()}) ===");
   let rows = fault_catalogue();
@@ -221,13 +293,20 @@ export func main() -> () ! {IO} {
   let _ = if c7 then println("  ✓ physical-fault exclusion carries all five 007 D1.3 reopen triggers")
           else println("  ✗ the 007 D1.3 reopen trigger list is not intact");
 
+  -- 7b. 034 W1.5: the world-only rows, and the four rules that hold them to
+  --     their twins. The emitted-`fault_class` check (3) is unchanged: a
+  --     world-only class is delivered as its twin, so it has no emission of
+  --     its own to observe here; `make corpus_pr` and `make strict_replay` read
+  --     the trace for it (standing rule 6).
+  let c7b = world_only_rows();
+
   -- 8. Negative control. The validator must be capable of rejecting, or every
   --    green check above is vacuous.
   let c8 = not catalogue_ok([]);
   let _ = if c8 then println("  ✓ control: an empty catalogue is rejected")
           else println("  ✗ control: an empty catalogue validates — every check above is vacuous");
 
-  if c1 && c2 && c3 && c4 && c7 && c8 then println("fault_catalogue_dst PASS")
+  if c1 && c2 && c3 && c4 && c7 && c7b && c8 then println("fault_catalogue_dst PASS")
   else {
     let _ = println("fault_catalogue_dst FAIL");
     exit(1)
