@@ -348,6 +348,16 @@ export type CorpusJob = {
 -- Taking the 317 would have restored the comfortable margin under `pr_job()` by
 -- choosing the more flattering of two honest numbers, which is the move that
 -- paragraph exists to forbid.
+--
+-- RE-CHECKED AT 034 W1.6 AND NOT MOVED. The stage and `applied` draws and the
+-- version bump re-phase every seed, so the question was whether the median
+-- trajectory got dearer. The harness above was run A/B on one machine, warm,
+-- interleaved: HEAD before W1.6 at 42.1 s per 100 seeds (421 ms, which
+-- reproduces this constant), W1.6 at 37.0 s (370 ms). The harness needed a
+-- scratch copy to run at all — it predates `ExecutionProgram.applied_faults`
+-- (W1.3), which is recorded evidence and was not edited. No rise, so neither
+-- this constant nor `pr_target_ceiling_ms()` moves; `make corpus_pr` took 24 s
+-- of its 180 s ceiling with the new bank.
 export pure func measured_ms_per_seed() -> int { 416 }
 
 export pure func seeds_affordable_in(budget_ms: int) -> int {

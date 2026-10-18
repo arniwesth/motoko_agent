@@ -581,7 +581,17 @@ export type ToolDecision = {
   content: string,
   -- The id the world answers with. Non-blank only for the correlation-mismatch
   -- choice; `world_tool` takes that branch on `t.tool_call_id != inv.call.id`.
-  answering_call_id: string
+  answering_call_id: string,
+  -- 034 W1.6, ADR-001 D3 and D4: the STAGE and the WORLD TRUTH, which
+  -- `generating_tool` copies onto `ScriptedTool` field for field.
+  -- `after_dispatch` is drawn only for the failed choice; the other three are
+  -- after dispatch by construction (D3), so they carry `true` and draw nothing.
+  -- `applied` is drawn for the after-dispatch failed choice and the late one,
+  -- the two arms a world-only class rides on; a before-dispatch failure never
+  -- entered its effect, so it carries `false` without a draw (D4), and so do
+  -- the ok and mismatch choices, which have no world-only row.
+  after_dispatch: bool,
+  applied: bool
 }
 
 export type ApprovalDecision = {
@@ -760,6 +770,25 @@ export pure func choose_tool(
         bounded_draw(d_code.state, "${salt}|dur", 1, 30,
                      "max_clock_advance_ms", g.bounds.max_clock_advance_ms)
     };
+  -- 034 W1.6. The stage, then world truth, each under its own salt and each
+  -- drawn only on the arms where it can differ, so an ok or mismatch choice
+  -- consumes exactly the draws it did at version 1. One in three failures is
+  -- before dispatch; one in two eligible faults applied. Before W1.6 every
+  -- generated `ToolFailed` was after dispatch and none applied, so the bank
+  -- reached neither the typed renderer's `none` arm nor either world-only row.
+  let d_stage =
+    match fault {
+      ToolChoiceFailed => draw(d_dur.state, "${salt}|stage", 3),
+      _ => { value: 1, state: d_dur.state }
+    };
+  let after_dispatch = d_stage.value != 0;
+  let d_applied =
+    match fault {
+      ToolChoiceFailed => if after_dispatch then draw(d_stage.state, "${salt}|applied", 2)
+                          else { value: 0, state: d_stage.state },
+      ToolChoiceLate => draw(d_stage.state, "${salt}|applied", 2),
+      _ => { value: 0, state: d_stage.state }
+    };
   {
     decision: {
       fault: fault,
@@ -770,9 +799,11 @@ export pure func choose_tool(
       answering_call_id: match fault {
         ToolChoiceMismatch => "${requested_call_id}_wrong",
         _ => ""
-      }
+      },
+      after_dispatch: after_dispatch,
+      applied: d_applied.value == 1
     },
-    state: d_dur.state
+    state: d_applied.state
   }
 }
 
@@ -1063,7 +1094,7 @@ pure func provider_text(d: ProviderDecision) -> string {
 }
 
 pure func tool_text(d: ToolDecision) -> string {
-  "T|${tool_choice_id(d.fault)}|${d.duration_ms}|${d.code}|${d.message}|${d.content}|${d.answering_call_id}"
+  "T|${tool_choice_id(d.fault)}|${d.duration_ms}|${d.code}|${d.message}|${d.content}|${d.answering_call_id}|${bit(d.after_dispatch)}|${bit(d.applied)}"
 }
 
 pure func approval_text(d: ApprovalDecision) -> string {
@@ -1263,24 +1294,43 @@ export pure func canary_generator_id() -> string { "motoko_driver_only" }
 -- 1..260 at both versions and was deleted, as WI-C5's did. Of 260 seeds,
 -- 942678 triples satisfy the filter (all three quantities pairwise distinct
 -- within each version's table, both layers remapped by the version bump at
--- every seed, no two pinned seeds adjacent), so the rows below are a query's
+-- every seed, no two pinned seeds adjacent), so the rows were a query's
 -- answer rather than a judgement.
 --
--- The trajectory-coverage preference is unchanged and re-applied to the new
--- numbers: seed 1 draws 97, the MAXIMUM, so the schedule's cap and the `|BOUND`
--- path stay pinned; seed 5 draws 22, the MINIMUM, where the wide walk
--- terminated early; seed 7 draws 50 and sits between them. A pinned digest
+-- The trajectory-coverage preference was unchanged and re-applied to the new
+-- numbers: seed 1 drew 97, the MAXIMUM, so the schedule's cap and the `|BOUND`
+-- path stayed pinned; seed 5 drew 22, the MINIMUM, where the wide walk
+-- terminated early; seed 7 drew 50 and sat between them. A pinned digest
 -- certifies the paths its trajectory walks and no others.
-export pure func pinned_canary_v1() -> [CanaryRow] {
-  [{ seed: 1, initial_state: 1760396834, draws: 97, digest: 840647018 },
-   { seed: 5, initial_state: 1760396838, draws: 22, digest: 399270517 },
-   { seed: 7, initial_state: 1760396840, draws: 50, digest: 672935065 }]
+--
+-- RE-PINNED AT 034 W1.6, AND THE PAIR OF VERSIONS MOVED WITH IT. W1.6 added
+-- the stage and `applied` draws to `choose_tool` and bumped the generator to
+-- version "2", which is the first real bump this literal has had. The pinned
+-- pair was ("1", "2"): "2" was the version a legitimate bump remaps TO. After the
+-- bump that is the version everything runs under, so re-pinning both tables in
+-- place would have left the remap contrast equal to the running version — the
+-- "pinned to an identity nothing runs under" failure axis K's `ok_identity`
+-- warns of. The pair is now the current version and the next one, ("2", "3"),
+-- and the version-1 table is RETIRED rather than kept: nothing runs at "1", and
+-- a table pinned there would certify a generator that no longer exists.
+--
+-- Re-swept by the same method: `scripts/dst/canary_sweep_tmp.ail` emitted a row
+-- per seed for 1..260 at "2" and "3" and was deleted. 1475909 triples satisfy
+-- the filter above. Trajectory coverage again chose among them: seed 43 draws
+-- 102, the MAXIMUM at "2" (the `|BOUND` path); seed 4 draws 22, the MINIMUM;
+-- seed 1 draws 79, between them. `seed_state` is unchanged, so "3" at seed s is
+-- still "2" at seed s+1 (`test_a_version_bump_is_currently_only_a_seed_offset`)
+-- and the no-adjacent-seeds rule still binds.
+export pure func pinned_canary_v2() -> [CanaryRow] {
+  [{ seed: 1, initial_state: 1760396835, draws: 79, digest: 1139293303 },
+   { seed: 4, initial_state: 1760396838, draws: 22, digest: 399270517 },
+   { seed: 43, initial_state: 1760396877, draws: 102, digest: 762248503 }]
 }
 
-export pure func pinned_canary_v2() -> [CanaryRow] {
-  [{ seed: 1, initial_state: 1760396835, draws: 92, digest: 1125006629 },
-   { seed: 5, initial_state: 1760396839, draws: 22, digest: 1388470833 },
-   { seed: 7, initial_state: 1760396841, draws: 50, digest: 548917106 }]
+export pure func pinned_canary_v3() -> [CanaryRow] {
+  [{ seed: 1, initial_state: 1760396836, draws: 65, digest: 1179720951 },
+   { seed: 4, initial_state: 1760396839, draws: 22, digest: 1388470833 },
+   { seed: 43, initial_state: 1760396878, draws: 100, digest: 900072862 }]
 }
 
 -- ---------------------------------------------------------------------------
@@ -1500,6 +1550,45 @@ pure func test_a_closed_approval_channel_never_reopens() -> bool
       && open_choice.state.approvals_closed == not open_choice.decision.serve
   }
 
+-- 034 W1.6, ADR-001 D3/D4, over 200 starting states: a before-dispatch choice
+-- is only ever a failed one and never applied; `applied` is set only on an
+-- after-dispatch failure or a late choice; and every one of those four shapes
+-- is actually drawn, so the rule is not passing on a generator that never
+-- leaves the old constant.
+type StageCensus = { bad: int, before: int, failed_applied: int, failed_plain: int, late_applied: int, late_plain: int }
+
+pure func one(b: bool) -> int { if b then 1 else 0 }
+
+pure func stage_census(g: GeneratorState, i: int, acc: StageCensus) -> StageCensus {
+  if i <= 0 then acc
+  else {
+    let d = choose_tool({ g | rng: i }, "t", 50, "c1").decision;
+    let bad = match d.fault {
+      ToolChoiceFailed => not d.after_dispatch && d.applied,
+      ToolChoiceLate => not d.after_dispatch,
+      _ => not d.after_dispatch || d.applied
+    };
+    let failed = match d.fault { ToolChoiceFailed => true, _ => false };
+    let late = match d.fault { ToolChoiceLate => true, _ => false };
+    stage_census(g, i - 1,
+      { bad: acc.bad + one(bad),
+        before: acc.before + one(failed && not d.after_dispatch),
+        failed_applied: acc.failed_applied + one(failed && d.after_dispatch && d.applied),
+        failed_plain: acc.failed_plain + one(failed && d.after_dispatch && not d.applied),
+        late_applied: acc.late_applied + one(late && d.applied),
+        late_plain: acc.late_plain + one(late && not d.applied) })
+  }
+}
+
+pure func test_the_stage_and_applied_draws_respect_d4_and_reach_every_shape() -> bool
+  tests [((), true)]
+  {
+    let c = stage_census(generator_state("gen", "2", 3, test_bounds()), 200,
+                         { bad: 0, before: 0, failed_applied: 0, failed_plain: 0, late_applied: 0, late_plain: 0 });
+    c.bad == 0 && c.before > 0 && c.failed_applied > 0 && c.failed_plain > 0
+      && c.late_applied > 0 && c.late_plain > 0
+  }
+
 -- The LATE tool choice must actually exceed the deadline it was given, and the
 -- ok choice must not. Both are read off the REQUEST's timeout, which is what
 -- makes this a test of the request participating as a value rather than as a
@@ -1532,8 +1621,8 @@ pure func test_the_late_choice_exceeds_the_requests_own_deadline() -> bool
 pure func test_the_pinned_canary_is_green_at_both_versions() -> bool
   tests [((), true)]
   {
-    canary_ok(check_canary(canary_generator_id(), "1", 0, pinned_canary_v1()))
-      && canary_ok(check_canary(canary_generator_id(), "2", 0, pinned_canary_v2()))
+    canary_ok(check_canary(canary_generator_id(), "2", 0, pinned_canary_v2()))
+      && canary_ok(check_canary(canary_generator_id(), "3", 0, pinned_canary_v3()))
   }
 
 -- C5, AND HERE IT IS THE ENTIRE POINT OF THE ARTIFACT. A deliberate seed remap
@@ -1548,14 +1637,14 @@ pure func test_the_pinned_canary_is_green_at_both_versions() -> bool
 pure func test_a_seed_remap_without_a_version_bump_turns_the_canary_red() -> bool
   tests [((), true)]
   {
-    let fs = check_canary(canary_generator_id(), "1", 1, pinned_canary_v1());
+    let fs = check_canary(canary_generator_id(), "2", 1, pinned_canary_v2());
     not canary_ok(fs)
       && has_canary_rule(fs, "generator-seed-remapped-without-a-version-bump")
       && has_canary_rule(fs, "generator-trajectory-reshaped-without-a-version-bump")
       && has_canary_rule(fs, "generator-choices-remapped-without-a-version-bump")
-      -- ...and the same remap against the version-2 table is red too, so the
+      -- ...and the same remap against the version-3 table is red too, so the
       -- demonstration is not an accident of one table's contents.
-      && not canary_ok(check_canary(canary_generator_id(), "2", 1, pinned_canary_v2()))
+      && not canary_ok(check_canary(canary_generator_id(), "3", 1, pinned_canary_v3()))
   }
 
 -- The two structural findings. Neither is decoration: an empty table compares
@@ -1580,10 +1669,10 @@ pure func test_the_canary_reports_its_own_vacuity_and_its_own_collisions() -> bo
 pure func test_the_version_axis_separates_the_two_pinned_tables() -> bool
   tests [((), true)]
   {
-    canary_ok(check_canary_version_axis(pinned_canary_v1(), pinned_canary_v2()))
-      && has_canary_rule(check_canary_version_axis(pinned_canary_v1(), pinned_canary_v1()),
+    canary_ok(check_canary_version_axis(pinned_canary_v2(), pinned_canary_v3()))
+      && has_canary_rule(check_canary_version_axis(pinned_canary_v2(), pinned_canary_v2()),
                          "generator-version-bump-changed-nothing")
-      && List.length(check_canary_version_axis(pinned_canary_v1(), pinned_canary_v1())) == 3
+      && List.length(check_canary_version_axis(pinned_canary_v2(), pinned_canary_v2())) == 3
   }
 
 -- The canary must be reachable ONLY through a draw (S8). The salts in

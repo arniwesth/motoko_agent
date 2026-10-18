@@ -96,17 +96,19 @@ pure func supported_profile() -> string { driver_only_id() }
 -- ============================================================================
 -- The seeded world — REPLICATED from corpus_pr_dst's script-local wiring
 -- ============================================================================
--- Kept byte-for-byte in step with `corpus_pr_dst.ail:299-313`. If those diverge,
+-- Kept byte-for-byte in step with `corpus_pr_dst.ail:336-348`. If those diverge,
 -- the same seed stops meaning the same world, and the divergence view silently
 -- compares two different experiments. That is why the shape is repeated here
 -- verbatim rather than approximated.
 
-pure func generator_version() -> string { "1" }
+-- 034 W1.6: "1" -> "2", this literal's first bump: `choose_tool` now draws the
+-- failed stage and `applied` (RECORD-W1.1 §4 lists the four producers).
+pure func generator_version() -> string { "2" }
 
 -- THE RECORDS-PER-STEP LEVER, AND IT IS OFF BY DEFAULT.
 --
 -- `chunk_draw_hi` is the only field here that is not a literal, and `default_chunk_draw_hi()`
--- is what `corpus_pr_dst.ail:301-309` declares — so at the default this function is
+-- is what `corpus_pr_dst.ail:341-348` declares — so at the default this function is
 -- byte-identical to the wiring it is kept in step with, and the exported trace,
 -- `make depth_canary`'s three pinned record counts and every digest downstream are
 -- unmoved. `main` supplies the default unless `CG_EXPORT_CHUNK_DRAW_HI` says

@@ -163,7 +163,9 @@ func budget() -> BudgetPlan { { total: 10, solver: 6, verifier: 4 } }
 func zero_rates() -> CostRates { { input_per_1m_millicents: 0, output_per_1m_millicents: 0 } }
 
 func generator_id() -> string { "motoko_driver_only" }
-func generator_version() -> string { "1" }
+-- 034 W1.6: "1" -> "2", this literal's first bump: `choose_tool` now draws the
+-- failed stage and `applied` (RECORD-W1.1 §4 lists the four producers).
+func generator_version() -> string { "2" }
 
 func bounds() -> GeneratorBounds {
   { max_interactions: 96,
@@ -245,8 +247,8 @@ pure func program_of(w: WorldState, initial: WorldState) -> ExecutionProgram {
     bounds: initial.gen.bounds,
     manifest: run_manifest(),
     interactions: w.log,
-    -- 034 W1.3: the world's effect-log FAULT entries, by recorded ordinal. Empty
-    -- until W1.6 makes the generator draw `applied`.
+    -- 034 W1.3: the world's effect-log FAULT entries, by recorded ordinal.
+    -- Non-empty since W1.6, when the generator began drawing `applied`.
     applied_faults: applied_faults_of_world(w) }
 }
 

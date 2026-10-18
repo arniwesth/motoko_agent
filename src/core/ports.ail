@@ -2368,11 +2368,12 @@ export func generating_tool(state: WorldState, inv: ToolInvocation) -> ToolExecu
       -- generated tool ran a process, which is the fabrication the sentinel
       -- exists to avoid. A generated program says it does not know.
       exit_code: -1,
-      -- 034 W1.2: after dispatch, and not applied — what every generated
-      -- `ToolFailed` has meant so far, and what a payload without a stage
-      -- decodes to. W1.6 gives the generator draws for both.
-      after_dispatch: true,
-      applied: false
+      -- 034 W1.6: both DRAWN, by `choose_tool` (until W1.6 every generated
+      -- fault was after dispatch and not applied). `applied` goes to the
+      -- world and never to the outcome: `scripted_tool_outcome` does not read
+      -- it, so it reaches the program only as `applied_faults` (D4).
+      after_dispatch: d.after_dispatch,
+      applied: d.applied
     };
     recording_tool({ state | gen: choice.state, tools: [entry] }, inv)
   }
