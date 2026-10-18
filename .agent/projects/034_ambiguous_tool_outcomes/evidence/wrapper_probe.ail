@@ -1,0 +1,38 @@
+-- scripts/dst/wrapper_probe_034.ail
+--
+-- 034 PLAN-001 W0b.1: ONE TOOL CALL DOWN THE LIVE PATH, READ AS THE MODEL READS IT.
+--
+-- A one-off probe driver, not a gate. It is kept beside `wrapper_probe.sh`, which copies it to
+-- `scripts/dst/` of a scratch tree that links the repo's `src/` and `packages/`, runs it once
+-- per case, and removes the tree. Nothing under `src/` is changed.
+--
+-- It sends one `BashExec` or `RunTests` call through `dispatch_one_typed`, which reaches
+-- `run_process_result` (`src/core/tool_runtime.ail`) by `run_native_batch`, and passes the
+-- result through `tool_result_message`, as `fault_disclosure_witness` does
+-- (`scripts/dst/world_state_probe.ail`). The deadline wrapper does not exist yet (W0b.3), so a
+-- case states it in the call itself: `cmd: "timeout"` with the wrapped argv for the direct-exec
+-- arm, or `timeout ...` inside the command string for the `bash -lc` arm.
+--
+-- Input: W0B_TOOL (default BashExec) and W0B_ARGS, the call's arguments as JSON.
+-- Output, two lines: `ELAPSED_MS <n>`, the wall time of the dispatch as the harness would
+-- measure it, and `MESSAGE <content>`, the tool message the model reads.
+
+module scripts/dst/wrapper_probe_034
+
+import std/io (println)
+import std/env (getEnvOr)
+import std/clock (now)
+import std/ai (ToolCall)
+import src/core/phase_vocab (tool_result_message)
+import src/core/tool_dispatch_adapter (dispatch_one_typed)
+
+export func main() -> () ! {Clock, Env, FS, IO, Process} {
+  let tool = getEnvOr("W0B_TOOL", "BashExec");
+  let args = getEnvOr("W0B_ARGS", "{}");
+  let call: ToolCall = { id: "w0b-probe", name: tool, arguments: args };
+  let start = now();
+  let content = dispatch_one_typed(".", call).content;
+  let stop = now();
+  let _ = println("ELAPSED_MS ${show(stop - start)}");
+  println("MESSAGE ${tool_result_message(call, content).content}")
+}

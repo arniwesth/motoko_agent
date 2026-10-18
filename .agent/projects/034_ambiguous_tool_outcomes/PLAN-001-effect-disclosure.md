@@ -3,9 +3,9 @@
 Implements [ADR-001](ADR-001-effect-disclosure-for-tool-faults.md) (this dir), accepted as amended
 by the operator on 2026-10-17 (its §6, rulings 1 to 5).
 
-Status: **W0 (Phase 0) in review, #277. W0b and W1 are next.** Phases 0b, 1, 2 and 3 are planned
-to the task. Each opens with a re-grounding step, because each starts after the one before it has
-merged.
+Status: **W0 (Phase 0) merged, #277. W0b.1 probed; the operator withdrew Phase 0b at W0b.2
+(W0b.3 and W0b.4 canceled), #279. W1 is next.** Phases 1, 2 and 3 are planned to the task. Each
+opens with a re-grounding step, because each starts after the one before it has merged.
 Revised 2026-10-17 after two independent reviews. v1.1 answers Codex Sol (`gpt-6.1-sol`): one
 blocking finding and seven others. v1.2 answers Claude Opus 5.5: one blocking finding, eight
 should-fix and ten minor. Every finding that could be checked against the code was reproduced
@@ -36,7 +36,7 @@ the operator names one. To run W0 with Motoko as orchestrator, see
   and none of the DST world.
 - **Phase 0b (W0b) is the deadline wrapper.** An operator question sits in front of it, because
   upstream may make it unnecessary (#1878) and because GNU `timeout` is not on a stock macOS
-  host.
+  host. *Withdrawn at W0b.2 after W0b.1's probe; see Phase 0b.*
 - **Phase 1 (W1) builds the world side.** `ScriptedTool.applied` and a dispatch stage, a world
   effect log, catalogue `/3` with two world-only rows, the typed renderer's `fault`, and the
   generator cascade.
@@ -432,6 +432,13 @@ exactly as at the base.
 
 ## Phase 0b — the deadline wrapper
 
+**Withdrawn at W0b.2, 2026-10-18 (#279).** W0b.1 was probed:
+[`evidence/RESULTS-W0b.1-wrapper-probe.md`](evidence/RESULTS-W0b.1-wrapper-probe.md). On those
+results the operator withdrew Phase 0b, so W0b.3 and W0b.4 are canceled in the graph. The
+process-group kill is left to the pin move to AILANG `>=0.54.14` (012), and partial output on
+timeout to sunholo-data/ailang#1878. W1 is next. W0b.3 and W0b.4 below are kept as they were
+planned, for the record.
+
 Own worktree and pull request, after W0 merges. Surface: `run_process_result`
 (`tool_runtime.ail:974-1025`), `tool_catalog.ail` (`timeout_secs`), and
 `runtime-process.ts:1009-1022` if the wall needs to be known.
@@ -461,6 +468,14 @@ A `question` task. The inputs are W0b.1's results, the state of sunholo-data/ail
 output upstream would remove the wrapper's main reason), and whether the pin has moved to
 `>=0.54.14` (012). The answers: go ahead as planned; go ahead re-scoped; or withdraw W0b, in which
 case W0b.3 and W0b.4 are canceled.
+
+**Answered 2026-10-18: withdraw W0b** (ADR §6, ruling 6). The inputs as they stood: W0b.1's
+results (`evidence/RESULTS-W0b.1-wrapper-probe.md`) show the wrapper's remaining value on v0.52.5
+is partial output, a per-call deadline, and TERM before KILL; it adds nothing for case A, the
+output limit or `setsid`; #1878 is open; the pin is still `>=0.52.5`. W0b.3 and W0b.4 are
+canceled. The process-group kill is left to the `>=0.54.14` pin move, and partial output to
+sunholo-data/ailang#1878. The dropped `req.args` on the `bash -lc` arm becomes a fix of its own
+(*Follow-ups*).
 
 ### W0b.3 — the wrapper
 
@@ -990,7 +1005,8 @@ As ADR §3:
   ahead on cost. Running Havoc itself against Motoko's tool surface may be cheaper than rebuilding
   it.
 - **The `req.args` drop on `run_process_result`'s `bash -lc` arm** (ADR §7). W0b.3 fixes it.
-  If W0b.2 withdraws W0b, it becomes a fix of its own. *(Review 2, finding 18.)*
+  If W0b.2 withdraws W0b, it becomes a fix of its own. *(Review 2, finding 18.)* W0b.2 withdrew
+  W0b, so it is now a fix of its own; W0b.1's case 35 shows it is a defect.
 - **A transcript-derived duplicate-effect measure** for live and journal sessions (W3.1).
 - **A property P2 run over the compose and herdr profiles.** Extension hooks see the token (W1.3),
   and only such a run could see an extension read world truth if the token ever carried it.
