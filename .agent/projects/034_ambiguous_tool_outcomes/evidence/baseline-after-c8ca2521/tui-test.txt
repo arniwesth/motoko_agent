@@ -1,0 +1,65 @@
+== tui-test.log
+FAIL src/compose-output-validator.test.ts
+FAIL src/compose_guard_semiformal.test.ts
+FAIL src/env-server.test.ts
+FAIL src/runtime-process.wake.test.ts (5.855 s)
+FAIL src/scratchpad/loopback.test.ts
+FAIL test/path-guard.test.ts
+Test Suites: 6 failed, 43 passed, 49 total
+Tests:       2 failed, 458 passed, 460 total
+== tui-test-head-2.log
+FAIL src/compose-output-validator.test.ts
+FAIL src/compose_guard_semiformal.test.ts
+FAIL src/env-server.test.ts
+FAIL src/scratchpad/loopback.test.ts
+FAIL test/path-guard.test.ts
+Test Suites: 5 failed, 44 passed, 49 total
+Tests:       460 passed, 460 total
+== tui-test-head-3.log
+FAIL src/compose-output-validator.test.ts
+FAIL src/compose_guard_semiformal.test.ts
+FAIL src/env-server.test.ts
+FAIL src/scratchpad/loopback.test.ts
+FAIL test/path-guard.test.ts
+Test Suites: 5 failed, 44 passed, 49 total
+Tests:       460 passed, 460 total
+== tui-test-base.log
+FAIL src/compose-output-validator.test.ts
+FAIL src/compose_guard_semiformal.test.ts
+FAIL src/env-server.test.ts
+FAIL src/scratchpad/loopback.test.ts
+FAIL test/path-guard.test.ts
+Test Suites: 5 failed, 44 passed, 49 total
+Tests:       460 passed, 460 total
+== tui-test-base-2.log
+FAIL src/compose-output-validator.test.ts
+FAIL src/compose_guard_semiformal.test.ts
+FAIL src/env-server.test.ts
+FAIL src/scratchpad/loopback.test.ts
+FAIL test/path-guard.test.ts
+Test Suites: 5 failed, 44 passed, 49 total
+Tests:       460 passed, 460 total
+== wake suite alone, head x3 and base x3
+wake-head-1.log Tests:       27 passed, 27 total
+wake-head-2.log Tests:       27 passed, 27 total
+wake-head-3.log Tests:       27 passed, 27 total
+wake-base-1.log Tests:       27 passed, 27 total
+wake-base-2.log Tests:       27 passed, 27 total
+wake-base-3.log Tests:       27 passed, 27 total
+== head run 1, the two failing tests
+  ● RuntimeProcess park and wake › suspended-child under --park-exits (PLAN-003 P4 Part 4) › control: with --park-exits off nothing here runs — the exit cancels the waiter and `exit` follows the park
+
+    @
+
+      processTicksAndRejections@
+
+  ● RuntimeProcess park and wake › the wake entry and the respawn (PLAN-003 P4 Part 5) › the waiter's reply: exactly one `wake`, the park's child; the waiter stopped; the respawn carries --resume <journal>
+
+    append of park failed: Error: ENOENT: no such file or directory, open '/tmp/wake-protocol-jnkoX0/.motoko/sessions/sess-p4/journal.jsonl'
+
+      at onError ([source:2]:215:107)
+      at append ([source:3]:337:24)
+      at record ([source:3]:494:34)
+      at [source:2]:227:38
+      at [source:4]:812:24
+      at [_onLine] (internal:readline/interface:201:15)
