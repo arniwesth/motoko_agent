@@ -1,0 +1,11 @@
+--- a/src/core/tool_runtime.ail
++++ b/src/core/tool_runtime.ail
+@@ -990,7 +990,7 @@
+   -- those can't be faithfully reproduced in-process via a single
+   -- exec call.
+   if req.streaming || req.needs_stderr_live || req.needs_hard_cancel then
+-    ToolErrorResult({ id: id, tool: tool, fault: refused_fault(), message: "requires delegated backend (streaming/cancel features)" })
++    ToolErrorResult({ id: id, tool: tool, fault: { kind: refused_fault().kind, effects: EffectsUnknown }, message: "requires delegated backend (streaming/cancel features)" })
+   else {
+     let effective = if shell_tokens_in_process(req) || isSome(req.cwd) then {
+       let prefix = match req.cwd {

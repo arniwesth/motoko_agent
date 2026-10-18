@@ -1,0 +1,275 @@
+-- src/core/tool_fault.ail
+--
+-- 034 PLAN-001 W0.2, under ADR-001 D2 and D3: the one home for the `fault`
+-- object's wire vocabulary (PLAN-001 C3) and the two mappings over
+-- `ProcessError`.
+--
+-- ONE HOME, AS `dst_fault_catalogue`'s `fault_class_*` NAMES ARE. The key
+-- names, the two `effects` values, the kind names and the two sentences are
+-- defined here and nowhere else, and every renderer imports them: the live
+-- renderer (`tool_dispatch_adapter.tool_result_item_to_json`, W0.3) and the
+-- typed one (`tool_phase.tool_fault_message`, W1.4). A copied literal is where
+-- two renderers drift apart.
+--
+-- WHY A MODULE OF ITS OWN. It imports only `src/core/types` and `std/*`, so the
+-- construction sites (`tool_runtime`) and both renderers can import it without
+-- a cycle, and `types` stays a module of types. Its functions are pure, so the
+-- mappings' rows run under `ailang test` with no capability.
+--
+-- The types themselves (`EffectDisclosure`, `FaultKind`, `ToolFault`) are in
+-- `src/core/types`, beside `ToolResultItem`, which carries them.
+module src/core/tool_fault
+
+import std/process (ProcessError, NotAllowed, NotFound, PermissionDenied, SpawnFailed, Timeout, OutputLimitExceeded, AbnormalExit)
+import src/core/types (EffectDisclosure, EffectsNone, EffectsUnknown, FaultKind, FaultNotAllowed, FaultNotFound, FaultPermissionDenied, FaultSpawnFailed, FaultDeadline, FaultOutputLimit, FaultSignal, FaultRefused, FaultIoError, ToolFault)
+
+-- CONTRACTS (027 ADR-001 §4). Every function here is inside the solver's
+-- fragment, so each carries an `ensures` rather than a `-- contracts:` excuse.
+-- The constants say only `result != ""`, on `registry_normalize`'s reasoning:
+-- pinning the literal would be spec-equals-body, and the renderers' tests pin
+-- it. The mappings state D2's safety direction -- only a refusal before launch
+-- (`NotAllowed`, `NotFound`) may disclose `none` -- which a mutant of any other
+-- arm violates. Contracts over an ADT parameter become properties `ailang test`
+-- has no generator for; `test_coverage` records that skip by reason.
+
+-- ============================================================================
+-- The keys. `fault` is the object's key on a tool result; the rest are its
+-- fields. `elapsed_ms`, `bytes`, `signal` and `signal_name` are the per-kind
+-- extra fields of C3's table.
+-- ============================================================================
+
+export pure func fault_key() -> string
+  ensures { result != "" }
+  { "fault" }
+export pure func fault_kind_key() -> string
+  ensures { result != "" }
+  { "kind" }
+export pure func fault_effects_key() -> string
+  ensures { result != "" }
+  { "effects" }
+export pure func fault_note_key() -> string
+  ensures { result != "" }
+  { "note" }
+export pure func fault_elapsed_ms_key() -> string
+  ensures { result != "" }
+  { "elapsed_ms" }
+export pure func fault_bytes_key() -> string
+  ensures { result != "" }
+  { "bytes" }
+export pure func fault_signal_key() -> string
+  ensures { result != "" }
+  { "signal" }
+export pure func fault_signal_name_key() -> string
+  ensures { result != "" }
+  { "signal_name" }
+
+-- ============================================================================
+-- The two values and the two sentences (C3). The sentences say only what the
+-- harness knows: `none` speaks of change, not of whether anything ran, because
+-- a read-only process such as `rg` may have run (D2 row 4); `unknown` does not
+-- claim the tool started, because under `PermissionDenied` the target program
+-- almost certainly never ran (ruling 3).
+-- ============================================================================
+
+export pure func effects_value_none() -> string
+  ensures { result != "" }
+  { "none" }
+export pure func effects_value_unknown() -> string
+  ensures { result != "" }
+  { "unknown" }
+
+export pure func effects_note_none() -> string
+  ensures { result != "" }
+{
+  "No change was made: the tool failed before it could write or change anything."
+}
+
+export pure func effects_note_unknown() -> string
+  ensures { result != "" }
+{
+  "The harness cannot confirm whether this tool's effects happened. They may have happened in full, not at all, or may still be happening. Check the current state before running it again."
+}
+
+export pure func effects_value(d: EffectDisclosure) -> string
+  ensures { result == effects_value_none() || result == effects_value_unknown() }
+{
+  match d {
+    EffectsNone => effects_value_none(),
+    EffectsUnknown => effects_value_unknown()
+  }
+}
+
+export pure func effects_note(d: EffectDisclosure) -> string
+  ensures { result == effects_note_none() || result == effects_note_unknown() }
+{
+  match d {
+    EffectsNone => effects_note_none(),
+    EffectsUnknown => effects_note_unknown()
+  }
+}
+
+-- ============================================================================
+-- The kinds (C3). `kind` names the observation, never the world's truth.
+-- ============================================================================
+
+export pure func fault_kind_not_allowed() -> string
+  ensures { result != "" }
+  { "not_allowed" }
+export pure func fault_kind_not_found() -> string
+  ensures { result != "" }
+  { "not_found" }
+export pure func fault_kind_permission_denied() -> string
+  ensures { result != "" }
+  { "permission_denied" }
+export pure func fault_kind_spawn_failed() -> string
+  ensures { result != "" }
+  { "spawn_failed" }
+export pure func fault_kind_deadline() -> string
+  ensures { result != "" }
+  { "deadline" }
+export pure func fault_kind_output_limit() -> string
+  ensures { result != "" }
+  { "output_limit" }
+export pure func fault_kind_signal() -> string
+  ensures { result != "" }
+  { "signal" }
+export pure func fault_kind_refused() -> string
+  ensures { result != "" }
+  { "refused" }
+export pure func fault_kind_io_error() -> string
+  ensures { result != "" }
+  { "io_error" }
+
+export pure func fault_kind_name(k: FaultKind) -> string
+  ensures { result != "" }
+{
+  match k {
+    FaultNotAllowed => fault_kind_not_allowed(),
+    FaultNotFound => fault_kind_not_found(),
+    FaultPermissionDenied => fault_kind_permission_denied(),
+    FaultSpawnFailed => fault_kind_spawn_failed(),
+    FaultDeadline(_) => fault_kind_deadline(),
+    FaultOutputLimit(_) => fault_kind_output_limit(),
+    FaultSignal(_, _) => fault_kind_signal(),
+    FaultRefused => fault_kind_refused(),
+    FaultIoError => fault_kind_io_error()
+  }
+}
+
+-- ============================================================================
+-- The two mappings over `ProcessError`. Each is one exhaustive `match` with no
+-- wildcard, so a new upstream arm is a compile error in both, and each has one
+-- test per arm, below.
+-- ============================================================================
+
+-- The kind, with the arm's numbers carried over. `Timeout(ms)` is the deadline
+-- the runtime enforced, which is the elapsed time at the moment it fired.
+export pure func process_error_fault_kind(err: ProcessError) -> FaultKind
+  ensures { result != FaultRefused && result != FaultIoError }
+{
+  match err {
+    NotAllowed(_) => FaultNotAllowed,
+    NotFound(_) => FaultNotFound,
+    PermissionDenied(_) => FaultPermissionDenied,
+    SpawnFailed(_) => FaultSpawnFailed,
+    Timeout(ms) => FaultDeadline(ms),
+    OutputLimitExceeded(n) => FaultOutputLimit(n),
+    AbnormalExit(sig, name) => FaultSignal(sig, name)
+  }
+}
+
+-- ADR-001 D2 as ruled. `NotFound` and `NotAllowed` are refused before any
+-- launch (cases B and C; `start_probe.sh` cases 13 and 14, ruling 2).
+-- `PermissionDenied` stays `unknown` until upstream states it is start-only
+-- (D7, sunholo-data/ailang#1880; ruling 3). `SpawnFailed`, `Timeout`,
+-- `OutputLimitExceeded` and `AbnormalExit` are reached after the process may
+-- have run.
+export pure func process_error_effects(err: ProcessError) -> EffectDisclosure
+  ensures { match err { NotAllowed(_) => true, NotFound(_) => true, _ => result == EffectsUnknown } }
+{
+  match err {
+    NotAllowed(_) => EffectsNone,
+    NotFound(_) => EffectsNone,
+    PermissionDenied(_) => EffectsUnknown,
+    SpawnFailed(_) => EffectsUnknown,
+    Timeout(_) => EffectsUnknown,
+    OutputLimitExceeded(_) => EffectsUnknown,
+    AbnormalExit(_, _) => EffectsUnknown
+  }
+}
+
+-- One test per arm of each mapping, so a mutant of one arm is killed by the
+-- test that names it. They are `((), true)` functions rather than rows of the
+-- mapping's own `tests [...]`, because on v0.52.5 the test harness evaluates a
+-- row's input without the module's imports and cannot see `std/process`'s
+-- constructors ("undefined variable: NotAllowed").
+
+func t_kind_not_allowed() -> bool
+  tests [((), true)]
+  { process_error_fault_kind(NotAllowed("rg")) == FaultNotAllowed }
+func t_kind_not_found() -> bool
+  tests [((), true)]
+  { process_error_fault_kind(NotFound("rg")) == FaultNotFound }
+func t_kind_permission_denied() -> bool
+  tests [((), true)]
+  { process_error_fault_kind(PermissionDenied("./x.sh")) == FaultPermissionDenied }
+func t_kind_spawn_failed() -> bool
+  tests [((), true)]
+  { process_error_fault_kind(SpawnFailed("fork: resource temporarily unavailable")) == FaultSpawnFailed }
+func t_kind_timeout() -> bool
+  tests [((), true)]
+  { process_error_fault_kind(Timeout(30000)) == FaultDeadline(30000) }
+func t_kind_output_limit_exceeded() -> bool
+  tests [((), true)]
+  { process_error_fault_kind(OutputLimitExceeded(1000)) == FaultOutputLimit(1000) }
+func t_kind_abnormal_exit() -> bool
+  tests [((), true)]
+  { process_error_fault_kind(AbnormalExit(9, "SIGKILL")) == FaultSignal(9, "SIGKILL") }
+
+func t_effects_not_allowed() -> bool
+  tests [((), true)]
+  { process_error_effects(NotAllowed("rg")) == EffectsNone }
+func t_effects_not_found() -> bool
+  tests [((), true)]
+  { process_error_effects(NotFound("rg")) == EffectsNone }
+func t_effects_permission_denied() -> bool
+  tests [((), true)]
+  { process_error_effects(PermissionDenied("./x.sh")) == EffectsUnknown }
+func t_effects_spawn_failed() -> bool
+  tests [((), true)]
+  { process_error_effects(SpawnFailed("fork: resource temporarily unavailable")) == EffectsUnknown }
+func t_effects_timeout() -> bool
+  tests [((), true)]
+  { process_error_effects(Timeout(30000)) == EffectsUnknown }
+func t_effects_output_limit_exceeded() -> bool
+  tests [((), true)]
+  { process_error_effects(OutputLimitExceeded(1000)) == EffectsUnknown }
+func t_effects_abnormal_exit() -> bool
+  tests [((), true)]
+  { process_error_effects(AbnormalExit(9, "SIGKILL")) == EffectsUnknown }
+
+-- ============================================================================
+-- Constructors for the construction sites in `tool_runtime`.
+-- ============================================================================
+
+-- A validation refusal before the effect (D2 row 3): nothing was attempted.
+export pure func refused_fault() -> ToolFault
+  ensures { result.effects == EffectsNone }
+{
+  { kind: FaultRefused, effects: EffectsNone }
+}
+
+-- A filesystem call that returned `Err`. The disclosure is the site's: `none`
+-- for a read, `unknown` once a write was called (D2 rows 4 and 5).
+export pure func io_error_fault(effects: EffectDisclosure) -> ToolFault
+  ensures { result.effects == effects }
+{
+  { kind: FaultIoError, effects: effects }
+}
+
+-- A `ProcessError` from a process that could change things: both mappings.
+export pure func process_fault(err: ProcessError) -> ToolFault
+  ensures { match err { NotAllowed(_) => true, NotFound(_) => true, _ => result.effects == EffectsUnknown } }
+{
+  { kind: process_error_fault_kind(err), effects: process_error_effects(err) }
+}

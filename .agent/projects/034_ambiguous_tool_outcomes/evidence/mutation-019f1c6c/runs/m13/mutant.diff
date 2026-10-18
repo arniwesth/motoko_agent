@@ -1,0 +1,11 @@
+--- a/src/core/tool_dispatch_adapter.ail
++++ b/src/core/tool_dispatch_adapter.ail
+@@ -216,7 +216,7 @@
+ func fault_field(fault: Option[ToolFault]) -> [{ key: string, value: Json }] {
+   match fault {
+     Some(f) => [kv(fault_key(), fault_to_json(f))],
+-    None => []
++    None => [kv(fault_key(), fault_to_json(io_error_fault(EffectsUnknown)))]
+   }
+ }
+ 

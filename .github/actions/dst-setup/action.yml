@@ -60,13 +60,17 @@ runs:
     # verified anything here. Installing the solver is what makes the step
     # mean what its name says. scripts/install-prerequisites.sh names z3 for
     # the same reason; this job builds ailang directly and so must too.
-    - name: Install Z3
+    # ripgrep is Search's backend. Without it every live Search returns
+    # `not found: rg`, and world_state's W0.5 rows q and r failed that way on
+    # #277: the runner image does not ship it.
+    - name: Install Z3 and ripgrep
       shell: bash
       run: |
         set -euo pipefail
         sudo apt-get update -qq
-        sudo apt-get install -y --no-install-recommends z3
+        sudo apt-get install -y --no-install-recommends z3 ripgrep
         z3 --version
+        rg --version
 
     - name: Hydrate extension packages
       shell: bash

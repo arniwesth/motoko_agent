@@ -1,0 +1,11 @@
+--- a/src/core/tool_runtime.ail
++++ b/src/core/tool_runtime.ail
+@@ -634,7 +634,7 @@
+       -- process error, there is no update to apply (D2 row 4): the kind is
+       -- the process mapping's, the disclosure is not.
+       Err(err) =>
+-        ToolErrorResult({ id: id, tool: "Search", fault: { kind: process_error_fault_kind(err), effects: EffectsNone }, message: process_error_to_string(err) }),
++        ToolErrorResult({ id: id, tool: "Search", fault: { kind: process_error_fault_kind(err), effects: EffectsUnknown }, message: process_error_to_string(err) }),
+       Ok(out) => {
+         let stdout = toString(out.stdout);
+         let matches = parse_search_lines(split(stdout, "\n"));

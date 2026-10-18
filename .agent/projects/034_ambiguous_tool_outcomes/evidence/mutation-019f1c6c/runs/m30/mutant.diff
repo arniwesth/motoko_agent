@@ -1,0 +1,10 @@
+--- a/src/core/tool_dispatch_adapter.ail
++++ b/src/core/tool_dispatch_adapter.ail
+@@ -161,7 +161,6 @@
+ 
+     RunTestsResult(r) => jo(
+       [kv("tool", js("RunTests"))]
+-      ++ fault_field(r.fault)
+       ++ [
+         kv("exit_code", jnum(_int_to_float(tool_result_exit_code(item)))),
+         kv("stdout", js(r.stdout)),

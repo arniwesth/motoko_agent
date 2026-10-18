@@ -1,0 +1,11 @@
+--- a/src/core/tool_runtime.ail
++++ b/src/core/tool_runtime.ail
+@@ -1005,7 +1005,7 @@
+         if tool == "RunTests" then
+           RunTestsResult({
+             id: id,
+-            fault: Some(process_fault(err)),
++            fault: None,
+             cmd: cmd_string(req.cmd, req.args),
+             stdout: "",
+             stderr: process_error_to_string(err),

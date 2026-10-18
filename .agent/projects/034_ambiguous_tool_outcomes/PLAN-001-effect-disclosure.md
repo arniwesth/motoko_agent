@@ -3,8 +3,9 @@
 Implements [ADR-001](ADR-001-effect-disclosure-for-tool-faults.md) (this dir), accepted as amended
 by the operator on 2026-10-17 (its §6, rulings 1 to 5).
 
-Status: **Phase 0 ready to implement.** Phases 0b, 1, 2 and 3 are planned to the task. Each opens
-with a re-grounding step, because each starts after the one before it has merged.
+Status: **W0 (Phase 0) in review, #277. W0b and W1 are next.** Phases 0b, 1, 2 and 3 are planned
+to the task. Each opens with a re-grounding step, because each starts after the one before it has
+merged.
 Revised 2026-10-17 after two independent reviews. v1.1 answers Codex Sol (`gpt-6.1-sol`): one
 blocking finding and seven others. v1.2 answers Claude Opus 5.5: one blocking finding, eight
 should-fix and ten minor. Every finding that could be checked against the code was reproduced
@@ -390,9 +391,11 @@ before the code exists. The implementer may add rows, and must not drop one.
 
 No mutant is possible for "a new upstream arm is a compile error": the property is that no
 wildcard exists, and that is checked by reading the code. The table records it as a survivor with
-that sentence. Search's `rg` failure (`:596`) has no row: it is `Err` only when `rg` itself
-cannot be launched, which no portable fixture arranges. It is recorded as a survivor with that
-sentence. Survival cases: W0.5 rows b, c, g, h and i to n must stay green on unmutated source.
+that sentence. Search's `rg` failure (`:596`) first had no row, on the claim that it is `Err` only
+when `rg` cannot be launched. #277's review showed an 11 MiB matching file reaches it as
+`OutputLimitExceeded` after a normal launch, so it is m36, killed by W0.5 row r; m37-m39 cover the
+read-only `rg` argv and the cut unknown tool name. Survival cases: W0.5 rows b, c, g, h and i to n
+must stay green on unmutated source.
 
 The table was widened after review finding 4: kinds m16-m22, the refusal sites m23-m29, and m14
 moved to the stricter order. It was widened again after review 2, finding 9: m30-m35.

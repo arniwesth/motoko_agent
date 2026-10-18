@@ -1,0 +1,11 @@
+--- a/src/core/tool_runtime.ail
++++ b/src/core/tool_runtime.ail
+@@ -613,7 +613,7 @@
+ -- that begins with `-` from being read as an option. The cost: Search no
+ -- longer applies the user's ripgrep config (#277 review, finding 1).
+ func search_argv(pattern: string, target: string) -> [string] {
+-  ["-n", "--no-heading", "--color", "never", "--no-config", "-e", pattern, "--", target]
++  ["-n", "--no-heading", "--color", "never", "--no-config", pattern, target]
+ }
+ 
+ func t_search_argv_reads_only() -> bool

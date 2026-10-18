@@ -1,0 +1,11 @@
+--- a/src/core/tool_runtime.ail
++++ b/src/core/tool_runtime.ail
+@@ -704,7 +704,7 @@
+       match mkdir_outcome {
+         Err(msg) => ToolErrorResult({ id: id, tool: "WriteFile", fault: io_error_fault(EffectsUnknown), message: "cannot create parent directory: ${msg}" }),
+         Ok(_) => match writeFileResult(resolved, content) {
+-          Err(msg) => ToolErrorResult({ id: id, tool: "WriteFile", fault: io_error_fault(EffectsUnknown), message: msg }),
++          Err(msg) => ToolErrorResult({ id: id, tool: "WriteFile", fault: io_error_fault(EffectsNone), message: msg }),
+           Ok(_) => WriteFileResult({
+             id: id,
+             path: path,

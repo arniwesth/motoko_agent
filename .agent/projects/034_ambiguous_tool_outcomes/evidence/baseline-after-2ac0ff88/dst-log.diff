@@ -1,0 +1,68 @@
+885a886
+>   -- 034 W0.5 fault-disclosure witness (full caps; scratch workdir; rows e and f need a non-root user) --
+942c943
+<   <T> wall, -j8, load 8.56 9.12 8.66
+---
+>   <T> wall, -j8, load 17.55 19.17 13.72
+1450c1451
+<   stderr: Error: type error in tmp/inline_1792310677140 (decl 0): undefined variable: undefined_symbol_xyz at tmp/inline_1792310677140.ail:3:35
+---
+>   stderr: Error: type error in tmp/inline_1792339944892 (decl 0): undefined variable: undefined_symbol_xyz at tmp/inline_1792339944892.ail:3:35
+1945,1946c1946,1947
+<   ✓ every manifest ABI pin in the tree is the declared one: 8.0 (34 pin(s) across 568 tracked .ail file(s))
+<   ✓ every manifest ABI pin in the tree is the declared one: 8.0 (34 pin(s) across 568 tracked .ail file(s))
+---
+>   ✓ every manifest ABI pin in the tree is the declared one: 8.0 (34 pin(s) across 569 tracked .ail file(s))
+>   ✓ every manifest ABI pin in the tree is the declared one: 8.0 (34 pin(s) across 569 tracked .ail file(s))
+2100c2101
+<   ✓ measured CI cost, WHOLE TARGET: 70000 ms against a declared ceiling of 180000 ms
+---
+>   ✓ measured CI cost, WHOLE TARGET: 20000 ms against a declared ceiling of 180000 ms
+2429a2431,2438
+>   ✓ row a: BashExec killed by signal 9 renders fault kind signal, effects unknown, signal 9, and exit_code 1
+>   ✓ row b: BashExec renders fault kind not_found, effects none, and exit_code 1
+>   ✓ row c: BashExec that ran to its own exit 3 renders no fault key, and exit_code 3
+>   ✓ row d: WriteFile renders fault kind io_error, effects unknown, and exit_code 1
+>   ✓ row e: WriteFile renders fault kind io_error, effects unknown, and exit_code 1
+>   ✓ row f: EditFile renders fault kind io_error, effects unknown, and exit_code 1
+>   ✓ row g: EditFile renders fault kind refused, effects none, and exit_code 1
+>   ✓ row h: ReadFile renders fault kind io_error, effects none, and exit_code 1
+2430a2440,2445
+>   ✓ row i: MotokoW05NoSuchTool renders fault kind refused, effects none, and exit_code 1
+>   ✓ row j: ReadFile renders fault kind refused, effects none, and exit_code 1
+>   ✓ row k: Search renders fault kind refused, effects none, and exit_code 1
+>   ✓ row l: EditFile renders fault kind refused, effects none, and exit_code 1
+>   ✓ row m: EditFile renders fault kind refused, effects none, and exit_code 1
+>   ✓ row n: EditFile renders fault kind refused, effects none, and exit_code 1
+2431a2447,2451
+>   ✓ row o: BashExec renders fault kind refused, effects none, and exit_code 1
+>   ✓ row p: RunTests killed by signal 9 renders fault kind signal, effects unknown, signal 9, and exit_code 1
+>   ✓ row q: Search for a pattern beginning with --pre= finds it as text in its one line, and the helper it names did not run
+>   ✓ row r: Search whose output passes the cap renders fault kind output_limit, effects none, bytes 10485760, and exit_code 1
+>   ✓ row s: an unknown tool named by 70000 characters renders fault kind refused, effects none, and exit_code 1, with the name cut
+2622a2643,2644
+>   ✓ src/core/tool_dispatch_adapter.ail: 15/15 passed
+>   ✓ src/core/tool_fault.ail: 36/43 passed (7 skipped)
+2627c2649
+<   ✓ src/core/tool_runtime.ail: 16/18 passed (2 skipped)
+---
+>   ✓ src/core/tool_runtime.ail: 18/21 passed (3 skipped)
+3307a3330,3331
+> fault_disclosure_witness PASS
+> fault_disclosure_witness: 034 W0.5 — a live tool fault reaches the model with its effects disclosed
+3504c3528
+< slowest against the <T> per-file cap: src/core/test/scripted_ports.ail <T> = 52%, 106 CPU-s, 0.3 cores; src/core/session.ail <T> = 50%, 120 CPU-s, 0.4 cores; src/core/ext/exit_manifest.ail <T> = 29%, 47 CPU-s, 0.3 cores
+---
+> slowest against the <T> per-file cap: src/core/test/scripted_ports.ail <T> = 41%, 89 CPU-s, 0.4 cores; src/core/session.ail <T> = 24%, 59 CPU-s, 0.4 cores; src/core/tool_phase.ail <T> = 23%, 35 CPU-s, 0.3 cores
+3506,3508c3530,3532
+< source revision    3ae506cc563369a581e0c091a67901b6c7f4836e
+< source revision    3ae506cc563369a581e0c091a67901b6c7f4836e
+< src/core: 72 .ail files discovered, 49 carry tests, 596 tests, 591 passed, 5 skipped
+---
+> source revision    2ac0ff882f03456828721184fcac193ec6764c7a
+> source revision    2ac0ff882f03456828721184fcac193ec6764c7a
+> src/core: 73 .ail files discovered, 51 carry tests, 657 tests, 644 passed, 13 skipped
+3522c3546
+< test_coverage: every file carrying inline tests was run; 591 of 596 passed, 5 skipped against a record
+---
+> test_coverage: every file carrying inline tests was run; 644 of 657 passed, 13 skipped against a record

@@ -9,8 +9,9 @@ import std/fs      (readFile, writeFile, fileExists, mkdirAll, isDir, readFileRe
 import std/process (exec, ProcessError, ProcessOutput)
 import std/bytes   (toString)
 import std/crypto  (sha256Hex)
-import src/core/types   (ToolBackend, ProcessExecReq, ToolResultItem, ToolResultMeta, SearchMatch, TestFailure, EditOp)
+import src/core/types   (ToolBackend, ProcessExecReq, ToolResultItem, ToolResultMeta, SearchMatch, TestFailure, EditOp, EffectsNone, EffectsUnknown)
 import src/core/tool_contract (ToolCallEnvelope)
+import src/core/tool_fault (refused_fault, io_error_fault, process_fault, process_error_fault_kind)
 
 export pure func needs_delegation_for_process(req: ProcessExecReq) -> bool {
   req.streaming
@@ -245,8 +246,28 @@ func run_native_call(call: ToolCallEnvelope, workdir: string) -> ToolResultItem 
   else if call.tool == "RunTests" then
     run_process_result("RunTests", call.id, parse_exec_from_args(args))
   else
-    ToolErrorResult({ id: call.id, tool: call.tool, message: "${call.tool} requires extension capability and is not available in native runtime" })
+    unknown_tool_refusal(call.id, call.tool)
 }
+
+-- The refusal of a tool the native runtime does not have. It echoes the
+-- caller's name, which nothing bounds, and the renderer writes `tool` before
+-- `fault`: a 70,000-character name filled the capped tool message and cut
+-- `fault` off (#277 review, finding 2). So it is the one construction site
+-- whose `tool` is not a literal, and it echoes at most 200 characters.
+export func unknown_tool_refusal(id: string, name: string) -> ToolResultItem {
+  let shown = echoed_tool_name(name, 200);
+  ToolErrorResult({ id: id, tool: shown, fault: refused_fault(), message: "${shown} requires extension capability and is not available in native runtime" })
+}
+
+-- A name of at most `max` characters is echoed as it is; a longer one is cut
+-- to its first `max` and says so.
+export pure func echoed_tool_name(name: string, max: int) -> string
+  requires { max >= 0 }
+  ensures { length(result) <= max + 18 && (length(name) > max || result == name) }
+  {
+    if length(name) <= max then name
+    else concat_String(substring(name, 0, max), "...[tool name cut]")
+  }
 
 func mk_meta(stdout: string, stderr: string, truncated: bool) -> ToolResultMeta {
   {
@@ -401,7 +422,7 @@ pure func root_dir_check_blocks_bare_abs() -> bool
   }
 
 func path_error(id: string, tool: string, message: string) -> ToolResultItem {
-  ToolErrorResult({ id: id, tool: tool, message: message })
+  ToolErrorResult({ id: id, tool: tool, fault: refused_fault(), message: message })
 }
 
 -- Strip "${workdir}/" prefix from path if path lives genuinely under workdir.
@@ -526,7 +547,7 @@ func run_read_file(id: string, path: string, start: int, end: int, workdir: stri
       -- violation) get caught here as a structured ToolErrorResult
       -- instead of escaping as a runtime panic that kills the agent.
       match readFileResult(resolved) {
-        Err(msg) => ToolErrorResult({ id: id, tool: "ReadFile", message: msg }),
+        Err(msg) => ToolErrorResult({ id: id, tool: "ReadFile", fault: io_error_fault(EffectsNone), message: msg }),
         Ok(content) => {
           let lines = split(content, "\n");
           let total = line_count_of(content);
@@ -585,15 +606,35 @@ func parse_search_lines(lines: [string]) -> [SearchMatch] {
   }
 }
 
+-- Search's `rg` argv, read-only as invoked: that is what lets its process
+-- errors disclose `none` (D2 row 4). `--no-config` stops `rg` reading
+-- `RIPGREP_CONFIG_PATH`, whose config can set `--pre=<program>` and run that
+-- program on every file searched. `-e` and `--` keep a pattern or a directory
+-- that begins with `-` from being read as an option. The cost: Search no
+-- longer applies the user's ripgrep config (#277 review, finding 1).
+func search_argv(pattern: string, target: string) -> [string] {
+  ["-n", "--no-heading", "--color", "never", "--no-config", "-e", pattern, "--", target]
+}
+
+func t_search_argv_reads_only() -> bool
+  tests [((), true)]
+  {
+    search_argv("--pre=/tmp/x", "-dir")
+      == ["-n", "--no-heading", "--color", "never", "--no-config", "-e", "--pre=/tmp/x", "--", "-dir"]
+  }
+
 func run_search(id: string, pattern: string, dir: string, workdir: string) -> ToolResultItem ! {Process} {
   if pattern == "" then
-    ToolErrorResult({ id: id, tool: "Search", message: "missing pattern" })
+    ToolErrorResult({ id: id, tool: "Search", fault: refused_fault(), message: "missing pattern" })
   else {
     let raw_dir = if dir == "" then "." else dir;
     let target = resolve_workdir_path(workdir, raw_dir);
-    match exec("rg", ["-n", "--no-heading", "--color", "never", pattern, target]) {
+    match exec("rg", search_argv(pattern, target)) {
+      -- `rg` only reads, as `search_argv` invokes it, so whatever the
+      -- process error, there is no update to apply (D2 row 4): the kind is
+      -- the process mapping's, the disclosure is not.
       Err(err) =>
-        ToolErrorResult({ id: id, tool: "Search", message: process_error_to_string(err) }),
+        ToolErrorResult({ id: id, tool: "Search", fault: { kind: process_error_fault_kind(err), effects: EffectsNone }, message: process_error_to_string(err) }),
       Ok(out) => {
         let stdout = toString(out.stdout);
         let matches = parse_search_lines(split(stdout, "\n"));
@@ -698,9 +739,9 @@ func run_write_file(id: string, path: string, content: string, workdir: string) 
         then mkdirAllResult(parent)
         else Ok(());
       match mkdir_outcome {
-        Err(msg) => ToolErrorResult({ id: id, tool: "WriteFile", message: "cannot create parent directory: ${msg}" }),
+        Err(msg) => ToolErrorResult({ id: id, tool: "WriteFile", fault: io_error_fault(EffectsUnknown), message: "cannot create parent directory: ${msg}" }),
         Ok(_) => match writeFileResult(resolved, content) {
-          Err(msg) => ToolErrorResult({ id: id, tool: "WriteFile", message: msg }),
+          Err(msg) => ToolErrorResult({ id: id, tool: "WriteFile", fault: io_error_fault(EffectsUnknown), message: msg }),
           Ok(_) => WriteFileResult({
             id: id,
             path: path,
@@ -867,17 +908,17 @@ func run_edit_file(
     Ok(_) => {
       let resolved = resolve_workdir_path(workdir, path);
       if not fileExists(resolved) then
-        ToolErrorResult({ id: id, tool: "EditFile", message: "path does not exist: ${path}" })
+        ToolErrorResult({ id: id, tool: "EditFile", fault: refused_fault(), message: "path does not exist: ${path}" })
       else if list_len(edits) <= 0 then
-        ToolErrorResult({ id: id, tool: "EditFile", message: "missing edits" })
+        ToolErrorResult({ id: id, tool: "EditFile", fault: refused_fault(), message: "missing edits" })
       else {
         let before = readFile(resolved);
         let before_sha = sha256Hex(before);
         if expected_sha256 != "" && expected_sha256 != before_sha then
-          ToolErrorResult({ id: id, tool: "EditFile", message: "expected_sha256 mismatch" })
+          ToolErrorResult({ id: id, tool: "EditFile", fault: refused_fault(), message: "expected_sha256 mismatch" })
         else
           match apply_edits(before, edits, 1) {
-            Err(msg) => ToolErrorResult({ id: id, tool: "EditFile", message: msg }),
+            Err(msg) => ToolErrorResult({ id: id, tool: "EditFile", fault: refused_fault(), message: msg }),
             Ok(applied) => {
               let after = applied.content;
               let diff = build_edit_file_diff(path, before, after, true);
@@ -896,7 +937,7 @@ func run_edit_file(
                 })
               else
                 match atomic_write(resolved, after) {
-                  Err(msg) => ToolErrorResult({ id: id, tool: "EditFile", message: msg }),
+                  Err(msg) => ToolErrorResult({ id: id, tool: "EditFile", fault: io_error_fault(EffectsUnknown), message: msg }),
                   Ok(_) =>
                     EditFileResult({
                       id: id,
@@ -945,6 +986,7 @@ func to_bash_result(id: string, req: ProcessExecReq, out: ProcessOutput) -> Tool
   let stderr = toString(out.stderr);
   BashExecResult({
     id: id,
+    fault: None,
     cmd: cmd_string(req.cmd, req.args),
     stdout: stdout,
     stderr: stderr,
@@ -960,6 +1002,7 @@ func to_test_result(id: string, req: ProcessExecReq, out: ProcessOutput) -> Tool
   let passed = if out.exitCode == 0 then 1 else 0;
   RunTestsResult({
     id: id,
+    fault: None,
     cmd: cmd_string(req.cmd, req.args),
     stdout: stdout,
     stderr: stderr,
@@ -984,7 +1027,7 @@ func run_process_result(tool: string, id: string, req: ProcessExecReq) -> ToolRe
   -- those can't be faithfully reproduced in-process via a single
   -- exec call.
   if req.streaming || req.needs_stderr_live || req.needs_hard_cancel then
-    ToolErrorResult({ id: id, tool: tool, message: "requires delegated backend (streaming/cancel features)" })
+    ToolErrorResult({ id: id, tool: tool, fault: refused_fault(), message: "requires delegated backend (streaming/cancel features)" })
   else {
     let effective = if shell_tokens_in_process(req) || isSome(req.cwd) then {
       let prefix = match req.cwd {
@@ -999,6 +1042,7 @@ func run_process_result(tool: string, id: string, req: ProcessExecReq) -> ToolRe
         if tool == "RunTests" then
           RunTestsResult({
             id: id,
+            fault: Some(process_fault(err)),
             cmd: cmd_string(req.cmd, req.args),
             stdout: "",
             stderr: process_error_to_string(err),
@@ -1011,6 +1055,7 @@ func run_process_result(tool: string, id: string, req: ProcessExecReq) -> ToolRe
         else
           BashExecResult({
             id: id,
+            fault: Some(process_fault(err)),
             cmd: cmd_string(req.cmd, req.args),
             stdout: "",
             stderr: process_error_to_string(err),

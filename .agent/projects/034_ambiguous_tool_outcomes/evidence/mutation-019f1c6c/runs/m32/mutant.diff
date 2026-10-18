@@ -1,0 +1,11 @@
+--- a/src/core/tool_dispatch_adapter.ail
++++ b/src/core/tool_dispatch_adapter.ail
+@@ -200,7 +200,7 @@
+     FaultNotFound => [],
+     FaultPermissionDenied => [],
+     FaultSpawnFailed => [],
+-    FaultDeadline(ms) => [kv(fault_elapsed_ms_key(), jnum(_int_to_float(ms)))],
++    FaultDeadline(_) => [],
+     FaultOutputLimit(n) => [kv(fault_bytes_key(), jnum(_int_to_float(n)))],
+     FaultSignal(sig, name) => [
+       kv(fault_signal_key(), jnum(_int_to_float(sig))),

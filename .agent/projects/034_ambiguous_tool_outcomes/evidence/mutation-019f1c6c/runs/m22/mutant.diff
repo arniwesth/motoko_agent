@@ -1,0 +1,11 @@
+--- a/src/core/tool_fault.ail
++++ b/src/core/tool_fault.ail
+@@ -115,7 +115,7 @@
+     SpawnFailed(_) => FaultSpawnFailed,
+     Timeout(ms) => FaultDeadline(ms),
+     OutputLimitExceeded(n) => FaultOutputLimit(n),
+-    AbnormalExit(sig, name) => FaultSignal(sig, name)
++    AbnormalExit(_, _) => FaultSpawnFailed
+   }
+ }
+ 

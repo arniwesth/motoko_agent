@@ -1,0 +1,11 @@
+--- a/src/core/tool_fault.ail
++++ b/src/core/tool_fault.ail
+@@ -113,7 +113,7 @@
+     NotFound(_) => FaultNotFound,
+     PermissionDenied(_) => FaultPermissionDenied,
+     SpawnFailed(_) => FaultSpawnFailed,
+-    Timeout(ms) => FaultDeadline(ms),
++    Timeout(ms) => FaultOutputLimit(ms),
+     OutputLimitExceeded(n) => FaultOutputLimit(n),
+     AbnormalExit(sig, name) => FaultSignal(sig, name)
+   }

@@ -1,0 +1,11 @@
+--- a/src/core/tool_fault.ail
++++ b/src/core/tool_fault.ail
+@@ -128,7 +128,7 @@
+ export pure func process_error_effects(err: ProcessError) -> EffectDisclosure {
+   match err {
+     NotAllowed(_) => EffectsNone,
+-    NotFound(_) => EffectsNone,
++    NotFound(_) => EffectsUnknown,
+     PermissionDenied(_) => EffectsUnknown,
+     SpawnFailed(_) => EffectsUnknown,
+     Timeout(_) => EffectsUnknown,

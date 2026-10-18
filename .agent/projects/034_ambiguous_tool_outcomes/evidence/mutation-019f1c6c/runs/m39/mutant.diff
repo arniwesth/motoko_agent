@@ -1,0 +1,11 @@
+--- a/src/core/tool_runtime.ail
++++ b/src/core/tool_runtime.ail
+@@ -255,7 +255,7 @@
+ -- `fault` off (#277 review, finding 2). So it is the one construction site
+ -- whose `tool` is not a literal, and it echoes at most 200 characters.
+ export func unknown_tool_refusal(id: string, name: string) -> ToolResultItem {
+-  let shown = echoed_tool_name(name, 200);
++  let shown = name;
+   ToolErrorResult({ id: id, tool: shown, fault: refused_fault(), message: "${shown} requires extension capability and is not available in native runtime" })
+ }
+ 

@@ -1,0 +1,42 @@
+943c943
+<   <T> wall, -j8, load 8.29 7.62 6.16
+---
+>   <T> wall, -j8, load 17.55 19.17 13.72
+1451c1451
+<   stderr: Error: type error in tmp/inline_1792316166429 (decl 0): undefined variable: undefined_symbol_xyz at tmp/inline_1792316166429.ail:3:35
+---
+>   stderr: Error: type error in tmp/inline_1792339944892 (decl 0): undefined variable: undefined_symbol_xyz at tmp/inline_1792339944892.ail:3:35
+2101c2101
+<   ✓ measured CI cost, WHOLE TARGET: 22000 ms against a declared ceiling of 180000 ms
+---
+>   ✓ measured CI cost, WHOLE TARGET: 20000 ms against a declared ceiling of 180000 ms
+2448a2449,2451
+>   ✓ row q: Search for a pattern beginning with --pre= finds it as text in its one line, and the helper it names did not run
+>   ✓ row r: Search whose output passes the cap renders fault kind output_limit, effects none, bytes 10485760, and exit_code 1
+>   ✓ row s: an unknown tool named by 70000 characters renders fault kind refused, effects none, and exit_code 1, with the name cut
+2640,2641c2643,2644
+<   ✓ src/core/tool_dispatch_adapter.ail: 14/14 passed
+<   ✓ src/core/tool_fault.ail: 14/14 passed
+---
+>   ✓ src/core/tool_dispatch_adapter.ail: 15/15 passed
+>   ✓ src/core/tool_fault.ail: 36/43 passed (7 skipped)
+2646c2649
+<   ✓ src/core/tool_runtime.ail: 16/18 passed (2 skipped)
+---
+>   ✓ src/core/tool_runtime.ail: 18/21 passed (3 skipped)
+3525c3528
+< slowest against the <T> per-file cap: src/core/test/scripted_ports.ail <T> = 25%, 65 CPU-s, 0.4 cores; src/core/session.ail <T> = 9%, 23 CPU-s, 0.4 cores; src/core/dst_corpus.ail <T> = 5%, 10 CPU-s, 0.3 cores
+---
+> slowest against the <T> per-file cap: src/core/test/scripted_ports.ail <T> = 41%, 89 CPU-s, 0.4 cores; src/core/session.ail <T> = 24%, 59 CPU-s, 0.4 cores; src/core/tool_phase.ail <T> = 23%, 35 CPU-s, 0.3 cores
+3527,3529c3530,3532
+< source revision    c8ca2521923b6e9b0920d6321cb70fd29923fb94
+< source revision    c8ca2521923b6e9b0920d6321cb70fd29923fb94
+< src/core: 73 .ail files discovered, 51 carry tests, 624 tests, 619 passed, 5 skipped
+---
+> source revision    2ac0ff882f03456828721184fcac193ec6764c7a
+> source revision    2ac0ff882f03456828721184fcac193ec6764c7a
+> src/core: 73 .ail files discovered, 51 carry tests, 657 tests, 644 passed, 13 skipped
+3543c3546
+< test_coverage: every file carrying inline tests was run; 619 of 624 passed, 5 skipped against a record
+---
+> test_coverage: every file carrying inline tests was run; 644 of 657 passed, 13 skipped against a record

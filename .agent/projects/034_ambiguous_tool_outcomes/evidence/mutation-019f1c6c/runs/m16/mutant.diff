@@ -1,0 +1,11 @@
+--- a/src/core/tool_fault.ail
++++ b/src/core/tool_fault.ail
+@@ -109,7 +109,7 @@
+ -- the runtime enforced, which is the elapsed time at the moment it fired.
+ export pure func process_error_fault_kind(err: ProcessError) -> FaultKind {
+   match err {
+-    NotAllowed(_) => FaultNotAllowed,
++    NotAllowed(_) => FaultNotFound,
+     NotFound(_) => FaultNotFound,
+     PermissionDenied(_) => FaultPermissionDenied,
+     SpawnFailed(_) => FaultSpawnFailed,

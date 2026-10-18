@@ -1,0 +1,11 @@
+--- a/src/core/tool_runtime.ail
++++ b/src/core/tool_runtime.ail
+@@ -246,7 +246,7 @@
+   else if call.tool == "RunTests" then
+     run_process_result("RunTests", call.id, parse_exec_from_args(args))
+   else
+-    ToolErrorResult({ id: call.id, tool: call.tool, fault: refused_fault(), message: "${call.tool} requires extension capability and is not available in native runtime" })
++    ToolErrorResult({ id: call.id, tool: call.tool, fault: { kind: refused_fault().kind, effects: EffectsUnknown }, message: "${call.tool} requires extension capability and is not available in native runtime" })
+ }
+ 
+ func mk_meta(stdout: string, stderr: string, truncated: bool) -> ToolResultMeta {

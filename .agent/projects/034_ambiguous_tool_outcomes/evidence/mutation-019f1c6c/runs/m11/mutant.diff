@@ -1,0 +1,11 @@
+--- a/src/core/tool_runtime.ail
++++ b/src/core/tool_runtime.ail
+@@ -878,7 +878,7 @@
+         let before = readFile(resolved);
+         let before_sha = sha256Hex(before);
+         if expected_sha256 != "" && expected_sha256 != before_sha then
+-          ToolErrorResult({ id: id, tool: "EditFile", fault: refused_fault(), message: "expected_sha256 mismatch" })
++          ToolErrorResult({ id: id, tool: "EditFile", fault: { kind: refused_fault().kind, effects: EffectsUnknown }, message: "expected_sha256 mismatch" })
+         else
+           match apply_edits(before, edits, 1) {
+             Err(msg) => ToolErrorResult({ id: id, tool: "EditFile", fault: refused_fault(), message: msg }),

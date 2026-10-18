@@ -1,0 +1,13 @@
+--- a/src/core/tool_dispatch_adapter.ail
++++ b/src/core/tool_dispatch_adapter.ail
+@@ -80,8 +80,8 @@
+     SearchResult(_) => 0,
+     WriteFileResult(_) => 0,
+     EditFileResult(_) => 0,
+-    BashExecResult(r) => r.exit_code,
+-    RunTestsResult(r) => r.exit_code,
++    BashExecResult(r) => match r.fault { Some(_) => 0, None => r.exit_code },
++    RunTestsResult(r) => match r.fault { Some(_) => 0, None => r.exit_code },
+     ToolErrorResult(_) => 1
+   }
+ }
