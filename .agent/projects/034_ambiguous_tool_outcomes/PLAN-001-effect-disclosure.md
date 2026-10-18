@@ -3,8 +3,9 @@
 Implements [ADR-001](ADR-001-effect-disclosure-for-tool-faults.md) (this dir), accepted as amended
 by the operator on 2026-10-17 (its §6, rulings 1 to 5).
 
-Status: **Phase 0 ready to implement.** Phases 0b, 1, 2 and 3 are planned to the task. Each opens
-with a re-grounding step, because each starts after the one before it has merged.
+Status: **W0 (Phase 0) in review, #277. W0b and W1 are next.** Phases 0b, 1, 2 and 3 are planned
+to the task. Each opens with a re-grounding step, because each starts after the one before it has
+merged.
 Revised 2026-10-17 after two independent reviews. v1.1 answers Codex Sol (`gpt-6.1-sol`): one
 blocking finding and seven others. v1.2 answers Claude Opus 5.5: one blocking finding, eight
 should-fix and ten minor. Every finding that could be checked against the code was reproduced
