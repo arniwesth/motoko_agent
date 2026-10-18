@@ -23,6 +23,8 @@ This PR fixes all three, and adds `gemini-4-argon`'s context limit so its sessio
 A review by codex `gpt-6.1-sol` at xhigh effort (`tmp/review-275-sol.md` in the shared checkout)
 found five ways the new "end your turn and park" guidance could strand or mislead an orchestrator.
 The third commit fixes them. The main fix bounds the two waits that never woke by themselves.
+A second review (`tmp/review-275-sol-r2.md`) found four more problems in that fix. The fourth code
+commit fixes them.
 
 ## Changes
 
@@ -66,8 +68,27 @@ The third commit fixes them. The main fix bounds the two waits that never woke b
   - The DelegateCheck description ("call it as often as you like") and the motoko launch result
     now say to end the turn as well.
   - The 034 prompt says what the two new `lost` wakes mean.
+- fix(herdr): a pending check re-opens its wait, and the parser cannot overflow
+  - R2-1: a `lost` wake removed the wait while the delegate was still live. The check it asked
+    for could find the delegate working again or `unknown`, and ending the turn then finished the
+    run.
+    - DelegateCheck's open results (still working, blocked, motoko not yet written) now carry the
+      delegate's `wait` again. The core re-registers it, which changes nothing while it is open.
+      This also re-opens a wait that a resumed run dropped.
+    - The waiter counts only `idle` and `done` as quiet. `unknown` resets the clock, and a row
+      with no `agent_status` is `host_error`.
+    - 034's brief gains item 7: a delegate does not end its turn while its own background job
+      runs. A check closes an idle pane with no answer file, and that kills the job.
+  - R2-2: `1.` followed by 64 zeros and `s` is a value AILANG accepts, and it crashed
+    registration with `RT001` because `pow10` wrapped to 0. Fractions now keep at most 9
+    digits, each term is computed inside 64 bits, and sums saturate.
+  - R2-3: `+`, `µs` and `μs` are parsed. A positive wall under 1 ms counts as 1 ms. Zero and
+    negative values get the short 10 s wall. `check_wait_default` never returns 0.
+  - R2-4: the timeout hint no longer says that nothing was delegated, because a prompt that
+    timed out may still have been delivered (`DESIGN-prompt-retry.md`).
+  - 034: the `timeout after …ms` bullet no longer says the delegate is still working.
 
-10 files changed.
+13 files changed.
 
 ## Governing docs
 
@@ -105,6 +126,14 @@ The third commit fixes them. The main fix bounds the two waits that never woke b
     `proxy-child-env`, `session-identity`, `harness-dst`. Five of the new tests are the waiter's
     bounds and one is the forwarding.
   - `tsc --noEmit` and `git diff --check` passed.
+- After the second review's fixes, these passed:
+  - `types.ail`: 324 tests, including 28 duration cases.
+  - `bun test` on the same six files: 93 tests.
+  - `verify_herdr_delegate_wait`, with three new assertions that an open check carries its wait.
+  - `verify_wait_descriptor_fixtures`, with a new `check_pending_reopens` row.
+  - The other eleven herdr targets, `tsc --noEmit` and `git diff --check`.
+  - `verify_herdr_gate`, run with `MOTOKO_PROCESS_TIMEOUT` set to the 64-zero value: exit 0, no
+    `RT001`.
 - Not run: the full `make check_core` and `make dst`. The W0 delegate's heavy runs were using the
   machine, and the plan runs heavy targets one at a time.
 
