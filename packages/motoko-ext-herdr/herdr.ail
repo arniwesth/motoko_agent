@@ -46,7 +46,7 @@ import pkg/sunholo/motoko_ext_herdr/dagr (
   seed_from_plan, attach_to_task, has_task,
   add_note, touch, run_file_name, is_foreign_run_file, abandoned_tasks, abandoned_report,
   abandoned_ids, settle_abandoned, sweep_tmp, prunable_scratch, prune_report,
-  open_delegate_panes
+  open_delegate_panes, open_attempt_pane, open_attempt_kind
 )
 import pkg/sunholo/motoko_ext_herdr/orchestrator (OrchestratorMode, orchestrator_off, prompt_patch, decide, mode_json, mode_of)
 import pkg/sunholo/motoko_ext_herdr/types (
@@ -57,7 +57,7 @@ import pkg/sunholo/motoko_ext_herdr/types (
   allowed_kind_count, sole_allowed_kind,
   path_is_safe, path_within, argv_is_safe, show_argv, has_shell_tokens,
   argv_split, argv_start, argv_start_model, argv_prompt, argv_get, argv_explain, argv_close,
-  argv_wait, wait_elapsed, elapsed_note, format_ms, start_ms_of, elapsed_is_exact,
+  argv_wait, wait_elapsed, process_wall_elapsed, elapsed_note, format_ms, start_ms_of, elapsed_is_exact,
   is_motoko, motoko_kind, motoko_run_payload, motoko_payload_is_safe,
   argv_pane_run, argv_wait_until, motoko_handle, handle_is_motoko,
   handle_pane, handle_name,
@@ -335,6 +335,35 @@ pure func kind_or_claude(k: string) -> string { if k == "" then "claude" else k 
 
 pure func meta_pending(name: string, pane: string, now_ms: int, waited_ms: int, kind: string, answer: string) -> Json {
   jo(timed_fields(name, pane, now_ms, waited_ms, false) ++ [kv("wait", delegate_wait(name, kind, pane, answer, run_key(name)))])
+}
+
+-- A HERDR CALL THE PROCESS WALL CUT OFF (PR #275 review 3, finding 1). The
+-- shell's limit killing `agent get` says nothing about the delegate, so the
+-- check reports it pending and carries the wait, exactly as a check that found
+-- the delegate still working does. As an error it carried none, and the core
+-- reads no wait from a failed result: after a `lost` wake had removed the wait,
+-- ending the turn finalized the run over a live delegate. Only the wall gets
+-- this. Any other herdr failure stays an error, so a herdr that is down cannot
+-- send the model round park and wake for ever.
+pure func wall_cut_pending(call_id: string, name: string, pane: string, now_ms: int, waited_ms: int,
+                           kind: string, answer: string, failure: string) -> ToolResultEnvelope {
+  { tool_call_id: call_id, tool: "DelegateCheck", exit_code: 0,
+    stdout: "${failure} The shell's time limit cut this herdr call off, which says nothing about the delegate: nothing was settled, and its wait is open again. To wait for it, end your turn: the loop parks and wakes you when the answer lands.",
+    stderr: "", metadata: meta_pending(name, pane, now_ms, waited_ms, kind, answer) }
+}
+
+-- The open attempt's pane and kind for `key`, from this session's run file.
+-- Empty when there is no run file, no such task, or its attempt is terminal.
+func recorded_attempt(cfg: HerdrConfig, p: ExtPorts, w: ExtWorld, workdir: string, key: string)
+  -> { pane: string, kind: string, next_state: ExtWorld } ! {IO, Process, FS} {
+  if cfg.session_ms == "" || path_within(workdir, cfg.dagr_dir) == false then
+    { pane: "", kind: "", next_state: w }
+  else {
+    let r = p.file_read(w, run_file(cfg.dagr_dir, cfg.own_pane, cfg.session_ms));
+    if r.present then
+      { pane: open_attempt_pane(r.content, key), kind: open_attempt_kind(r.content, key), next_state: r.next_state }
+    else { pane: "", kind: "", next_state: r.next_state }
+  }
 }
 
 func relaxation_note(kind: string) -> string {
@@ -1638,6 +1667,10 @@ func do_check_motoko(cfg: HerdrConfig, ctx: ProviderCtx, call: ToolCallEnvelope,
             next_state: rec.next_state }
         }
       }
+      else if process_wall_elapsed(g.err) then
+        { result: wall_cut_pending(call.id, handle, pane, t0.now_ms, 0, motoko_kind(), answer,
+                                   explain_failure("Reading motoko delegate in pane `${pane}`", argv_get(pane), g)),
+          next_state: g.next_state }
       else
         { result: err_result_meta(call.id, "DelegateCheck",
                                   explain_failure("Reading motoko delegate in pane `${pane}`", argv_get(pane), g),
@@ -1784,13 +1817,22 @@ func do_check(cfg: HerdrConfig, ctx: ProviderCtx, call: ToolCallEnvelope)
     -- reaching a clean `done` having written nothing. Wait-then-check, never
     -- wait-instead-of-check.
     let g = run_herdr(cfg, p, t1.next_state, argv_get(name));
-    if g.code != 0 then {
+    -- The wall cut `agent get` off, so the pane and kind come from the run file.
+    let cut = if g.code != 0 && means_agent_gone(g.code, g.err) == false && process_wall_elapsed(g.err)
+              then recorded_attempt(cfg, p, g.next_state, ctx.workdir, run_key(name))
+              else { pane: "", kind: "", next_state: g.next_state };
+    if cut.pane != "" then
+      { result: wall_cut_pending(call.id, name, cut.pane, t1.now_ms, waited, kind_or_claude(cut.kind),
+                                 answer_path(cfg.work_dir, name),
+                                 explain_failure("Reading delegate `${name}`", argv_get(name), g)),
+        next_state: cut.next_state }
+    else if g.code != 0 then {
       let rec = if means_agent_gone(g.code, g.err)
-                then dagr_settle(cfg, p, g.next_state, ctx.workdir, t1.now_ms, run_key(name),
+                then dagr_settle(cfg, p, cut.next_state, ctx.workdir, t1.now_ms, run_key(name),
                                  "lost", "failed", "heuristic", "",
                                  "herdr reports agent_not_found and no answer file was written",
                                  false, "")
-                else { note: "", next_state: g.next_state };
+                else { note: "", next_state: cut.next_state };
       { result: err_result_meta(call.id, "DelegateCheck", explain_failure("Reading delegate `${name}`", argv_get(name), g),
                                 meta_timed(name, "", t1.now_ms, waited, means_agent_gone(g.code, g.err))),
         next_state: rec.next_state }

@@ -1201,6 +1201,46 @@ export pure func open_delegate_panes_str(content: string) -> string
   ]
   { join(",", open_delegate_panes(content)) }
 
+-- THE OPEN ATTEMPT OF ONE DELEGATION, read back for `DelegateCheck` (PR #275
+-- review 3, finding 1). A check whose `agent get` the process wall cut off has
+-- no herdr row to read the pane or the kind from, and a wait the core accepts
+-- needs both. The run file recorded them when the delegate launched. Only an
+-- attempt still open counts: a terminal one is not waited on.
+pure func open_attempt(content: string, key: string) -> Option[Json] {
+  match decode(content) {
+    Err(_) => None,
+    Ok(doc) => {
+      let id = task_of_key(doc, key);
+      if id == "" then None
+      else match latest_attempt(doc, id) {
+        None => None,
+        Some(a) => if attempt_is_terminal(sfield(a, "state")) then None else Some(a)
+      }
+    }
+  }
+}
+
+export pure func open_attempt_pane(content: string, key: string) -> string
+  tests [
+    (("{\"tasks\":[{\"id\":\"mot-dlg-5\",\"attempts\":[{\"state\":\"working\",\"actor\":\"codex\",\"locator\":{\"pane\":\"w1:p8\"}}]}]}", "mot-dlg-5"), "w1:p8"),
+    -- a terminal attempt is not waited on
+    (("{\"tasks\":[{\"id\":\"mot-dlg-5\",\"attempts\":[{\"state\":\"done\",\"actor\":\"codex\",\"locator\":{\"pane\":\"w1:p8\"}}]}]}", "mot-dlg-5"), ""),
+    -- only the latest attempt counts
+    (("{\"tasks\":[{\"id\":\"mot-dlg-5\",\"attempts\":[{\"state\":\"lost\",\"actor\":\"claude\",\"locator\":{\"pane\":\"w1:p7\"}},{\"state\":\"working\",\"actor\":\"codex\",\"locator\":{\"pane\":\"w1:p9\"}}]}]}", "mot-dlg-5"), "w1:p9"),
+    (("{\"tasks\":[{\"id\":\"mot-dlg-5\",\"attempts\":[{\"state\":\"working\",\"actor\":\"codex\",\"locator\":{\"pane\":\"w1:p8\"}}]}]}", "mot-dlg-6"), ""),
+    (("not json", "mot-dlg-5"), "")
+  ]
+  { match open_attempt(content, key) { None => "", Some(a) => sfield(field(a, "locator"), "pane") } }
+
+-- The kind the attempt was launched as: `actor` is the kind (`dagr_open`).
+export pure func open_attempt_kind(content: string, key: string) -> string
+  tests [
+    (("{\"tasks\":[{\"id\":\"mot-dlg-5\",\"attempts\":[{\"state\":\"working\",\"actor\":\"codex\",\"locator\":{\"pane\":\"w1:p8\"}}]}]}", "mot-dlg-5"), "codex"),
+    (("{\"tasks\":[{\"id\":\"mot-dlg-5\",\"attempts\":[{\"state\":\"done\",\"actor\":\"codex\",\"locator\":{\"pane\":\"w1:p8\"}}]}]}", "mot-dlg-5"), ""),
+    (("{\"tasks\":[{\"id\":\"mot-dlg-5\",\"attempts\":[{\"state\":\"lost\",\"actor\":\"claude\",\"locator\":{\"pane\":\"w1:p7\"}},{\"state\":\"working\",\"actor\":\"codex\",\"locator\":{\"pane\":\"w1:p9\"}}]}]}", "mot-dlg-5"), "codex")
+  ]
+  { match open_attempt(content, key) { None => "", Some(a) => sfield(a, "actor") } }
+
 -- Tasks in `content` whose latest attempt is still in flight on a pane that is
 -- not in `live`. An unparseable file yields nothing: we are not its writer and
 -- not its validator either.

@@ -602,7 +602,7 @@ export pure func wait_elapsed(exit_code: int, stderr: string) -> bool
   }
 
 -- The tool runtime's `Timeout(ms)` rendering, exactly: `timeout after <digits>ms`.
-pure func process_wall_elapsed(stderr: string) -> bool
+export pure func process_wall_elapsed(stderr: string) -> bool
   tests [
     ("timeout after 30002ms", true),
     ("timeout after 35005ms", true),
@@ -654,6 +654,9 @@ export pure func process_wall_ms(s: string) -> int
     ("0.5ms", 1),
     ("1ns", 1),
     ("99999999999999999999h", 2000000000000),
+    ("00000000000000000010s", 10000),
+    ("0000000000000000000000000.5s", 500),
+    ("000s", 10000),
     ("0", 10000),
     ("0s", 10000),
     ("-1s", 10000),
@@ -717,6 +720,11 @@ pure func frac_ns(digits: string, unit: int) -> int {
   if unit >= 1000000000 then nine * (unit / 1000000000) else nine * unit / 1000000000
 }
 
+-- The first index in `[i, j)` that is not a `0`, or `j`.
+pure func zeros_end(s: string, i: int, j: int) -> int {
+  if i < j && substring(s, i, i + 1) == "0" then zeros_end(s, i + 1, j) else i
+}
+
 -- `<decimal><unit>` terms from `i`, summed in nanoseconds and saturated at
 -- `duration_cap_ns`.
 pure func duration_ns(s: string, i: int, acc: int) -> Option[int] {
@@ -732,11 +740,15 @@ pure func duration_ns(s: string, i: int, acc: int) -> Option[int] {
       (unit, n) => {
         let cap = duration_cap_ns();
         -- Saturates BEFORE multiplying: more than 18 digits may not parse, and
-        -- `v * unit` past `cap / unit` would wrap.
+        -- `v * unit` past `cap / unit` would wrap. The digits are counted after
+        -- the leading zeros, which Go accepts and which change nothing: counted
+        -- with them, `00000000000000000010s` saturated to the cap (PR #275
+        -- review 3, finding 2).
+        let z = zeros_end(s, i, j);
         let whole =
-          if j == i then 0
-          else if j - i > 18 then cap
-          else match stringToInt(substring(s, i, j)) {
+          if z == j then 0
+          else if j - z > 18 then cap
+          else match stringToInt(substring(s, z, j)) {
             Some(v) => if v > cap / unit then cap else v * unit,
             None => cap
           };

@@ -21,8 +21,9 @@ tool texts to say so, sizes `DelegateCheck`'s wait under the shell's 30 s limit,
 the two waits that never woke on their own: a delegate that never registers (2 min) and one
 idle with no answer file (60 min). `MOTOKO_WAKE_REGISTER_TIMEOUT_MS` and
 `MOTOKO_WAKE_IDLE_NO_ANSWER_MS` change them. A `DelegateCheck` that finds a delegate still open
-carries its wait again, so a delegate that comes back after such a wake is parked on again. Brief
-item 7 keeps a delegate's turn open while its own background job runs.
+carries its wait again, so a delegate that comes back after such a wake is parked on again. So
+does a check whose herdr call the shell's limit cut off, when the run file names the delegate's
+pane. Brief item 7 keeps a delegate's turn open while its own background job runs.
 
 ## Before you start
 
@@ -227,9 +228,10 @@ VERIFYING A DELEGATE, before the next delegation
      does one that never starts. Call DelegateCheck once. If it reports the delegate
      still working or blocked, the wait is open again: end your turn. Otherwise follow
      WHEN SOMETHING IS WRONG.
-   - If a DelegateCheck reports `herdr_cli_rejected` with `timeout after …ms`, the
-     shell's limit cut off one of its herdr calls. That says nothing about the delegate,
-     and the wait stays open: end your turn.
+   - If a DelegateCheck says the shell's time limit cut off one of its herdr calls
+     (`timeout after …ms`), that says nothing about the delegate. When it also says the
+     wait is open again, end your turn. When it is an error instead, no wait is open:
+     follow WHEN SOMETHING IS WRONG.
 2. From git: `git -C <worktree> log --oneline origin/main..HEAD` shows one new commit
    for the task; `git -C <worktree> status --short` is empty; `git status --short`
    here matches the list from step 0.

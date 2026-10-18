@@ -158,8 +158,14 @@ func publish_if(world: ExtWorld, publish_on: string, here: string) -> ExtWorld {
   if publish_on == here then put_file(world, the_answer(), answer_text()) else world
 }
 
+-- The tool runtime's rendering of the process wall killing the call
+-- (`tool_runtime.ail`'s `Timeout(ms)` arm), not a herdr error.
+func wall_cut(world: ExtWorld) -> ExtProcOutcome {
+  { output: envelope("", "timeout after 30002ms", 1), exit_code: 1, next_state: world }
+}
+
 -- `wait`: "ok" | "timeout" | "gone" | "unwell"
--- `get_mode`: an agent status, or "gone" | "unwell"
+-- `get_mode`: an agent status, or "gone" | "unwell" | "wallcut"
 func scripted(split_ok: bool, wait: string, get_mode: string, publish_on: string)
   -> (ExtWorld, string, string) -> ExtProcOutcome ! {IO, Process, FS} {
   func(world: ExtWorld, _tool: string, args_json: string) -> ExtProcOutcome ! {IO, Process, FS} {
@@ -195,6 +201,7 @@ func scripted(split_ok: bool, wait: string, get_mode: string, publish_on: string
       let w2 = publish_if(world, publish_on, "get");
       if get_mode == "gone" then fail_with(w2, "agent_not_found")
       else if get_mode == "unwell" then fail_with(w2, "server_not_running")
+      else if get_mode == "wallcut" then wall_cut(w2)
       else ok_with(w2, agent_json(get_mode))
     }
     else ok_with(world, "")
@@ -405,10 +412,21 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMe
   let c12 = expect_wait("claude still working carries its wait again (R2-1)", claude_check(w0, n, "timeout", "working", ""), "claude");
   let c13 = expect_wait("claude blocked carries its wait again (R2-1)", claude_check(w0, n, "ok", "blocked", ""), "claude");
   let m8 = expect_wait("motoko not yet carries its wait again (R2-1)", motoko_check(w0, "timeout", "working", ""), "motoko");
+  -- PR #275 review 3, finding 1: the process wall cutting `agent get` off says
+  -- nothing about the delegate, so the check carries its wait again. The
+  -- claude path reads the pane and kind from the run file the launch wrote;
+  -- with no run file it stays the error it was, carrying no wait.
+  let m9 = expect_wait("motoko agent get cut off by the process wall carries its wait again (review 3)",
+                       motoko_check(w0, "timeout", "wallcut", ""), "motoko");
+  let c14 = expect_wait("claude agent get cut off by the process wall carries its wait again, pane from the run file (review 3)",
+                        claude_check(dc.w, n, "timeout", "wallcut", ""), "claude");
+  let nc = claude_check(w0, n, "timeout", "wallcut", "");
+  let c15 = report("claude agent get cut off with no run file -> error, settled false, no wait (review 3)",
+                   nc.exit_code == 1 && settled_of(nc) == "false" && present(nc, "wait") == false, describe(nc));
 
   if d1 && d1h && d1b && d2 && d2h && d3 && d4 && d5
-     && m1 && m2 && m2b && m3 && m4 && m5 && m6 && m7 && m8
-     && c1 && c2 && c3 && c4 && c5 && c6 && c7 && c8 && c9 && c10 && c11 && c12 && c13
+     && m1 && m2 && m2b && m3 && m4 && m5 && m6 && m7 && m8 && m9
+     && c1 && c2 && c3 && c4 && c5 && c6 && c7 && c8 && c9 && c10 && c11 && c12 && c13 && c14 && c15
   then () else exit(1)
 }
 
