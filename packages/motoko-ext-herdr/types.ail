@@ -577,14 +577,86 @@ export pure func argv_wait_str(target: string, timeout_ms: int) -> string
 
 -- The whole point of the branch: `timeout` from a wait means STILL WORKING.
 -- Every other non-zero outcome is a real failure and must keep its own message.
+--
+-- TWO TIMEOUTS MEAN THAT, NOT ONE (2026-10-18). herdr's own is the JSON code.
+-- The other is the AILANG runtime's process wall (`--process-timeout`, 30s
+-- unless MOTOKO_PROCESS_TIMEOUT raises it) killing `herdr agent wait` before
+-- herdr's bound is reached; the tool runtime reports that as exit 1 and the
+-- plain text `timeout after <n>ms` (`tool_runtime.ail`'s
+-- `process_error_to_string`). Either way the wait observed nothing terminal,
+-- and the check that follows (`agent get`, then the answer file) is still the
+-- right next step. Read as a failure, it reported every check of a 45s wait
+-- under a 30s wall as `herdr_cli_rejected`: session_1792309035163, 21 checks.
 export pure func wait_elapsed(exit_code: int, stderr: string) -> bool
   tests [
     ((1, "{\"error\":{\"code\":\"timeout\",\"message\":\"timed out waiting for agent status\"},\"id\":\"cli:agent:wait\"}"), true),
+    ((1, "timeout after 30002ms"), true),
     ((1, "{\"error\":{\"code\":\"agent_not_found\",\"message\":\"agent target x not found\"}}"), false),
+    ((1, "timeout after a while"), false),
     ((0, ""), false),
     ((2, "herdr agent commands:"), false)
   ]
-  { if exit_code == 0 then false else failure_code(exit_code, stderr) == "timeout" }
+  {
+    if exit_code == 0 then false
+    else failure_code(exit_code, stderr) == "timeout" || process_wall_elapsed(stderr)
+  }
+
+-- The tool runtime's `Timeout(ms)` rendering, exactly: `timeout after <digits>ms`.
+pure func process_wall_elapsed(stderr: string) -> bool
+  tests [
+    ("timeout after 30002ms", true),
+    ("timeout after 35005ms", true),
+    ("timeout after ms", false),
+    ("timeout after 3s", false),
+    ("{\"error\":{\"code\":\"timeout\"}}", false)
+  ]
+{
+  let pre = "timeout after ";
+  let n = length(stderr);
+  let p = length(pre);
+  if n <= p + 2 then false
+  else if substring(stderr, 0, p) != pre || substring(stderr, n - 2, n) != "ms" then false
+  else match stringToInt(substring(stderr, p, n - 2)) { Some(_) => true, None => false }
+}
+
+-- THE PROCESS WALL, in ms, from the value MOTOKO_PROCESS_TIMEOUT carries (a Go
+-- duration; the TUI passes it to `ailang run --process-timeout`). Unset is
+-- AILANG's default, 30s. Only the single-unit forms are read; anything else
+-- (`1m30s`, `1.5m`) is taken as the default, which can only make the waits
+-- sized from it shorter than they could be, never longer than the wall.
+export pure func process_wall_ms(s: string) -> int
+  tests [
+    ("", 30000),
+    ("300s", 300000),
+    ("10m", 600000),
+    ("1h", 3600000),
+    ("1500ms", 1500),
+    ("1m30s", 30000),
+    ("fast", 30000)
+  ]
+{
+  let n = length(s);
+  let num = \k. match stringToInt(substring(s, 0, n - k)) { Some(v) => v, None => 0 - 1 };
+  let v =
+    if n > 2 && substring(s, n - 2, n) == "ms" then num(2)
+    else if n > 1 && substring(s, n - 1, n) == "s" then num(1) * 1000
+    else if n > 1 && substring(s, n - 1, n) == "m" then num(1) * 60000
+    else if n > 1 && substring(s, n - 1, n) == "h" then num(1) * 3600000
+    else 0 - 1;
+  if v > 0 then v else 30000
+}
+
+-- DelegateCheck's default wait: 10s under the wall, because a herdr `--timeout`
+-- overruns (a 25s bound returned at 28.3s, M3), and never past 45s, because
+-- past that an operator cannot tell a blocking wait from a hang. A wall too
+-- short for that margin gets half of it.
+export pure func check_wait_default(wall_ms: int) -> int
+  tests [(30000, 20000), (300000, 45000), (50000, 40000), (10000, 5000)]
+{
+  if wall_ms - 10000 >= 45000 then 45000
+  else if wall_ms > 20000 then wall_ms - 10000
+  else wall_ms / 2
+}
 
 export pure func argv_get(target: string) -> [string]
   { ["agent", "get", target] }
@@ -1053,13 +1125,13 @@ export pure func failure_message(exit_code: int, stderr: string) -> string
 -- which is the half the prose message leaves out.
 export pure func code_hint(code: string) -> string
   tests [
-    ("timeout", " The wait elapsed; the delegate is still working. This is a poll interval, not a death — call DelegateCheck again."),
+    ("timeout", " The wait elapsed; the delegate is still working. This is a poll interval, not a death. To wait for it, end your turn: the loop parks and wakes you when the answer lands."),
     ("agent_not_found", " No agent with that name or pane is live. It has been closed, or it was never started."),
     ("unrecognised_code_xyz", "")
   ]
   {
     if code == "timeout" then
-      " The wait elapsed; the delegate is still working. This is a poll interval, not a death — call DelegateCheck again."
+      " The wait elapsed; the delegate is still working. This is a poll interval, not a death. To wait for it, end your turn: the loop parks and wakes you when the answer lands."
     else if code == "agent_prompt_stalled" then
       " The delegate accepted input but its state never changed, which in practice means it is not really at an agent prompt — check `agent explain`."
     else if code == "agent_not_found" then

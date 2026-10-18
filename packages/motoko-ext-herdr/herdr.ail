@@ -254,7 +254,7 @@ func check_params() -> string {
 export func describe_tools(allowed: string, must_choose: bool) -> [ToolSchema] {
   [
     { name: "Delegate",
-      description: "Hand a self-contained sub-task to a coding agent running in its own terminal pane. Returns a handle immediately; the delegate keeps working after this call returns. Poll with DelegateCheck — a typical task takes 20-30s and some take over a minute.",
+      description: "Hand a self-contained sub-task to a coding agent running in its own terminal pane. Returns a handle immediately; the delegate keeps working after this call returns. To wait for it, end your turn: the loop parks and wakes you when the answer lands or the delegate is lost. Then call DelegateCheck once to collect it. Do not poll DelegateCheck: each call costs a step.",
       parameters: delegate_params(allowed, must_choose) },
     { name: "DelegateCheck",
       description: "Fetch a delegate's current state and its answer if it has landed. Cheap; call it as often as you like.",
@@ -1515,7 +1515,7 @@ func do_delegate(cfg: HerdrConfig, ctx: ProviderCtx, call: ToolCallEnvelope)
                     tool_call_id: call.id,
                     tool: "Delegate",
                     exit_code: 0,
-                    stdout: "Delegate `${name}` is running `${kind}`${model_note(kind, model)} in pane ${pane}${relaxation_note(kind)}. Starting it took ${format_ms(t.now_ms - clock.now_ms)}. It has the task and is working now; this call did not wait for it. Typical completion is 20-30s and some tasks take over a minute. Call DelegateCheck with name `${name}` to collect the answer.${plan.note}${tag.note}${rec.note}${view.note}",
+                    stdout: "Delegate `${name}` is running `${kind}`${model_note(kind, model)} in pane ${pane}${relaxation_note(kind)}. Starting it took ${format_ms(t.now_ms - clock.now_ms)}. It has the task and is working now; this call did not wait for it. Typical completion is 20-30s and some tasks take over a minute. If you have nothing else to do meanwhile, end your turn: the loop parks on this delegate and wakes you when its answer lands. Then call DelegateCheck with name `${name}` once to collect the answer.${plan.note}${tag.note}${rec.note}${view.note}",
                     stderr: "",
                     metadata: meta_delegate(name, pane, kind, answer, run_key(name))
                   },
@@ -1662,7 +1662,7 @@ func do_check_motoko(cfg: HerdrConfig, ctx: ProviderCtx, call: ToolCallEnvelope,
                              run_key(handle), cur_status);
         { result: {
             tool_call_id: call.id, tool: "DelegateCheck", exit_code: 0,
-            stdout: "Delegate `${handle}` has not written its answer yet (state `${cur_status}`, waited ${format_ms(waited)} for a transition to `${target}`). A motoko delegate reports idle at startup, so its state is not a completion signal — only the answer file is. Check again.${rec.note}",
+            stdout: "Delegate `${handle}` has not written its answer yet (state `${cur_status}`, waited ${format_ms(waited)} for a transition to `${target}`). A motoko delegate reports idle at startup, so its state is not a completion signal — only the answer file is. To wait for it, end your turn: the loop parks and wakes you when the answer lands.${rec.note}",
             stderr: "", metadata: meta_timed(handle, pane, t1.now_ms, waited, false)
           },
           next_state: rec.next_state }
@@ -1836,7 +1836,7 @@ func do_check(cfg: HerdrConfig, ctx: ProviderCtx, call: ToolCallEnvelope)
         let rec = dagr_alive(cfg, p, rd.next_state, ctx.workdir, t1.now_ms, run_key(name), status);
         { result: {
             tool_call_id: call.id, tool: "DelegateCheck", exit_code: 0,
-            stdout: "Delegate `${name}` is still `${status}` in pane ${pane} after ${format_ms(t1.now_ms - start_ms_of(name))}. No answer yet — this call already waited ${format_ms(waited)} server-side for it, so check again rather than assuming it is stuck.${rec.note}",
+            stdout: "Delegate `${name}` is still `${status}` in pane ${pane} after ${format_ms(t1.now_ms - start_ms_of(name))}. No answer yet — this call already waited ${format_ms(waited)} server-side for it, so it is not stuck. To wait for it, end your turn: the loop parks and wakes you when the answer lands.${rec.note}",
             stderr: "", metadata: meta_timed(name, pane, t1.now_ms, waited, false)
           },
           next_state: rec.next_state }

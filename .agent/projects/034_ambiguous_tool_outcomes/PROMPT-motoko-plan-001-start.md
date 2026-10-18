@@ -14,6 +14,11 @@ plan's code anchors are at `e69aaad7`. This file adapts 005's
 whose W1 session shipped as #256. The herdr extension it was checked against has not changed
 since (`a7c77571`, 2026-10-08).
 
+Revised 2026-10-18, after the first session (`session_1792309035163`) busy-polled `DelegateCheck`
+instead of parking: *VERIFYING A DELEGATE* step 1 and the end-of-turn rule now tell the
+orchestrator to wait by ending its turn. The same pull request changes the herdr extension's
+tool texts to say so, and sizes `DelegateCheck`'s wait under the shell's 30 s limit.
+
 ## Before you start
 
 Four steps.
@@ -199,11 +204,19 @@ SHIP STEPS, in W0.7's brief only, after the gate is green
 - Do not merge it, and do not wait for CI.
 
 VERIFYING A DELEGATE, before the next delegation
-1. DelegateCheck until it settles. Each call costs a step and blocks for about 45 s.
-   A delegate can show as blocked for a few seconds and then go on by itself. So if
-   DelegateCheck reports it blocked or waiting for input, check three more times. Only
-   if it is still blocked then, tell me the pane and what it is asking, and end your
-   turn. I will answer it.
+1. Wait by ending your turn, not by polling. After a Delegate call, reply with one
+   line, the task id, the handle and what it is running, and no tool call. The loop
+   then parks on the delegate and wakes you when its answer file lands or its pane is
+   gone. On the wake, call DelegateCheck once to collect the answer.
+   - Do not call DelegateCheck before the wake. Each call costs a step, and one that
+     finds a Claude delegate idle with no answer file closes its pane, which kills any
+     job the delegate left running in the background.
+   - If I write to you while you are parked, answer and end your turn again. The wait
+     stays open.
+   - A delegate blocked on a prompt does not wake you. I see it in herdr and answer it.
+   - If a DelegateCheck reports `herdr_cli_rejected` with `timeout after …ms`, the
+     shell's limit cut off the check's wait. The delegate is still working: end your
+     turn.
 2. From git: `git -C <worktree> log --oneline origin/main..HEAD` shows one new commit
    for the task; `git -C <worktree> status --short` is empty; `git status --short`
    here matches the list from step 0.
@@ -246,8 +259,9 @@ BUDGET AND HANDOFF
   tmp/034-orchestrator/HANDOFF-<date>.md: the worktree's branch and last commit, the
   tasks verified, the delegate handles in flight, the next ready task ids, and that
   the next session is this run's orchestrator and delegates.
-- End your turn only when W0's pull request is open and reported, or a rule above says
-  stop, or the budget rule applies. A response with no tool call ends the turn.
+- A response with no tool call ends the turn. End it to wait on a delegate (VERIFYING
+  step 1), and otherwise only when W0's pull request is open and reported, or a rule
+  above says stop, or the budget rule applies.
 ```
 
 ## Notes for the operator
@@ -273,8 +287,10 @@ BUDGET AND HANDOFF
   the one id in *DELEGATE CALLS*.
 - **The two long runs.** W0.1 and W0.7 each run `make dst` (2,085 s at `-j8` when last measured)
   and then `make eval_matrix` (821 s). Do not start other heavy targets on the machine while they
-  run. The orchestrator spends a step per `DelegateCheck`, about every 45 s, so each of those
-  tasks costs roughly 70 steps of waiting.
+  run. The orchestrator parks while a delegate works and is woken when the answer lands, so the
+  wait costs no steps. The first session, on 2026-10-18, was told to poll instead: one
+  `DelegateCheck` step every ~35 s, each resending ~107k tokens of context, until the operator
+  interrupted it.
 - **The step budget.** "Step 900" assumes the `default` profile's 1200 steps. Change the number if
   you start Motoko on another profile.
 - **The shell tool's limit.** A foreground command in a Motoko session is cut off after 30
