@@ -27,6 +27,16 @@ Run it from the repository root, as a non-root user, on a clean tree:
 
 `--apply-check` applies each mutant, runs `ailang check` on the file it edits,
 and restores it, without running a suite: the spec's own self-test.
+
+`--followup` runs the #277 review's follow-up instead, at FOLLOWUP_COMMIT:
+its own controls, the mutants in FOLLOWUP, and a fourth suite,
+
+  runtime     `ailang test --json src/core/tool_runtime.ail` (`search_argv`'s test)
+
+with W0.5 at rows a-s. It rewrites `mutants.tsv` keeping every row of the
+first run except the `s-rg` survivor, which m36 replaces with a measured
+result, and appends its own rows, each naming FOLLOWUP_COMMIT. Its meta and
+self-test go to `meta-followup.txt` and `apply-check-followup.txt`.
 """
 
 import hashlib
@@ -39,6 +49,7 @@ import sys
 import time
 
 COMMIT = "019f1c6c"
+FOLLOWUP_COMMIT = "d3047dd1"
 HERE = os.path.dirname(os.path.abspath(__file__))
 RUNS = os.path.join(HERE, "runs")
 TIMEOUT = 300
@@ -205,13 +216,43 @@ SURVIVORS = [
      "No mutant is possible: the property is that no wildcard exists, and that is checked by reading the "
      "code; this script reads it (process_error_fault_kind and process_error_effects each have the seven "
      "ProcessError arms and no `_ =>` arm)."),
-    ("s-rg", "D2 read-only failure -> none, Search's rg launch failure",
-     "none run: tool_runtime.ail:600 (plan :596), the Err arm of exec(\"rg\", ...)",
-     "No input reaches it portably: the arm is Err only when rg itself cannot be launched, which no "
-     "portable fixture arranges, so no run tells the mutated and unmutated versions apart."),
 ]
+# `s-rg` was the second survivor: "No input reaches it portably: the arm is Err
+# only when rg itself cannot be launched". That was false (#277 review, finding
+# 3): an 11 MiB matching file launches `rg` normally and reaches the arm with
+# OutputLimitExceeded(10485760). It is now m36 in FOLLOWUP, run against W0.5
+# row r, and its row in `mutants.tsv` is that measured result.
 
 SURVIVAL_ROWS = ["w05:b", "w05:c", "w05:g", "w05:h", "w05:i", "w05:j", "w05:k", "w05:l", "w05:m", "w05:n"]
+
+# The #277 review's follow-up, at FOLLOWUP_COMMIT (`d3047dd1`, the review's
+# three fixes and W0.5 rows q, r and s). Line numbers are that commit's.
+SEARCH_ARGV = '  ["-n", "--no-heading", "--color", "never", "--no-config", "-e", pattern, "--", target]\n'
+FOLLOWUP = [
+    ("m36", "D2 read-only failure -> none, Search's rg process error (was survivor s-rg)",
+     "tool_runtime.ail:637 run_search's Err arm discloses unknown", RT,
+     [("fault: { kind: process_error_fault_kind(err), effects: EffectsNone }, message: process_error_to_string(err)",
+       "fault: { kind: process_error_fault_kind(err), effects: EffectsUnknown }, message: process_error_to_string(err)")],
+     ["w05:r"]),
+    # Under m37 `rg` reads `--pre=<helper>` as an option and the directory as
+    # the pattern, so with no path it searches the process's own directory, the
+    # repository, running the helper on each file: the helper only `cat`s the
+    # file and touches a marker in W0.5's scratch workdir.
+    ("m37", "#277 finding 1: Search's pattern is text (-e, --)",
+     "tool_runtime.ail:616 search_argv passes the pattern positionally again, with no -e and no --", RT,
+     [(SEARCH_ARGV, '  ["-n", "--no-heading", "--color", "never", "--no-config", pattern, target]\n')],
+     ["runtime:t_search_argv_reads_only", "w05:q"]),
+    ("m38", "#277 finding 1: Search reads no ripgrep config (--no-config)",
+     "tool_runtime.ail:616 search_argv drops --no-config", RT,
+     [(SEARCH_ARGV, '  ["-n", "--no-heading", "--color", "never", "-e", pattern, "--", target]\n')],
+     ["runtime:t_search_argv_reads_only"]),
+    ("m39", "#277 finding 2: the unknown-tool refusal echoes the name cut",
+     "tool_runtime.ail:258 unknown_tool_refusal echoes the caller's name uncut", RT,
+     [("  let shown = echoed_tool_name(name, 200);\n", "  let shown = name;\n")],
+     ["adapter:t_long_unknown_tool_keeps_fault", "w05:s"]),
+]
+K0F = ("K0f",) + K0[1:]
+FOLLOWUP_SURVIVAL_ROWS = SURVIVAL_ROWS + ["w05:q", "w05:r", "w05:s"]
 
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -247,29 +288,32 @@ def inline_suite(name, path, d):
     return res, rc
 
 
-def witness_suite(d):
+def witness_suite(d, rows):
+    """W0.5's rows: 16 (a-p) at COMMIT, 19 (a-s) at FOLLOWUP_COMMIT."""
     cmd = ["ailang", "run", "--caps", "IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace", "--ai-stub",
            "--entry", "fault_disclosure_witness", WITNESS]
     out, rc, _ = sh(cmd, os.path.join(d, "w05.log"))
     out = ANSI.sub("", out)
     res = {}
     for line in out.splitlines():
-        m = re.match(r"\s*([✓✗]) row ([a-p]):", line)
+        m = re.match(r"\s*([✓✗]) row ([a-z]):", line)
         if m:
             res["w05:" + m.group(2)] = "pass" if m.group(1) == "✓" else "fail"
     complete = re.search(r"^fault_disclosure_witness (PASS|FAIL)", out, re.M) is not None
-    if "NOT EVALUATED" in out or len(res) != 16 or not complete:
+    if "NOT EVALUATED" in out or len(res) != rows or not complete:
         return None, rc
     return res, rc
 
 
-def run_suites(d):
+def run_suites(d, followup=False):
     os.makedirs(d, exist_ok=True)
     suites = {}
     rcs = {}
     suites["tool_fault"], rcs["tool_fault"] = inline_suite("tool_fault", TF, d)
     suites["adapter"], rcs["adapter"] = inline_suite("adapter", AD, d)
-    suites["w05"], rcs["w05"] = witness_suite(d)
+    if followup:
+        suites["runtime"], rcs["runtime"] = inline_suite("runtime", RT, d)
+    suites["w05"], rcs["w05"] = witness_suite(d, 19 if followup else 16)
     return suites, rcs
 
 
@@ -324,17 +368,22 @@ def red_set(suites):
 
 def main():
     apply_check = "--apply-check" in sys.argv
+    followup = "--followup" in sys.argv
+    commit = FOLLOWUP_COMMIT if followup else COMMIT
+    spec = FOLLOWUP + [K0F] if followup else MUTANTS + [K0]
+    controls = ("F-baseline", "F-restored") if followup else ("C-baseline", "C-restored")
+    survival_rows = FOLLOWUP_SURVIVAL_ROWS if followup else SURVIVAL_ROWS
     if os.getuid() == 0:
         raise SystemExit("run as a non-root user: as root W0.5 rows e and f are not evaluated")
     head = git("rev-parse", "--short=8", "HEAD")
-    if not apply_check and head != COMMIT:
-        raise SystemExit("HEAD is %s, this run is for %s" % (head, COMMIT))
+    if not apply_check and head != commit:
+        raise SystemExit("HEAD is %s, this run is for %s" % (head, commit))
     if git("status", "--porcelain", "--", *TRACKED):
         raise SystemExit("the source this run mutates is not clean")
     originals = {p: sha(p) for p in TRACKED}
 
     if apply_check:
-        for mid, _, _, path, edits, _ in MUTANTS + [K0]:
+        for mid, _, _, path, edits, _ in spec:
             backup = path + ".w06.orig"
             shutil.copyfile(path, backup)
             try:
@@ -348,34 +397,36 @@ def main():
             assert sha(path) == originals[path], "restore failed for " + mid
         return
 
-    if os.path.isdir(RUNS):
-        shutil.rmtree(RUNS)
-    os.makedirs(RUNS)
+    # Only this run's own directories are cleared: the other run's stay.
+    for rid in [m[0] for m in spec] + list(controls):
+        if os.path.isdir(os.path.join(RUNS, rid)):
+            shutil.rmtree(os.path.join(RUNS, rid))
+    os.makedirs(RUNS, exist_ok=True)
     rows = []
     started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
     def control(cid, note):
         t0 = time.time()
-        suites, rcs = run_suites(os.path.join(RUNS, cid))
+        suites, rcs = run_suites(os.path.join(RUNS, cid), followup)
         ok = all(s is not None for s in suites.values())
         red = red_set(suites)
         n = sum(len(s) for s in suites.values() if s)
-        surv = [t for t in SURVIVAL_ROWS if suites["w05"] and suites["w05"].get(t) == "pass"]
+        surv = [t for t in survival_rows if suites["w05"] and suites["w05"].get(t) == "pass"]
         verdict = "PASS" if ok and not red else "FAIL"
         seen = "%d tests ran, %d red%s; survival rows %s green" % (
             n, len(red), (": " + " ".join(sorted(red))) if red else "", "all %d" % len(surv)
-            if len(surv) == len(SURVIVAL_ROWS) else "%d of %d" % (len(surv), len(SURVIVAL_ROWS)))
-        rows.append([cid, "control", note, "none: unmutated source at %s" % COMMIT, "-", "nothing red",
+            if len(surv) == len(survival_rows) else "%d of %d" % (len(surv), len(survival_rows)))
+        rows.append([cid, "control", note, "none: unmutated source at %s" % commit, "-", "nothing red",
                      seen, verdict, "-", "", "complete" if ok else "NOT-RUN",
                      " ".join("%s=%s" % kv for kv in rcs.items()), "%.0f" % (time.time() - t0)])
         print(cid, verdict, seen, flush=True)
         return verdict == "PASS"
 
-    if not control("C-baseline", "every suite green before the first mutant, survival rows included"):
-        write(rows, started)
+    if not control(controls[0], "every suite green before the first mutant, survival rows included"):
+        write(rows, started, followup)
         raise SystemExit("baseline is not green: no mutant is run")
 
-    for mid, rule, edit, path, edits, expect in MUTANTS + [K0]:
+    for mid, rule, edit, path, edits, expect in spec:
         d = os.path.join(RUNS, mid)
         os.makedirs(d)
         backup = os.path.join(d, "orig.ail")
@@ -385,7 +436,7 @@ def main():
             apply(path, edits)
             with open(os.path.join(d, "mutant.diff"), "w") as f:
                 f.write(unified_diff(backup, path, path))
-            suites, rcs = run_suites(d)
+            suites, rcs = run_suites(d, followup)
         finally:
             shutil.copyfile(backup, path)
             os.remove(backup)
@@ -397,7 +448,7 @@ def main():
         seen = [t for t in expect if t in red]
         missing = [t for t in expect if not any(s and t in s for s in suites.values())]
         also = sorted(red - set(expect))
-        if mid == "K0":
+        if mid in ("K0", "K0f"):
             verdict = "PASS" if complete and not red else "FAIL"
         elif not complete or missing:
             verdict = "NOT-RUN"
@@ -413,7 +464,7 @@ def main():
         for k, s in suites.items():
             if s is None:
                 notes.append("%s did not run to its end (rc=%s): see runs/%s/%s.log" % (k, rcs[k], mid, k))
-        rows.append([mid, "control" if mid == "K0" else "mutant", rule, edit, path,
+        rows.append([mid, "control" if mid in ("K0", "K0f") else "mutant", rule, edit, path,
                      " ".join(expect) if expect else "nothing red", " ".join(seen) if seen else
                      ("nothing red" if not red else "none of the expected"),
                      verdict, " ".join(also) if also else "none", "; ".join(notes),
@@ -421,29 +472,41 @@ def main():
                      "%.0f" % (time.time() - t0)])
         print(mid, verdict, "also:", len(also), flush=True)
 
-    ok, why = no_wildcard_check()
-    for sid, rule, edit, sentence in SURVIVORS:
-        note = sentence + ((" Read at %s: %s." % (COMMIT, why)) if sid == "s-nowildcard" else "")
-        if sid == "s-nowildcard" and not ok:
-            note = "THE READ FAILED: " + why
-        rows.append([sid, "survivor", rule, edit, "-", "-", "-", "SURVIVOR", "-", note, "not run", "-", "0"])
+    if not followup:
+        ok, why = no_wildcard_check()
+        for sid, rule, edit, sentence in SURVIVORS:
+            note = sentence + ((" Read at %s: %s." % (COMMIT, why)) if sid == "s-nowildcard" else "")
+            if sid == "s-nowildcard" and not ok:
+                note = "THE READ FAILED: " + why
+            rows.append([sid, "survivor", rule, edit, "-", "-", "-", "SURVIVOR", "-", note, "not run", "-", "0"])
 
-    control("C-restored", "every suite green after the last mutant, on the restored source")
+    control(controls[1], "every suite green after the last mutant, on the restored source")
     for p in TRACKED:
         assert sha(p) == originals[p], "tree not restored: " + p
     if git("status", "--porcelain", "--", *TRACKED):
         raise SystemExit("the mutated source is not clean after the run")
-    write(rows, started)
+    write(rows, started, followup)
 
 
-def write(rows, started):
-    head = ["id", "kind", "rule", "edit", "file", "expect_red", "seen_red", "verdict", "also_red", "notes",
-            "run", "exit", "wall_secs", "commit"]
+HEAD_COLS = ["id", "kind", "rule", "edit", "file", "expect_red", "seen_red", "verdict", "also_red", "notes",
+             "run", "exit", "wall_secs", "commit"]
+
+
+def write(rows, started, followup=False):
+    commit = FOLLOWUP_COMMIT if followup else COMMIT
+    lines = [r + [commit] for r in rows]
+    if followup:
+        # The first run's rows stay, but for `s-rg`, which m36 replaces, and any
+        # row of an earlier follow-up run, which this one replaces.
+        drop = {"s-rg"} | {r[0] for r in rows}
+        with open(os.path.join(HERE, "mutants.tsv")) as f:
+            kept = [l.rstrip("\n").split("\t") for l in f.readlines()[1:]]
+        lines = [r for r in kept if r[0] not in drop and r[-1] == COMMIT] + lines
     with open(os.path.join(HERE, "mutants.tsv"), "w") as f:
-        f.write("\t".join(head) + "\n")
-        for r in rows:
-            f.write("\t".join(str(c).replace("\t", " ").replace("\n", " ") for c in r + [COMMIT]) + "\n")
-    with open(os.path.join(HERE, "meta.txt"), "w") as f:
+        f.write("\t".join(HEAD_COLS) + "\n")
+        for r in lines:
+            f.write("\t".join(str(c).replace("\t", " ").replace("\n", " ") for c in r) + "\n")
+    with open(os.path.join(HERE, "meta-followup.txt" if followup else "meta.txt"), "w") as f:
         f.write("commit\t%s\nuid\t%d\nailang\t%s\nstarted\t%s\nended\t%s\n" % (
             git("rev-parse", "HEAD"), os.getuid(),
             subprocess.run(["ailang", "--version"], stdout=subprocess.PIPE).stdout.decode().split("\n")[0],
