@@ -599,13 +599,14 @@ func check_stderr_text() -> string {
   "Error: type error in tmp/inline_1 (decl 0): undefined variable: undefined_symbol_xyz"
 }
 
-func compose_effects() -> [{ tool_call_id: string, duration_ms: int, code: string, message: string, content: string, exit_code: int }] {
+func compose_effects() -> [{ tool_call_id: string, duration_ms: int, code: string, message: string, content: string, exit_code: int,
+    after_dispatch: bool, applied: bool }] {
   [{ tool_call_id: "", duration_ms: 79, code: "", message: "",
      content: "{\"tool\":\"BashExec\",\"cmd\":\"ailang check tmp/inline_1.ail\",\"exit_code\":0,\"stdout\":\"\",\"stderr\":\"${check_stderr_text()}\",\"truncated\":false}",
-     exit_code: 89 },
+     exit_code: 89, after_dispatch: true, applied: false },
    { tool_call_id: "", duration_ms: 83, code: "", message: "",
      content: "{\"tool\":\"BashExec\",\"cmd\":\"unreached\",\"exit_code\":0,\"stdout\":\"\",\"stderr\":\"\",\"truncated\":false}",
-     exit_code: 97 }]
+     exit_code: 97, after_dispatch: true, applied: false }]
 }
 
 -- The response the model "returns". Reaching the fence is what puts compose on
@@ -737,7 +738,10 @@ pure func graded_program(w: WorldState, initial: WorldState) -> ExecutionProgram
       chunk_draw_hi: 3
     },
     manifest: compose_manifest("HEAD", "ailang 0.33.0", "8.0", "{}", ["env_get"], [], "HEAD"),
-    interactions: w.log
+    interactions: w.log,
+    -- 034 W1.2: no world truth recorded yet. W1.3 fills this from the world's
+    -- effect log, which stays empty unless the scenario scripts an applied fault.
+    applied_faults: []
   }
 }
 

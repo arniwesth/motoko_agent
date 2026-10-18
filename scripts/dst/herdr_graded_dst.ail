@@ -149,14 +149,16 @@ func bash_envelope(stdout: string) -> string {
 }
 
 func eff(duration_ms: int, exit_code: int, stdout: string)
-  -> { tool_call_id: string, duration_ms: int, code: string, message: string, content: string, exit_code: int } {
+  -> { tool_call_id: string, duration_ms: int, code: string, message: string, content: string, exit_code: int,
+    after_dispatch: bool, applied: bool } {
   { tool_call_id: "", duration_ms: duration_ms, code: "", message: "",
-    content: bash_envelope(stdout), exit_code: exit_code }
+    content: bash_envelope(stdout), exit_code: exit_code, after_dispatch: true, applied: false }
 }
 
 -- Durations 101..113 and codes 127/131: distinct from every queue constant in
 -- the tree (S7), which uses 41…61, 43/47/53/59 and 79/83.
-func herdr_effects() -> [{ tool_call_id: string, duration_ms: int, code: string, message: string, content: string, exit_code: int }] {
+func herdr_effects() -> [{ tool_call_id: string, duration_ms: int, code: string, message: string, content: string, exit_code: int,
+    after_dispatch: bool, applied: bool }] {
   [ -- 0. THE STARTUP SWEEP, and missing it is what this spike caught. `sweep_once`
     --    runs on the FIRST tool call, before `do_delegate` does anything, and
     --    issues `pane list`. A fixture that starts at the split serves the
@@ -419,7 +421,10 @@ pure func graded_program(w: WorldState, initial: WorldState) -> ExecutionProgram
       chunk_draw_hi: 3
     },
     manifest: herdr_manifest(),
-    interactions: w.log
+    interactions: w.log,
+    -- 034 W1.2: no world truth recorded yet. W1.3 fills this from the world's
+    -- effect log, which stays empty unless the scenario scripts an applied fault.
+    applied_faults: []
   }
 }
 

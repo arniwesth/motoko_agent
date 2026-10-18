@@ -238,7 +238,7 @@ func m11_under_over(lr: LiveRun) -> bool ! {IO} {
   let run = lr.run;
   let under = { run | trace: { records: run.trace.records ++ [lt_prepared()] } };
   let over = { run | trace: { records: lt_drop_first(run.trace.records, lt_is_prepared) } };
-  let tool_left: ScriptedTool = { tool_call_id: "fx", duration_ms: 0, code: "", message: "", content: "", exit_code: -1 };
+  let tool_left: ScriptedTool = { tool_call_id: "fx", duration_ms: 0, code: "", message: "", content: "", exit_code: -1, after_dispatch: true, applied: false };
   let kept = { run | world: { run.world | tools: [tool_left] } };
   let u = a7_of_run(under, lr.w0, lr.jw);
   let o = a7_of_run(over, lr.w0, lr.jw);

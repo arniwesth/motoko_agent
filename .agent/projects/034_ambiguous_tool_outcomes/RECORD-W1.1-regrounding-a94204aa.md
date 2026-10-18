@@ -378,4 +378,16 @@ reported, never refused.
    commit, after W1.8's comparison has been recorded against the unregenerated manifest. W1.8 then
    runs `make eval_matrix` a second time, and the PR states both runs.
 
-**The operator's answer** is recorded here before W1.2 starts: **pending.**
+**The operator's answer** is recorded here before W1.2 starts: **accepted, Option A, 2026-10-18.**
+W1 leaves `tools/eval_protected/`, `scripts/eval/` and `MATRIX.expected.tsv` untouched (points 1
+and 2 above); W1.8 verifies that the changed rows match §5; a separate evaluator pull request after
+W1 merges moves `A` and regenerates `manifest-A`. Point 3 is not taken.
+
+**W1.2's answer to the type-closure question above:** the dispatch stage is a `bool`,
+`ScriptedTool.after_dispatch` and `ToolFailed.after_dispatch`, not a new sum type. A sum declared
+in `ports.ail` would be pinned at the next `gen` and move the span count off 119; declared in
+`types.ail` or `tool_fault.ail` it needs a new import in `ports.ail`, which changes the protected
+`<imports:1>` region, the first span in `ports.ail`, and so the first finding of every row §5
+predicts. A `bool` does neither, and W1.2 adds no function that a protected `ports.ail` function
+calls, so the closure flags stay at 14. With W1.2 alone the first `ports.ail` finding is
+`changed:ScriptedTool`; it becomes `changed:WorldState` when W1.3 edits `WorldState`, as §5 predicts.

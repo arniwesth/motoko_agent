@@ -677,7 +677,10 @@ pure func program_of(log: [Interaction], initial: WorldState) -> ExecutionProgra
       chunk_draw_hi: 3
     },
     manifest: w4_manifest(),
-    interactions: log
+    interactions: log,
+    -- 034 W1.2: no world truth recorded yet. W1.3 fills this from the world's
+    -- effect log, which stays empty unless the scenario scripts an applied fault.
+    applied_faults: []
   }
 }
 

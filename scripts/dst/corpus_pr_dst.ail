@@ -443,7 +443,10 @@ pure func program_of(w: WorldState, initial: WorldState) -> ExecutionProgram {
     },
     bounds: initial.gen.bounds,
     manifest: run_manifest(),
-    interactions: w.log }
+    interactions: w.log,
+    -- 034 W1.2: no world truth recorded yet. W1.3 fills this from the world's
+    -- effect log; W1.6 makes the generator draw `applied`.
+    applied_faults: [] }
 }
 
 export pure func store_root() -> string { ".ailang/dst-corpus" }

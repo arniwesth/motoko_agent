@@ -113,7 +113,7 @@ import src/core/dst_profile (ExecutionManifest)
 import src/core/ports (WakeObservation, wake_outcome_of, 
   WorldState, ScriptedStep, ScriptedTool, empty_world_state,
   ProviderOutcome, ProviderServed, ProviderScriptExhausted, ProviderUndecodable,
-  ToolOutcome, ToolCompleted,
+  ToolOutcome, ToolCompleted, ToolFailed, ToolDeadlineExceeded,
   ToolOutcomeRecord, ToolRecordDecoded, ToolRecordUndecodable,
   decode_provider_outcome, decode_tool_outcome,
   encode_provider_outcome, encode_exhausted_provider_outcome, encode_tool_outcome
@@ -633,12 +633,19 @@ export type ReplayRefusal
   = ProgramStructurallyInvalid(string)   -- the first structural rule that fired
   | ProviderOutcomeUndecodable(int, string)  -- ordinal, why
   | ToolOutcomeUndecodable(int, string)      -- ordinal, why
+  -- 034 W1.2: the world-truth list's two STAGE-DEPENDENT rules. They live here
+  -- and not in `dst_program.validate_program` because both need the outcome
+  -- payload decoded, and that decoder is port code `dst_program` must not import.
+  | AppliedFaultCompleted(int)               -- listed ordinal
+  | AppliedFaultBeforeDispatch(int)          -- listed ordinal
 
 export pure func refusal_rule(r: ReplayRefusal) -> string {
   match r {
     ProgramStructurallyInvalid(_) => "replay-refused-invalid-program",
     ProviderOutcomeUndecodable(_, _) => "replay-refused-provider-outcome-undecodable",
-    ToolOutcomeUndecodable(_, _) => "replay-refused-tool-outcome-undecodable"
+    ToolOutcomeUndecodable(_, _) => "replay-refused-tool-outcome-undecodable",
+    AppliedFaultCompleted(_) => "replay-refused-applied-fault-completed",
+    AppliedFaultBeforeDispatch(_) => "replay-refused-applied-fault-before-dispatch"
   }
 }
 
@@ -649,7 +656,11 @@ export pure func refusal_message(r: ReplayRefusal) -> string {
     ProviderOutcomeUndecodable(ord, why) =>
       "[replay-refused-provider-outcome-undecodable] interaction #${ord} records a provider outcome this build cannot read back (${why}); the provider script is a PROJECTION of the interaction list (dst_program design note 3), so an outcome that cannot be re-served is a program that cannot be replayed — failing closed here is what stops it becoming a silently shorter run",
     ToolOutcomeUndecodable(ord, why) =>
-      "[replay-refused-tool-outcome-undecodable] interaction #${ord} records a tool outcome this build cannot read back (${why}); the tool queue is a projection of the interaction list, so the same rule applies as for the provider outcome"
+      "[replay-refused-tool-outcome-undecodable] interaction #${ord} records a tool outcome this build cannot read back (${why}); the tool queue is a projection of the interaction list, so the same rule applies as for the provider outcome",
+    AppliedFaultCompleted(ord) =>
+      "[replay-refused-applied-fault-completed] applied_faults lists interaction #${ord}, whose tool outcome COMPLETED; the world-truth list names faults whose effect applied anyway, and a completed call's outcome already says the tool reported (034 PLAN-001 W1.2), so listing one is a program that states two different truths about one call",
+    AppliedFaultBeforeDispatch(ord) =>
+      "[replay-refused-applied-fault-before-dispatch] applied_faults lists interaction #${ord}, a fault observed BEFORE DISPATCH; its effect was provably not entered, so 'applied' is impossible there, and 034 ADR-001 D4 requires validation to reject a program that sets it"
   }
 }
 
@@ -808,6 +819,50 @@ pure func ext_effects_of(xs: [Interaction]) -> Result[[ScriptedTool], ReplayRefu
   }
 }
 
+-- 034 W1.2. The world-truth list's STAGE-DEPENDENT rules, run after the
+-- structural validator has established that every listed ordinal names exactly
+-- one tool interaction. Each listed interaction must be a FAULT, and one observed
+-- AFTER DISPATCH. Two refusals and not one, because they are two different
+-- untruths: a completed call listed as applied-then-faulted (034 W1.7 mutant
+-- v03), and an applied effect on a fault whose effect was provably not entered
+-- (D4, mutant v04).
+--
+-- "Completed" is read off the recorded STATUS, not the decoded `ScriptedTool`:
+-- a deadline fault decodes with a blank code just as a completion does, and the
+-- two differ only in what the invocation's timeout makes of the duration. The
+-- status is what the recorder wrote, so it is the observation. The stage is read
+-- off the decoded payload, which is the only place it lives.
+-- contracts: SKIPPED — calls `applied_fault_check`, whose Option[ReplayRefusal] result is unencodable.
+pure func applied_fault_refusal(xs: [Interaction], listed: [int]) -> Option[ReplayRefusal] {
+  match listed {
+    [] => None,
+    ord :: rest =>
+      match applied_fault_check(xs, ord) {
+        Some(r) => Some(r),
+        None => applied_fault_refusal(xs, rest)
+      }
+  }
+}
+
+-- contracts: SKIPPED — calls std/json `decode`, whose Result[Json, string] is unencodable.
+pure func applied_fault_check(xs: [Interaction], ord: int) -> Option[ReplayRefusal] {
+  match xs {
+    [] => None,
+    i :: rest =>
+      if i.identity.ordinal != ord then applied_fault_check(rest, ord)
+      else match i.outcome.status {
+        OutcomeOk => Some(AppliedFaultCompleted(ord)),
+        _ =>
+          match decode_tool_outcome(i.outcome.payload, i.outcome.advance_ms) {
+            ToolRecordUndecodable(why) => Some(ToolOutcomeUndecodable(ord, why)),
+            ToolRecordDecoded(t) =>
+              if t.code != "" && not t.after_dispatch then Some(AppliedFaultBeforeDispatch(ord))
+              else None
+          }
+      }
+  }
+}
+
 pure func first_structural_rule(p: ExecutionProgram, known_class_ids: [string]) -> Option[string] {
   match validate_program(p, known_class_ids) {
     [] => None,
@@ -834,6 +889,11 @@ export pure func world_state_of(
   match first_structural_rule(p, known_class_ids) {
     Some(rule) => Err(ProgramStructurallyInvalid(rule)),
     None =>
+      -- 034 W1.2. The list is VALIDATED here and not yet READ: `tools_of`
+      -- decodes every entry with `applied: false`, and W1.3 sets it from the list.
+      match applied_fault_refusal(p.interactions, p.applied_faults) {
+        Some(r) => Err(r),
+        None =>
       match script_of(p.interactions) {
         Err(e) => Err(e),
         Ok(script) =>
@@ -873,6 +933,7 @@ export pure func world_state_of(
                    ext_effects: ext_effects })
               }
           }
+      }
       }
   }
 }
@@ -1147,7 +1208,8 @@ pure func fixture_program() -> ExecutionProgram {
     bounds: { max_interactions: 64, max_chunks_per_interaction: 4, max_payload_bytes: 4096,
               max_resource_size: 4096, max_clock_advance_ms: 1000, chunk_draw_hi: 3 },
     manifest: fixture_manifest(),
-    interactions: fixture_interactions() }
+    interactions: fixture_interactions(),
+    applied_faults: [] }
 }
 
 -- One reconstituted tool queue entry. WI-D22 factored this out of the four
@@ -1158,7 +1220,8 @@ pure func fixture_program() -> ExecutionProgram {
 -- above records, so the queue this fixture builds is the queue `world_state_of`
 -- actually derives from the same program.
 pure func fixture_tool() -> ScriptedTool {
-  { tool_call_id: "", duration_ms: 3, code: "", message: "", content: "OUT", exit_code: -1 }
+  { tool_call_id: "", duration_ms: 3, code: "", message: "", content: "OUT", exit_code: -1,
+    after_dispatch: true, applied: false }
 }
 
 -- THE SURVIVE FIXTURE (S7). The three queues, the epoch and the environment all
@@ -1278,6 +1341,88 @@ pure func test_an_invalid_program_refuses_replay_before_reconstitution() -> bool
       Ok(_) => false,
       Err(r) => refusal_rule(r) == "replay-refused-invalid-program"
     }
+  }
+
+-- ---------------------------------------------------------------------------
+-- 034 W1.2 ACCEPTANCE (c), THE STAGE-DEPENDENT HALF: the world-truth list's two
+-- refusals, each with its own row, and the controls that keep them failable.
+-- The structural half (an ordinal that is not a tool interaction, or is listed
+-- twice) is `dst_program.validate_program`'s, with its rows in
+-- `scripts/dst/execution_program_dst.ail`.
+-- ---------------------------------------------------------------------------
+
+-- The class id the fault rows below record. Passed to `world_state_of` as the
+-- known set, so the structural validator admits it.
+pure func wt_class() -> string { "F" }
+
+pure func failed_i(ord: int, call_id: string, after: bool) -> Interaction {
+  mk(ToolIdentity("loop_v2", call_id, "T"), ord,
+     { advance_ms: 3, chunks: [],
+       payload: encode_tool_outcome(ToolFailed({ tool_call_id: call_id, code: "E_WT", message: "m",
+                                                 after_dispatch: after })),
+       status: OutcomeFault, fault_class_id: wt_class() })
+}
+
+pure func late_i(ord: int, call_id: string) -> Interaction {
+  mk(ToolIdentity("loop_v2", call_id, "T"), ord,
+     { advance_ms: 900, chunks: [],
+       payload: encode_tool_outcome(ToolDeadlineExceeded({ tool_call_id: call_id, elapsed_ms: 900, timeout_ms: 50 })),
+       status: OutcomeFault, fault_class_id: wt_class() })
+}
+
+-- The fixture program with interaction #1 replaced and `applied_faults` set.
+-- Everything else is `fixture_program()`, which reconstitutes cleanly.
+pure func wt_program(one: Interaction, listed: [int]) -> ExecutionProgram {
+  { fixture_program() |
+    interactions: [provider_i(0, "s0"), one, approval_i(2, "c1", true),
+                   provider_i(3, "s1"), tool_i(4, "c2"), approval_i(5, "c2", false),
+                   tool_i(6, "c3"), approval_i(7, "c3", false), tool_i(8, "c4"),
+                   exhausted_i(9)],
+    applied_faults: listed }
+}
+
+pure func wt_rule(p: ExecutionProgram) -> string {
+  match world_state_of(p, [wt_class()]) { Ok(_) => "ok", Err(r) => refusal_rule(r) }
+}
+
+-- A COMPLETED call listed as applied-then-faulted is refused (034 W1.7 mutant
+-- v03). #1 is `tool_i`'s completion, recorded `ok`.
+pure func test_a_listed_completed_tool_outcome_refuses_replay() -> bool
+  tests [((), true)]
+  {
+    wt_rule(wt_program(tool_i(1, "c1"), [1])) == "replay-refused-applied-fault-completed"
+      -- The control: the same program with the list empty replays.
+      && wt_rule(wt_program(tool_i(1, "c1"), [])) == "ok"
+  }
+
+-- `applied` on a BEFORE-DISPATCH fault is refused (034 ADR-001 D4; W1.7 mutant
+-- v04). The controls are what make the row failable from both sides: the same
+-- fault UNLISTED replays, so the refusal is about the list and not the fault;
+-- and an AFTER-dispatch fault LISTED replays, so it is about the stage and not
+-- about listing a fault at all.
+pure func test_a_listed_before_dispatch_fault_refuses_replay() -> bool
+  tests [((), true)]
+  {
+    wt_rule(wt_program(failed_i(1, "c1", false), [1])) == "replay-refused-applied-fault-before-dispatch"
+      && wt_rule(wt_program(failed_i(1, "c1", false), [])) == "ok"
+      && wt_rule(wt_program(failed_i(1, "c1", true), [1])) == "ok"
+  }
+
+-- A deadline fault decodes with a blank code, exactly as a completion does, and
+-- is after dispatch by construction. Listing one replays: the "completed" rule
+-- reads the recorded status, not the decoded code.
+pure func test_a_listed_deadline_fault_replays() -> bool
+  tests [((), true)]
+  {
+    wt_rule(wt_program(late_i(1, "c1"), [1])) == "ok"
+  }
+
+-- The structural rules run FIRST, in `validate_program`: an ordinal that names
+-- the provider interaction is an invalid program, not a stage refusal.
+pure func test_a_listed_non_tool_ordinal_is_a_structural_refusal() -> bool
+  tests [((), true)]
+  {
+    wt_rule(wt_program(failed_i(1, "c1", true), [0])) == "replay-refused-invalid-program"
   }
 
 -- ---------------------------------------------------------------------------

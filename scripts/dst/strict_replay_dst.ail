@@ -668,7 +668,10 @@ pure func program_of(log: [Interaction], initial: WorldState) -> ExecutionProgra
       chunk_draw_hi: 3
     },
     manifest: discovered_manifest(),
-    interactions: log
+    interactions: log,
+    -- 034 W1.2: no world truth recorded yet. W1.3 fills this from the world's
+    -- effect log, which stays empty unless the scenario scripts an applied fault.
+    applied_faults: []
   }
 }
 
@@ -1119,9 +1122,9 @@ func rich_answers() -> [string] { [approve_line(), deny_line("bravo"), approve_l
 func rich_tools() -> [ScriptedTool] {
   -- WI-D22's `exit_code`. All three are -1 ("nothing said"): these are scripted
   -- answers for a tool named "T", not process runs.
-  [{ tool_call_id: "", duration_ms: 7,  code: "",       message: "",     content: "OK-ALPHA",   exit_code: -1 },
-   { tool_call_id: "", duration_ms: 11, code: "E_BOOM", message: "boom", content: "",           exit_code: -1 },
-   { tool_call_id: "", duration_ms: 13, code: "",       message: "",     content: "OK-CHARLIE", exit_code: -1 }]
+  [{ tool_call_id: "", duration_ms: 7,  code: "",       message: "",     content: "OK-ALPHA",   exit_code: -1, after_dispatch: true, applied: false },
+   { tool_call_id: "", duration_ms: 11, code: "E_BOOM", message: "boom", content: "",           exit_code: -1, after_dispatch: true, applied: false },
+   { tool_call_id: "", duration_ms: 13, code: "",       message: "",     content: "OK-CHARLIE", exit_code: -1, after_dispatch: true, applied: false }]
 }
 
 -- THE FAILURE-PATH SCENARIO. A step budget of 1 against a script of three

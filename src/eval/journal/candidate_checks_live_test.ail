@@ -337,7 +337,7 @@ func m14_markers(a: Admitted) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, S
 -- ============================================================================
 
 func m14_k1(a: Admitted, w0: WorldState) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
-  let extra: ScriptedTool = { tool_call_id: "fx", duration_ms: 0, code: "", message: "", content: "", exit_code: -1 };
+  let extra: ScriptedTool = { tool_call_id: "fx", duration_ms: 0, code: "", message: "", content: "", exit_code: -1, after_dispatch: true, applied: false };
   let handed = { w0 | tools: w0.tools ++ [extra] };
   let run = candidate_run(a.jw, handed, lt_workdir());
   let over = lt_case("m14_k1_reconstitution", lt_verdict(a.entry, handed, run), lt_all(a.entry, handed, run),

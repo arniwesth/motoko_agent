@@ -275,10 +275,11 @@ func world_env() -> [{ key: string, value: string }] {
 --
 -- All three are -1 ("nothing said"): these tools do not run a process, and a 0
 -- would assert that they did and succeeded.
-func scripted_tools() -> [{ tool_call_id: string, duration_ms: int, code: string, message: string, content: string, exit_code: int }] {
-  [{ tool_call_id: "", duration_ms: 7,  code: "", message: "", content: "OK-ALPHA",   exit_code: -1 },
-   { tool_call_id: "", duration_ms: 11, code: "", message: "", content: "OK-BRAVO",   exit_code: -1 },
-   { tool_call_id: "", duration_ms: 13, code: "", message: "", content: "OK-CHARLIE", exit_code: -1 }]
+func scripted_tools() -> [{ tool_call_id: string, duration_ms: int, code: string, message: string, content: string, exit_code: int,
+    after_dispatch: bool, applied: bool }] {
+  [{ tool_call_id: "", duration_ms: 7,  code: "", message: "", content: "OK-ALPHA",   exit_code: -1, after_dispatch: true, applied: false },
+   { tool_call_id: "", duration_ms: 11, code: "", message: "", content: "OK-BRAVO",   exit_code: -1, after_dispatch: true, applied: false },
+   { tool_call_id: "", duration_ms: 13, code: "", message: "", content: "OK-CHARLIE", exit_code: -1, after_dispatch: true, applied: false }]
 }
 
 func base_world(answers: [string]) -> WorldState {
@@ -837,7 +838,10 @@ pure func program_of(w: WorldState, initial: WorldState) -> ExecutionProgram {
       chunk_draw_hi: 3
     },
     manifest: discovered_manifest(),
-    interactions: w.log
+    interactions: w.log,
+    -- 034 W1.2: no world truth recorded yet. W1.3 fills this from the world's
+    -- effect log, which stays empty unless the scenario scripts an applied fault.
+    applied_faults: []
   }
 }
 
@@ -1138,7 +1142,8 @@ func routing_scenario() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedM
 -- `WorldState.ext_effects` (durations 17/19/23/29), and no two quantities in
 -- either queue are equal (S7). A world serving one queue from the other shows up
 -- as a content mismatch rather than as a count that still balances.
-func effect_tools() -> [{ tool_call_id: string, duration_ms: int, code: string, message: string, content: string, exit_code: int }] {
+func effect_tools() -> [{ tool_call_id: string, duration_ms: int, code: string, message: string, content: string, exit_code: int,
+    after_dispatch: bool, applied: bool }] {
   -- SIX entries against the four intercepts the script produces, and the slack
   -- is load-bearing rather
   -- than defensive: an empty `ext_effects` queue does not fail, it DELEGATES —
@@ -1152,12 +1157,12 @@ func effect_tools() -> [{ tool_call_id: string, duration_ms: int, code: string, 
   -- value for a tool that runs no process, and it is exactly wrong here: this
   -- seam's whole point since WI-D23 is that a subprocess code crosses the ABI,
   -- so the fixture states codes a replay can be caught losing.
-  [{ tool_call_id: "", duration_ms: 17, code: "", message: "", content: "EXT-EFFECT-1", exit_code: 41 },
-   { tool_call_id: "", duration_ms: 19, code: "", message: "", content: "EXT-EFFECT-2", exit_code: 43 },
-   { tool_call_id: "", duration_ms: 23, code: "", message: "", content: "EXT-EFFECT-3", exit_code: 47 },
-   { tool_call_id: "", duration_ms: 29, code: "", message: "", content: "EXT-EFFECT-4", exit_code: 53 },
-   { tool_call_id: "", duration_ms: 31, code: "", message: "", content: "EXT-EFFECT-5", exit_code: 59 },
-   { tool_call_id: "", duration_ms: 37, code: "", message: "", content: "EXT-EFFECT-6", exit_code: 61 }]
+  [{ tool_call_id: "", duration_ms: 17, code: "", message: "", content: "EXT-EFFECT-1", exit_code: 41, after_dispatch: true, applied: false },
+   { tool_call_id: "", duration_ms: 19, code: "", message: "", content: "EXT-EFFECT-2", exit_code: 43, after_dispatch: true, applied: false },
+   { tool_call_id: "", duration_ms: 23, code: "", message: "", content: "EXT-EFFECT-3", exit_code: 47, after_dispatch: true, applied: false },
+   { tool_call_id: "", duration_ms: 29, code: "", message: "", content: "EXT-EFFECT-4", exit_code: 53, after_dispatch: true, applied: false },
+   { tool_call_id: "", duration_ms: 31, code: "", message: "", content: "EXT-EFFECT-5", exit_code: 59, after_dispatch: true, applied: false },
+   { tool_call_id: "", duration_ms: 37, code: "", message: "", content: "EXT-EFFECT-6", exit_code: 61, after_dispatch: true, applied: false }]
 }
 
 func effect_world(answers: [string]) -> WorldState {
@@ -1460,7 +1465,8 @@ func check_stderr_text() -> string {
 -- the block above: the disagreement is the oracle. 71 is distinct from every
 -- other quantity in this file (S7) — the driver's tools carry -1, D24's effects
 -- 41/43/47/53/59/61, and the grep scenario below uses 1.
-func compose_check_effects() -> [{ tool_call_id: string, duration_ms: int, code: string, message: string, content: string, exit_code: int }] {
+func compose_check_effects() -> [{ tool_call_id: string, duration_ms: int, code: string, message: string, content: string, exit_code: int,
+    after_dispatch: bool, applied: bool }] {
   -- TWO entries against the ONE dispatch the script produces, and the slack is
   -- WI-D24's load-bearing kind rather than defensive: an empty `ext_effects`
   -- queue does not fail, it DELEGATES to the real dispatcher, so a fixture sized
@@ -1470,10 +1476,10 @@ func compose_check_effects() -> [{ tool_call_id: string, duration_ms: int, code:
   -- queue the LOG rebuilds, not the one this function seeded.
   [{ tool_call_id: "", duration_ms: 43, code: "", message: "",
      content: "{\"tool\":\"BashExec\",\"cmd\":\"ailang check tmp/inline_1.ail\",\"exit_code\":0,\"stdout\":\"\",\"stderr\":\"${check_stderr_text()}\",\"truncated\":false}",
-     exit_code: 71 },
+     exit_code: 71, after_dispatch: true, applied: false },
    { tool_call_id: "", duration_ms: 47, code: "", message: "",
      content: "{\"tool\":\"BashExec\",\"cmd\":\"unreached\",\"exit_code\":0,\"stdout\":\"\",\"stderr\":\"\",\"truncated\":false}",
-     exit_code: 73 }]
+     exit_code: 73, after_dispatch: true, applied: false }]
 }
 
 -- The response the model "returns". The fence is what `extract_ailang_fence`
@@ -1674,17 +1680,18 @@ func compose_check_scenario() -> bool ! {AI, Clock, Env, FS, IO, Net, SharedMem,
 -- verdict is carried out of the hook by a `file_write`, which IS recorded and
 -- which lands in the final world. That is WI-D20's `routing_tool_handle` shape:
 -- put the observation somewhere a witness outside the hook can read it.
-func grep_effects() -> [{ tool_call_id: string, duration_ms: int, code: string, message: string, content: string, exit_code: int }] {
+func grep_effects() -> [{ tool_call_id: string, duration_ms: int, code: string, message: string, content: string, exit_code: int,
+    after_dispatch: bool, applied: bool }] {
   -- exit_code 1 with EMPTY stdout: ripgrep's "no matches". The embedded code
   -- agrees with the typed one here, unlike the check scenario's fixture — this
   -- row is not about which code is read, it is about the code not being read at
   -- all, so a disagreement would only muddy it.
   [{ tool_call_id: "", duration_ms: 53, code: "", message: "",
      content: "{\"tool\":\"BashExec\",\"cmd\":\"rg -n --no-heading -F needle_xyz haystack.txt\",\"exit_code\":1,\"stdout\":\"\",\"stderr\":\"\",\"truncated\":false}",
-     exit_code: 1 },
+     exit_code: 1, after_dispatch: true, applied: false },
    { tool_call_id: "", duration_ms: 59, code: "", message: "",
      content: "{\"tool\":\"BashExec\",\"cmd\":\"unreached\",\"exit_code\":1,\"stdout\":\"\",\"stderr\":\"\",\"truncated\":false}",
-     exit_code: 1 }]
+     exit_code: 1, after_dispatch: true, applied: false }]
 }
 
 -- The file the FALLBACK SCAN must find the pattern in. It is in the world's

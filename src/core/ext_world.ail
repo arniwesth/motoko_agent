@@ -263,7 +263,13 @@ pure func scripted_tool_json(t: ScriptedTool) -> Json {
     -- this codec's own header describes for `files`, one field over. Its
     -- decoder's fallback is `-1` ("nothing said"), not 0, for
     -- `ScriptedTool.exit_code`'s stated reason: 0 is a claim of success.
-    kv("exit_code", jint(t.exit_code))
+    kv("exit_code", jint(t.exit_code)),
+    -- 034 W1.2. The dispatch stage is an observation and crosses as one, or
+    -- every hook that adopts the world back would reset a before-dispatch fault
+    -- to the decoder's fallback. `applied` is WORLD TRUTH and is deliberately
+    -- not written (034 ADR-001 D4): a hook must not be handed it. W1.3 re-seats
+    -- it from the pre-hook world after adoption.
+    kv("after_dispatch", jb(t.after_dispatch))
   ])
 }
 
@@ -280,7 +286,12 @@ pure func scripted_tools_of(xs: [Json]) -> [ScriptedTool] {
          code: str_field(x, "code", ""),
          message: str_field(x, "message", ""),
          content: str_field(x, "content", ""),
-         exit_code: int_field(x, "exit_code", -1) }) :: scripted_tools_of(rest)
+         exit_code: int_field(x, "exit_code", -1),
+         -- A token written before 034 W1.2 carries no stage, and decodes after
+         -- dispatch for the persistence codec's reason (`ports.decode_tool_outcome`).
+         after_dispatch: bool_field(x, "after_dispatch", true),
+         -- Never in the token; see `scripted_tool_json`.
+         applied: false }) :: scripted_tools_of(rest)
   }
 }
 
@@ -778,17 +789,22 @@ pure func codec_fixture_world() -> WorldState {
     -- fixture (199, 1213, 107, 109, 457, 5, 7, 311, 617, 23, 29, 31, 37), per
     -- S7 — a fixture holding -1 or 0 here could not distinguish a field that
     -- round-tripped from one the decoder defaulted.
+    -- 034 W1.2: `after_dispatch: false`, the value the decoder's fallback can
+    -- NOT supply, so a codec that drops the stage is visible here.
     tools: [{ tool_call_id: "t-17", duration_ms: 199, code: "E_TOOL",
-              message: "tool said no", content: "the content", exit_code: 211 }],
+              message: "tool said no", content: "the content", exit_code: 211,
+              after_dispatch: false, applied: false }],
     -- WI-D24's extension-effect cursor. TWO entries against the tool queue's
     -- one, and every quantity distinct from every other in this fixture (S7):
     -- the failure this catches is a decoder reading `ext_effects` out of
     -- `tools`, which a same-length pair of queues could not distinguish. The
     -- blank `tool_call_id` is this class's real shape, so the fixture holds it.
     ext_effects: [{ tool_call_id: "", duration_ms: 223, code: "",
-                    message: "", content: "ext content", exit_code: 227 },
+                    message: "", content: "ext content", exit_code: 227,
+                    after_dispatch: true, applied: false },
                   { tool_call_id: "", duration_ms: 229, code: "E_EXT",
-                    message: "ext said no", content: "", exit_code: 233 }],
+                    message: "ext said no", content: "", exit_code: 233,
+                    after_dispatch: true, applied: false }],
     -- The holder. A value no other field in this fixture holds, because the
     -- decoder's failure mode here is reading it out of some other string.
     holder_ext_id: "ext-holder-239",
@@ -1111,7 +1127,10 @@ pure func test_the_world_token_round_trips_the_remaining_cursors() -> bool
                    -- WI-D22. An encoder that omitted this key leaves the
                    -- decoder's -1 behind, and every hook that adopts the world
                    -- back would erase the tool queue's exit codes mid-run.
-                   && t.exit_code == 211,
+                   && t.exit_code == 211
+                   -- 034 W1.2. The fixture holds before dispatch, which the
+                   -- decoder's fallback cannot produce.
+                   && not t.after_dispatch,
       _ => false
     };
     -- WI-D3. Asserted by VALUE and in order, for the reason the approvals queue

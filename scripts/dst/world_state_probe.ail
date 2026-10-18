@@ -1061,10 +1061,10 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
       -- `code: "ExitCode"` is D3's typed tool fault class id and is a different
       -- quantity from this field: the fault class says which failure, the exit
       -- code says what a process returned, and this world runs no process.
-      { tool_call_id: "", duration_ms: 1,  code: "",         message: "",             content: "OK-ALPHA", exit_code: -1 },
-      { tool_call_id: "", duration_ms: 1,  code: "ExitCode", message: "boom-bravo",   content: "",         exit_code: -1 },
-      { tool_call_id: "WRONG-ID", duration_ms: 1, code: "",  message: "",             content: "",         exit_code: -1 },
-      { tool_call_id: "", duration_ms: 999, code: "",        message: "",             content: "OK-DELTA", exit_code: -1 }
+      { tool_call_id: "", duration_ms: 1,  code: "",         message: "",             content: "OK-ALPHA", exit_code: -1, after_dispatch: true, applied: false },
+      { tool_call_id: "", duration_ms: 1,  code: "ExitCode", message: "boom-bravo",   content: "",         exit_code: -1, after_dispatch: true, applied: false },
+      { tool_call_id: "WRONG-ID", duration_ms: 1, code: "",  message: "",             content: "",         exit_code: -1, after_dispatch: true, applied: false },
+      { tool_call_id: "", duration_ms: 999, code: "",        message: "",             content: "OK-DELTA", exit_code: -1, after_dispatch: true, applied: false }
     ]
   };
   let tools_run = run_world(allow_rt("probe_tools"), 12, tool_world);
@@ -1151,7 +1151,7 @@ export func exit_code_witness() -> () ! {AI, Clock, Env, FS, IO, Net, Process, S
   -- catches the `ExtProcOutcome` projection being dropped, because the seam
   -- was built across four items with no caller at all and this is its first.
   let scripted_tool: ScriptedTool =
-    { tool_call_id: "", duration_ms: 11, code: "", message: "", content: "d23-scripted", exit_code: 5 };
+    { tool_call_id: "", duration_ms: 11, code: "", message: "", content: "d23-scripted", exit_code: 5, after_dispatch: true, applied: false };
   -- `ext_effects` AND NOT `tools` SINCE WI-D24, and this line is the D23 row
   -- being MOVED rather than rewritten. The bridge's dispatch is an extension
   -- effect: it is served from its own cursor and recorded under its own identity

@@ -596,13 +596,40 @@ export pure func advance_ordinal(w: WorldState, c: RequestClass) -> WorldState {
 -- decode arms, the generating adapter (which draws nothing, by WI-D22's
 -- decision 6), and every in-process noop — all producers that genuinely
 -- cannot state a code.
+--
+-- 034 W1.2 ADDED TWO FIELDS, AND THEY TRAVEL BY DIFFERENT ROUTES BECAUSE ONE IS
+-- AN OBSERVATION AND ONE IS NOT (034 ADR-001 D3, D4):
+--
+--   after_dispatch  the STAGE of a typed execution fault: `false` when the fault
+--                   was observed before the tool was dispatched (its effect was
+--                   provably not entered), `true` when it was observed after.
+--                   It is an observation, so it reaches `ToolFailed` and the
+--                   served outcome payload exactly as `code` does. It means
+--                   nothing when `code` is empty: a mismatch answers a
+--                   dispatched call and a deadline is measured from dispatch,
+--                   so both are after dispatch by construction (D3).
+--   applied         WORLD TRUTH: the fault's effect was applied anyway. It
+--                   never reaches a `ToolOutcome`, the served payload or the
+--                   world token (D4: "no carrier"); `scripted_tool_outcome`
+--                   does not read it. A program records it as the ordinals in
+--                   `ExecutionProgram.applied_faults`, never in an interaction.
+--
+-- THE STAGE IS A `bool` AND NOT A TWO-ARM SUM, and the reason is 013 ADR-004's
+-- protected-region manifest rather than taste. A sum declared here is a new type
+-- `ScriptedTool` names, so the next `manifest-A` regeneration would pin it and
+-- move the span count off 119; declared in another module it needs a new import
+-- in this file, which changes the protected `<imports:1>` region and so the
+-- first finding of every candidate the evaluator matrix checks. A `bool` with
+-- the stage in its name does neither (034 RECORD-W1.1 §6).
 export type ScriptedTool = {
   tool_call_id: string,
   duration_ms: int,
   code: string,
   message: string,
   content: string,
-  exit_code: int
+  exit_code: int,
+  after_dispatch: bool,
+  applied: bool
 }
 
 -- D1's typed tool request: parts 1 and 2 of the three the decision requires —
@@ -644,9 +671,15 @@ export type ToolInvocation = {
 --
 -- See `ScriptedTool.exit_code` for the domain; `-1` is "no subprocess, or a seam
 -- that cannot say", and it is NOT success.
+--
+-- 034 W1.2 GAVE `ToolFailed` THE DISPATCH STAGE and the other two faults none,
+-- for the reason above applied to a second quantity: a deadline is measured from
+-- dispatch and a mismatch answers a dispatched call, so both are after dispatch
+-- by construction, and a field there would make "before dispatch" representable
+-- where it is always wrong. See `ScriptedTool.after_dispatch`.
 export type ToolOutcome
   = ToolCompleted({ tool_call_id: string, content: string, exit_code: int })
-  | ToolFailed({ tool_call_id: string, code: string, message: string })
+  | ToolFailed({ tool_call_id: string, code: string, message: string, after_dispatch: bool })
   | ToolCorrelationMismatch({ expected_id: string, got_id: string })
   | ToolDeadlineExceeded({ tool_call_id: string, elapsed_ms: int, timeout_ms: int })
 
@@ -1778,7 +1811,9 @@ pure func scripted_tool_outcome(inv: ToolInvocation, t: ScriptedTool) -> ToolOut
   else if inv.timeout_ms > 0 && t.duration_ms > inv.timeout_ms then
     ToolDeadlineExceeded({ tool_call_id: inv.call.id, elapsed_ms: t.duration_ms, timeout_ms: inv.timeout_ms })
   else if t.code != "" then
-    ToolFailed({ tool_call_id: inv.call.id, code: t.code, message: t.message })
+    -- The stage is copied and `t.applied` is not read: D4's "no carrier".
+    ToolFailed({ tool_call_id: inv.call.id, code: t.code, message: t.message,
+                 after_dispatch: t.after_dispatch })
   else
     -- The scripted arm is the one that CAN say. This is the whole of what
     -- WI-D22 buys: a deterministic world whose script states an exit code
@@ -2291,7 +2326,12 @@ export func generating_tool(state: WorldState, inv: ToolInvocation) -> ToolExecu
       -- nothing and is worse: it would manufacture the claim that every
       -- generated tool ran a process, which is the fabrication the sentinel
       -- exists to avoid. A generated program says it does not know.
-      exit_code: -1
+      exit_code: -1,
+      -- 034 W1.2: after dispatch, and not applied — what every generated
+      -- `ToolFailed` has meant so far, and what a payload without a stage
+      -- decodes to. W1.6 gives the generator draws for both.
+      after_dispatch: true,
+      applied: false
     };
     recording_tool({ state | gen: choice.state, tools: [entry] }, inv)
   }
@@ -2585,8 +2625,15 @@ export pure func encode_tool_outcome(o: ToolOutcome) -> string {
     ToolCompleted(c) =>
       encode(jo([kv("result", js("completed")), kv("content", js(c.content)),
                  kv("exit_code", jnum(_int_to_float(c.exit_code)))])),
+    -- 034 W1.2: the stage, written UNCONDITIONALLY for `exit_code`'s reason
+    -- above — its absence is reserved for "written before the field existed".
+    -- A token rather than a bool so that an artifact reads as what it says,
+    -- and so that a value this build does not know is a refusal rather than
+    -- a `bool_field` fallback. `applied` is not written, and must never be
+    -- (D4): replay rebuilds every `ScriptedTool` from these bytes alone.
     ToolFailed(f) =>
-      encode(jo([kv("result", js("failed")), kv("code", js(f.code)), kv("message", js(f.message))])),
+      encode(jo([kv("result", js("failed")), kv("code", js(f.code)), kv("message", js(f.message)),
+                 kv("stage", js(if f.after_dispatch then "after_dispatch" else "before_dispatch"))])),
     -- `got_id` is the SCRIPT's id, which is what the world must be re-seeded
     -- with for `world_tool` to take the correlation branch again. Recording the
     -- expected id instead would replay as an ordinary success.
@@ -2642,23 +2689,49 @@ export pure func decode_tool_outcome(payload: string, advance_ms: int) -> ToolOu
           Some(x) =>
             ToolRecordDecoded({ tool_call_id: "", duration_ms: advance_ms, code: "",
                                 message: "", content: str_field(root, "content", ""),
-                                exit_code: x })
+                                exit_code: x, after_dispatch: true, applied: false })
         }
       -- The other three arms carry `-1` rather than reading a field, because
       -- none of them is a process that exited: a typed tool fault has D3's
       -- CODE, a mismatch has two ids, a deadline has two times. See
       -- `ToolOutcome` for why only `ToolCompleted` carries the quantity.
+      --
+      -- 034 W1.2. Every arm decodes `applied: false`, because the payload
+      -- never carries it (D4); replay takes it from the program's world-truth
+      -- list instead. The stage is read only on the `failed` arm, the one
+      -- outcome that has one.
       else if result == "failed" then
-        ToolRecordDecoded({ tool_call_id: "", duration_ms: advance_ms,
-                            code: str_field(root, "code", ""),
-                            message: str_field(root, "message", ""), content: "",
-                            exit_code: -1 })
+        -- THE STAGE IS READ BY PRESENCE, AND ITS ABSENCE DEFAULTS — the
+        -- opposite of `exit_code` above, decided by the same rule. A payload
+        -- written before execution-program/5 carries no stage, and here a
+        -- default is admissible: no older version had a stage, and after
+        -- dispatch is the conservative value — it renders `unknown`, which
+        -- 034's property P1 always permits, where before dispatch would claim
+        -- the effect provably did not start (034 PLAN-001 W1.2). This is a
+        -- new arm, not a copy of the precedent: that one refuses. The
+        -- version is not threaded through, because this decoder never sees it
+        -- and the default is the same at every version that lacks the key.
+        -- A stage this build does not know is a refusal, not a default.
+        {
+          let stage = str_field(root, "stage", "");
+          if has_key(root, "stage") && stage != "after_dispatch" && stage != "before_dispatch" then
+            ToolRecordUndecodable("the payload records a failed tool with stage '${stage}'; this build defines 'before_dispatch' and 'after_dispatch', and reading another value as either would claim an observation the recorder never made")
+          else
+            ToolRecordDecoded({ tool_call_id: "", duration_ms: advance_ms,
+                                code: str_field(root, "code", ""),
+                                message: str_field(root, "message", ""), content: "",
+                                exit_code: -1,
+                                after_dispatch: not has_key(root, "stage") || stage == "after_dispatch",
+                                applied: false })
+        }
       else if result == "correlation_mismatch" then
         ToolRecordDecoded({ tool_call_id: str_field(root, "got_id", ""), duration_ms: advance_ms,
-                            code: "", message: "", content: "", exit_code: -1 })
+                            code: "", message: "", content: "", exit_code: -1,
+                            after_dispatch: true, applied: false })
       else if result == "deadline_exceeded" then
         ToolRecordDecoded({ tool_call_id: "", duration_ms: advance_ms, code: "",
-                            message: "", content: "", exit_code: -1 })
+                            message: "", content: "", exit_code: -1,
+                            after_dispatch: true, applied: false })
       else
         ToolRecordUndecodable("the payload carries no recognised 'result' discriminator (saw '${result}'); a tool outcome recorded before WI-A13 stage 3 held the content or the message alone and cannot reconstitute the failure code")
     }
@@ -2763,7 +2836,7 @@ pure func test_each_tool_outcome_round_trips_to_a_world_input_that_reproduces_it
     -- from "the decoder supplied its default". 137 is also distinct from every
     -- other quantity in this row (7, 11, 13, 900, 50), per S7.
     let completed = decode_tool_outcome(encode_tool_outcome(ToolCompleted({ tool_call_id: "c1", content: "OUT", exit_code: 137 })), 7);
-    let failed = decode_tool_outcome(encode_tool_outcome(ToolFailed({ tool_call_id: "c1", code: "E42", message: "boom" })), 11);
+    let failed = decode_tool_outcome(encode_tool_outcome(ToolFailed({ tool_call_id: "c1", code: "E42", message: "boom", after_dispatch: true })), 11);
     let mismatch = decode_tool_outcome(encode_tool_outcome(ToolCorrelationMismatch({ expected_id: "c1", got_id: "c9" })), 13);
     let late = decode_tool_outcome(encode_tool_outcome(ToolDeadlineExceeded({ tool_call_id: "c1", elapsed_ms: 900, timeout_ms: 50 })), 900);
     (match completed {
@@ -2774,21 +2847,105 @@ pure func test_each_tool_outcome_round_trips_to_a_world_input_that_reproduces_it
       && (match failed {
             -- The CODE is the field stage 2's flat payload lost.
             ToolRecordDecoded(t) => t.code == "E42" && t.message == "boom" && t.duration_ms == 11
-                                      && t.exit_code == -1,
+                                      && t.exit_code == -1 && t.after_dispatch && not t.applied,
             ToolRecordUndecodable(_) => false
           })
       && (match mismatch {
             -- `got_id`, not `expected_id`: re-seeding the world with the id the
             -- driver asked for replays as an ordinary success.
-            ToolRecordDecoded(t) => t.tool_call_id == "c9" && t.duration_ms == 13 && t.exit_code == -1,
+            ToolRecordDecoded(t) => t.tool_call_id == "c9" && t.duration_ms == 13 && t.exit_code == -1
+                                      && t.after_dispatch && not t.applied,
             ToolRecordUndecodable(_) => false
           })
       && (match late {
             -- Nothing but the duration, which is what re-derives the branch.
             ToolRecordDecoded(t) => t.duration_ms == 900 && t.code == "" && t.tool_call_id == ""
-                                      && t.exit_code == -1,
+                                      && t.exit_code == -1 && t.after_dispatch && not t.applied,
             ToolRecordUndecodable(_) => false
           })
+  }
+
+-- 034 W1.2 ACCEPTANCE (e): THE STAGE ROUND-TRIPS THROUGH THE CODEC, BOTH VALUES,
+-- and back through `scripted_tool_outcome` to the `ToolFailed` it came from —
+-- the reconstituted world input is what replay feeds back, as in the row above.
+--
+-- BOTH values, and before dispatch is the one that does the work: it is the
+-- value the legacy default can NOT supply, so an encoder that drops the key
+-- (034 W1.7 mutant v17) still passes the after-dispatch half and fails this one.
+-- `applied` is asserted false on both, because the payload never carries it.
+pure func stage_round_trip(after: bool) -> bool {
+  let o = ToolFailed({ tool_call_id: "c1", code: "E42", message: "boom", after_dispatch: after });
+  let inv = { call: { id: "c1", tool: "BashExec", arguments: jo([]) },
+              workdir: "/w", timeout_ms: 0, started_at_ms: 0 };
+  match decode_tool_outcome(encode_tool_outcome(o), 11) {
+    ToolRecordUndecodable(_) => false,
+    ToolRecordDecoded(t) =>
+      t.after_dispatch == after && not t.applied
+        && (match scripted_tool_outcome(inv, t) {
+              ToolFailed(f) => f.after_dispatch == after && f.code == "E42",
+              _ => false
+            })
+  }
+}
+
+pure func test_the_dispatch_stage_round_trips_through_the_tool_codec_both_values() -> bool
+  tests [((), true)]
+  {
+    stage_round_trip(false) && stage_round_trip(true)
+      -- And the two payloads differ, so neither value is the decoder's default
+      -- answering for an absent key.
+      && encode_tool_outcome(ToolFailed({ tool_call_id: "c1", code: "E42", message: "boom", after_dispatch: false }))
+           != encode_tool_outcome(ToolFailed({ tool_call_id: "c1", code: "E42", message: "boom", after_dispatch: true }))
+  }
+
+-- 034 W1.2 ACCEPTANCE (f): A LEGACY FAULT DECODES AS AFTER DISPATCH.
+--
+-- The literal is a failed tool outcome as `execution-program/4` wrote one, byte
+-- for byte: no `stage` key. It decodes, and it decodes after dispatch — the
+-- conservative stage, which renders `unknown` (034 PLAN-001 W1.2). A decoder that
+-- defaulted it to before dispatch (034 W1.7 mutant v18) would tell the model a
+-- recorded fault provably did not start, which no pre-/5 recorder observed.
+--
+-- The second and third clauses are the controls: an explicit before-dispatch
+-- stage survives as before dispatch, so this row cannot be passed by a decoder
+-- that answers "after" for everything; and a stage this build does not define
+-- refuses rather than falling back.
+pure func v4_failed_tool_payload() -> string {
+  "{\"result\":\"failed\",\"code\":\"E42\",\"message\":\"boom\"}"
+}
+
+pure func test_a_legacy_failed_tool_payload_decodes_as_after_dispatch() -> bool
+  tests [((), true)]
+  {
+    let legacy = match decode_tool_outcome(v4_failed_tool_payload(), 11) {
+      ToolRecordDecoded(t) => t.after_dispatch && not t.applied && t.code == "E42",
+      ToolRecordUndecodable(_) => false
+    };
+    let explicit_before = match decode_tool_outcome("{\"result\":\"failed\",\"code\":\"E42\",\"message\":\"boom\",\"stage\":\"before_dispatch\"}", 11) {
+      ToolRecordDecoded(t) => not t.after_dispatch,
+      ToolRecordUndecodable(_) => false
+    };
+    let unknown_stage = match decode_tool_outcome("{\"result\":\"failed\",\"code\":\"E42\",\"message\":\"boom\",\"stage\":\"mid_dispatch\"}", 11) {
+      ToolRecordUndecodable(_) => true,
+      ToolRecordDecoded(_) => false
+    };
+    legacy && explicit_before && unknown_stage
+  }
+
+-- 034 W1.2: `applied` NEVER ENTERS THE SERVED PAYLOAD (D4). Two scripted faults
+-- that differ only in `applied` serve the same outcome and the same bytes. W1.3's
+-- acceptance (b) states the same thing for whole programs; this is its unit.
+pure func test_applied_never_reaches_the_outcome_or_its_payload() -> bool
+  tests [((), true)]
+  {
+    let inv = { call: { id: "c1", tool: "BashExec", arguments: jo([]) },
+                workdir: "/w", timeout_ms: 0, started_at_ms: 0 };
+    let t = { tool_call_id: "", duration_ms: 3, code: "E42", message: "boom", content: "",
+              exit_code: -1, after_dispatch: true, applied: false };
+    let a = scripted_tool_outcome(inv, t);
+    let b = scripted_tool_outcome(inv, { t | applied: true });
+    encode_tool_outcome(a) == encode_tool_outcome(b)
+      && not Str.contains(encode_tool_outcome(b), "applied")
   }
 
 -- WI-D22. THE ROW THE SCHEMA BUMP EXISTS TO MAKE TRUE, and it is stated as the

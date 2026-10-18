@@ -1376,6 +1376,7 @@ program_persistence:
 	         scripts/dst/fixtures/execution-program-v2.artifact \
 	         scripts/dst/fixtures/execution-program-v3.artifact \
 	         scripts/dst/fixtures/execution-program-v4.artifact \
+	         scripts/dst/fixtures/execution-program-v5.artifact \
 	         scripts/dst/fixtures/execution-program-v0.artifact; do \
 		if [ ! -s "$$f" ]; then \
 			echo "FAIL: the frozen specimen $$f is missing or empty."; \
@@ -1385,8 +1386,8 @@ program_persistence:
 			exit 1; \
 		fi; \
 	done; \
-	echo "  ✓ all five frozen specimens are present ($$(wc -l < scripts/dst/fixtures/execution-program-v1.artifact | tr -d ' ') lines of v1 bytes and $$(wc -l < scripts/dst/fixtures/execution-program-v2.artifact | tr -d ' ') of v2 and $$(wc -l < scripts/dst/fixtures/execution-program-v3.artifact | tr -d ' ') of v3, all three now predating this build's encoder, plus $$(wc -l < scripts/dst/fixtures/execution-program-v4.artifact | tr -d ' ') lines of v4 bytes carrying the byte-identity assertion at the version this build writes)"; \
-	writers=$$(grep -rlE 'writeFile[A-Za-z]*\(\s*"?scripts/dst/fixtures|v1_fixture_path\(\)\s*,|v2_fixture_path\(\)\s*,|v3_fixture_path\(\)\s*,|v4_fixture_path\(\)\s*,|v0_fixture_path\(\)\s*,' \
+	echo "  ✓ all six frozen specimens are present ($$(wc -l < scripts/dst/fixtures/execution-program-v1.artifact | tr -d ' ') lines of v1 bytes, $$(wc -l < scripts/dst/fixtures/execution-program-v2.artifact | tr -d ' ') of v2, $$(wc -l < scripts/dst/fixtures/execution-program-v3.artifact | tr -d ' ') of v3 and $$(wc -l < scripts/dst/fixtures/execution-program-v4.artifact | tr -d ' ') of v4, all four now predating this build's encoder, plus $$(wc -l < scripts/dst/fixtures/execution-program-v5.artifact | tr -d ' ') lines of v5 bytes carrying the byte-identity assertion at the version this build writes)"; \
+	writers=$$(grep -rlE 'writeFile[A-Za-z]*\(\s*"?scripts/dst/fixtures|v1_fixture_path\(\)\s*,|v2_fixture_path\(\)\s*,|v3_fixture_path\(\)\s*,|v4_fixture_path\(\)\s*,|v5_fixture_path\(\)\s*,|v0_fixture_path\(\)\s*,' \
 	     src scripts --include=*.ail || true); \
 	if [ -n "$$writers" ]; then \
 		echo "FAIL: something in the tree writes to the frozen fixtures:"; \

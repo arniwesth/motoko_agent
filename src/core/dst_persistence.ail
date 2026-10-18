@@ -336,6 +336,11 @@ export type ProgramDecode
 
 -- Every header tag that must appear EXACTLY ONCE, with its field count.
 --
+-- 034 W1.2: AT EVERY VERSION, which is why `applied_faults` is not here. That tag
+-- is required at execution-program/5 and absent before it, so it is added by
+-- `required_header_tags_at` for the versions that have it and no other. It has no
+-- `manifest.` prefix, so the Makefile's arity guard does not count it.
+--
 -- This list is the decoder's completeness statement and the Makefile counts its
 -- `manifest.` entries against `ExecutionManifest`'s declared fields. A manifest
 -- field added in `dst_profile` and forgotten here would otherwise project as ""
@@ -425,6 +430,77 @@ pure func with_bounds_arity(ts: [{ tag: string, arity: int }], n: int) -> [{ tag
 -- exactly one home, which is what the Makefile's arity guard counts.
 export pure func required_header_tags_at(version: string) -> [{ tag: string, arity: int }] {
   with_bounds_arity(required_header_tags(), bounds_arity_at(version))
+    ++ (if version_has_applied_faults(version) then [{ tag: "applied_faults", arity: 1 }] else [])
+}
+
+-- ---------------------------------------------------------------------------
+-- The world-truth line — 034 PLAN-001 W1.2
+-- ---------------------------------------------------------------------------
+
+-- `ExecutionProgram.applied_faults`, written as ONE REQUIRED line holding an
+-- explicit list, from execution-program/5 on. The two encodings it was chosen
+-- over both type-check, and both lose a rule:
+--
+--   a plain entry in `required_header_tags()` makes it required at EVERY
+--     version, so every v1-v4 artifact — all four frozen specimens — refuses
+--     with `MissingSection`;
+--   a repeatable tag, one line per ordinal, cannot tell ABSENT from EMPTY:
+--     zero lines mean both, so a v5 artifact that lost the line would decode
+--     as "nothing applied" and the missing-field rejection could never fire.
+--
+-- So it is required, at the versions that have it, and its one field is the
+-- whole list: `[]`, or `[12]`, or `[3,7]`. The brackets are there so the empty
+-- list is a visible token rather than an empty field at the end of a line. The
+-- tag is `applied_faults`, a literal like every other tag in these tables.
+
+-- Written as the versions that LACK the line, for `version_has_chunk_draw_hi`'s
+-- reason: that set is closed forever, so the next version inherits the line
+-- without anyone having to remember it.
+--
+-- The contract is the two halves a mutant would break, and no more: v5 has the
+-- line (034 W1.7 v02's precondition) and v4 does not (the frozen v4 bytes
+-- would refuse). It leaves every other version free, so it is weaker than the
+-- body rather than a copy of it.
+export pure func version_has_applied_faults(version: string) -> bool
+  ensures { (version != "execution-program/5" || result)
+            && (version != "execution-program/4" || not result) }
+{
+  not (version == "execution-program/1" || version == "execution-program/2"
+       || version == "execution-program/3" || version == "execution-program/4")
+}
+
+-- contracts: SKIPPED — unencodable builtin: std/string.join.
+export pure func applied_faults_field(xs: [int]) -> string {
+  "[${Str.join(",", ints_text(xs))}]"
+}
+
+-- contracts: BLOCKED — RECURSIVE over the list.
+pure func ints_text(xs: [int]) -> [string] {
+  match xs { [] => [], x :: rest => ["${x}"] ++ ints_text(rest) }
+}
+
+-- The field's ordinals, or `None` when it is not a bracketed list of integers.
+-- `None` is a refusal (`NotAnInteger`), never an empty list.
+-- contracts: SKIPPED — unencodable builtin: std/string.split.
+export pure func applied_faults_of_field(txt: string) -> Option[[int]] {
+  let n = Str.length(txt);
+  if n < 2 || not Str.startsWith(txt, "[") || Str.substring(txt, n - 1, n) != "]" then None
+  else {
+    let inner = Str.substring(txt, 1, n - 1);
+    if inner == "" then Some([]) else ints_of(Str.split(inner, ","))
+  }
+}
+
+-- contracts: SKIPPED — unencodable builtin: std/string.stringToInt, whose result is an Option.
+pure func ints_of(parts: [string]) -> Option[[int]] {
+  match parts {
+    [] => Some([]),
+    x :: rest =>
+      match Str.stringToInt(x) {
+        None => None,
+        Some(v) => match ints_of(rest) { None => None, Some(vs) => Some([v] ++ vs) }
+      }
+  }
 }
 
 -- Tags whose single field must parse as an integer. `bounds` is not here: it
@@ -585,6 +661,10 @@ export pure func encode_body(p: ExecutionProgram) -> string {
       ++ string_lines("manifest.classifier_2", m.classifier_2_set)
       ++ string_lines("manifest.unrouted_field", m.unrouted_fields)
       ++ string_lines("manifest.scan_root", m.scan_roots)
+      -- 034 W1.2, LAST IN THE HEADER and directly above the interactions it
+      -- indexes. Written unconditionally, the empty list included: this build
+      -- writes only execution-program/5, where the line is required.
+      ++ [line1("applied_faults", applied_faults_field(p.applied_faults))]
       ++ interaction_lines(p.interactions))
 }
 
@@ -831,6 +911,25 @@ pure func int_fields_of(l: Line, i: int, n: int) -> [DecodeRefusal] {
     let txt = nth_str(l.fields, i);
     (match Str.stringToInt(txt) { Some(_) => [], None => [NotAnInteger(l.no, l.tag, txt)] })
       ++ int_fields_of(l, i + 1, n)
+  }
+}
+
+-- 034 W1.2. The world-truth line's field must be a bracketed list of integers.
+-- Run in the structural phase for `check_file_entries`' reason: `project` has
+-- nowhere to put a refusal. Its PRESENCE is `check_required`'s, from the table
+-- the artifact's version declares; a v4 artifact carrying the line is refused
+-- earlier, as an `UnknownTag`, because v4's table has no such tag.
+-- contracts: SKIPPED — calls `applied_faults_of_field`, whose Option[[int]] result is unencodable.
+pure func check_applied_faults_line(ls: [Line]) -> [DecodeRefusal] {
+  match find_tag(ls, "applied_faults") {
+    [] => [],
+    l :: _ => {
+      let txt = head_or(l.fields, "");
+      match applied_faults_of_field(txt) {
+        Some(_) => [],
+        None => [NotAnInteger(l.no, "applied_faults", txt)]
+      }
+    }
   }
 }
 
@@ -1148,7 +1247,8 @@ pure func decode_body(version: string, body: string) -> ProgramDecode {
       let structural = check_required(hs, req)
                          ++ check_integers(hs, integer_header_tags())
                          ++ check_bounds_line(version, hs)
-                         ++ check_file_entries(hs);
+                         ++ check_file_entries(hs)
+                         ++ check_applied_faults_line(hs);
       match structural {
         r :: rs => ProgramDecodeRefused([r] ++ rs),
         [] => {
@@ -1175,6 +1275,19 @@ pure func decode_body(version: string, body: string) -> ProgramDecode {
 pure func chunk_draw_hi_of(version: string, hs: [Line]) -> int {
   if version_has_chunk_draw_hi(version) then int_at(hs, "bounds", 5)
   else chunk_draw_hi_before_v3()
+}
+
+-- 034 W1.2. Before execution-program/5 there is no line and the list is EMPTY:
+-- "not applied" is what every pre-v5 tool fault recorded (see
+-- `dst_program.program_schema_version`). At v5 the line is required and has
+-- been checked, so `None` is unreachable here and the `[]` is totality only.
+-- contracts: SKIPPED — calls `applied_faults_of_field`, whose Option[[int]] result is unencodable.
+pure func applied_faults_at(version: string, hs: [Line]) -> [int] {
+  if not version_has_applied_faults(version) then []
+  else match applied_faults_of_field(str_at(hs, "applied_faults", 0)) {
+    Some(xs) => xs,
+    None => []
+  }
 }
 
 pure func project(version: string, hs: [Line], xs: [Interaction]) -> ExecutionProgram {
@@ -1225,7 +1338,8 @@ pure func project(version: string, hs: [Line], xs: [Interaction]) -> ExecutionPr
       attribution_rules_version: str_at(hs, "manifest.attribution_rules_version", 0),
       fault_catalogue_version: str_at(hs, "manifest.fault_catalogue_version", 0)
     },
-    interactions: xs }
+    interactions: xs,
+    applied_faults: applied_faults_at(version, hs) }
 }
 
 -- ---------------------------------------------------------------------------
@@ -1503,5 +1617,40 @@ pure func stub_program(id: string, version: string, seed: int) -> ExecutionProgr
                 scan_root_commit: "", profile_rules_version: "",
                 coverage_rules_version: "", attribution_rules_version: "",
                 fault_catalogue_version: "" },
-    interactions: [] }
+    interactions: [],
+    applied_faults: [] }
 }
+
+-- 034 W1.2. The world-truth field's codec, on its own: the empty list is a
+-- visible token, a list round-trips in order, and anything that is not a
+-- bracketed list of integers is `None` — a refusal — rather than an empty list.
+pure func test_the_applied_faults_field_round_trips_and_refuses_malformed_text() -> bool
+  tests [((), true)]
+  {
+    applied_faults_field([]) == "[]"
+      && applied_faults_field([12, 3]) == "[12,3]"
+      && (match applied_faults_of_field("[]") { Some(xs) => List.length(xs) == 0, None => false })
+      && (match applied_faults_of_field("[12,3]") { Some(a :: b :: []) => a == 12 && b == 3, _ => false })
+      && (match applied_faults_of_field("") { None => true, Some(_) => false })
+      && (match applied_faults_of_field("12") { None => true, Some(_) => false })
+      && (match applied_faults_of_field("[12,x]") { None => true, Some(_) => false })
+      && (match applied_faults_of_field("[12,]") { None => true, Some(_) => false })
+  }
+
+pure func requires_world_truth(v: string) -> bool {
+  contains_str(tag_names(required_header_tags_at(v)), "applied_faults")
+}
+
+-- 034 W1.2. The line is required at v5 and at no earlier version, through the
+-- table the ARTIFACT'S version declares. Both halves are asserted: a table that
+-- required it everywhere would refuse every frozen specimen, and one that never
+-- required it would decode a v5 artifact that lost the line as "nothing applied".
+pure func test_the_world_truth_line_is_required_at_v5_only() -> bool
+  tests [((), true)]
+  {
+    requires_world_truth("execution-program/5") && requires_world_truth(program_schema_version())
+      && not requires_world_truth("execution-program/4") && not requires_world_truth("execution-program/3")
+      && not requires_world_truth("execution-program/2") && not requires_world_truth("execution-program/1")
+      && not contains_str(tag_names(required_header_tags()), "applied_faults")
+      && not contains_str(tag_names(repeatable_header_tags()), "applied_faults")
+  }

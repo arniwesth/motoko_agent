@@ -123,6 +123,7 @@ import src/core/dst_driver_only (driver_only, driver_only_manifest, driver_only_
 import src/core/dst_replay (
   world_state_of, reconstitution_balance, refusal_rule, reconstitution_rule,
   ReplayRefusal, ProgramStructurallyInvalid, ProviderOutcomeUndecodable, ToolOutcomeUndecodable,
+  AppliedFaultCompleted, AppliedFaultBeforeDispatch,
   ReconstitutionFinding, QueueUnderfilled, QueueOverfilled, EpochNotCarried, EnvironmentNotCarried, FilesNotCarried
 )
 import src/core/dst_fault_catalogue (required_class_ids)
@@ -362,7 +363,10 @@ pure func ad_refusal_location(r: ReplayRefusal) -> Location {
   match r {
     ProgramStructurallyInvalid(_) => Aggregate("program"),
     ProviderOutcomeUndecodable(o, _) => Interaction(o),
-    ToolOutcomeUndecodable(o, _) => Interaction(o)
+    ToolOutcomeUndecodable(o, _) => Interaction(o),
+    -- 034 W1.2. Unreachable for a journal, whose world-truth list is empty.
+    AppliedFaultCompleted(o) => Interaction(o),
+    AppliedFaultBeforeDispatch(o) => Interaction(o)
   }
 }
 
@@ -733,7 +737,11 @@ export pure func admission_program(jw: JournalWorld, w0: WorldState, log: [Inter
     },
     bounds: observed_bounds(log, w0),
     manifest: m,
-    interactions: log
+    interactions: log,
+    -- 034 W1.2. A journal records no world truth, so the list is empty, and
+    -- here empty means NOT RECORDED rather than not applied: 034's property P1
+    -- is vacuous on a journal replay and P2 does not run on one.
+    applied_faults: []
   }
 }
 
@@ -1190,7 +1198,8 @@ pure func tx_program(log: [Interaction]) -> ExecutionProgram {
     },
     bounds: observed_bounds(log, w),
     manifest: manifest_of(tx_ids()),
-    interactions: log
+    interactions: log,
+    applied_faults: []
   }
 }
 
@@ -1237,7 +1246,7 @@ pure func test_m9_program_shape() -> bool
         let w0 = journal_world_state(jw, 11);
         let log = tx_log_from("{\"served\":false}");
         let p = admission_program(jw, w0, log, manifest_of(tx_ids()), "abc-dev");
-        p.schema_version == "execution-program/4"
+        p.schema_version == "execution-program/5"
           && p.generator_id == "journal_admission"
           && p.generator_version == "abc-dev"
           && p.seed == 0

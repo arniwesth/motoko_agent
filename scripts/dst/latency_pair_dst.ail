@@ -207,7 +207,7 @@ pure func tool_of(duration: int) -> ScriptedTool {
   -- WI-D22: `exit_code` is part of "the underlying completion result held
   -- constant" — both worlds take it from here, so the pair still differs in
   -- `duration_ms` and only there.
-  { tool_call_id: "", duration_ms: duration, code: "", message: "", content: shared_content(), exit_code: -1 }
+  { tool_call_id: "", duration_ms: duration, code: "", message: "", content: shared_content(), exit_code: -1, after_dispatch: true, applied: false }
 }
 
 pure func env_of(limit_ms: int) -> [{ key: string, value: string }] {
@@ -255,7 +255,10 @@ pure func program_of(log: [Interaction], initial: WorldState, tag: string) -> Ex
               max_payload_bytes: 4096, max_resource_size: 4096,
               max_clock_advance_ms: 60000, chunk_draw_hi: 3 },
     manifest: manifest(),
-    interactions: log }
+    interactions: log,
+    -- 034 W1.2: no world truth recorded yet. W1.3 fills this from the world's
+    -- effect log, which stays empty unless the scenario scripts an applied fault.
+    applied_faults: [] }
 }
 
 -- ---------------------------------------------------------------------------
@@ -328,7 +331,7 @@ func scenario_the_pair_differs_only_in_latency() -> bool ! {IO} {
 
 pure func head_tool(ts: [ScriptedTool]) -> ScriptedTool {
   match ts {
-    [] => { tool_call_id: "<absent>", duration_ms: -1, code: "", message: "", content: "", exit_code: -1 },
+    [] => { tool_call_id: "<absent>", duration_ms: -1, code: "", message: "", content: "", exit_code: -1, after_dispatch: true, applied: false },
     t :: _ => t
   }
 }

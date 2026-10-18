@@ -150,7 +150,7 @@ func print_branches(rows: [FaultClass]) -> () ! {IO} {
 -- interpolations below because a nested string literal cannot appear inside
 -- `${...}` on the pin.
 pure func sample_failed() -> ToolOutcome {
-  ToolFailed({ tool_call_id: "call-1", code: "E", message: "m" })
+  ToolFailed({ tool_call_id: "call-1", code: "E", message: "m", after_dispatch: true })
 }
 
 pure func sample_mismatch() -> ToolOutcome {
