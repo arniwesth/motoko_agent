@@ -28,10 +28,15 @@ module src/core/tool_dispatch_adapter
 
 import std/ai (ToolCall)
 import std/json (Json, decode, encode, jo, ja, kv, js, jnum, jb)
+import std/option (Option, Some, None)
 import std/result (Ok, Err)
+import std/string (contains)
+import std/string as Str (length)
 import src/core/tool_contract (ToolCallEnvelope)
-import src/core/types (ToolResultItem, SearchMatch, ReadFileResult, SearchResult, WriteFileResult, EditFileResult, BashExecResult, RunTestsResult, ToolErrorResult)
+import src/core/types (ToolResultItem, SearchMatch, ReadFileResult, SearchResult, WriteFileResult, EditFileResult, BashExecResult, RunTestsResult, ToolErrorResult, ToolFault, FaultKind, FaultNotAllowed, FaultNotFound, FaultPermissionDenied, FaultSpawnFailed, FaultDeadline, FaultOutputLimit, FaultSignal, FaultRefused, FaultIoError, EffectsNone, EffectsUnknown)
+import src/core/tool_fault (fault_key, fault_kind_key, fault_effects_key, fault_note_key, fault_elapsed_ms_key, fault_bytes_key, fault_signal_key, fault_signal_name_key, fault_kind_name, effects_value, effects_note, effects_note_none, effects_note_unknown, refused_fault, io_error_fault)
 import src/core/tool_runtime (run_native_batch)
+import src/core/phase_vocab (tool_result_message)
 
 -- Convert upstream ToolCall to motoko's ToolCallEnvelope.
 -- ToolCall.name → ToolCallEnvelope.tool (rename only)
@@ -90,6 +95,16 @@ export pure func tool_result_exit_code(item: ToolResultItem) -> int {
 -- Every arm's `exit_code` reads `tool_result_exit_code` — see that accessor
 -- for why the mapping must not be restated here as literals.
 --
+-- 034 PLAN-001 W0.3, under ADR-001 D3: a faulted arm renders `fault`
+-- IMMEDIATELY AFTER `tool`, ahead of every field whose size is not bounded,
+-- `cmd` included. The tool message is cut from the END
+-- (`phase_vocab.cap_tool_message_content`, applied by `tool_result_message`),
+-- so only a field ahead of `fault` can push it out of what the model reads; a
+-- long `cmd` ahead of it would. `BashExecResult` and `RunTestsResult` render it
+-- when it is `Some`; `ToolErrorResult` always does. With `fault = None` an arm's
+-- JSON is byte-identical to its rendering before W0 (D1: a process that ran to
+-- its own exit, any exit code, carries no disclosure).
+--
 -- The result is a Json object; caller encode()s to string for the
 -- upstream `(ToolCall) -> string` contract.
 export func tool_result_item_to_json(item: ToolResultItem) -> Json {
@@ -133,29 +148,75 @@ export func tool_result_item_to_json(item: ToolResultItem) -> Json {
       kv("exit_code", jnum(_int_to_float(tool_result_exit_code(item))))
     ]),
 
-    BashExecResult(r) => jo([
-      kv("tool", js("BashExec")),
-      kv("cmd", js(r.cmd)),
-      kv("exit_code", jnum(_int_to_float(tool_result_exit_code(item)))),
-      kv("stdout", js(r.stdout)),
-      kv("stderr", js(r.stderr)),
-      kv("truncated", jb(r.meta.truncated))
-    ]),
+    BashExecResult(r) => jo(
+      [kv("tool", js("BashExec"))]
+      ++ fault_field(r.fault)
+      ++ [
+        kv("cmd", js(r.cmd)),
+        kv("exit_code", jnum(_int_to_float(tool_result_exit_code(item)))),
+        kv("stdout", js(r.stdout)),
+        kv("stderr", js(r.stderr)),
+        kv("truncated", jb(r.meta.truncated))
+      ]),
 
-    RunTestsResult(r) => jo([
-      kv("tool", js("RunTests")),
-      kv("exit_code", jnum(_int_to_float(tool_result_exit_code(item)))),
-      kv("stdout", js(r.stdout)),
-      kv("stderr", js(r.stderr)),
-      kv("truncated", jb(r.meta.truncated))
-    ]),
+    RunTestsResult(r) => jo(
+      [kv("tool", js("RunTests"))]
+      ++ fault_field(r.fault)
+      ++ [
+        kv("exit_code", jnum(_int_to_float(tool_result_exit_code(item)))),
+        kv("stdout", js(r.stdout)),
+        kv("stderr", js(r.stderr)),
+        kv("truncated", jb(r.meta.truncated))
+      ]),
 
     ToolErrorResult(r) => jo([
       kv("tool", js(r.tool)),
+      kv(fault_key(), fault_to_json(r.fault)),
       kv("error", jb(true)),
       kv("message", js(r.message)),
       kv("exit_code", jnum(_int_to_float(tool_result_exit_code(item))))
     ])
+  }
+}
+
+-- The `fault` object (PLAN-001 C3): `kind`, `effects`, the kind's extra
+-- fields, then `note`. Every key, value, kind name and sentence is read from
+-- `src/core/tool_fault`, the one home every renderer imports. The match over
+-- the kind has no wildcard, so a kind W1 adds is a compile error here until
+-- its extra fields are stated.
+export func fault_to_json(f: ToolFault) -> Json {
+  jo(
+    [
+      kv(fault_kind_key(), js(fault_kind_name(f.kind))),
+      kv(fault_effects_key(), js(effects_value(f.effects)))
+    ]
+    ++ fault_extra_fields(f.kind)
+    ++ [kv(fault_note_key(), js(effects_note(f.effects)))])
+}
+
+func fault_extra_fields(k: FaultKind) -> [{ key: string, value: Json }] {
+  match k {
+    FaultNotAllowed => [],
+    FaultNotFound => [],
+    FaultPermissionDenied => [],
+    FaultSpawnFailed => [],
+    FaultDeadline(ms) => [kv(fault_elapsed_ms_key(), jnum(_int_to_float(ms)))],
+    FaultOutputLimit(n) => [kv(fault_bytes_key(), jnum(_int_to_float(n)))],
+    FaultSignal(sig, name) => [
+      kv(fault_signal_key(), jnum(_int_to_float(sig))),
+      kv(fault_signal_name_key(), js(name))
+    ],
+    FaultRefused => [],
+    FaultIoError => []
+  }
+}
+
+-- The optional `fault` entry of `BashExecResult` and `RunTestsResult`: none
+-- at all on the `Ok` arm, so that arm's JSON is unchanged.
+func fault_field(fault: Option[ToolFault]) -> [{ key: string, value: Json }] {
+  match fault {
+    Some(f) => [kv(fault_key(), fault_to_json(f))],
+    None => []
   }
 }
 
@@ -201,12 +262,23 @@ func match_to_json(m: SearchMatch) -> Json {
 -- single-result contract), and 1 is what the one mapping assigns an error.
 -- 0 would assert a success no process produced; -1 would file an adapter
 -- defect under "no subprocess ran".
+--
+-- 034 PLAN-001 W0.3: the branch also carries `fault`, kind `io_error` and
+-- effects `unknown`. It is reached AFTER a dispatch, so nothing says the
+-- tool's effect was not entered. It has no `tool` key, so `fault` leads.
 export func dispatch_one_typed(workdir: string, call: ToolCall) -> { content: string, exit_code: int } ! {FS, Process} {
   let envelope = tool_call_to_envelope(call) in
-  let results = run_native_batch([envelope], workdir) in
+  typed_dispatch_result(run_native_batch([envelope], workdir))
+}
+
+-- The pure half of `dispatch_one_typed`: the dispatcher's results for one
+-- call, rendered. A function of its own so the defensive branch, which no
+-- real dispatch reaches, is reachable from a test.
+func typed_dispatch_result(results: [ToolResultItem]) -> { content: string, exit_code: int } {
   match results {
     [r] => { content: encode(tool_result_item_to_json(r)), exit_code: tool_result_exit_code(r) },
     _ => { content: encode(jo([
+             kv(fault_key(), fault_to_json(io_error_fault(EffectsUnknown))),
              kv("error", jb(true)),
              kv("message", js("internal: dispatcher returned 0 or >1 results for single call"))
            ])),
@@ -232,3 +304,162 @@ export func dispatch_one_typed(workdir: string, call: ToolCall) -> { content: st
 export func dispatch_one(workdir: string, call: ToolCall) -> string ! {FS, Process} {
   dispatch_one_typed(workdir, call).content
 }
+
+-- ============================================================================
+-- 034 PLAN-001 W0.3 tests. Each asserts the encoded string, so key order is
+-- asserted with the values. They are `((), true)` functions for the reason
+-- `tool_fault`'s are: on v0.52.5 a `tests [...]` row's input is evaluated
+-- without the module's imports.
+-- ============================================================================
+
+pure func t_meta() -> { truncated: bool, stdout_bytes: int, stdout_total_bytes: int, stderr_bytes: int, stderr_total_bytes: int, stdout_sha256: string, stderr_sha256: string } {
+  { truncated: false, stdout_bytes: 0, stdout_total_bytes: 0, stderr_bytes: 0, stderr_total_bytes: 0, stdout_sha256: "", stderr_sha256: "" }
+}
+
+func t_bash(fault: Option[ToolFault], cmd: string, stdout: string, stderr: string, exit_code: int) -> ToolResultItem {
+  BashExecResult({ id: "call-1", fault: fault, cmd: cmd, stdout: stdout, stderr: stderr, exit_code: exit_code, meta: t_meta() })
+}
+
+func t_render(item: ToolResultItem) -> string {
+  encode(tool_result_item_to_json(item))
+}
+
+-- The two sentences, verbatim, through the renderer. A wording change in the
+-- one home is a change to these two tests.
+func t_note_none_verbatim() -> bool
+  tests [((), true)]
+  {
+    encode(fault_to_json(refused_fault()))
+      == "{\"kind\":\"refused\",\"effects\":\"none\",\"note\":\"No change was made: the tool failed before it could write or change anything.\"}"
+  }
+
+func t_note_unknown_verbatim() -> bool
+  tests [((), true)]
+  {
+    encode(fault_to_json(io_error_fault(EffectsUnknown)))
+      == "{\"kind\":\"io_error\",\"effects\":\"unknown\",\"note\":\"The harness cannot confirm whether this tool's effects happened. They may have happened in full, not at all, or may still be happening. Check the current state before running it again.\"}"
+  }
+
+-- A faulted BashExecResult: `fault` straight after `tool`, before `cmd`.
+func t_bash_faulted_key_order() -> bool
+  tests [((), true)]
+  {
+    let f = { kind: FaultOutputLimit(1000), effects: EffectsUnknown };
+    t_render(t_bash(Some(f), "make build", "", "output limit exceeded: 1000 bytes", 1))
+      == "{\"tool\":\"BashExec\",\"fault\":{\"kind\":\"output_limit\",\"effects\":\"unknown\",\"bytes\":1000,\"note\":\"${effects_note_unknown()}\"},\"cmd\":\"make build\",\"exit_code\":1,\"stdout\":\"\",\"stderr\":\"output limit exceeded: 1000 bytes\",\"truncated\":false}"
+  }
+
+-- A faulted RunTestsResult, its own arm.
+func t_run_tests_faulted_key_order() -> bool
+  tests [((), true)]
+  {
+    let f = { kind: FaultNotFound, effects: EffectsNone };
+    let item = RunTestsResult({ id: "call-2", fault: Some(f), cmd: "pytest", stdout: "", stderr: "command not found: pytest", exit_code: 1, passed: 0, failed: 1, failures: [{ test: "test-command", message: "command not found: pytest" }], meta: t_meta() });
+    t_render(item)
+      == "{\"tool\":\"RunTests\",\"fault\":{\"kind\":\"not_found\",\"effects\":\"none\",\"note\":\"${effects_note_none()}\"},\"exit_code\":1,\"stdout\":\"\",\"stderr\":\"command not found: pytest\",\"truncated\":false}"
+  }
+
+-- A ToolErrorResult always renders `fault`.
+func t_tool_error_renders_fault() -> bool
+  tests [((), true)]
+  {
+    let item = ToolErrorResult({ id: "call-3", tool: "ReadFile", fault: refused_fault(), message: "missing path" });
+    t_render(item)
+      == "{\"tool\":\"ReadFile\",\"fault\":{\"kind\":\"refused\",\"effects\":\"none\",\"note\":\"${effects_note_none()}\"},\"error\":true,\"message\":\"missing path\",\"exit_code\":1}"
+  }
+
+-- One faulted result per kind with extra fields, asserting those fields.
+func t_kind_deadline_fields() -> bool
+  tests [((), true)]
+  {
+    let f = { kind: FaultDeadline(30000), effects: EffectsUnknown };
+    t_render(t_bash(Some(f), "sleep 60", "", "timeout after 30000ms", 1))
+      == "{\"tool\":\"BashExec\",\"fault\":{\"kind\":\"deadline\",\"effects\":\"unknown\",\"elapsed_ms\":30000,\"note\":\"${effects_note_unknown()}\"},\"cmd\":\"sleep 60\",\"exit_code\":1,\"stdout\":\"\",\"stderr\":\"timeout after 30000ms\",\"truncated\":false}"
+  }
+
+func t_kind_output_limit_fields() -> bool
+  tests [((), true)]
+  {
+    let f = { kind: FaultOutputLimit(4096), effects: EffectsUnknown };
+    encode(fault_to_json(f))
+      == "{\"kind\":\"output_limit\",\"effects\":\"unknown\",\"bytes\":4096,\"note\":\"${effects_note_unknown()}\"}"
+  }
+
+func t_kind_signal_fields() -> bool
+  tests [((), true)]
+  {
+    let f = { kind: FaultSignal(9, "SIGKILL"), effects: EffectsUnknown };
+    t_render(t_bash(Some(f), "./run.sh", "", "killed by SIGKILL", 1))
+      == "{\"tool\":\"BashExec\",\"fault\":{\"kind\":\"signal\",\"effects\":\"unknown\",\"signal\":9,\"signal_name\":\"SIGKILL\",\"note\":\"${effects_note_unknown()}\"},\"cmd\":\"./run.sh\",\"exit_code\":1,\"stdout\":\"\",\"stderr\":\"killed by SIGKILL\",\"truncated\":false}"
+  }
+
+-- `Ok` arms, byte-equal to their rendering before W0 (recorded at fc7c0a13
+-- by running this renderer before the change). A non-zero exit code is not a
+-- fault (D1).
+func t_bash_ok_unchanged() -> bool
+  tests [((), true)]
+  {
+    t_render(t_bash(None, "make build", "ok", "", 2))
+      == "{\"tool\":\"BashExec\",\"cmd\":\"make build\",\"exit_code\":2,\"stdout\":\"ok\",\"stderr\":\"\",\"truncated\":false}"
+  }
+
+func t_run_tests_ok_unchanged() -> bool
+  tests [((), true)]
+  {
+    let item = RunTestsResult({ id: "call-4", fault: None, cmd: "pytest", stdout: "1 passed", stderr: "", exit_code: 0, passed: 1, failed: 0, failures: [], meta: t_meta() });
+    t_render(item)
+      == "{\"tool\":\"RunTests\",\"exit_code\":0,\"stdout\":\"1 passed\",\"stderr\":\"\",\"truncated\":false}"
+  }
+
+-- The long-command case: a `cmd` longer than the tool message cap, through
+-- the exported `tool_result_message`, which applies the cap. The message is
+-- cut, and the complete `fault` object survives the cut.
+func t_long_cmd_keeps_fault() -> bool
+  tests [((), true)]
+  {
+    let x1 = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyzAB";
+    let x2 = "${x1}${x1}";
+    let x4 = "${x2}${x2}";
+    let x8 = "${x4}${x4}";
+    let x16 = "${x8}${x8}";
+    let x32 = "${x16}${x16}";
+    let x64 = "${x32}${x32}";
+    let x128 = "${x64}${x64}";
+    let x256 = "${x128}${x128}";
+    let x512 = "${x256}${x256}";
+    let x1024 = "${x512}${x512}";
+    let f = { kind: FaultOutputLimit(1000), effects: EffectsUnknown };
+    let content = t_render(t_bash(Some(f), x1024, "", "output limit exceeded: 1000 bytes", 1));
+    let msg = tool_result_message({ id: "call-5", name: "BashExec", arguments: "{}" }, content);
+    Str.length(x1024) > 65536
+      && Str.length(msg.content) == 65536
+      && contains(msg.content, "\"fault\":${encode(fault_to_json(f))}")
+  }
+
+-- `dispatch_one_typed`'s defensive branch, for 0 and for >1 results: kind
+-- `io_error`, effects `unknown`, exit code 1.
+func t_defensive_arm_no_results() -> bool
+  tests [((), true)]
+  {
+    let out = typed_dispatch_result([]);
+    out.exit_code == 1
+      && out.content == "{\"fault\":{\"kind\":\"io_error\",\"effects\":\"unknown\",\"note\":\"${effects_note_unknown()}\"},\"error\":true,\"message\":\"internal: dispatcher returned 0 or >1 results for single call\"}"
+  }
+
+func t_defensive_arm_two_results() -> bool
+  tests [((), true)]
+  {
+    let a = t_bash(None, "true", "", "", 0);
+    let out = typed_dispatch_result([a, a]);
+    out.exit_code == 1
+      && out.content == "{\"fault\":{\"kind\":\"io_error\",\"effects\":\"unknown\",\"note\":\"${effects_note_unknown()}\"},\"error\":true,\"message\":\"internal: dispatcher returned 0 or >1 results for single call\"}"
+  }
+
+-- The single-result branch is the item's own rendering and exit code.
+func t_single_result_passthrough() -> bool
+  tests [((), true)]
+  {
+    let a = t_bash(None, "make build", "ok", "", 2);
+    let out = typed_dispatch_result([a]);
+    out.exit_code == 2 && out.content == t_render(a)
+  }
