@@ -400,10 +400,15 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, Rand, SharedMe
   let c10 = expect_check("claude settled with no answer -> settled_unverified, settled true",
                          claude_check(w0, n, "ok", "idle", ""), 1, true, n, "w1:pA");
   let c11 = expect_check("claude still working -> settled false", claude_check(w0, n, "timeout", "working", ""), 0, false, n, "w1:pA");
+  -- PR #275 review, R2-1: a check that finds the delegate still open carries
+  -- its wait again, so the core re-opens one a `lost` wake or a resume dropped.
+  let c12 = expect_wait("claude still working carries its wait again (R2-1)", claude_check(w0, n, "timeout", "working", ""), "claude");
+  let c13 = expect_wait("claude blocked carries its wait again (R2-1)", claude_check(w0, n, "ok", "blocked", ""), "claude");
+  let m8 = expect_wait("motoko not yet carries its wait again (R2-1)", motoko_check(w0, "timeout", "working", ""), "motoko");
 
   if d1 && d1h && d1b && d2 && d2h && d3 && d4 && d5
-     && m1 && m2 && m2b && m3 && m4 && m5 && m6 && m7
-     && c1 && c2 && c3 && c4 && c5 && c6 && c7 && c8 && c9 && c10 && c11
+     && m1 && m2 && m2b && m3 && m4 && m5 && m6 && m7 && m8
+     && c1 && c2 && c3 && c4 && c5 && c6 && c7 && c8 && c9 && c10 && c11 && c12 && c13
   then () else exit(1)
 }
 

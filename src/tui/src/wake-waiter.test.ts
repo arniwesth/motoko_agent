@@ -279,6 +279,24 @@ describe("wake waiter: DelegateWait state observation — HostError versus Lost"
     handle.cancel();
   });
 
+  it("claude/codex: `unknown` is not quiet and never reaches the idle bound", async () => {
+    const f = fake(async (argv) => (argv[1] === "wait" ? SETTLED_WAIT : rowWith("unknown")));
+    f.deps.idleNoAnswerMs = 1;
+    ticking(f, 100_000);
+    const { replies, handle } = run(request([delegate("d0")]), f);
+    await tick();
+    expect(replies).toHaveLength(0);
+    handle.cancel();
+  });
+
+  it("claude/codex: a settled-phase row with no agent_status is host_error, not quiet", async () => {
+    let gets = 0;
+    const f = fake(async (argv) => (argv[1] === "wait" ? SETTLED_WAIT : ++gets === 1 ? ROW : { code: 0, stdout: '{"result":{"agent":{}}}', stderr: "" }));
+    f.deps.idleNoAnswerMs = 600_000;
+    ticking(f, 100_000);
+    expect(await run(request([delegate("d0")]), f).reply).toMatchObject({ outcome: "host_error", wait_id: "" });
+  });
+
   it("a row never registered within registerTimeoutMs is lost; with an answer on disk it is settled", async () => {
     for (const kind of ["claude", "motoko"]) {
       const f = fake(async () => NOT_FOUND);

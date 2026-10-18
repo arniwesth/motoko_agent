@@ -20,7 +20,9 @@ orchestrator to wait by ending its turn. The same pull request changes the herdr
 tool texts to say so, sizes `DelegateCheck`'s wait under the shell's 30 s limit, and bounds
 the two waits that never woke on their own: a delegate that never registers (2 min) and one
 idle with no answer file (60 min). `MOTOKO_WAKE_REGISTER_TIMEOUT_MS` and
-`MOTOKO_WAKE_IDLE_NO_ANSWER_MS` change them.
+`MOTOKO_WAKE_IDLE_NO_ANSWER_MS` change them. A `DelegateCheck` that finds a delegate still open
+carries its wait again, so a delegate that comes back after such a wake is parked on again. Brief
+item 7 keeps a delegate's turn open while its own background job runs.
 
 ## Before you start
 
@@ -166,15 +168,19 @@ order:
    Run `make dst` and `make eval_matrix` by themselves, never beside each other or
    another target: eval_matrix is under the 12 GiB memory rule. A gate that could not
    run is not a gate that passed: say which did not run and why."
-7. For W0.1: "Record the baseline at the commit the branch was cut from, before any
+7. "Do not end your turn while a job you started in the background is still running.
+   Keep checking it with tool calls until it finishes, then write the answer. A turn
+   that ends before the answer file is written leaves your pane idle, and a check that
+   finds a pane idle with no answer closes it, which kills the job."
+8. For W0.1: "Record the baseline at the commit the branch was cut from, before any
    source change: `make dst`, then `make eval_matrix`. Expect about 35 and 14 minutes.
    Commit the evidence directory the task names."
-8. For W0.5 and W0.6: "Run as a non-root user, and put the output of `id -u` in your
+9. For W0.5 and W0.6: "Run as a non-root user, and put the output of `id -u` in your
    answer. Under root, rows e and f are not evaluated and the task is not done."
-9. "If a gate is red for a reason this task does not name, or the task cannot be done
-   as written, stop and report. Do not widen the task, and do not change another
-   task's files to get a green gate."
-10. "Your answer: the commit hash; `git show --stat` of it; each gate command with its
+10. "If a gate is red for a reason this task does not name, or the task cannot be done
+    as written, stop and report. Do not widen the task, and do not change another
+    task's files to get a green gate."
+11. "Your answer: the commit hash; `git show --stat` of it; each gate command with its
     exit code and its last lines; what you did not do; every line reference that had
     moved."
 
@@ -218,11 +224,12 @@ VERIFYING A DELEGATE, before the next delegation
      stays open.
    - A delegate blocked on a prompt does not wake you. I see it in herdr and answer it.
    - A delegate that sits idle for an hour with no answer file wakes you as `lost`, and so
-     does one that never starts. Call DelegateCheck once, then follow WHEN SOMETHING IS
-     WRONG.
+     does one that never starts. Call DelegateCheck once. If it reports the delegate
+     still working or blocked, the wait is open again: end your turn. Otherwise follow
+     WHEN SOMETHING IS WRONG.
    - If a DelegateCheck reports `herdr_cli_rejected` with `timeout after …ms`, the
-     shell's limit cut off the check's wait. The delegate is still working: end your
-     turn.
+     shell's limit cut off one of its herdr calls. That says nothing about the delegate,
+     and the wait stays open: end your turn.
 2. From git: `git -C <worktree> log --oneline origin/main..HEAD` shows one new commit
    for the task; `git -C <worktree> status --short` is empty; `git status --short`
    here matches the list from step 0.

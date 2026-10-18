@@ -367,7 +367,9 @@ export function startWakeWaiter(
         // records `settled_unverified`. Quiet resets on `working` (back to phase 2: a delegate that
         // goes idle while a background job runs is woken by that job) and on `blocked`, which waits
         // for a person, not for a deadline. The bound is long because DelegateCheck closes an idle
-        // pane, and with it any background job still running there.
+        // pane, and with it any background job still running there. `lost` drops the wait, but a
+        // DelegateCheck that finds the delegate still open carries the wait again
+        // (`herdr.ail`'s `meta_pending`), so a delegate that comes back is parked on again.
         let quietSince = deps.now();
         let resumed = false;
         while (!resumed) {
@@ -378,15 +380,22 @@ export function startWakeWaiter(
           const r = await herdr(argv);
           if (finished) return;
           if (r.spawnError === undefined && r.code === 0) {
+            // ONLY `idle` AND `done` ARE QUIET (second review, R2-1). `unknown` is herdr failing to
+            // classify the screen, not evidence that nothing is happening, so it resets the clock
+            // like `blocked`; output with no status is an observation failure, not a state.
             const status = herdrAgentStatus(r.stdout);
+            if (status === "") {
+              ready(index, "host_error", "", `herdr ${argv.join(" ")} returned no agent_status: ${r.stdout.slice(0, 200)}`);
+              return;
+            }
             if (status === "working") resumed = true;
-            else if (status === "blocked") quietSince = deps.now();
+            else if (status !== "idle" && status !== "done") quietSince = deps.now();
             else if (deps.idleNoAnswerMs !== undefined && deps.now() - quietSince >= deps.idleNoAnswerMs) {
               ready(
                 index,
                 "lost",
                 w.id,
-                `${target} has been \`${status || "unknown"}\` for ${Math.round(deps.idleNoAnswerMs / 60000)} min and no answer file was written to ${w.answer_path}`,
+                `${target} has been \`${status}\` for ${Math.round(deps.idleNoAnswerMs / 60000)} min and no answer file was written to ${w.answer_path}`,
               );
               return;
             }
