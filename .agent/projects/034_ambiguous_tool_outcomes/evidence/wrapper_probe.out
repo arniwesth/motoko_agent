@@ -1,0 +1,112 @@
+AILANG v0.52.5
+timeout (GNU coreutils) 9.4
+uid 1001; bash -l turns PATH=/nonexistent into: /bin:/nonexistent:/usr/local/go/bin
+repo 5b275f24
+
+--- no wrapper: what W0 renders today (the 0.52.5 baseline) ---
+== 22 bash -lc arm, deadline, work still running   [wall 2s, dispatch took 7005 ms]
+    message: {"tool":"BashExec","fault":{"kind":"deadline","effects":"unknown","elapsed_ms":7004,"note":"The harness cannot confirm whether this tool's effects happened. They may have happened in full, not at all, or may still be happening. Check the current state before running it again."},"cmd":"echo PARTIAL; echo ERRLINE >&2; (sleep 8; touch m22) >/dev/null 2>&1 & sleep 30","exit_code":1,"stdout":"","stderr":"timeout after 700
+    fault kind=deadline effects=unknown elapsed_ms=7004 | exit_code=1 | stdout='' | stderr='timeout after 7004ms'
+    m22 when the message was rendered: absent
+== 23 direct-exec arm, deadline (sleep 30)   [wall 3s, dispatch took 3004 ms]
+    message: {"tool":"BashExec","fault":{"kind":"deadline","effects":"unknown","elapsed_ms":3003,"note":"The harness cannot confirm whether this tool's effects happened. They may have happened in full, not at all, or may still be happening. Check the current state before running it again."},"cmd":"sleep 30","exit_code":1,"stdout":"","stderr":"timeout after 3003ms","truncated":false}
+    fault kind=deadline effects=unknown elapsed_ms=3003 | exit_code=1 | stdout='' | stderr='timeout after 3003ms'
+== 24 command's own exit 124, no wrapper   [wall 20s, dispatch took 4 ms]
+    message: {"tool":"BashExec","cmd":"echo OWN; exit 124","exit_code":124,"stdout":"OWN\n","stderr":"","truncated":false}
+    no fault | exit_code=124 | stdout='OWN\n' | stderr=''
+
+--- exit 124: wrapper deadline vs the command's own 124 (bash -lc arm, deadline 2 s, grace 1 s, wall 20 s) ---
+== 25 wrapper deadline, work still running   [wall 20s, dispatch took 2009 ms]
+    message: {"tool":"BashExec","cmd":"timeout -k 1 2 bash -c 'echo PARTIAL; echo ERRLINE >&2; (sleep 8; touch m25) >/dev/null 2>&1 & sleep 30'","exit_code":124,"stdout":"PARTIAL\n","stderr":"ERRLINE\n","truncated":false}
+    no fault | exit_code=124 | stdout='PARTIAL\n' | stderr='ERRLINE\n'
+== 26 command's own exit 124, early   [wall 20s, dispatch took 5 ms]
+    message: {"tool":"BashExec","cmd":"timeout -k 1 2 bash -c 'echo OWN; exit 124'","exit_code":124,"stdout":"OWN\n","stderr":"","truncated":false}
+    no fault | exit_code=124 | stdout='OWN\n' | stderr=''
+== 27 command's own exit 124 at 1.8 s, just inside the deadline   [wall 20s, dispatch took 1809 ms]
+    message: {"tool":"BashExec","cmd":"timeout -k 1 2 bash -c 'sleep 1.8; echo OWN; exit 124'","exit_code":124,"stdout":"OWN\n","stderr":"","truncated":false}
+    no fault | exit_code=124 | stdout='OWN\n' | stderr=''
+== 28 --verbose, wrapper deadline   [wall 20s, dispatch took 2007 ms]
+    message: {"tool":"BashExec","cmd":"timeout --verbose -k 1 2 bash -c 'echo PARTIAL; echo ERRLINE >&2; sleep 30'","exit_code":124,"stdout":"PARTIAL\n","stderr":"ERRLINE\ntimeout: sending signal TERM to command ‘bash’\n","truncated":false}
+    no fault | exit_code=124 | stdout='PARTIAL\n' | stderr='ERRLINE\ntimeout: sending signal TERM to command ‘bash’\n'
+== 29 --verbose, command forges the verbose line and exits 124   [wall 20s, dispatch took 3 ms]
+    message: {"tool":"BashExec","cmd":"timeout --verbose -k 1 2 bash -c 'echo \"timeout: sending signal TERM to command ‘bash’\" >&2; exit 124'","exit_code":124,"stdout":"","stderr":"timeout: sending signal TERM to command ‘bash’\n","truncated":false}
+    no fault | exit_code=124 | stdout='' | stderr='timeout: sending signal TERM to command ‘bash’\n'
+== 29b --verbose under LC_ALL=C: the same line, other quotes   [wall 20s, dispatch took 2005 ms]
+    message: {"tool":"BashExec","cmd":"timeout --verbose -k 1 2 bash -c 'sleep 30'","exit_code":124,"stdout":"","stderr":"timeout: sending signal TERM to command 'bash'\n","truncated":false}
+    no fault | exit_code=124 | stdout='' | stderr="timeout: sending signal TERM to command 'bash'\n"
+== 30 command ignores TERM: KILL after the grace   [wall 20s, dispatch took 3005 ms]
+    message: {"tool":"BashExec","fault":{"kind":"signal","effects":"unknown","signal":9,"signal_name":"killed","note":"The harness cannot confirm whether this tool's effects happened. They may have happened in full, not at all, or may still be happening. Check the current state before running it again."},"cmd":"timeout -k 1 2 bash -c 'trap \"\" TERM; echo PARTIAL; echo ERRLINE >&2; sleep 30'","exit_code":1,"stdout":"","stderr":"a
+    fault kind=signal effects=unknown signal=9 signal_name=killed | exit_code=1 | stdout='' | stderr='abnormal exit signal 9 (killed)'
+== 31 command exits on TERM with its own code (trap ... exit 3)   [wall 20s, dispatch took 2007 ms]
+    message: {"tool":"BashExec","cmd":"timeout -k 1 2 bash -c 'trap \"exit 3\" TERM; echo PARTIAL; echo ERRLINE >&2; sleep 30 & wait'","exit_code":124,"stdout":"PARTIAL\n","stderr":"ERRLINE\n","truncated":false}
+    no fault | exit_code=124 | stdout='PARTIAL\n' | stderr='ERRLINE\n'
+
+--- process groups ---
+== 46 process groups: the wrapped command's pgid vs timeout's and the runtime's   [wall 20s, dispatch took 44 ms]
+    message: {"tool":"BashExec","cmd":"timeout -k 1 5 bash -c 'echo cmd=$(ps -o pgid= -p $$) timeout=$(ps -o pgid= -p $PPID) timeout_pid=$PPID timeout_parent=$(ps -o comm= -p $(ps -o ppid= -p $PPID)) runtime=$(ps -o pgid= -p $(ps -o ppid= -p $PPID))'","exit_code":0,"stdout":"cmd= 841654 timeout= 841654 timeout_pid=841654 timeout_parent=ailang runtime= 841644\n","stderr":"","truncated":false}
+    no fault | exit_code=0 | stdout='cmd= 841654 timeout= 841654 timeout_pid=841654 timeout_parent=ailang runtime= 841644\n' | stderr=''
+
+--- the direct-exec arm (no shell tokens) ---
+== 32 direct arm, no wrapper: tail -f (prints, then waits)   [wall 3s, dispatch took 3004 ms]
+    message: {"tool":"BashExec","fault":{"kind":"deadline","effects":"unknown","elapsed_ms":3002,"note":"The harness cannot confirm whether this tool's effects happened. They may have happened in full, not at all, or may still be happening. Check the current state before running it again."},"cmd":"tail -f tail.txt","exit_code":1,"stdout":"","stderr":"timeout after 3002ms","truncated":false}
+    fault kind=deadline effects=unknown elapsed_ms=3002 | exit_code=1 | stdout='' | stderr='timeout after 3002ms'
+== 33 direct arm under timeout: tail -f   [wall 20s, dispatch took 2004 ms]
+    message: {"tool":"BashExec","cmd":"timeout -k 1 2 tail -f tail.txt","exit_code":124,"stdout":"line one\nline two\n","stderr":"","truncated":false}
+    no fault | exit_code=124 | stdout='line one\nline two\n' | stderr=''
+== 34 direct arm under timeout: sleep 30   [wall 20s, dispatch took 2008 ms]
+    message: {"tool":"BashExec","cmd":"timeout -k 1 2 sleep 30","exit_code":124,"stdout":"","stderr":"","truncated":false}
+    no fault | exit_code=124 | stdout='' | stderr=''
+== 35 an arg with a shell token moves the call to bash -lc, which drops args   [wall 20s, dispatch took 3 ms]
+    message: {"tool":"BashExec","cmd":"timeout -k 1 2 sh -c echo A; sleep 30","exit_code":125,"stdout":"","stderr":"Try 'timeout --help' for more information.\n","truncated":false}
+    no fault | exit_code=125 | stdout='' | stderr="Try 'timeout --help' for more information.\n"
+
+--- where GNU timeout is absent ---
+== 36 direct arm, PATH without timeout   [wall 20s, dispatch took 0 ms]
+    message: {"tool":"BashExec","fault":{"kind":"not_found","effects":"none","note":"No change was made: the tool failed before it could write or change anything."},"cmd":"timeout -k 1 2 sleep 30","exit_code":1,"stdout":"","stderr":"not found: timeout","truncated":false}
+    fault kind=not_found effects=none | exit_code=1 | stdout='' | stderr='not found: timeout'
+== 37 bash -lc arm, wrapper binary absent (named motoko-w0b-no-timeout)   [wall 20s, dispatch took 2 ms]
+    message: {"tool":"BashExec","cmd":"motoko-w0b-no-timeout -k 1 2 bash -c 'touch m37; echo RAN'","exit_code":127,"stdout":"","stderr":"/usr/bin/bash: line 1: motoko-w0b-no-timeout: command not found\n","truncated":false}
+    no fault | exit_code=127 | stdout='' | stderr='/usr/bin/bash: line 1: motoko-w0b-no-timeout: command not found\n'
+    m37 (did the command run?): absent
+== 38 direct arm, PATH with gtimeout only (Homebrew on macOS)   [wall 20s, dispatch took 2004 ms]
+    message: {"tool":"BashExec","cmd":"gtimeout -k 1 2 sleep 30","exit_code":124,"stdout":"","stderr":"","truncated":false}
+    no fault | exit_code=124 | stdout='' | stderr=''
+
+--- case A (exit 0, a child holds the pipe) ---
+== 39 case A, no wrapper   [wall 20s, dispatch took 5009 ms]
+    message: {"tool":"BashExec","fault":{"kind":"spawn_failed","effects":"unknown","note":"The harness cannot confirm whether this tool's effects happened. They may have happened in full, not at all, or may still be happening. Check the current state before running it again."},"cmd":"echo DONE; touch m39fg; (sleep 9; touch m39bg) & exit 0","exit_code":1,"stdout":"","stderr":"spawn failed: exec: WaitDelay expired before I/O comple
+    fault kind=spawn_failed effects=unknown | exit_code=1 | stdout='' | stderr='spawn failed: exec: WaitDelay expired before I/O complete'
+    m39fg at render: present   m39bg: absent
+== 40 case A under the wrapper   [wall 20s, dispatch took 5007 ms]
+    message: {"tool":"BashExec","fault":{"kind":"spawn_failed","effects":"unknown","note":"The harness cannot confirm whether this tool's effects happened. They may have happened in full, not at all, or may still be happening. Check the current state before running it again."},"cmd":"timeout -k 1 2 bash -c 'echo DONE; touch m40fg; (sleep 9; touch m40bg) & exit 0'","exit_code":1,"stdout":"","stderr":"spawn failed: exec: WaitDelay 
+    fault kind=spawn_failed effects=unknown | exit_code=1 | stdout='' | stderr='spawn failed: exec: WaitDelay expired before I/O complete'
+    m40fg at render: present   m40bg: absent
+== 41 case A under the wrapper, exit 7 (the #1879 contrast)   [wall 20s, dispatch took 5007 ms]
+    message: {"tool":"BashExec","cmd":"timeout -k 1 2 bash -c 'echo DONE; (sleep 9; touch m41bg) & exit 7'","exit_code":7,"stdout":"DONE\n","stderr":"","truncated":false}
+    no fault | exit_code=7 | stdout='DONE\n' | stderr=''
+
+--- the clamp, RunTests, and the output limit ---
+== 42 wrapper deadline above the wall (10 s vs 3 s)   [wall 3s, dispatch took 8008 ms]
+    message: {"tool":"BashExec","fault":{"kind":"deadline","effects":"unknown","elapsed_ms":8006,"note":"The harness cannot confirm whether this tool's effects happened. They may have happened in full, not at all, or may still be happening. Check the current state before running it again."},"cmd":"timeout -k 1 10 bash -c 'echo PARTIAL; echo ERRLINE >&2; sleep 120.42'","exit_code":1,"stdout":"","stderr":"timeout after 8006ms","tru
+    fault kind=deadline effects=unknown elapsed_ms=8006 | exit_code=1 | stdout='' | stderr='timeout after 8006ms'
+    at render: the wrapped command (sleep 120.42) alive; its timeout process gone
+== 43 deadline under the wall, deadline + grace over it (3+2 s vs 4 s), TERM ignored   [wall 4s, dispatch took 9007 ms]
+    message: {"tool":"BashExec","fault":{"kind":"deadline","effects":"unknown","elapsed_ms":9005,"note":"The harness cannot confirm whether this tool's effects happened. They may have happened in full, not at all, or may still be happening. Check the current state before running it again."},"cmd":"timeout -k 2 3 bash -c 'trap \"\" TERM; echo PARTIAL; echo ERRLINE >&2; sleep 120.43'","exit_code":1,"stdout":"","stderr":"timeout aft
+    fault kind=deadline effects=unknown elapsed_ms=9005 | exit_code=1 | stdout='' | stderr='timeout after 9005ms'
+    at render: the wrapped command (sleep 120.43) alive; its timeout process gone
+== 44 RunTests, wrapper deadline   [wall 20s, dispatch took 2006 ms]
+    message: {"tool":"RunTests","exit_code":124,"stdout":"PARTIAL\n","stderr":"ERRLINE\n","truncated":false}
+    no fault | exit_code=124 | stdout='PARTIAL\n' | stderr='ERRLINE\n'
+== 45 wrapper deadline 5 s, output passes a 1,000-byte limit first   [wall 20s, dispatch took 6 ms]
+    message: {"tool":"BashExec","fault":{"kind":"output_limit","effects":"unknown","bytes":1000,"note":"The harness cannot confirm whether this tool's effects happened. They may have happened in full, not at all, or may still be happening. Check the current state before running it again."},"cmd":"timeout -k 1 5 bash -c 'head -c 5000 /dev/zero; touch m45; exit 0'","exit_code":1,"stdout":"","stderr":"output limit exceeded: 1000 byt
+    fault kind=output_limit effects=unknown bytes=1000 | exit_code=1 | stdout='' | stderr='output limit exceeded: 1000 bytes'
+    m45: present
+
+waiting 10 s for work that outlived its result...
+    m22   (case 22, no wrapper):          present
+    m25   (case 25, wrapper deadline):    absent
+    m39bg (case 39, case A):              present
+    m40bg (case 40, case A under wrapper): present
+    m41bg (case 41):                       present
+    case 42 (deadline above the wall):          sleep 120.42 alive, its timeout gone
+    case 43 (deadline + grace over the wall):   sleep 120.43 alive, its timeout gone
