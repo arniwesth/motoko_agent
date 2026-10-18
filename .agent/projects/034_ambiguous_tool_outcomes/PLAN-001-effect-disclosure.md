@@ -391,9 +391,11 @@ before the code exists. The implementer may add rows, and must not drop one.
 
 No mutant is possible for "a new upstream arm is a compile error": the property is that no
 wildcard exists, and that is checked by reading the code. The table records it as a survivor with
-that sentence. Search's `rg` failure (`:596`) has no row: it is `Err` only when `rg` itself
-cannot be launched, which no portable fixture arranges. It is recorded as a survivor with that
-sentence. Survival cases: W0.5 rows b, c, g, h and i to n must stay green on unmutated source.
+that sentence. Search's `rg` failure (`:596`) first had no row, on the claim that it is `Err` only
+when `rg` cannot be launched. #277's review showed an 11 MiB matching file reaches it as
+`OutputLimitExceeded` after a normal launch, so it is m36, killed by W0.5 row r; m37-m39 cover the
+read-only `rg` argv and the cut unknown tool name. Survival cases: W0.5 rows b, c, g, h and i to n
+must stay green on unmutated source.
 
 The table was widened after review finding 4: kinds m16-m22, the refusal sites m23-m29, and m14
 moved to the stricter order. It was widened again after review 2, finding 9: m30-m35.
