@@ -15,6 +15,10 @@
  *         A default-wait success is NEVER an answer: it only triggers an answer re-read.
  *       - motoko one-shot: the row disappearing AFTER it was seen, then an answer re-read
  *         (content -> `settled`, none -> `lost`).
+ *     Two bounds end observations that otherwise never end (2026-10-18, PR #275 review):
+ *       - a row never seen within `registerTimeoutMs` -> answer re-read, else `lost`;
+ *       - claude/codex settled with no answer for `idleNoAnswerMs` of continuous quiet (reset by
+ *         `working` and `blocked`) -> `lost`. The wake sends the model to DelegateCheck.
  *   - A herdr transport failure (spawn error, non-zero exit other than `agent_not_found`,
  *     unparseable output) is `host_error`, NEVER `lost` — the extension separates these at
  *     `herdr.ail`'s `means_agent_gone`, and the host does too.
@@ -98,6 +102,16 @@ export interface WaiterDeps {
   defer: (fn: () => void) => void;
   /** Interval between `agent get` polls while waiting for a row to appear or disappear. */
   pollMs: number;
+  /**
+   * How long a row may stay unregistered (`agent_not_found` before it was ever seen) before the
+   * wait is reported `lost`. Unset: no bound, the pre-2026-10-18 behaviour.
+   */
+  registerTimeoutMs?: number;
+  /**
+   * claude/codex only: how long a delegate may sit settled (idle/done/unknown, not blocked) with no
+   * answer file before the wait is reported `lost`. Unset: no bound.
+   */
+  idleNoAnswerMs?: number;
 }
 
 export interface WakeWaiterHandle {
@@ -127,6 +141,17 @@ export function herdrFailureCode(r: HerdrResult): string {
 
 export function herdrMeansAgentGone(r: HerdrResult): boolean {
   return herdrFailureCode(r) === "agent_not_found";
+}
+
+/** `agent get`'s `agent_status`, "" when it is absent or the output is not agent_info. */
+export function herdrAgentStatus(stdout: string): string {
+  try {
+    const parsed = JSON.parse(stdout.trim()) as { result?: { agent?: { agent_status?: unknown } } };
+    const st = parsed?.result?.agent?.agent_status;
+    return typeof st === "string" ? st : "";
+  } catch {
+    return "";
+  }
 }
 
 /** True when `agent get` stdout is herdr's agent_info shape. */
@@ -278,7 +303,12 @@ export function startWakeWaiter(
     const hostError = (argv: string[], r: HerdrResult): void =>
       ready(index, "host_error", "", describeHerdrFailure(argv, r));
 
-    // Phase 1: wait for the row to exist. `agent_not_found` here means "not registered yet".
+    // Phase 1: wait for the row to exist. `agent_not_found` here means "not registered yet" -- for
+    // `registerTimeoutMs`. A motoko child that dies during startup, or a pane closed before the
+    // first observation, never registers, and without the bound the park outlived its delegate
+    // (PR #275 review, finding 2). The answer is re-read first: a fast one-shot can publish and
+    // exit before it is ever seen.
+    const registerStart = deps.now();
     for (;;) {
       if (finished) return;
       const argv = argvAgentGet(target);
@@ -292,33 +322,83 @@ export function startWakeWaiter(
         break;
       }
       if (!herdrMeansAgentGone(r)) return hostError(argv, r);
+      if (deps.registerTimeoutMs !== undefined && deps.now() - registerStart >= deps.registerTimeoutMs) {
+        const content = deps.readAnswer(w.answer_path);
+        if (content !== null) ready(index, "settled", w.id, content);
+        else
+          ready(
+            index,
+            "lost",
+            w.id,
+            `herdr never reported an agent at ${target} within ${Math.round(deps.registerTimeoutMs / 1000)}s and no answer file was written to ${w.answer_path}; it failed to start or was closed before it was seen`,
+          );
+        return;
+      }
       await sleep(deps.pollMs);
     }
 
     // Phase 2 (claude/codex): the settled-state wait. Its success is not an answer.
     if (w.delegate_kind !== "motoko") {
       for (;;) {
-        if (finished) return;
-        const argv = argvAgentWaitSettled(target);
-        const r = await herdr(argv);
-        if (finished) return;
-        if (r.spawnError === undefined && r.code === 0) {
-          const content = deps.readAnswer(w.answer_path);
-          if (content !== null) {
-            ready(index, "settled", w.id, content);
-            return;
+        for (;;) {
+          if (finished) return;
+          const argv = argvAgentWaitSettled(target);
+          const r = await herdr(argv);
+          if (finished) return;
+          if (r.spawnError === undefined && r.code === 0) {
+            const content = deps.readAnswer(w.answer_path);
+            if (content !== null) {
+              ready(index, "settled", w.id, content);
+              return;
+            }
+            // Settled with no answer on disk: not an answer, and not lost (the row is there). Fall
+            // through to watching the row, while the file observation stays live.
+            break;
           }
-          // Settled with no answer on disk: not an answer, and not lost (the row is there). Fall
-          // through to watching the row, while the file observation stays live.
-          break;
+          if (herdrMeansAgentGone(r)) return rowGone(w, index, target);
+          if (herdrFailureCode(r) === "timeout") continue;
+          return hostError(argv, r);
         }
-        if (herdrMeansAgentGone(r)) return rowGone(w, index, target);
-        if (herdrFailureCode(r) === "timeout") continue;
-        return hostError(argv, r);
+
+        // Phase 3 (claude/codex): settled with no answer. An interactive agent's row never goes
+        // away by itself, so without a bound this park lasted for ever on a delegate that answered
+        // in its reply and never wrote the file (PR #275 review, finding 1). `idleNoAnswerMs` of
+        // continuous quiet ends it as `lost`, and the wake sends the model to DelegateCheck, which
+        // records `settled_unverified`. Quiet resets on `working` (back to phase 2: a delegate that
+        // goes idle while a background job runs is woken by that job) and on `blocked`, which waits
+        // for a person, not for a deadline. The bound is long because DelegateCheck closes an idle
+        // pane, and with it any background job still running there.
+        let quietSince = deps.now();
+        let resumed = false;
+        while (!resumed) {
+          if (finished) return;
+          await sleep(deps.pollMs);
+          if (finished) return;
+          const argv = argvAgentGet(target);
+          const r = await herdr(argv);
+          if (finished) return;
+          if (r.spawnError === undefined && r.code === 0) {
+            const status = herdrAgentStatus(r.stdout);
+            if (status === "working") resumed = true;
+            else if (status === "blocked") quietSince = deps.now();
+            else if (deps.idleNoAnswerMs !== undefined && deps.now() - quietSince >= deps.idleNoAnswerMs) {
+              ready(
+                index,
+                "lost",
+                w.id,
+                `${target} has been \`${status || "unknown"}\` for ${Math.round(deps.idleNoAnswerMs / 60000)} min and no answer file was written to ${w.answer_path}`,
+              );
+              return;
+            }
+            continue;
+          }
+          if (herdrMeansAgentGone(r)) return rowGone(w, index, target);
+          return hostError(argv, r);
+        }
       }
     }
 
-    // Phase 3: the row disappearing after it was seen (the motoko one-shot's exit).
+    // Phase 3 (motoko): the row disappearing after it was seen (the one-shot's exit).
     for (;;) {
       if (finished) return;
       await sleep(deps.pollMs);
@@ -473,7 +553,15 @@ export function defaultWaiterDeps(): WaiterDeps {
       setImmediate(fn);
     },
     pollMs: 1000,
+    registerTimeoutMs: envMs("MOTOKO_WAKE_REGISTER_TIMEOUT_MS", 120_000),
+    idleNoAnswerMs: envMs("MOTOKO_WAKE_IDLE_NO_ANSWER_MS", 3_600_000),
   };
+}
+
+/** A positive integer from the environment, else the fallback. */
+function envMs(name: string, fallback: number): number {
+  const n = Number((process.env[name] ?? "").trim());
+  return Number.isInteger(n) && n > 0 ? n : fallback;
 }
 
 export const defaultWakeWaiterFactory: WakeWaiterFactory = (req, onReady) =>

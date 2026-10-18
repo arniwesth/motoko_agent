@@ -17,7 +17,10 @@ since (`a7c77571`, 2026-10-08).
 Revised 2026-10-18, after the first session (`session_1792309035163`) busy-polled `DelegateCheck`
 instead of parking: *VERIFYING A DELEGATE* step 1 and the end-of-turn rule now tell the
 orchestrator to wait by ending its turn. The same pull request changes the herdr extension's
-tool texts to say so, and sizes `DelegateCheck`'s wait under the shell's 30 s limit.
+tool texts to say so, sizes `DelegateCheck`'s wait under the shell's 30 s limit, and bounds
+the two waits that never woke on their own: a delegate that never registers (2 min) and one
+idle with no answer file (60 min). `MOTOKO_WAKE_REGISTER_TIMEOUT_MS` and
+`MOTOKO_WAKE_IDLE_NO_ANSWER_MS` change them.
 
 ## Before you start
 
@@ -214,6 +217,9 @@ VERIFYING A DELEGATE, before the next delegation
    - If I write to you while you are parked, answer and end your turn again. The wait
      stays open.
    - A delegate blocked on a prompt does not wake you. I see it in herdr and answer it.
+   - A delegate that sits idle for an hour with no answer file wakes you as `lost`, and so
+     does one that never starts. Call DelegateCheck once, then follow WHEN SOMETHING IS
+     WRONG.
    - If a DelegateCheck reports `herdr_cli_rejected` with `timeout after …ms`, the
      shell's limit cut off the check's wait. The delegate is still working: end your
      turn.

@@ -257,7 +257,7 @@ export func describe_tools(allowed: string, must_choose: bool) -> [ToolSchema] {
       description: "Hand a self-contained sub-task to a coding agent running in its own terminal pane. Returns a handle immediately; the delegate keeps working after this call returns. To wait for it, end your turn: the loop parks and wakes you when the answer lands or the delegate is lost. Then call DelegateCheck once to collect it. Do not poll DelegateCheck: each call costs a step.",
       parameters: delegate_params(allowed, must_choose) },
     { name: "DelegateCheck",
-      description: "Fetch a delegate's current state and its answer if it has landed. Cheap; call it as often as you like.",
+      description: "Collect a delegate's answer once the loop has woken you for it, or read its current state. Each call costs a step and can block for one wait (about 20s); do not poll it.",
       parameters: check_params() }
   ]
 }
@@ -1435,7 +1435,7 @@ func do_delegate(cfg: HerdrConfig, ctx: ProviderCtx, call: ToolCallEnvelope)
               let view = ensure_dagr_pane(cfg, p, rec.next_state, ctx.workdir);
               { result: {
                   tool_call_id: call.id, tool: "Delegate", exit_code: 0,
-                  stdout: "Delegate `${h}` is running motoko${model_note(kind, model)} in pane ${pane}. Starting it took ${format_ms(t.now_ms - clock.now_ms)}. A motoko delegate does not report readiness the way claude and codex do and it will not stop on its own, so DelegateCheck watches for the answer file rather than for the agent going idle. Call DelegateCheck with `${h}`.${plan.note}${tag.note}${rec.note}${view.note}",
+                  stdout: "Delegate `${h}` is running motoko${model_note(kind, model)} in pane ${pane}. Starting it took ${format_ms(t.now_ms - clock.now_ms)}. A motoko delegate does not report readiness the way claude and codex do and it will not stop on its own, so DelegateCheck watches for the answer file rather than for the agent going idle. If you have nothing else to do meanwhile, end your turn: the loop parks on this delegate and wakes you when its answer lands. Then call DelegateCheck with `${h}` once.${plan.note}${tag.note}${rec.note}${view.note}",
                   stderr: "", metadata: meta_delegate(h, pane, motoko_kind(), answer, run_key(h))
                 },
                 next_state: view.next_state }

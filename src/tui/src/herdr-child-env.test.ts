@@ -73,4 +73,19 @@ describe("buildChildEnv forwards the herdr pane environment", () => {
 
     for (const k of KEYS) expect(k in childEnv).toBe(false);
   });
+
+  // The extension sizes DelegateCheck's wait under the process wall, so it needs the same value
+  // `--process-timeout` is built from: trimmed, and "" when unset (PR #275 review, finding 3).
+  it("carries MOTOKO_PROCESS_TIMEOUT, trimmed, for the extension's wait sizing", () => {
+    const before = process.env.MOTOKO_PROCESS_TIMEOUT;
+    try {
+      process.env.MOTOKO_PROCESS_TIMEOUT = " 300s ";
+      expect(buildChildEnv(workdir, "someprofile", "", "").MOTOKO_PROCESS_TIMEOUT).toBe("300s");
+      delete process.env.MOTOKO_PROCESS_TIMEOUT;
+      expect(buildChildEnv(workdir, "someprofile", "", "").MOTOKO_PROCESS_TIMEOUT).toBe("");
+    } finally {
+      if (before === undefined) delete process.env.MOTOKO_PROCESS_TIMEOUT;
+      else process.env.MOTOKO_PROCESS_TIMEOUT = before;
+    }
+  });
 });

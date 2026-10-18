@@ -220,6 +220,81 @@ describe("wake waiter: DelegateWait state observation — HostError versus Lost"
     expect(await run(request([delegate("m0", "motoko")]), f).reply).toMatchObject({ outcome: "settled", detail: "published" });
   });
 
+  // PR #275 review, findings 1 and 2: the two observations that never ended on their own.
+  const rowWith = (status: string): HerdrResult => ({
+    code: 0,
+    stdout: `{"id":"cli:agent:get","result":{"agent":{"agent_status":"${status}","pane_id":"w1:p1"},"type":"agent_info"}}`,
+    stderr: "",
+  });
+  const SETTLED_WAIT: HerdrResult = { code: 0, stdout: "{}", stderr: "" };
+  /** A clock that advances `step` ms per reading. */
+  const ticking = (f: Fake, step: number): void => {
+    let t = 0;
+    f.deps.now = () => (t += step);
+  };
+
+  it("claude/codex: idle with no answer past idleNoAnswerMs is lost, naming the state", async () => {
+    const f = fake(async (argv) => (argv[1] === "wait" ? SETTLED_WAIT : rowWith("idle")));
+    f.deps.idleNoAnswerMs = 600_000;
+    ticking(f, 100_000);
+    const reply = await run(request([delegate("d0")]), f).reply;
+    expect(reply).toMatchObject({ wait_id: "d0", outcome: "lost" });
+    expect(reply.detail).toContain("`idle` for 10 min");
+  });
+
+  it("claude/codex: idle with no answer and no bound stays parked", async () => {
+    const f = fake(async (argv) => (argv[1] === "wait" ? SETTLED_WAIT : rowWith("idle")));
+    ticking(f, 100_000);
+    const { replies, handle } = run(request([delegate("d0")]), f);
+    await tick();
+    expect(replies).toHaveLength(0);
+    handle.cancel();
+  });
+
+  it("claude/codex: working again resets the quiet clock and goes back to the settled-state wait", async () => {
+    const statuses = ["working", "idle", "idle"];
+    let gets = 0;
+    const f = fake(async (argv, s) => {
+      if (argv[1] === "wait") return SETTLED_WAIT;
+      gets++;
+      if (gets === 1) return ROW; // phase 1
+      return gets - 2 < statuses.length ? rowWith(statuses[gets - 2]) : hang(s);
+    });
+    f.deps.idleNoAnswerMs = 250_000;
+    ticking(f, 100_000);
+    const { replies, handle } = run(request([delegate("d0")]), f);
+    await tick();
+    expect(replies).toHaveLength(0);
+    expect(f.calls.filter((c) => c[1] === "wait")).toHaveLength(2);
+    handle.cancel();
+  });
+
+  it("claude/codex: blocked never times out", async () => {
+    const f = fake(async (argv) => (argv[1] === "wait" ? SETTLED_WAIT : rowWith("blocked")));
+    f.deps.idleNoAnswerMs = 1;
+    ticking(f, 100_000);
+    const { replies, handle } = run(request([delegate("d0")]), f);
+    await tick();
+    expect(replies).toHaveLength(0);
+    handle.cancel();
+  });
+
+  it("a row never registered within registerTimeoutMs is lost; with an answer on disk it is settled", async () => {
+    for (const kind of ["claude", "motoko"]) {
+      const f = fake(async () => NOT_FOUND);
+      f.deps.registerTimeoutMs = 120_000;
+      ticking(f, 50_000);
+      const reply = await run(request([delegate("d0", kind)]), f).reply;
+      expect(reply).toMatchObject({ wait_id: "d0", outcome: "lost" });
+      expect(reply.detail).toContain("within 120s");
+    }
+    let reads = 0;
+    const g = fake(async () => NOT_FOUND, () => (++reads >= 3 ? "published before it was seen" : null));
+    g.deps.registerTimeoutMs = 120_000;
+    ticking(g, 50_000);
+    expect(await run(request([delegate("m0", "motoko")]), g).reply).toMatchObject({ outcome: "settled", detail: "published before it was seen" });
+  });
+
   it("classifies herdr failures like the extension", () => {
     expect(herdrFailureCode(NOT_FOUND)).toBe("agent_not_found");
     expect(herdrFailureCode(SERVER_DOWN)).toBe("server_not_running");

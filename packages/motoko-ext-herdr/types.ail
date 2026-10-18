@@ -32,7 +32,7 @@ module sunholo/motoko_ext_herdr/types
 --      them — a healthy agent has a populated `matched_rule` and a null
 --      `fallback_reason`. `explain_says_ready` is that test.
 
-import std/string (length, substring, contains, intToStr, join, replace, split, stringToInt, find)
+import std/string (length, substring, contains, intToStr, join, replace, split, stringToInt, find, trim)
 import std/json (Json, decode, encode, get, asString, asNumber, asArray, jo, ja, js, kv)
 import std/option (Option, Some, None)
 import std/result (Ok, Err)
@@ -620,30 +620,80 @@ pure func process_wall_elapsed(stderr: string) -> bool
 }
 
 -- THE PROCESS WALL, in ms, from the value MOTOKO_PROCESS_TIMEOUT carries (a Go
--- duration; the TUI passes it to `ailang run --process-timeout`). Unset is
--- AILANG's default, 30s. Only the single-unit forms are read; anything else
--- (`1m30s`, `1.5m`) is taken as the default, which can only make the waits
--- sized from it shorter than they could be, never longer than the wall.
+-- duration; the TUI passes the same trimmed string to `ailang run
+-- --process-timeout`). Unset is AILANG's default, 30s. Parsed with Go's
+-- grammar -- one or more `<decimal><unit>`, units ns us ms s m h -- because
+-- the runtime accepts all of it (`10.0s`, `0.5s`, `1s500ms`). A string that
+-- still does not parse is taken as a SHORT wall, 10s: an unknown spelling must
+-- not size a wait past the real wall (PR #275 review, finding 4).
 export pure func process_wall_ms(s: string) -> int
   tests [
     ("", 30000),
+    ("  ", 30000),
     ("300s", 300000),
+    (" 300s ", 300000),
     ("10m", 600000),
     ("1h", 3600000),
     ("1500ms", 1500),
-    ("1m30s", 30000),
-    ("fast", 30000)
+    ("10.0s", 10000),
+    ("0.5s", 500),
+    ("1s500ms", 1500),
+    ("1m30s", 90000),
+    ("2500000us", 2500),
+    ("fast", 10000),
+    ("10", 10000),
+    ("s", 10000)
   ]
 {
-  let n = length(s);
-  let num = \k. match stringToInt(substring(s, 0, n - k)) { Some(v) => v, None => 0 - 1 };
-  let v =
-    if n > 2 && substring(s, n - 2, n) == "ms" then num(2)
-    else if n > 1 && substring(s, n - 1, n) == "s" then num(1) * 1000
-    else if n > 1 && substring(s, n - 1, n) == "m" then num(1) * 60000
-    else if n > 1 && substring(s, n - 1, n) == "h" then num(1) * 3600000
-    else 0 - 1;
-  if v > 0 then v else 30000
+  let t = trim(s);
+  if t == "" then 30000
+  else match duration_ns(t, 0, 0) {
+    Some(ns) => if ns >= 1000000 then ns / 1000000 else 10000,
+    None => 10000
+  }
+}
+
+pure func is_digit_at(s: string, i: int) -> bool {
+  i < length(s) && contains("0123456789", substring(s, i, i + 1))
+}
+
+pure func digits_end(s: string, i: int) -> int {
+  if is_digit_at(s, i) then digits_end(s, i + 1) else i
+}
+
+pure func pow10(n: int) -> int { if n <= 0 then 1 else 10 * pow10(n - 1) }
+
+-- The unit at `i`, as (nanoseconds, its length); (0, 0) when there is none.
+-- Two-letter units are tried first, so `ms` is never read as `m`.
+pure func unit_at(s: string, i: int) -> (int, int) {
+  let two = if i + 2 <= length(s) then substring(s, i, i + 2) else "";
+  let one = if i + 1 <= length(s) then substring(s, i, i + 1) else "";
+  if two == "ns" then (1, 2)
+  else if two == "us" then (1000, 2)
+  else if two == "ms" then (1000000, 2)
+  else if one == "s" then (1000000000, 1)
+  else if one == "m" then (60000000000, 1)
+  else if one == "h" then (3600000000000, 1)
+  else (0, 0)
+}
+
+-- `<decimal><unit>` terms from `i`, summed in nanoseconds. Go requires a unit
+-- on every term except a bare "0", which no wall uses, so that is refused.
+pure func duration_ns(s: string, i: int, acc: int) -> Option[int] {
+  if i >= length(s) then (if i > 0 then Some(acc) else None)
+  else {
+    let j = digits_end(s, i);
+    let has_frac = j < length(s) && substring(s, j, j + 1) == ".";
+    let k = if has_frac then digits_end(s, j + 1) else j;
+    let whole = if j > i then match stringToInt(substring(s, i, j)) { Some(v) => v, None => 0 } else 0;
+    let frac_len = if has_frac then k - (j + 1) else 0;
+    let frac = if frac_len > 0 then match stringToInt(substring(s, j + 1, k)) { Some(v) => v, None => 0 } else 0;
+    if j == i && frac_len == 0 then None
+    else match unit_at(s, k) {
+      (0, _) => None,
+      (unit, n) => duration_ns(s, k + n, acc + whole * unit + frac * unit / pow10(frac_len))
+    }
+  }
 }
 
 -- DelegateCheck's default wait: 10s under the wall, because a herdr `--timeout`
@@ -1123,15 +1173,20 @@ export pure func failure_message(exit_code: int, stderr: string) -> string
 
 -- The hints are the measured part. Each says what the code MEANS operationally,
 -- which is the half the prose message leaves out.
+--
+-- `timeout` NEVER REACHES HERE FROM DelegateCheck's WAIT: `wait_elapsed` takes it
+-- first, as a poll interval. What does arrive is a start, prompt or `get` that
+-- timed out, and a failed Delegate opens no wait, so this hint must not send the
+-- model to park (PR #275 review, finding 5).
 export pure func code_hint(code: string) -> string
   tests [
-    ("timeout", " The wait elapsed; the delegate is still working. This is a poll interval, not a death. To wait for it, end your turn: the loop parks and wakes you when the answer lands."),
+    ("timeout", " herdr's time bound for this call elapsed before it finished. If this was a Delegate, nothing was delegated and no wait is open: re-delegate, or run the task directly."),
     ("agent_not_found", " No agent with that name or pane is live. It has been closed, or it was never started."),
     ("unrecognised_code_xyz", "")
   ]
   {
     if code == "timeout" then
-      " The wait elapsed; the delegate is still working. This is a poll interval, not a death. To wait for it, end your turn: the loop parks and wakes you when the answer lands."
+      " herdr's time bound for this call elapsed before it finished. If this was a Delegate, nothing was delegated and no wait is open: re-delegate, or run the task directly."
     else if code == "agent_prompt_stalled" then
       " The delegate accepted input but its state never changed, which in practice means it is not really at an agent prompt — check `agent explain`."
     else if code == "agent_not_found" then
