@@ -1,0 +1,102 @@
+Warning: dependency sunholo/motoko_ext_herdr content changed (locked: sha256:6928b495ef76aff83..., current: sha256:6ad70260565a80fa4...)
+Run 'ailang lock' to update
+strict_replay_dst: WI-A13 stage 3 — strict replay against driver_only
+
+rich: discovery recorded 30 interactions
+CENSUS rich expect_provider=5 expect_tool=2 expect_approval=6 expect_wake=0 expect_extension_effect=0 environment_read=12 runtime_random_draw=0 advance_clock=5 file_write=0 file_remove=0 dir_make=0
+  ✓ rich: the discovery run ended Ok as the scenario intends
+  ✓ rich: the program's manifest validates against driver_only/38
+  ✓ rich: replay metadata is projected from the manifest, not restated
+  ✓ rich: the reconstituted world accounts for the program, in both directions
+rich: reconstituted script=4 approvals=3 tools=2 clock=0
+  ✓ rich: the exact program replays to an identical interaction log
+  ✓ rich: the replay reproduces the terminal outcome
+rich: replay witness provider=5 tool=2 approval_reads=6 approvals_served=3 clock_delta=23ms
+  ✓ rich: the REPLAYED run's log accounts for it, against witnesses the recorder did not write
+  ✓ rich: every witness the grading consumes is non-zero
+  ✓ rich: the surviving fixture carries every shape the specification protects
+  ✓ rich: no two of the surviving fixture's quantities are equal
+  ✓ rich: the replay's recorded provider steps equal the driver's own
+  ✓ rich: a program and a log with the SAME defect match perfectly
+  ✓ rich: …and the independent witnesses reject it anyway
+  mutations (each must go red):
+  ✓ replay-unused-interaction ← the replay stops one interaction early
+  ✓ replay-program-exhausted ← the replay makes one request more than the program holds
+  ✓ replay-wrong-kind ← one provider request arrives as a clock advance
+  ✓ replay-wrong-origin ← one provider request comes from a different producer
+  ✓ replay-unsafe-identity-mismatch ← one tool request carries a different call id
+  ✓ replay-projection-differs ← one request projection differs
+  ✓ replay-outcome-differs ← the world served the right request and a different answer
+  regression replay (D2's second mode), on the same real logs:
+  ✓ rich: an exact replay is regression-clean AND records nothing
+      regression replay: 0 fatal, 1 recorded difference(s)
+    - [replay-projection-differs] at interaction position 11 the program records request projection 'model_step model=phase-c-model msg_count=2' and the driver produced 'model_step model=phase-c-model msg_count=2 (drifted)'; strict replay requires the recorded projections to match, and the projection is what carries the arguments and message digests D2 says are recorded rather than silently discarded
+  ✓ rich: a differing request projection is RECORDED and the replay continues
+  ✓ rich: a differing outcome is RECORDED and the replay continues
+  ✓ rich: causal identity and both walk arms stay FATAL in regression mode
+  ✓ rich: no fatal rule was quietly recorded as a difference instead
+  ✓ rich: an undecodable schema version refuses replay
+  ✓ rich: a provider outcome that cannot be read back refuses replay
+  ✓ rich: a mismatch returns a typed HarnessFailure with position and projection
+  ✓ rich: two replays of one program produce the same log
+  ✓ rich: the replayed log is itself a structurally valid program
+
+maxsteps: discovery recorded 19 interactions
+CENSUS maxsteps expect_provider=1 expect_tool=1 expect_approval=3 expect_wake=0 expect_extension_effect=0 environment_read=10 runtime_random_draw=0 advance_clock=4 file_write=0 file_remove=0 dir_make=0
+  ✓ maxsteps: the discovery run ended Err as the scenario intends
+  ✓ maxsteps: the program's manifest validates against driver_only/38
+  ✓ maxsteps: replay metadata is projected from the manifest, not restated
+  ✓ maxsteps: the reconstituted world accounts for the program, in both directions
+maxsteps: reconstituted script=1 approvals=2 tools=1 clock=0
+  ✓ maxsteps: the exact program replays to an identical interaction log
+  ✓ maxsteps: the replay reproduces the terminal outcome
+maxsteps: replay witness provider=1 tool=1 approval_reads=3 approvals_served=2 clock_delta=11ms
+  ✓ maxsteps: the REPLAYED run's log accounts for it, against witnesses the recorder did not write
+  ✓ maxsteps: every witness the grading consumes is non-zero
+  ✓ maxsteps: the replay's recorded provider steps equal the driver's own
+  ✓ maxsteps: a program and a log with the SAME defect match perfectly
+  ✓ maxsteps: …and the independent witnesses reject it anyway
+  mutations (each must go red):
+  ✓ replay-unused-interaction ← the replay stops one interaction early
+  ✓ replay-program-exhausted ← the replay makes one request more than the program holds
+  ✓ replay-wrong-kind ← one provider request arrives as a clock advance
+  ✓ replay-wrong-origin ← one provider request comes from a different producer
+  ✓ replay-unsafe-identity-mismatch ← one tool request carries a different call id
+  ✓ replay-projection-differs ← one request projection differs
+  ✓ replay-outcome-differs ← the world served the right request and a different answer
+  regression replay (D2's second mode), on the same real logs:
+  ✓ maxsteps: an exact replay is regression-clean AND records nothing
+      regression replay: 0 fatal, 1 recorded difference(s)
+    - [replay-projection-differs] at interaction position 11 the program records request projection 'model_step model=phase-c-model msg_count=2' and the driver produced 'model_step model=phase-c-model msg_count=2 (drifted)'; strict replay requires the recorded projections to match, and the projection is what carries the arguments and message digests D2 says are recorded rather than silently discarded
+  ✓ maxsteps: a differing request projection is RECORDED and the replay continues
+  ✓ maxsteps: a differing outcome is RECORDED and the replay continues
+  ✓ maxsteps: causal identity and both walk arms stay FATAL in regression mode
+  ✓ maxsteps: no fatal rule was quietly recorded as a difference instead
+  ✓ maxsteps: an undecodable schema version refuses replay
+  ✓ maxsteps: a provider outcome that cannot be read back refuses replay
+  ✓ maxsteps: a mismatch returns a typed HarnessFailure with position and projection
+  ✓ maxsteps: two replays of one program produce the same log
+  ✓ maxsteps: the replayed log is itself a structurally valid program
+
+world_truth (034 W1.3): the effect log, recorded, persisted and replayed
+world_truth: discovery recorded 27 interactions; tool ordinals [15,19,23]; effect log #15 wt0a T:{}; #19 wt0b T:{}; #23 wt0c T:{}; 
+  ✓ world_truth: the discovery run dispatched the three scripted tools
+  ✗ world_truth: the effect log holds the completed call and the applied fault, at their interaction ordinals — effect log [15,19,23], expected [15,19] — the non-applied fault #23 must be absent and the completed call #15 present
+  ✗ world_truth: each entry carries its call id and the tool-and-arguments key — #15 wt0a T:{}; #19 wt0b T:{}; #23 wt0c T:{}; 
+  ✗ world_truth: the builder lists exactly the applied fault — applied_faults [19,23], expected [19]
+  ✓ world_truth: no world-only class id in any projected tool message (standing rule 6), over 3 tool message(s)
+  ✓ world_truth: the program round-trips through the artifact codec with its list
+  ✗ world_truth: the reconstituted queue has `applied` on the listed fault only — [false,true,true]
+  ✓ world_truth: the decoded program replays to an identical interaction log
+  ✓ world_truth: replay rebuilds the effect log — the completed calls and the listed faults, at the listed ordinals
+  ✓ world_truth (b): two programs differing only in the list serve identical interactions, payload and advance alike
+  ✗ world_truth (b): …and differ in world truth alone — the twin's effect log has no fault entry — twin effect log #15 wt0a T:{}; #19 wt0b T:{}; #23 wt0c T:{}; 
+
+v5_fixture (034 W1.3): the frozen world-truth pair, persisted, reconstituted and replayed
+  ✓ v5_fixture: the frozen bytes list #12 and not #13
+  ✓ v5_fixture: the replayable specimen round-trips with its list
+  ✓ v5_fixture: the reconstituted tool queue (#1, #12, #13) has `applied` on #12 alone
+  ✓ v5_fixture: the replayed tool seam serves the recorded outcomes
+  ✗ v5_fixture: replay reproduces the effect log — #1 completed and #12 listed, #13 absent — effect log #1 call.alpha tool.name:{}; #12 call.gamma tool.applied:{}; #13 call.delta tool.not_applied:{}; 
+
+strict_replay_dst FAIL

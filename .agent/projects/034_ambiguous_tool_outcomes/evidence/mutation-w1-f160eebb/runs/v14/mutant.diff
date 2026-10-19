@@ -1,0 +1,11 @@
+--- a/src/core/tool_phase.ail
++++ b/src/core/tool_phase.ail
+@@ -290,7 +290,7 @@
+   match o {
+     ToolCompleted(c) => tool_result_message(call, c.content),
+     ToolFailed(f) =>
+-      tool_fault_message(call, fault_class_tool_failed(), failed_fault(f.after_dispatch), encode(jo([
++      tool_fault_message(call, fault_class_tool_failed(), failed_fault(false), encode(jo([
+         kv("code", js(f.code)), kv("message", js(f.message)), kv("tool_call_id", js(f.tool_call_id))
+       ]))),
+     ToolCorrelationMismatch(m) =>

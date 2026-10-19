@@ -1,0 +1,11 @@
+--- a/src/core/ports.ail
++++ b/src/core/ports.ail
+@@ -2763,7 +2763,7 @@
+                                 code: str_field(root, "code", ""),
+                                 message: str_field(root, "message", ""), content: "",
+                                 exit_code: -1,
+-                                after_dispatch: not has_key(root, "stage") || stage == "after_dispatch",
++                                after_dispatch: stage == "after_dispatch",
+                                 applied: false })
+         }
+       else if result == "correlation_mismatch" then

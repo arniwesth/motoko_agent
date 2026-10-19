@@ -1,0 +1,11 @@
+--- a/src/core/tool_phase.ail
++++ b/src/core/tool_phase.ail
+@@ -362,7 +362,7 @@
+   tool_result_message(call, encode(jo([
+     kv("error", jb(true)),
+     kv("tool", js(call.name)),
+-    kv(fault_key(), fault_to_json(arguments_undecodable_fault())),
++    kv(fault_key(), fault_to_json({ arguments_undecodable_fault() | effects: failed_fault(true).effects })),
+     kv("code", js("arguments_undecodable")),
+     kv("raw_length", jnum(_int_to_float(raw_length))),
+     kv("message", js("The arguments for this call were not valid JSON and the tool was NOT run — nothing was written, read or executed. ${show(raw_length)} bytes arrived. This is almost always the response being cut at the output-token limit part-way through the argument JSON: emit the tool call FIRST, before any explanation, and split a large `content` into several smaller calls."))

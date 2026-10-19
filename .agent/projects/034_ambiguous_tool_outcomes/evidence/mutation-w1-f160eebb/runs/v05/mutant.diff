@@ -1,0 +1,11 @@
+--- a/src/core/dst_replay.ail
++++ b/src/core/dst_replay.ail
+@@ -786,7 +786,7 @@
+             ToolRecordDecoded(t) =>
+               match tools_of(rest, listed) {
+                 Err(e) => Err(e),
+-                Ok(tail) => Ok({ t | applied: listed_ordinal(listed, i.identity.ordinal) } :: tail)
++                Ok(tail) => Ok({ t | applied: false } :: tail)
+               }
+           },
+         _ => tools_of(rest, listed)

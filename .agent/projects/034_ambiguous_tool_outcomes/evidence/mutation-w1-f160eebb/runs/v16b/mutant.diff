@@ -1,0 +1,20 @@
+--- a/src/core/session.ail
++++ b/src/core/session.ail
+@@ -40,7 +40,7 @@
+ import src/core/tool_catalog (tools_with_extensions)
+ import src/core/tool_contract (call_to_json)
+ import src/core/tool_dispatch_adapter (tool_call_to_envelope, fault_to_json)
+-import src/core/types (Msg) import src/core/tool_fault (fault_key, denied_fault) -- 034 W1.4: `policy_denied_message`'s `fault`, joined onto this line so the five clock anchors do not move
++import src/core/types (Msg) import src/core/tool_fault (fault_key, denied_fault, failed_fault) -- 034 W1.4: `policy_denied_message`'s `fault`, joined onto this line so the five clock anchors do not move
+ import src/core/config (CostRates)
+ import std/option (Option, Some, None)
+ import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, ExtPorts, TokenTelemetry, ResponseInterceptDecision, FinalizeDecision, ExtWorld, NotReached, AiStepOutcome, ExtClockReading, ExtProcOutcome, ExtFileRead, ExtFileMutation, ExtPathStat, ExtDirListing, ExtPathKind, ExtPathMissing, ExtPathFile, ExtPathDir) -- WI-B2b; ExtClockReading WI-C5; ExtProcOutcome/ExtFileRead WI-D16; ExtFileMutation WI-D17; ExtPathStat/ExtDirListing WI-D18: ExtWorld/AiStepOutcome, on this line to limit A5 anchor drift
+@@ -2061,7 +2061,7 @@
+   let denial_payload = encode(jo([
+     kv("error", jb(true)),
+     kv("denied_by_policy", jb(true)),
+-    kv("tool", js(call.name)), kv(fault_key(), fault_to_json(denied_fault())),
++    kv("tool", js(call.name)), kv(fault_key(), fault_to_json({ denied_fault() | effects: failed_fault(true).effects })),
+     kv("reason", js(reason))
+   ]));
+   {

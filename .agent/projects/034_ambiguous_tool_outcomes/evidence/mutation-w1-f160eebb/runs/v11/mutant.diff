@@ -1,0 +1,11 @@
+--- a/src/core/dst_fault_catalogue.ail
++++ b/src/core/dst_fault_catalogue.ail
+@@ -675,7 +675,7 @@
+             if twin.delivery_constructor == r.delivery_constructor then []
+             else [WorldOnlyTwinConstructorDiffers(r.class_id, t)];
+           let branch =
+-            if same_branch(twin.recovery_branch, r.recovery_branch) then []
++            if true then []
+             else [WorldOnlyTwinBranchDiffers(r.class_id, t)];
+           world_only ++ ctor ++ branch
+         }

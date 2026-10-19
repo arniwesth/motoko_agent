@@ -1,0 +1,11 @@
+--- a/src/core/tool_phase.ail
++++ b/src/core/tool_phase.ail
+@@ -298,7 +298,7 @@
+         kv("expected_id", js(m.expected_id)), kv("got_id", js(m.got_id))
+       ]))),
+     ToolDeadlineExceeded(d) =>
+-      tool_fault_message(call, fault_class_tool_deadline_exceeded(), deadline_fault(d.elapsed_ms), encode(jo([
++      tool_fault_message(call, fault_class_tool_deadline_exceeded(), { deadline_fault(d.elapsed_ms) | effects: failed_fault(false).effects }, encode(jo([
+         kv("tool_call_id", js(d.tool_call_id)),
+         kv("elapsed_ms", jnum(_int_to_float(d.elapsed_ms))),
+         kv("timeout_ms", jnum(_int_to_float(d.timeout_ms)))

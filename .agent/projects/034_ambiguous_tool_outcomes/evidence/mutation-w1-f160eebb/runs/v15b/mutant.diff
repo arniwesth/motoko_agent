@@ -1,0 +1,11 @@
+--- a/src/core/tool_phase.ail
++++ b/src/core/tool_phase.ail
+@@ -294,7 +294,7 @@
+         kv("code", js(f.code)), kv("message", js(f.message)), kv("tool_call_id", js(f.tool_call_id))
+       ]))),
+     ToolCorrelationMismatch(m) =>
+-      tool_fault_message(call, fault_class_tool_correlation_mismatch(), correlation_mismatch_fault(), encode(jo([
++      tool_fault_message(call, fault_class_tool_correlation_mismatch(), { correlation_mismatch_fault() | effects: failed_fault(false).effects }, encode(jo([
+         kv("expected_id", js(m.expected_id)), kv("got_id", js(m.got_id))
+       ]))),
+     ToolDeadlineExceeded(d) =>

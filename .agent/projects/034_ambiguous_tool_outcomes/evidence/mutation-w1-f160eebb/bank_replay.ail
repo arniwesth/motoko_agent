@@ -1,0 +1,142 @@
+-- 034 PLAN-001 W1.7, THE SURVIVAL CASE FOR THE PR BANK: every member of
+-- `corpus_pr_dst.fixed_bank()`, and the constructed member, generated as
+-- `make corpus_pr` generates it, persisted through the artifact codec, decoded,
+-- reconstituted and STRICTLY REPLAYED. `make corpus_pr` loads each member's
+-- bytes back but replays none, so nothing else in the tree shows that the bank
+-- W1.6 re-derived (the first bank whose programs carry `applied_faults`)
+-- replays clean.
+--
+-- Per member: the decoded program reconstitutes a world; the replay's
+-- interaction log equals the program's (`strict_replay_findings`); the replay
+-- ends as the discovery run did; and world truth is rebuilt — the replayed
+-- effect log holds the program's completed calls and listed faults
+-- (`effect_ordinals_of`), equals the discovery run's entry for entry, and lists
+-- back to the same `applied_faults`. A closing row refuses a vacuous pass: the
+-- bank must list at least four applied faults (W1.6's two witnesses for each
+-- world-only class).
+--
+-- It lives beside the mutation evidence, not under scripts/dst, and runs with
+-- `--relax-modules` because its path is not a module path. It changes no source.
+--
+--   ailang run --relax-modules --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+--     --ai-stub --entry main .agent/projects/034_ambiguous_tool_outcomes/evidence/mutation-w1-f160eebb/bank_replay.ail
+
+module bank_replay
+
+import std/io (println, exit)
+import std/list as List (length)
+import std/result (Result, Ok, Err)
+import src/core/session (TracedSessionResult)
+import src/core/dst_program (ExecutionProgram)
+import src/core/dst_replay (
+  applied_faults_of_world,
+  effect_ordinals_of,
+  effect_log_ordinals,
+  strict_replay_findings,
+  replay_message,
+  refusal_rule,
+  world_state_of
+)
+import src/core/dst_persistence (
+  EncodeOutcome, Encoded, EncodeRefused, encode_artifact,
+  ProgramDecode, ProgramDecoded, ProgramDecodeRefused, decode_artifact, first_decode_message
+)
+import src/core/dst_fault_catalogue (required_class_ids)
+import scripts/dst/corpus_pr_dst (
+  BankEntry, MemberRun, fixed_bank, bank_step_budget,
+  run_seed_member, run_constructed_member, run_recording_at
+)
+
+func check(label: string, ok: bool, detail: string) -> bool ! {IO} {
+  let _ = if ok then println("  ✓ ${label}") else println("  ✗ ${label} — ${detail}");
+  ok
+}
+
+pure func eq_ints(a: [int], b: [int]) -> bool {
+  match a {
+    [] => (match b { [] => true, _ => false }),
+    x :: xr => match b { [] => false, y :: yr => x == y && eq_ints(xr, yr) }
+  }
+}
+
+pure func join_ints(xs: [int]) -> string {
+  match xs { [] => "", x :: [] => show(x), x :: rest => "${show(x)},${join_ints(rest)}" }
+}
+
+pure func ended_ok(r: TracedSessionResult) -> bool {
+  match r.result { Ok(_) => true, Err(_) => false }
+}
+
+func round_trip(p: ExecutionProgram) -> Result[ExecutionProgram, string] {
+  match encode_artifact(p) {
+    EncodeRefused(_) => Err("the artifact encoder refused the program"),
+    Encoded(bytes) => match decode_artifact(bytes) {
+      ProgramDecodeRefused(rs) => Err("the artifact did not decode: ${first_decode_message(rs)}"),
+      ProgramDecoded(back) => Ok(back)
+    }
+  }
+}
+
+-- One member: its replay rows, and the number of applied faults it lists (or
+-- -1 when it did not replay).
+func replay_member(m: MemberRun)
+  -> int ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let l = m.label;
+  match round_trip(m.program) {
+    Err(why) => { let _ = check("${l}: decodes", false, why); -1 },
+    Ok(back) =>
+      match world_state_of(back, required_class_ids()) {
+        Err(r) => { let _ = check("${l}: decodes and reconstitutes a world", false, refusal_rule(r)); -1 },
+        Ok(rw) => {
+          let replay = run_recording_at("bank_replay_${l}", rw, bank_step_budget());
+          let ms = strict_replay_findings(back.interactions, replay.world.log);
+          let _ = match ms { [] => (), x :: _ => println("      first: ${replay_message(x)}") };
+          let a = check("${l}: decodes, reconstitutes, and replays to an identical interaction log (n=${show(List.length(back.interactions))})",
+                        List.length(ms) == 0, "${show(List.length(ms))} mismatch(es)");
+          let b = check("${l}: the replay ends as the discovery run did",
+                        ended_ok(replay) == ended_ok(m.run), "discovery ok=${show(ended_ok(m.run))} replay ok=${show(ended_ok(replay))}");
+          let c = check("${l}: replay rebuilds world truth (applied_faults [${join_ints(back.applied_faults)}])",
+                        eq_ints(effect_log_ordinals(replay.world.effect_log), effect_ordinals_of(back))
+                          && eq_ints(effect_log_ordinals(replay.world.effect_log), effect_log_ordinals(m.run.world.effect_log))
+                          && eq_ints(applied_faults_of_world(replay.world), back.applied_faults),
+                        "replayed effect log [${join_ints(effect_log_ordinals(replay.world.effect_log))}], program [${join_ints(effect_ordinals_of(back))}], discovery [${join_ints(effect_log_ordinals(m.run.world.effect_log))}]");
+          if a && b && c then List.length(back.applied_faults) else -1
+        }
+      }
+  }
+}
+
+func replay_all(es: [BankEntry])
+  -> [int] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  match es {
+    [] => [],
+    e :: rest => {
+      let here = replay_member(run_seed_member(e));
+      here :: replay_all(rest)
+    }
+  }
+}
+
+pure func all_replayed(xs: [int]) -> bool {
+  match xs { [] => true, x :: rest => x >= 0 && all_replayed(rest) }
+}
+
+pure func total(xs: [int]) -> int {
+  match xs { [] => 0, x :: rest => (if x > 0 then x else 0) + total(rest) }
+}
+
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("bank_replay (034 W1.7 survival): the PR bank, decoded and strictly replayed");
+  let seeds = replay_all(fixed_bank());
+  let constructed = replay_member(run_constructed_member());
+  let results = seeds ++ [constructed];
+  let n = List.length(results);
+  let ok_all = check("all ${show(n)} bank members decode and replay clean", all_replayed(results), "a member above is red");
+  let ok_truth = check("the bank lists ${show(total(results))} applied fault(s), so world truth was replayed and not vacuously absent",
+                       total(results) >= 4, "fewer than W1.6's four world-only witnesses");
+  if ok_all && ok_truth then println("bank_replay PASS")
+  else {
+    let _ = println("bank_replay FAIL");
+    exit(1)
+  }
+}
