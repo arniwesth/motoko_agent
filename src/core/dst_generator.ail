@@ -1327,7 +1327,11 @@ export pure func pinned_canary_v2() -> [CanaryRow] {
    { seed: 43, initial_state: 1760396877, draws: 102, digest: 762248503 }]
 }
 
-export pure func pinned_canary_v3() -> [CanaryRow] {
+-- Three rows, one per trajectory the sweep chose (maximum, minimum, between):
+-- an empty table is `CanaryVacuous`, and a dropped row loses a path.
+export pure func pinned_canary_v3() -> [CanaryRow]
+  ensures { List.length(result) == 3 }
+{
   [{ seed: 1, initial_state: 1760396836, draws: 65, digest: 1179720951 },
    { seed: 4, initial_state: 1760396839, draws: 22, digest: 1388470833 },
    { seed: 43, initial_state: 1760396878, draws: 100, digest: 900072862 }]
