@@ -1,0 +1,335 @@
+Warning: dependency sunholo/motoko_ext_herdr content changed (locked: sha256:6928b495ef76aff83..., current: sha256:6ad70260565a80fa4...)
+Run 'ailang lock' to update
+011 ADR-003 D1 — the invariant set and six two-channel checks on every corpus member's real run (invariant-set/3)
+
+-- each check can fire, and can stay silent --
+  ✓ each run gets one row for each of the six rule ids, in a fixed order
+  ✓ all six are silent on the good input: 4 calls on a budget of 4, a retry at step 2, both counts balanced, ordinals 1 to 5
+  ✓ steps-not-contiguous fires on steps 0, 1, 3, 4 (a gap), and no other check does
+  ✓ steps-not-contiguous fires on steps 1, 2, 3, 4 (not from zero), and no other check does
+  ✓ provider-calls-exceed-budget fires on 5 calls on a budget of 4, and no other check does
+  ✓ retry-at-budget-edge fires on a retry at step 3 of 4, and no other check does
+  ✓ provider-calls-unbalanced fires on 4 prepared records and 3 logged, as 'log below trace', and no other check does
+  ✓ provider-calls-unbalanced fires on 4 prepared records and 5 logged, as 'log above trace', and no other check does
+  ✓ tool-dispatches-unbalanced fires on 1 dispatch start and 0 logged, as 'log below trace', and no other check does
+  ✓ tool-dispatches-unbalanced fires on 1 dispatch start and 2 logged, as 'log above trace', and no other check does
+  ✓ request-ordinals-not-contiguous fires on ordinals 1, 2, 4, 5 (a gap), and no other check does
+  ✓ request-ordinals-not-contiguous fires on ordinals 1 to 5 and a returned world at 4 (a successor dropped after its witness), and no other check does
+  ✓ request-ordinals-not-contiguous fires on ordinals 2 to 5 from a world at 0 (the first request is missing), and no other check does
+SELFCHECK undeclared-budget steps-not-contiguous clean prepared steps 0..3 (4)
+SELFCHECK undeclared-budget provider-calls-exceed-budget not-evaluated the step budget is undeclared, so 4 provider call(s) were held against nothing
+SELFCHECK undeclared-budget retry-at-budget-edge not-evaluated the step budget is undeclared, so the retries at [2] were held against nothing
+SELFCHECK undeclared-budget provider-calls-unbalanced clean trace=4 log=4
+SELFCHECK undeclared-budget tool-dispatches-unbalanced clean trace=1 log=1
+SELFCHECK undeclared-budget request-ordinals-not-contiguous clean ordinals 1..5 (5) from a world at 0 to a world at 5
+  ✓ a run started with a budget of 0 declares none: the two budget rules are NOT EVALUATED and the other four are clean
+  ✓ and not evaluated is not clean, which is what makes it red on a bank member
+  ✓ an empty trace is clean on all six checks, and the guard names it: no prepared call, no request ordinal
+  ✓ the guard is silent on the good input
+  ✓ a bank with no retry and no dispatch is clean on all six checks, and the bank guard names both
+  ✓ the bank guard is silent once a member holds a retry and a dispatch
+
+-- the bank: every member's run, bridged and judged --
+budgets, declared once: step 12 (bank_step_budget(), the value each member's run is started with), retry 11, decision undeclared
+JUDGEROW seed-1 n=24 ended=Ok finish=stop set=[] checks=[] not_evaluated=[]
+JUDGE seed-1 invariant-set clean no finding; unevaluated=replay-consistency
+JUDGE seed-1 steps-not-contiguous clean prepared steps 0..5 (6)
+JUDGE seed-1 provider-calls-exceed-budget clean 6 call(s) on a budget of 12
+JUDGE seed-1 retry-at-budget-edge clean retries at [] on a budget of 12
+JUDGE seed-1 provider-calls-unbalanced clean trace=6 log=6
+JUDGE seed-1 tool-dispatches-unbalanced clean trace=0 log=0
+JUDGE seed-1 request-ordinals-not-contiguous clean ordinals 1..27 (27) from a world at 0 to a world at 27
+JUDGEROW seed-3 n=35 ended=Ok finish=stop set=[] checks=[] not_evaluated=[]
+JUDGE seed-3 invariant-set clean no finding; unevaluated=replay-consistency
+JUDGE seed-3 steps-not-contiguous clean prepared steps 0..6 (7)
+JUDGE seed-3 provider-calls-exceed-budget clean 7 call(s) on a budget of 12
+JUDGE seed-3 retry-at-budget-edge clean retries at [] on a budget of 12
+JUDGE seed-3 provider-calls-unbalanced clean trace=7 log=7
+JUDGE seed-3 tool-dispatches-unbalanced clean trace=3 log=3
+JUDGE seed-3 request-ordinals-not-contiguous clean ordinals 1..38 (38) from a world at 0 to a world at 38
+JUDGEROW seed-4 n=14 ended=Err finish=error set=[] checks=[] not_evaluated=[]
+JUDGE seed-4 invariant-set clean no finding; unevaluated=replay-consistency
+JUDGE seed-4 steps-not-contiguous clean prepared steps 0 (1)
+JUDGE seed-4 provider-calls-exceed-budget clean 1 call(s) on a budget of 12
+JUDGE seed-4 retry-at-budget-edge clean retries at [] on a budget of 12
+JUDGE seed-4 provider-calls-unbalanced clean trace=1 log=1
+JUDGE seed-4 tool-dispatches-unbalanced clean trace=0 log=0
+JUDGE seed-4 request-ordinals-not-contiguous clean ordinals 1..17 (17) from a world at 0 to a world at 17
+JUDGEROW seed-6 n=16 ended=Err finish=error set=[] checks=[] not_evaluated=[]
+JUDGE seed-6 invariant-set clean no finding; unevaluated=replay-consistency
+JUDGE seed-6 steps-not-contiguous clean prepared steps 0..1 (2)
+JUDGE seed-6 provider-calls-exceed-budget clean 2 call(s) on a budget of 12
+JUDGE seed-6 retry-at-budget-edge clean retries at [] on a budget of 12
+JUDGE seed-6 provider-calls-unbalanced clean trace=2 log=2
+JUDGE seed-6 tool-dispatches-unbalanced clean trace=0 log=0
+JUDGE seed-6 request-ordinals-not-contiguous clean ordinals 1..19 (19) from a world at 0 to a world at 19
+JUDGEROW seed-8 n=17 ended=Ok finish=stop set=[] checks=[] not_evaluated=[]
+JUDGE seed-8 invariant-set clean no finding; unevaluated=replay-consistency
+JUDGE seed-8 steps-not-contiguous clean prepared steps 0..2 (3)
+JUDGE seed-8 provider-calls-exceed-budget clean 3 call(s) on a budget of 12
+JUDGE seed-8 retry-at-budget-edge clean retries at [1] on a budget of 12
+JUDGE seed-8 provider-calls-unbalanced clean trace=3 log=3
+JUDGE seed-8 tool-dispatches-unbalanced clean trace=0 log=0
+JUDGE seed-8 request-ordinals-not-contiguous clean ordinals 1..20 (20) from a world at 0 to a world at 20
+JUDGEROW seed-11 n=22 ended=Ok finish=stop set=[tool-pairing/tool-call-redispatched] checks=[tool-dispatches-unbalanced] not_evaluated=[]
+JUDGE seed-11 invariant-set RED 1 finding(s); unevaluated=replay-consistency
+JUDGE seed-11 tool-call-redispatched RED tool-pairing: [tool-call-redispatched] call 'gcall_0_722' was dispatched to the world more than once, and more times than the provider's assistant messages emitted that id; 034 ADR-001's P3 is that the driver dispatches no tool call id twice, because re-dispatching a call whose effect may have happened is how one effect is applied twice. An id the PROVIDER emitted again in a later step is not this rule's, which is why emissions are counted (034 PLAN-001 review 2, finding 10)
+JUDGE seed-11 steps-not-contiguous clean prepared steps 0..2 (3)
+JUDGE seed-11 provider-calls-exceed-budget clean 3 call(s) on a budget of 12
+JUDGE seed-11 retry-at-budget-edge clean retries at [] on a budget of 12
+JUDGE seed-11 provider-calls-unbalanced clean trace=3 log=3
+JUDGE seed-11 tool-dispatches-unbalanced RED log above trace: the trace holds 1 v2_tool_dispatch_start record(s) and the run added 2 expect_tool interaction(s) to the log
+JUDGE seed-11 request-ordinals-not-contiguous clean ordinals 1..25 (25) from a world at 0 to a world at 25
+JUDGEROW seed-14 n=24 ended=Err finish=error set=[tool-pairing/tool-call-redispatched] checks=[tool-dispatches-unbalanced] not_evaluated=[]
+JUDGE seed-14 invariant-set RED 1 finding(s); unevaluated=replay-consistency
+JUDGE seed-14 tool-call-redispatched RED tool-pairing: [tool-call-redispatched] call 'gcall_4_670' was dispatched to the world more than once, and more times than the provider's assistant messages emitted that id; 034 ADR-001's P3 is that the driver dispatches no tool call id twice, because re-dispatching a call whose effect may have happened is how one effect is applied twice. An id the PROVIDER emitted again in a later step is not this rule's, which is why emissions are counted (034 PLAN-001 review 2, finding 10)
+JUDGE seed-14 steps-not-contiguous clean prepared steps 0..3 (4)
+JUDGE seed-14 provider-calls-exceed-budget clean 4 call(s) on a budget of 12
+JUDGE seed-14 retry-at-budget-edge clean retries at [] on a budget of 12
+JUDGE seed-14 provider-calls-unbalanced clean trace=4 log=4
+JUDGE seed-14 tool-dispatches-unbalanced RED log above trace: the trace holds 1 v2_tool_dispatch_start record(s) and the run added 2 expect_tool interaction(s) to the log
+JUDGE seed-14 request-ordinals-not-contiguous clean ordinals 1..27 (27) from a world at 0 to a world at 27
+JUDGEROW seed-18 n=40 ended=Err finish=error set=[] checks=[] not_evaluated=[]
+JUDGE seed-18 invariant-set clean no finding; unevaluated=replay-consistency
+JUDGE seed-18 steps-not-contiguous clean prepared steps 0..11 (12)
+JUDGE seed-18 provider-calls-exceed-budget clean 12 call(s) on a budget of 12
+JUDGE seed-18 retry-at-budget-edge clean retries at [8] on a budget of 12
+JUDGE seed-18 provider-calls-unbalanced clean trace=12 log=12
+JUDGE seed-18 tool-dispatches-unbalanced clean trace=2 log=2
+JUDGE seed-18 request-ordinals-not-contiguous clean ordinals 1..43 (43) from a world at 0 to a world at 43
+JUDGEROW seed-29 n=14 ended=Err finish=error set=[] checks=[] not_evaluated=[]
+JUDGE seed-29 invariant-set clean no finding; unevaluated=replay-consistency
+JUDGE seed-29 steps-not-contiguous clean prepared steps 0 (1)
+JUDGE seed-29 provider-calls-exceed-budget clean 1 call(s) on a budget of 12
+JUDGE seed-29 retry-at-budget-edge clean retries at [] on a budget of 12
+JUDGE seed-29 provider-calls-unbalanced clean trace=1 log=1
+JUDGE seed-29 tool-dispatches-unbalanced clean trace=0 log=0
+JUDGE seed-29 request-ordinals-not-contiguous clean ordinals 1..17 (17) from a world at 0 to a world at 17
+JUDGEROW seed-31 n=20 ended=Err finish=error set=[] checks=[] not_evaluated=[]
+JUDGE seed-31 invariant-set clean no finding; unevaluated=replay-consistency
+JUDGE seed-31 steps-not-contiguous clean prepared steps 0..2 (3)
+JUDGE seed-31 provider-calls-exceed-budget clean 3 call(s) on a budget of 12
+JUDGE seed-31 retry-at-budget-edge clean retries at [1] on a budget of 12
+JUDGE seed-31 provider-calls-unbalanced clean trace=3 log=3
+JUDGE seed-31 tool-dispatches-unbalanced clean trace=1 log=1
+JUDGE seed-31 request-ordinals-not-contiguous clean ordinals 1..23 (23) from a world at 0 to a world at 23
+JUDGEROW seed-60 n=27 ended=Err finish=error set=[tool-pairing/tool-call-redispatched] checks=[tool-dispatches-unbalanced] not_evaluated=[]
+JUDGE seed-60 invariant-set RED 1 finding(s); unevaluated=replay-consistency
+JUDGE seed-60 tool-call-redispatched RED tool-pairing: [tool-call-redispatched] call 'gcall_2_524' was dispatched to the world more than once, and more times than the provider's assistant messages emitted that id; 034 ADR-001's P3 is that the driver dispatches no tool call id twice, because re-dispatching a call whose effect may have happened is how one effect is applied twice. An id the PROVIDER emitted again in a later step is not this rule's, which is why emissions are counted (034 PLAN-001 review 2, finding 10)
+JUDGE seed-60 steps-not-contiguous clean prepared steps 0..3 (4)
+JUDGE seed-60 provider-calls-exceed-budget clean 4 call(s) on a budget of 12
+JUDGE seed-60 retry-at-budget-edge clean retries at [] on a budget of 12
+JUDGE seed-60 provider-calls-unbalanced clean trace=4 log=4
+JUDGE seed-60 tool-dispatches-unbalanced RED log above trace: the trace holds 2 v2_tool_dispatch_start record(s) and the run added 3 expect_tool interaction(s) to the log
+JUDGE seed-60 request-ordinals-not-contiguous clean ordinals 1..30 (30) from a world at 0 to a world at 30
+JUDGEROW seed-61 n=19 ended=Err finish=error set=[] checks=[] not_evaluated=[]
+JUDGE seed-61 invariant-set clean no finding; unevaluated=replay-consistency
+JUDGE seed-61 steps-not-contiguous clean prepared steps 0..1 (2)
+JUDGE seed-61 provider-calls-exceed-budget clean 2 call(s) on a budget of 12
+JUDGE seed-61 retry-at-budget-edge clean retries at [] on a budget of 12
+JUDGE seed-61 provider-calls-unbalanced clean trace=2 log=2
+JUDGE seed-61 tool-dispatches-unbalanced clean trace=1 log=1
+JUDGE seed-61 request-ordinals-not-contiguous clean ordinals 1..22 (22) from a world at 0 to a world at 22
+JUDGEROW seed-71 n=23 ended=Ok finish=stop set=[] checks=[] not_evaluated=[]
+JUDGE seed-71 invariant-set clean no finding; unevaluated=replay-consistency
+JUDGE seed-71 steps-not-contiguous clean prepared steps 0..3 (4)
+JUDGE seed-71 provider-calls-exceed-budget clean 4 call(s) on a budget of 12
+JUDGE seed-71 retry-at-budget-edge clean retries at [] on a budget of 12
+JUDGE seed-71 provider-calls-unbalanced clean trace=4 log=4
+JUDGE seed-71 tool-dispatches-unbalanced clean trace=1 log=1
+JUDGE seed-71 request-ordinals-not-contiguous clean ordinals 1..26 (26) from a world at 0 to a world at 26
+JUDGEROW seed-102 n=19 ended=Ok finish=stop set=[] checks=[] not_evaluated=[]
+JUDGE seed-102 invariant-set clean no finding; unevaluated=replay-consistency
+JUDGE seed-102 steps-not-contiguous clean prepared steps 0..1 (2)
+JUDGE seed-102 provider-calls-exceed-budget clean 2 call(s) on a budget of 12
+JUDGE seed-102 retry-at-budget-edge clean retries at [] on a budget of 12
+JUDGE seed-102 provider-calls-unbalanced clean trace=2 log=2
+JUDGE seed-102 tool-dispatches-unbalanced clean trace=1 log=1
+JUDGE seed-102 request-ordinals-not-contiguous clean ordinals 1..22 (22) from a world at 0 to a world at 22
+JUDGEROW seed-109 n=54 ended=Err finish=max_steps set=[tool-pairing/tool-call-redispatched] checks=[tool-dispatches-unbalanced] not_evaluated=[]
+JUDGE seed-109 invariant-set RED 1 finding(s); unevaluated=replay-consistency
+JUDGE seed-109 tool-call-redispatched RED tool-pairing: [tool-call-redispatched] call 'gcall_10_54' was dispatched to the world more than once, and more times than the provider's assistant messages emitted that id; 034 ADR-001's P3 is that the driver dispatches no tool call id twice, because re-dispatching a call whose effect may have happened is how one effect is applied twice. An id the PROVIDER emitted again in a later step is not this rule's, which is why emissions are counted (034 PLAN-001 review 2, finding 10)
+JUDGE seed-109 steps-not-contiguous clean prepared steps 0..11 (12)
+JUDGE seed-109 provider-calls-exceed-budget clean 12 call(s) on a budget of 12
+JUDGE seed-109 retry-at-budget-edge clean retries at [8] on a budget of 12
+JUDGE seed-109 provider-calls-unbalanced clean trace=12 log=12
+JUDGE seed-109 tool-dispatches-unbalanced RED log above trace: the trace holds 6 v2_tool_dispatch_start record(s) and the run added 7 expect_tool interaction(s) to the log
+JUDGE seed-109 request-ordinals-not-contiguous clean ordinals 1..57 (57) from a world at 0 to a world at 57
+JUDGEROW seed-165 n=26 ended=Ok finish=stop set=[] checks=[] not_evaluated=[]
+JUDGE seed-165 invariant-set clean no finding; unevaluated=replay-consistency
+JUDGE seed-165 steps-not-contiguous clean prepared steps 0..3 (4)
+JUDGE seed-165 provider-calls-exceed-budget clean 4 call(s) on a budget of 12
+JUDGE seed-165 retry-at-budget-edge clean retries at [] on a budget of 12
+JUDGE seed-165 provider-calls-unbalanced clean trace=4 log=4
+JUDGE seed-165 tool-dispatches-unbalanced clean trace=2 log=2
+JUDGE seed-165 request-ordinals-not-contiguous clean ordinals 1..29 (29) from a world at 0 to a world at 29
+JUDGEROW seed-215 n=61 ended=Err finish=max_steps set=[tool-pairing/effect-disclosure-unsound,tool-pairing/tool-call-redispatched] checks=[tool-dispatches-unbalanced] not_evaluated=[]
+JUDGE seed-215 invariant-set RED 2 finding(s); unevaluated=replay-consistency
+JUDGE seed-215 effect-disclosure-unsound RED tool-pairing: [effect-disclosure-unsound] the tool message for call 'gcall_20_912' (dispatch at interaction 47; -1 when nothing was dispatched) breaks 034 ADR-001's P1 in one of its two halves: it discloses fault.effects 'none' while the world's effect log records that dispatch's effect as APPLIED (soundness: 'none' is a promise the update did not happen, and 'unknown' is always permitted), or it is a harness-reported fault message — a fault the world served, a denial, an undecodable-argument refusal, a delegated deferral, the live renderer's error arm — that carries no fault.effects of 'none' or 'unknown' (presence). Read from the world's logs and the projected message, never from the renderer
+JUDGE seed-215 tool-call-redispatched RED tool-pairing: [tool-call-redispatched] call 'gcall_20_912' was dispatched to the world more than once, and more times than the provider's assistant messages emitted that id; 034 ADR-001's P3 is that the driver dispatches no tool call id twice, because re-dispatching a call whose effect may have happened is how one effect is applied twice. An id the PROVIDER emitted again in a later step is not this rule's, which is why emissions are counted (034 PLAN-001 review 2, finding 10)
+JUDGE seed-215 steps-not-contiguous clean prepared steps 0..11 (12)
+JUDGE seed-215 provider-calls-exceed-budget clean 12 call(s) on a budget of 12
+JUDGE seed-215 retry-at-budget-edge clean retries at [] on a budget of 12
+JUDGE seed-215 provider-calls-unbalanced clean trace=12 log=12
+JUDGE seed-215 tool-dispatches-unbalanced RED log above trace: the trace holds 8 v2_tool_dispatch_start record(s) and the run added 9 expect_tool interaction(s) to the log
+JUDGE seed-215 request-ordinals-not-contiguous clean ordinals 1..64 (64) from a world at 0 to a world at 64
+JUDGEROW constructed-empty-terminal n=14 ended=Ok finish=stop set=[] checks=[] not_evaluated=[]
+JUDGE constructed-empty-terminal invariant-set clean no finding; unevaluated=replay-consistency
+JUDGE constructed-empty-terminal steps-not-contiguous clean prepared steps 0 (1)
+JUDGE constructed-empty-terminal provider-calls-exceed-budget clean 1 call(s) on a budget of 12
+JUDGE constructed-empty-terminal retry-at-budget-edge clean retries at [] on a budget of 12
+JUDGE constructed-empty-terminal provider-calls-unbalanced clean trace=1 log=1
+JUDGE constructed-empty-terminal tool-dispatches-unbalanced clean trace=0 log=0
+JUDGE constructed-empty-terminal request-ordinals-not-contiguous clean ordinals 1..17 (17) from a world at 0 to a world at 17
+
+-- the two budget-edge controls: scripted worlds under the bank's rig, not bank members --
+CONTROLROW retry-with-two-steps-left n=15 ended=Ok finish=stop set=[] checks=[] not_evaluated=[]
+CONTROL retry-with-two-steps-left invariant-set clean no finding; unevaluated=replay-consistency
+CONTROL retry-with-two-steps-left steps-not-contiguous clean prepared steps 0..1 (2)
+CONTROL retry-with-two-steps-left provider-calls-exceed-budget clean 2 call(s) on a budget of 2
+CONTROL retry-with-two-steps-left retry-at-budget-edge clean retries at [0] on a budget of 2
+CONTROL retry-with-two-steps-left provider-calls-unbalanced clean trace=2 log=2
+CONTROL retry-with-two-steps-left tool-dispatches-unbalanced clean trace=0 log=0
+CONTROL retry-with-two-steps-left request-ordinals-not-contiguous clean ordinals 1..18 (18) from a world at 0 to a world at 18
+  ✓ retry with two steps left: the run ends Ok on stop
+  ✓ retry with two steps left: prepared steps 0 and 1, one retry at step 0, two provider interactions logged
+  ✓ retry with two steps left: no finding from the set, none from the six checks
+CONTROLROW no-retry-with-one-step-left n=13 ended=Err finish=error set=[] checks=[] not_evaluated=[]
+CONTROL no-retry-with-one-step-left invariant-set clean no finding; unevaluated=replay-consistency
+CONTROL no-retry-with-one-step-left steps-not-contiguous clean prepared steps 0 (1)
+CONTROL no-retry-with-one-step-left provider-calls-exceed-budget clean 1 call(s) on a budget of 1
+CONTROL no-retry-with-one-step-left retry-at-budget-edge clean retries at [] on a budget of 1
+CONTROL no-retry-with-one-step-left provider-calls-unbalanced clean trace=1 log=1
+CONTROL no-retry-with-one-step-left tool-dispatches-unbalanced clean trace=0 log=0
+CONTROL no-retry-with-one-step-left request-ordinals-not-contiguous clean ordinals 1..16 (16) from a world at 0 to a world at 16
+  ✓ no retry with one step left: the run ends Err with E_PROVIDER_TIMEOUT on error
+  ✓ no retry with one step left: one prepared step, no retry record
+  ✓ no retry with one step left: no finding from the set, none from the six checks
+
+-- the two branch controls: the bank's rig with one part changed, not bank members --
+CONTROLROW tool-run-without-approval n=21 ended=Ok finish=stop set=[] checks=[] not_evaluated=[]
+CONTROL tool-run-without-approval invariant-set clean no finding; unevaluated=replay-consistency
+CONTROL tool-run-without-approval steps-not-contiguous clean prepared steps 0..1 (2)
+CONTROL tool-run-without-approval provider-calls-exceed-budget clean 2 call(s) on a budget of 2
+CONTROL tool-run-without-approval retry-at-budget-edge clean retries at [] on a budget of 2
+CONTROL tool-run-without-approval provider-calls-unbalanced clean trace=2 log=2
+CONTROL tool-run-without-approval tool-dispatches-unbalanced clean trace=2 log=2
+CONTROL tool-run-without-approval request-ordinals-not-contiguous clean ordinals 1..24 (24) from a world at 0 to a world at 24
+  ✓ tool run without approval: the run ends Ok on stop, with prepared steps 0 and 1
+  ✓ tool run without approval: the branch was walked — two tools dispatched, two tool interactions logged, no approval asked, the tool queue drained
+  ✓ tool run without approval: no finding from the set, none from the six checks
+CONTROLROW solver-feedback n=14 ended=Err finish=max_steps set=[] checks=[] not_evaluated=[]
+CONTROL solver-feedback invariant-set clean no finding; unevaluated=replay-consistency
+CONTROL solver-feedback steps-not-contiguous clean prepared steps 0..1 (2)
+CONTROL solver-feedback provider-calls-exceed-budget clean 2 call(s) on a budget of 2
+CONTROL solver-feedback retry-at-budget-edge clean retries at [] on a budget of 2
+CONTROL solver-feedback provider-calls-unbalanced clean trace=2 log=2
+CONTROL solver-feedback tool-dispatches-unbalanced clean trace=0 log=0
+CONTROL solver-feedback request-ordinals-not-contiguous clean ordinals 1..17 (17) from a world at 0 to a world at 17
+  ✓ solver feedback: the run ends Err on max_steps
+  ✓ solver feedback: the branch was walked — feedback at steps 0 and 1, prepared steps 0 and 1, two provider interactions logged, the third scripted entry never asked for
+  ✓ solver feedback: no finding from the set, none from the six checks
+
+-- the verdict on the bank --
+  ✓ all 18 members carry a terminal summary and were bridged
+  ✗ all 18 members are clean: no finding from the invariant set, none from the six checks, none not evaluated
+      not clean, 5 of 18: seed-11, seed-14, seed-60, seed-109, seed-215. The JUDGE rows above name each rule, and a failure record for each member follows.
+  families the set did not evaluate, over all 18 members: replay-consistency (the obligation is NoReplay: a discovery run owes its program nothing)
+  ✓ no family other than replay-consistency went unevaluated on a member
+
+-- the gate saw something to judge --
+  ✓ every member's trace holds a prepared call and a request ordinal
+  ✓ a member recorded a retry (4 of 18: seed-8, seed-18, seed-31, seed-109)
+  ✓ a member dispatched a tool (12 of 18)
+
+FAILURE RECORD seed-11 — what 009 ADR-001 D8 lists for a generated failure
+  program schema version   execution-program/5
+  generator id             motoko_driver_only
+  generator version        2
+  seed                     11
+  serialized program       ABSENT at .ailang/dst-corpus/motoko_driver_only/2/seed-11.artifact. `make corpus_pr` writes it; run that first. This gate persists no program.
+  source revision          printed by the recipe, beneath these records
+  toolchain version        printed by the recipe, beneath these records
+  profile                  driver_only/1, issued as driver_only version 38
+  execution manifest       profile_id=driver_only profile_version=38 source_revision=HEAD toolchain='ailang 0.33.0' abi_version=8.0 event_vocabulary_version=event-vocabulary/4 normalized_configuration={} extension_packages=0 classifier_2_set=[ai_step,env_get,tool_handle] unrouted_fields=[clock_now] scan_roots=[src,packages] scan_root_commit=HEAD profile_rules=profile-rules/3 coverage_rules=coverage-rules/1 attribution_rules=attribution-rules/1 fault_catalogue=fault-catalogue/3
+  event vocabulary         event-vocabulary/4
+  run configuration        step budget 12, retry budget 11, decision budget undeclared; bridged with the starting world's clock (0 ms), NoReplay, 0 ambient RNG reads and no forbidden effect site, both supplied; the rig's other arguments are those of this member's run helper in scripts/dst/corpus_pr_dst.ail at the source revision
+  first failed invariant   tool-pairing/tool-call-redispatched; gate checks also red: tool-dispatches-unbalanced
+  terminal outcome         ended=Ok finish_reason=stop error=''
+  trace                    the recipe's output file, kept when the target is red; its path is printed beneath these records
+  quick reproduction       make corpus_judge (it regenerates from the seed; the replay is the serialized program above)
+
+FAILURE RECORD seed-14 — what 009 ADR-001 D8 lists for a generated failure
+  program schema version   execution-program/5
+  generator id             motoko_driver_only
+  generator version        2
+  seed                     14
+  serialized program       ABSENT at .ailang/dst-corpus/motoko_driver_only/2/seed-14.artifact. `make corpus_pr` writes it; run that first. This gate persists no program.
+  source revision          printed by the recipe, beneath these records
+  toolchain version        printed by the recipe, beneath these records
+  profile                  driver_only/1, issued as driver_only version 38
+  execution manifest       profile_id=driver_only profile_version=38 source_revision=HEAD toolchain='ailang 0.33.0' abi_version=8.0 event_vocabulary_version=event-vocabulary/4 normalized_configuration={} extension_packages=0 classifier_2_set=[ai_step,env_get,tool_handle] unrouted_fields=[clock_now] scan_roots=[src,packages] scan_root_commit=HEAD profile_rules=profile-rules/3 coverage_rules=coverage-rules/1 attribution_rules=attribution-rules/1 fault_catalogue=fault-catalogue/3
+  event vocabulary         event-vocabulary/4
+  run configuration        step budget 12, retry budget 11, decision budget undeclared; bridged with the starting world's clock (0 ms), NoReplay, 0 ambient RNG reads and no forbidden effect site, both supplied; the rig's other arguments are those of this member's run helper in scripts/dst/corpus_pr_dst.ail at the source revision
+  first failed invariant   tool-pairing/tool-call-redispatched; gate checks also red: tool-dispatches-unbalanced
+  terminal outcome         ended=Err finish_reason=error error='generated E_PROVIDER_PROTOCOL'
+  trace                    the recipe's output file, kept when the target is red; its path is printed beneath these records
+  quick reproduction       make corpus_judge (it regenerates from the seed; the replay is the serialized program above)
+
+FAILURE RECORD seed-60 — what 009 ADR-001 D8 lists for a generated failure
+  program schema version   execution-program/5
+  generator id             motoko_driver_only
+  generator version        2
+  seed                     60
+  serialized program       ABSENT at .ailang/dst-corpus/motoko_driver_only/2/seed-60.artifact. `make corpus_pr` writes it; run that first. This gate persists no program.
+  source revision          printed by the recipe, beneath these records
+  toolchain version        printed by the recipe, beneath these records
+  profile                  driver_only/1, issued as driver_only version 38
+  execution manifest       profile_id=driver_only profile_version=38 source_revision=HEAD toolchain='ailang 0.33.0' abi_version=8.0 event_vocabulary_version=event-vocabulary/4 normalized_configuration={} extension_packages=0 classifier_2_set=[ai_step,env_get,tool_handle] unrouted_fields=[clock_now] scan_roots=[src,packages] scan_root_commit=HEAD profile_rules=profile-rules/3 coverage_rules=coverage-rules/1 attribution_rules=attribution-rules/1 fault_catalogue=fault-catalogue/3
+  event vocabulary         event-vocabulary/4
+  run configuration        step budget 12, retry budget 11, decision budget undeclared; bridged with the starting world's clock (0 ms), NoReplay, 0 ambient RNG reads and no forbidden effect site, both supplied; the rig's other arguments are those of this member's run helper in scripts/dst/corpus_pr_dst.ail at the source revision
+  first failed invariant   tool-pairing/tool-call-redispatched; gate checks also red: tool-dispatches-unbalanced
+  terminal outcome         ended=Err finish_reason=error error='generated E_PROVIDER_PROTOCOL'
+  trace                    the recipe's output file, kept when the target is red; its path is printed beneath these records
+  quick reproduction       make corpus_judge (it regenerates from the seed; the replay is the serialized program above)
+
+FAILURE RECORD seed-109 — what 009 ADR-001 D8 lists for a generated failure
+  program schema version   execution-program/5
+  generator id             motoko_driver_only
+  generator version        2
+  seed                     109
+  serialized program       ABSENT at .ailang/dst-corpus/motoko_driver_only/2/seed-109.artifact. `make corpus_pr` writes it; run that first. This gate persists no program.
+  source revision          printed by the recipe, beneath these records
+  toolchain version        printed by the recipe, beneath these records
+  profile                  driver_only/1, issued as driver_only version 38
+  execution manifest       profile_id=driver_only profile_version=38 source_revision=HEAD toolchain='ailang 0.33.0' abi_version=8.0 event_vocabulary_version=event-vocabulary/4 normalized_configuration={} extension_packages=0 classifier_2_set=[ai_step,env_get,tool_handle] unrouted_fields=[clock_now] scan_roots=[src,packages] scan_root_commit=HEAD profile_rules=profile-rules/3 coverage_rules=coverage-rules/1 attribution_rules=attribution-rules/1 fault_catalogue=fault-catalogue/3
+  event vocabulary         event-vocabulary/4
+  run configuration        step budget 12, retry budget 11, decision budget undeclared; bridged with the starting world's clock (0 ms), NoReplay, 0 ambient RNG reads and no forbidden effect site, both supplied; the rig's other arguments are those of this member's run helper in scripts/dst/corpus_pr_dst.ail at the source revision
+  first failed invariant   tool-pairing/tool-call-redispatched; gate checks also red: tool-dispatches-unbalanced
+  terminal outcome         ended=Err finish_reason=max_steps error='step budget exhausted'
+  trace                    the recipe's output file, kept when the target is red; its path is printed beneath these records
+  quick reproduction       make corpus_judge (it regenerates from the seed; the replay is the serialized program above)
+
+FAILURE RECORD seed-215 — what 009 ADR-001 D8 lists for a generated failure
+  program schema version   execution-program/5
+  generator id             motoko_driver_only
+  generator version        2
+  seed                     215
+  serialized program       ABSENT at .ailang/dst-corpus/motoko_driver_only/2/seed-215.artifact. `make corpus_pr` writes it; run that first. This gate persists no program.
+  source revision          printed by the recipe, beneath these records
+  toolchain version        printed by the recipe, beneath these records
+  profile                  driver_only/1, issued as driver_only version 38
+  execution manifest       profile_id=driver_only profile_version=38 source_revision=HEAD toolchain='ailang 0.33.0' abi_version=8.0 event_vocabulary_version=event-vocabulary/4 normalized_configuration={} extension_packages=0 classifier_2_set=[ai_step,env_get,tool_handle] unrouted_fields=[clock_now] scan_roots=[src,packages] scan_root_commit=HEAD profile_rules=profile-rules/3 coverage_rules=coverage-rules/1 attribution_rules=attribution-rules/1 fault_catalogue=fault-catalogue/3
+  event vocabulary         event-vocabulary/4
+  run configuration        step budget 12, retry budget 11, decision budget undeclared; bridged with the starting world's clock (0 ms), NoReplay, 0 ambient RNG reads and no forbidden effect site, both supplied; the rig's other arguments are those of this member's run helper in scripts/dst/corpus_pr_dst.ail at the source revision
+  first failed invariant   tool-pairing/effect-disclosure-unsound; gate checks also red: tool-dispatches-unbalanced
+  terminal outcome         ended=Err finish_reason=max_steps error='step budget exhausted'
+  trace                    the recipe's output file, kept when the target is red; its path is printed beneath these records
+  quick reproduction       make corpus_judge (it regenerates from the seed; the replay is the serialized program above)
+
+✗ corpus_judge FAILED
+
+  source revision    8c996274777dd2d81c1f2d2b9618c71b833739b9 (with uncommitted changes)
+  toolchain version  AILANG v0.52.5
+  trace              /tmp/tmp.kzNbqHiMLS (kept: every member's wire, and every row above)
+make: *** [Makefile:2053: corpus_judge] Error 1

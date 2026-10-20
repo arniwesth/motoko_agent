@@ -1,0 +1,254 @@
+-- 034 PLAN-001 W2.3: WHAT P1 AND P3 HAVE TO READ on `make corpus_judge`'s
+-- members and controls. A rule that is clean on a run holding none of its
+-- inputs certifies nothing, so this counts, per run, the inputs each rule reads:
+--
+--   P1 (`effect-disclosure-unsound`)
+--     tool_msgs      tool-role messages the run projected (`HistoryAppended`)
+--     disclosing     of those, how many carry `fault.effects` = none / unknown
+--     fault_disp     tool dispatches the world served as a fault (OutcomeFault)
+--     applied_faults of those, how many the effect log lists (P1's soundness half)
+--     refusals       `NativeToolDenied` / `ToolArgumentsUndecodable` /
+--                    `DelegatedToolDeferred` records (P1's presence half, ordinal -1)
+--   P3 (`tool-call-redispatched`)
+--     tool_disp      tool interactions the run added to the world's log
+--     ids            distinct call ids among them
+--     redispatched   ids dispatched twice or more (must be 0 on the unmutated tree)
+--     emitted        tool-call ids emitted by projected assistant messages
+--
+-- The members are `corpus_pr_dst`'s own runs, through the helpers
+-- `corpus_judge_dst` calls. The four controls are corpus_judge's, rebuilt from
+-- the same exported rig helpers and the same scripts (copied from
+-- `corpus_judge_dst.ail`, whose builders are not exported); their run ids differ
+-- (`reach_` for `corpus_judge_`). It reads, counts and prints. It judges
+-- nothing: the verdict on each rule is corpus_judge's own row.
+--
+-- It lives beside the evidence and runs with `--relax-modules`, as
+-- 034 W1.7's `bank_replay.ail` does:
+--
+--   ailang run --relax-modules --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+--     --ai-stub --entry main .agent/projects/034_ambiguous_tool_outcomes/evidence/acceptance-w2-8c996274/p1p3_reach.ail
+
+module p1p3_reach
+
+import std/io (println)
+import std/list as List (length)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/json (Json, decode, get, asString)
+import std/ai (Message, ToolCall)
+import src/core/session (TracedSessionResult)
+import src/core/ports (ScriptedStep, ScriptedTool, WorldState)
+import src/core/test/stub_step (prose_step, tool_step, scripted_world_state)
+import src/core/phase_vocab (
+  LedgerRecord, WireRecord, HistoryAppended, HistorySeeded,
+  NativeToolDenied, ToolArgumentsUndecodable, DelegatedToolDeferred
+)
+import src/core/journal (message_of_json, messages_of_json)
+import src/core/dst_interaction (Interaction, ToolIdentity, OutcomeFault)
+import scripts/dst/corpus_pr_dst (
+  BankEntry, MemberRun, fixed_bank,
+  run_seed_member, run_constructed_member, run_recording_at,
+  run_recording_allowing_at, run_recording_continuing_at
+)
+
+type Effect = { ordinal: int, call_id: string, effect_key: string }
+
+type Reach = {
+  tool_msgs: int, disclosing: int, fault_disp: int, applied_faults: int, refusals: int,
+  tool_disp: int, ids: int, redispatched: int, emitted: int
+}
+
+pure func drop_n(xs: [Interaction], n: int) -> [Interaction] {
+  if n <= 0 then xs else match xs { [] => [], _ :: rest => drop_n(rest, n - 1) }
+}
+
+pure func tool_id_of(i: Interaction) -> Option[string] {
+  match i.identity.body { ToolIdentity(_, id, _) => Some(id), _ => None }
+}
+
+pure func tool_interactions(xs: [Interaction]) -> [Interaction] {
+  match xs {
+    [] => [],
+    i :: rest => match tool_id_of(i) { Some(_) => i :: tool_interactions(rest), None => tool_interactions(rest) }
+  }
+}
+
+pure func ids_of(xs: [Interaction]) -> [string] {
+  match xs { [] => [], i :: rest => match tool_id_of(i) { Some(id) => id :: ids_of(rest), None => ids_of(rest) } }
+}
+
+pure func has_str(xs: [string], t: string) -> bool {
+  match xs { [] => false, x :: rest => x == t || has_str(rest, t) }
+}
+
+pure func count_str(xs: [string], t: string) -> int {
+  match xs { [] => 0, x :: rest => (if x == t then 1 else 0) + count_str(rest, t) }
+}
+
+pure func distinct(xs: [string], seen: [string]) -> [string] {
+  match xs { [] => seen, x :: rest => distinct(rest, if has_str(seen, x) then seen else seen ++ [x]) }
+}
+
+pure func repeated(all: [string], ds: [string]) -> int {
+  match ds { [] => 0, d :: rest => (if count_str(all, d) > 1 then 1 else 0) + repeated(all, rest) }
+}
+
+pure func is_fault(i: Interaction) -> bool {
+  match i.outcome.status { OutcomeFault => true, _ => false }
+}
+
+pure func faults(xs: [Interaction]) -> [Interaction] {
+  match xs { [] => [], i :: rest => if is_fault(i) then i :: faults(rest) else faults(rest) }
+}
+
+pure func listed(es: [Effect], ord: int) -> bool {
+  match es { [] => false, e :: rest => e.ordinal == ord || listed(rest, ord) }
+}
+
+pure func applied_count(xs: [Interaction], es: [Effect]) -> int {
+  match xs { [] => 0, i :: rest => (if listed(es, i.identity.ordinal) then 1 else 0) + applied_count(rest, es) }
+}
+
+-- The projected messages, seed and appended, in order.
+pure func projected(rs: [LedgerRecord]) -> [Message] {
+  match rs {
+    [] => [],
+    r :: rest => match r {
+      WireRecord(HistorySeeded(i)) => (match messages_of_json(i.messages) { Ok(ms) => ms, Err(_) => [] }) ++ projected(rest),
+      WireRecord(HistoryAppended(i)) => (match message_of_json(i.message) { Ok(m) => [m], Err(_) => [] }) ++ projected(rest),
+      _ => projected(rest)
+    }
+  }
+}
+
+pure func appended_tool(rs: [LedgerRecord]) -> [Message] {
+  match rs {
+    [] => [],
+    r :: rest => match r {
+      WireRecord(HistoryAppended(i)) => (match message_of_json(i.message) {
+          Ok(m) => if m.role == "tool" then [m] else [],
+          Err(_) => [] }) ++ appended_tool(rest),
+      _ => appended_tool(rest)
+    }
+  }
+}
+
+pure func effects_of(content: string) -> string {
+  match decode(content) {
+    Err(_) => "",
+    Ok(j) => match get(j, "fault") {
+      None => "",
+      Some(f) => match get(f, "effects") { None => "", Some(e) => match asString(e) { Some(v) => v, None => "" } }
+    }
+  }
+}
+
+pure func discloses(content: string) -> bool {
+  let v = effects_of(content);
+  v == "none" || v == "unknown"
+}
+
+pure func disclosing(ms: [Message]) -> int {
+  match ms {
+    [] => 0,
+    m :: rest => (if discloses(m.content) then 1 else 0) + disclosing(rest)
+  }
+}
+
+pure func call_ids(cs: [ToolCall]) -> [string] {
+  match cs { [] => [], c :: rest => c.id :: call_ids(rest) }
+}
+
+pure func emitted_ids(ms: [Message]) -> [string] {
+  match ms { [] => [], m :: rest => (if m.role == "assistant" then call_ids(m.tool_calls) else []) ++ emitted_ids(rest) }
+}
+
+pure func refusals(rs: [LedgerRecord]) -> int {
+  match rs {
+    [] => 0,
+    r :: rest => (match r {
+      WireRecord(NativeToolDenied(_)) => 1,
+      WireRecord(ToolArgumentsUndecodable(_)) => 1,
+      WireRecord(DelegatedToolDeferred(_)) => 1,
+      _ => 0 }) + refusals(rest)
+  }
+}
+
+pure func reach(initial: WorldState, run: TracedSessionResult) -> Reach {
+  let added = drop_n(run.world.log, List.length(initial.log));
+  let tools = tool_interactions(added);
+  let all_ids = ids_of(tools);
+  let ds = distinct(all_ids, []);
+  let fs = faults(tools);
+  let tm = appended_tool(run.trace.records);
+  { tool_msgs: List.length(tm), disclosing: disclosing(tm), fault_disp: List.length(fs),
+    applied_faults: applied_count(fs, run.world.effect_log), refusals: refusals(run.trace.records),
+    tool_disp: List.length(tools), ids: List.length(ds), redispatched: repeated(all_ids, ds),
+    emitted: List.length(emitted_ids(projected(run.trace.records))) }
+}
+
+func print_reach(tag: string, label: string, r: Reach) -> Reach ! {IO} {
+  let _ = println("${tag} ${label} p1: tool_msgs=${show(r.tool_msgs)} disclosing=${show(r.disclosing)} fault_disp=${show(r.fault_disp)} applied_faults=${show(r.applied_faults)} refusals=${show(r.refusals)} | p3: tool_disp=${show(r.tool_disp)} ids=${show(r.ids)} redispatched=${show(r.redispatched)} emitted=${show(r.emitted)}");
+  r
+}
+
+func members(es: [BankEntry]) -> [Reach] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  match es {
+    [] => [],
+    e :: rest => {
+      let m = run_seed_member(e);
+      let here = print_reach("REACH", m.label, reach(m.initial, m.run));
+      here :: members(rest)
+    }
+  }
+}
+
+-- corpus_judge_dst's four control scripts, copied.
+pure func timeout_step() -> ScriptedStep {
+  { prose_step("") | error_code: "E_PROVIDER_TIMEOUT",
+                     error_message: "constructed: a retryable provider timeout" }
+}
+
+pure func two_tool_step() -> ScriptedStep {
+  { tool_step("T", "{}", "c1") |
+    tool_calls: [{ id: "c1", name: "T", arguments: "{}" }, { id: "c2", name: "T", arguments: "{}" }] }
+}
+
+pure func tool_answer(content: string) -> ScriptedTool {
+  { tool_call_id: "", duration_ms: 1, code: "", message: "", content: content, exit_code: 0 - 1, after_dispatch: true, applied: false }
+}
+
+pure func third_call_step() -> ScriptedStep {
+  { prose_step("") | error_code: "E_PROVIDER_PROTOCOL",
+                     error_message: "constructed: the model was called a third time on a step budget of two" }
+}
+
+pure func sum(rs: [Reach], f: (Reach) -> int) -> int {
+  match rs { [] => 0, r :: rest => f(r) + sum(rest, f) }
+}
+
+pure func count_where(rs: [Reach], f: (Reach) -> bool) -> int {
+  match rs { [] => 0, r :: rest => (if f(r) then 1 else 0) + count_where(rest, f) }
+}
+
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("p1p3_reach (034 W2.3): what P1 and P3 read on corpus_judge's members and controls");
+  let seeded = members(fixed_bank());
+  let c = run_constructed_member();
+  let cm = print_reach("REACH", c.label, reach(c.initial, c.run));
+  let ms = seeded ++ [cm];
+
+  let a0 = scripted_world_state([timeout_step(), prose_step("done")]);
+  let a = print_reach("REACHCONTROL", "retry-with-two-steps-left", reach(a0, run_recording_at("reach_retry-with-two-steps-left", a0, 2)));
+  let z0 = scripted_world_state([timeout_step()]);
+  let z = print_reach("REACHCONTROL", "no-retry-with-one-step-left", reach(z0, run_recording_at("reach_no-retry-with-one-step-left", z0, 1)));
+  let t0: WorldState = { scripted_world_state([two_tool_step(), prose_step("done")]) |
+                         tools: [tool_answer("OK-ALPHA"), tool_answer("OK-BRAVO")] };
+  let t = print_reach("REACHCONTROL", "tool-run-without-approval", reach(t0, run_recording_allowing_at("reach_tool-run-without-approval", t0, 2)));
+  let f0 = scripted_world_state([prose_step("first answer"), prose_step("second answer"), third_call_step()]);
+  let f = print_reach("REACHCONTROL", "solver-feedback", reach(f0, run_recording_continuing_at("reach_solver-feedback", f0, 2)));
+  let cs = [a, z, t, f];
+
+  let _ = println("REACHTOTAL members=${show(List.length(ms))} tool_msgs=${show(sum(ms, \r. r.tool_msgs))} disclosing=${show(sum(ms, \r. r.disclosing))} fault_disp=${show(sum(ms, \r. r.fault_disp))} applied_faults=${show(sum(ms, \r. r.applied_faults))} refusals=${show(sum(ms, \r. r.refusals))} tool_disp=${show(sum(ms, \r. r.tool_disp))} redispatched=${show(sum(ms, \r. r.redispatched))} emitted=${show(sum(ms, \r. r.emitted))} members_with_fault_msgs=${show(count_where(ms, \r. r.fault_disp > 0))} members_with_dispatch=${show(count_where(ms, \r. r.tool_disp > 0))}");
+  println("REACHTOTAL controls=${show(List.length(cs))} tool_msgs=${show(sum(cs, \r. r.tool_msgs))} disclosing=${show(sum(cs, \r. r.disclosing))} fault_disp=${show(sum(cs, \r. r.fault_disp))} tool_disp=${show(sum(cs, \r. r.tool_disp))} redispatched=${show(sum(cs, \r. r.redispatched))} emitted=${show(sum(cs, \r. r.emitted))}")
+}

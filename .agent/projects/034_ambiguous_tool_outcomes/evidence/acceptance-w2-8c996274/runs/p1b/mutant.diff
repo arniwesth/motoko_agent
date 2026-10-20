@@ -1,0 +1,7 @@
+diff --git a/src/core/tool_phase.ail b/src/core/tool_phase.ail
+index 203aab47..21b68631 100644
+--- a/src/core/tool_phase.ail
++++ b/src/core/tool_phase.ail
+@@ -313 +313 @@ pure func tool_fault_message(call: ToolCall, fault_class: string, fault: ToolFau
+-    kv(fault_key(), fault_to_json(fault)),
++    kv(fault_key(), jo([kv("kind", match get(fault_to_json(fault), "kind") { Some(k) => k, None => js("") }), kv("note", match get(fault_to_json(fault), "note") { Some(n) => n, None => js("") })])),
