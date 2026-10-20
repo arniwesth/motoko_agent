@@ -1,0 +1,32 @@
+start 2026-10-20T16:55:13Z rev=24d347d2 ailang=AILANG v0.52.5 nproc=8
+worktree /workspaces/motoko_agent-034-w1 HEAD 24d347d2a19f566df2ba8c0dcf40cdb2d629ce32 status-lines=1
+AILANG_FS_SANDBOX unset for both runs; compile cache .ailang/ present: yes
+memory.current 4761083904
+ 16:55:13 up 3 days, 10:39,  0 user,  load average: 1.85, 2.02, 1.92
+dst rc=0 seconds=1002 end 2026-10-20T17:11:55Z
+eval_matrix rc=2 seconds=371 end 2026-10-20T17:18:06Z
+memory.current 4793024512
+ 17:18:06 up 3 days, 11:02,  0 user,  load average: 1.67, 4.18, 5.54
+DONE
+
+# gate 1 (before the baseline), one make at a time, env -u AILANG_FS_SANDBOX
+## g1
+start 2026-10-20T16:47:29Z make check_core test_coverage seeded_generator fault_catalogue corpus_pr run_report world_state invariants anchors attribution_table
+ 16:47:29 up 3 days, 10:32,  0 user,  load average: 2.10, 1.92, 1.77
+memory.current 5300834304
+rc=0 seconds=397 end 2026-10-20T16:54:06Z
+ 16:54:06 up 3 days, 10:38,  0 user,  load average: 1.68, 2.06, 1.93
+memory.current 4726468608
+DONE
+
+## g1b
+start 2026-10-20T16:54:16Z make new_contract_policy verify_classify_check
+ 16:54:16 up 3 days, 10:38,  0 user,  load average: 1.50, 2.00, 1.91
+memory.current 4999979008
+rc=0 seconds=49 end 2026-10-20T16:55:05Z
+ 16:55:05 up 3 days, 10:39,  0 user,  load average: 1.93, 2.04, 1.93
+memory.current 5190275072
+DONE
+
+id -u 1001
+merge-base origin/main a94204aaa2e7a2a76aa26bc1cbb9159dde63f1e4
