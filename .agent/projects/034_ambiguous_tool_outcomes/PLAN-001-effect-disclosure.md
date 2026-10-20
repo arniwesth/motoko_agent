@@ -4,9 +4,9 @@ Implements [ADR-001](ADR-001-effect-disclosure-for-tool-faults.md) (this dir), a
 by the operator on 2026-10-17 (its §6, rulings 1 to 5).
 
 Status: **W0 (Phase 0) merged, #277. W0b.1 probed; the operator withdrew Phase 0b at W0b.2
-(W0b.3 and W0b.4 canceled), #279. W1 is under way: W1.1 re-grounded it at `a94204aa`
-(*W1.1*).** Phases 1, 2 and 3 are planned to the task. Each
-opens with a re-grounding step, because each starts after the one before it has merged.
+(W0b.3 and W0b.4 canceled), #279. W1 in review, #280. W2 and W3 are next.** Phases 1, 2
+and 3 are planned to the task. Each opens with a re-grounding step, because each starts after
+the one before it has merged.
 Revised 2026-10-17 after two independent reviews. v1.1 answers Codex Sol (`gpt-6.1-sol`): one
 blocking finding and seven others. v1.2 answers Claude Opus 5.5: one blocking finding, eight
 should-fix and ten minor. Every finding that could be checked against the code was reproduced
