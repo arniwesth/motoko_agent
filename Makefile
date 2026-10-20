@@ -505,7 +505,7 @@ DST_JOBS ?= $(shell nproc 2>/dev/null || echo 4)
 DST_LOG  ?= .ailang/dst-last.log
 
 DST_TARGETS := test_coverage declared_vs_performed terminal_trace smoke_parity \
-  profile_definition smoke_driver corpus_pr corpus_judge strict_replay world_state \
+  profile_definition smoke_driver corpus_pr corpus_judge applied_twin strict_replay world_state \
   corpus_rotating driver_plus_compose driver_plus_herdr driver_only seeded_generator \
   event_vocabulary phase_c_l1 recorded_stream driver_plus_no_ops \
   ext_hook_scope_selftest ext_hook_scope invariants run_report discovery program_persistence \
@@ -2062,6 +2062,59 @@ corpus_judge:
 		exit 1; \
 	fi; \
 	grep -v '^{' $$out; \
+	rm -f $$out
+
+# 034 ADR-001 §2, PROPERTY P2: THE APPLIED-TWIN RELATION ON THE BANK'S PROGRAMS
+# (034 PLAN-001 W2.2).
+#
+# Every program `corpus_pr` builds is run against each of its twins — the same
+# program with one after-dispatch fault's ordinal moved into or out of
+# `applied_faults` — and `dst_invariants.applied_twin_findings` must be empty on
+# every pair: served interactions, outcome, final state and trace records, each
+# compared IN FULL. The script's header says how a twin is built and how this
+# could be green and worthless.
+#
+# ITS OWN TARGET, NOT A ROW IN `invariants`. A pair relation needs two runs and
+# `invariants_dst` runs none; this one runs the bank about twice over. It is in
+# DST_TARGETS and not DST_TIMED_TARGETS, on its own cache lane, as corpus_judge.
+#
+# THE COUNT LINE IS READ, NEVER ONLY THE EXIT STATUS (WI-A17's rule). A runner
+# that compared zero pairs, flipped in one direction only, or whose controls
+# stopped firing exits 0 just as readily as one that checked everything, so
+# each of those is a field on the line and is held here:
+#
+#   ran == identical_clean == members   every member ran, and two runs of ONE
+#                                       program are clean against each other
+#   pairs > 0, clean == pairs           twins whose world truth was seen to
+#                                       differ, and each one clean
+#   to_applied > 0, to_unapplied > 0    the flip was made in both directions
+#   refused == 0                        no twin was refused at reconstitution
+#   controls == controls_red == 6       each part of the relation fired, on a
+#                                       real execution, under its own rule
+.PHONY: applied_twin
+applied_twin:
+	@set -eu; \
+	out=$$(mktemp); rc=0; \
+	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace \
+	     --ai-stub --entry main scripts/dst/applied_twin_dst.ail < /dev/null > $$out 2>&1 || rc=$$?; \
+	grep -v '^{' $$out | grep -E '^(applied_twin|COUNT| +[✓✗]| +first:)' || true; \
+	line=$$(grep -E '^COUNT ' $$out | tail -1); \
+	field() { printf '%s\n' "$$line" | sed -n "s/.* $$1=\([0-9][0-9]*\).*/\1/p"; }; \
+	members=$$(field members); ran=$$(field ran); same=$$(field identical_clean); \
+	pairs=$$(field pairs); clean=$$(field clean); up=$$(field to_applied); down=$$(field to_unapplied); \
+	refused=$$(field refused); controls=$$(field controls); red=$$(field controls_red); \
+	if [ $$rc -ne 0 ] || [ -z "$$line" ] || [ -z "$$red" ] \
+	   || [ "$$ran" -ne "$$members" ] || [ "$$same" -ne "$$members" ] \
+	   || [ "$$pairs" -le 0 ] || [ "$$clean" -ne "$$pairs" ] \
+	   || [ "$$up" -le 0 ] || [ "$$down" -le 0 ] || [ "$$refused" -ne 0 ] \
+	   || [ "$$controls" -ne 6 ] || [ "$$red" -ne "$$controls" ]; then \
+		echo "applied_twin: FAIL (exit $$rc; $${line:-no COUNT line})"; \
+		echo "  source revision    $$(git rev-parse HEAD 2>/dev/null || echo unknown)$$(git diff --quiet HEAD 2>/dev/null || echo ' (with uncommitted changes)')"; \
+		echo "  toolchain version  $$(ailang --version 2>/dev/null | head -1)"; \
+		echo "  output             $$out (kept)"; \
+		exit 1; \
+	fi; \
+	echo "  ✓ P2 held on $$clean of $$pairs twin pair(s) over $$members program(s) ($$up flipped to applied, $$down to not applied); $$red of $$controls controls red on their own rule"; \
 	rm -f $$out
 
 # D11's SCHEDULED ROTATING CORPUS (WI-A15 commit 2). Six checks.

@@ -127,15 +127,17 @@
 
 module src/core/dst_invariants
 
-import std/list as List (length, foldl, map, filter)
+import std/list as List (length, foldl, map, filter, reverse)
 import std/crypto (sha256Hex)
-import std/string as Str (startsWith, contains)
+import std/string as Str (startsWith, contains, length, substring, foldChars, intToStr, concat)
 import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
 
 import src/core/phase_vocab (
   LedgerTrace,
   LedgerRecord, WireRecord, CompactionStageRecord, DecisionRecord,
+  -- 034 PLAN-001 W2.2: the applied-twin relation compares records in full.
+  to_schema_v1, InMemoryStageOutcome, TraceStageApplied, TraceStageRejected, TraceStageObserved, TraceStagePassed,
   LedgerEvent, RunSummary, TotalsUpdated, CostExhausted, DoneEvent, CheckpointTaken,
   StreamDelta,
   -- 011 ADR-003 D3: the record that carries the DRIVER's own step number, read
@@ -217,7 +219,7 @@ import src/core/journal (
   -- 034 ADR-001 §2: the projected message, as P1 and P3 read it.
   message_of_json
 )
-import std/json (Json, encode, decode, get, asString, asBool)
+import std/json (Json, encode, decode, get, asString, asBool, jo, ja, kv, js, jb)
 import std/ai (Message)
 import src/core/ports (
   WorldState,
@@ -2590,6 +2592,264 @@ export pure func has_determinism_rule(fs: [DeterminismFinding], rule: string) ->
   match fs {
     [] => false,
     f :: rest => if determinism_rule(f) == rule then true else has_determinism_rule(rest, rule)
+  }
+}
+
+-- ============================================================================
+-- PART 8 — 034 ADR-001 §2's P2: the applied-twin relation
+-- ============================================================================
+--
+-- "Two programs differing only in one `applied` field produce identical
+--  traces, outcomes and served interactions."
+--
+-- Over a PAIR, for the discovery contract's reason above, so it is not a family
+-- and its findings are not `Violation`s: a family that passed whenever it held
+-- one run would be green on every run it was ever given. Its runner is
+-- `scripts/dst/applied_twin_dst.ail` (`make applied_twin`), which builds each
+-- twin from a bank program by moving one ordinal into or out of
+-- `ExecutionProgram.applied_faults` (034 PLAN-001 W2.2). The served interactions
+-- of the two are equal by construction (W1.3 acceptance b), so any other
+-- difference is the HARNESS reading world truth, which D4 says only this
+-- relation stands between and the wire.
+--
+-- IT IS NOT `discovery_contract_findings` UNDER A NEW NAME, and the difference
+-- is the point. `trace_positions` compares `record_variant` alone. A harness
+-- that reads `applied` from `next_state` into a tool message changes that
+-- message's CONTENT and no record's variant (mutant p2, PLAN-001 W2.3), so a
+-- variant-only comparison is green on exactly the leak P2 exists for. Each side
+-- here is compared in full:
+--
+--   served interactions  identity, request, payload and advance — the key
+--                        `log_positions` uses, and for its reason.
+--   the outcome          the returned `Result[[Message], AIError]` itself, or a
+--                        harness failure's kind, position and request. Not
+--                        `outcome_label`, which is one of three words and is
+--                        equal for two runs that returned different messages.
+--   the final state      what the run ended holding: history, counts,
+--                        telemetry, artifacts.
+--   the trace            every record, every field.
+--
+-- "IN FULL" IS NOT `show`, AND THAT WAS MEASURED. `show` elides a value below
+-- about three levels (`JObject([{key: ..., value: ...}])`), which is exactly
+-- where a tool message's body sits inside `HistoryAppended`; the first build of
+-- this relation compared `show` and its content control stayed green on a
+-- replaced message body. So a wire record is compared by `show` (every
+-- top-level field, wire or not) AND by its wire encoding (`to_schema_v1`,
+-- which carries the Json payloads to the last byte); the two records that are
+-- not wire events, the outcome's messages and the final state are encoded field
+-- by field (`record_content`, `returned_outcome`, `final_content`).
+--
+-- NOT COMPARED: the world's effect log. It is world truth, and it is SUPPOSED
+-- to differ: that difference is what makes the pair a twin, and the runner
+-- asserts it does rather than assuming it.
+
+export type AppliedTwinFinding
+  = TwinServedLengthDiffers(int, int)
+  | TwinServedDiffers(int, string, string)
+  | TwinOutcomeDiffers(string, string)
+  | TwinFinalStateDiffers(string, string)
+  | TwinTraceLengthDiffers(int, int)
+  | TwinTraceRecordDiffers(int, string, string, string)
+
+export pure func applied_twin_rule(f: AppliedTwinFinding) -> string
+  ensures { result != "" }
+{
+  match f {
+    TwinServedLengthDiffers(_, _) => "applied-twin-served-length",
+    TwinServedDiffers(_, _, _) => "applied-twin-served",
+    TwinOutcomeDiffers(_, _) => "applied-twin-outcome",
+    TwinFinalStateDiffers(_, _) => "applied-twin-final-state",
+    TwinTraceLengthDiffers(_, _) => "applied-twin-trace-length",
+    TwinTraceRecordDiffers(_, _, _, _) => "applied-twin-trace-record"
+  }
+}
+
+-- Built with `concat` and `intToStr`, not interpolation: interpolation lowers to
+-- `show`, which `verify_classify`'s probes cannot encode.
+export pure func applied_twin_message(f: AppliedTwinFinding) -> string
+  ensures { result != "" }
+{
+  match f {
+    TwinServedLengthDiffers(a, b) =>
+      Str.concat(["[applied-twin-served-length] the twins were served ", Str.intToStr(a), " and ", Str.intToStr(b), " interactions; two programs that differ only in one `applied` ordinal serve the same log (034 PLAN-001 W1.3 acceptance b), so the WORLD read the bit and every other row is about the world, not the harness"]),
+    TwinServedDiffers(pos, a, b) =>
+      Str.concat(["[applied-twin-served] at interaction position ", Str.intToStr(pos), " the twins were served '", a, "' and '", b, "'"]),
+    TwinOutcomeDiffers(a, b) =>
+      Str.concat(["[applied-twin-outcome] the twins returned '", a, "' and '", b, "'; 034 ADR-001 §2 P2 requires the same outcome from programs that differ only in world truth"]),
+    TwinFinalStateDiffers(a, b) =>
+      Str.concat(["[applied-twin-final-state] the twins ended holding '", a, "' and '", b, "'"]),
+    TwinTraceLengthDiffers(a, b) =>
+      Str.concat(["[applied-twin-trace-length] the twins returned traces of ", Str.intToStr(a), " and ", Str.intToStr(b), " records"]),
+    TwinTraceRecordDiffers(pos, variant, a, b) =>
+      Str.concat(["[applied-twin-trace-record] at trace position ", Str.intToStr(pos), " (", variant, ") the twins returned '", a, "' and '", b, "'; a difference in content with no difference in variant is the shape of a harness that read `applied` into a message"])
+  }
+}
+
+-- Where `a` and `b` first differ: the length of their common prefix. One pass
+-- over `a`, carrying `b`'s characters as a list, because `charAt` is itself a
+-- scan and an indexed loop would be quadratic in a record that can run to
+-- kilobytes. Called only once two values are known to differ.
+-- contracts: SKIPPED — folds with `std/string.foldChars`, whose signature the fragment cannot encode.
+pure func first_difference(a: string, b: string) -> int {
+  let bs = List.reverse(Str.foldChars(\acc c. c :: acc, [], b));
+  let r = Str.foldChars(\acc c.
+    if acc.at >= 0 then acc
+    else match acc.rest {
+      [] => { acc | at: acc.i },
+      d :: ds => if c == d then { acc | rest: ds, i: acc.i + 1 } else { acc | at: acc.i }
+    },
+    { rest: bs, i: 0, at: -1 }, a);
+  if r.at >= 0 then r.at else r.i
+}
+
+-- A window of `s` from shortly before `at`, so a finding shows where two
+-- values part and not the kilobytes they share.
+pure func excerpt_at(s: string, at: int) -> string
+  ensures { result != "" || s == "" }
+{
+  let n = Str.length(s);
+  let from = if at > 40 then at - 40 else 0;
+  let to = if from + 200 < n then from + 200 else n;
+  let head = if from > 0 then "…" else "";
+  let tail = if to < n then "…" else "";
+  Str.concat([head, Str.substring(s, from, to), tail])
+}
+
+-- The two windows at the point `a` and `b` first differ.
+-- contracts: SKIPPED — calls `first_difference`; see that function.
+pure func parted(a: string, b: string) -> { a: string, b: string } {
+  let at = first_difference(a, b);
+  { a: excerpt_at(a, at), b: excerpt_at(b, at) }
+}
+
+-- contracts: BLOCKED — RECURSIVE over the interaction lists.
+pure func served_twin_positions(a: [Interaction], b: [Interaction], pos: int) -> [AppliedTwinFinding] {
+  match a {
+    [] => [],
+    x :: xs =>
+      match b {
+        [] => [],
+        y :: ys => {
+          -- The key `log_positions` compares, for the reason stated there.
+          let kx = "${identity_projection(x.identity)}|${x.request_projection}|${x.outcome.payload}|${x.outcome.advance_ms}";
+          let ky = "${identity_projection(y.identity)}|${y.request_projection}|${y.outcome.payload}|${y.outcome.advance_ms}";
+          let here = if kx == ky then [] else {
+            let p = parted(kx, ky);
+            [TwinServedDiffers(pos, p.a, p.b)]
+          };
+          here ++ served_twin_positions(xs, ys, pos + 1)
+        }
+      }
+  }
+}
+
+-- contracts: BLOCKED — RECURSIVE over the trace records.
+pure func trace_twin_positions(a: [LedgerRecord], b: [LedgerRecord], pos: int) -> [AppliedTwinFinding] {
+  match a {
+    [] => [],
+    x :: xs =>
+      match b {
+        [] => [],
+        y :: ys => {
+          let sx = record_content(x);
+          let sy = record_content(y);
+          let here = if sx == sy then [] else {
+            let p = parted(sx, sy);
+            let va = record_variant(x);
+            let vb = record_variant(y);
+            [TwinTraceRecordDiffers(pos, if va == vb then va else "${va} / ${vb}", p.a, p.b)]
+          };
+          here ++ trace_twin_positions(xs, ys, pos + 1)
+        }
+      }
+  }
+}
+
+-- One trace record in full. See this part's header for why `show` alone is not.
+-- contracts: SKIPPED — matches on the `LedgerRecord` ADT and encodes `Json`.
+pure func record_content(r: LedgerRecord) -> string {
+  match r {
+    WireRecord(e) => "${show(r)}\n${encode(to_schema_v1(e))}",
+    CompactionStageRecord(c) =>
+      encode(jo([kv("record", js("compaction_stage")), kv("step", js(show(c.step))),
+                 kv("ext_id", js(c.ext_id)), kv("outcome", stage_outcome_json(c.outcome))])),
+    DecisionRecord(d) =>
+      encode(jo([kv("record", js("decision")), kv("step", js(show(d.step))), kv("decision", js(d.decision))]))
+  }
+}
+
+-- contracts: SKIPPED — matches on the `InMemoryStageOutcome` ADT.
+pure func stage_outcome_json(o: InMemoryStageOutcome) -> Json {
+  match o {
+    TraceStageApplied(s) => jo([kv("applied", js(s))]),
+    TraceStageRejected(s) => jo([kv("rejected", js(s))]),
+    TraceStageObserved(s, fs) =>
+      jo([kv("observed", js(s)), kv("fields", ja(List.map(\f. jo([kv("key", js(f.key)), kv("value", js(f.value))]), fs)))]),
+    TraceStagePassed => jo([kv("passed", js(""))])
+  }
+}
+
+-- The returned outcome in full. A harness failure is its kind, position and
+-- request; a completed run is every message it returned, or its error.
+-- contracts: SKIPPED — matches on the `DstResult` ADT and encodes `Json`.
+pure func returned_outcome(r: DstResult) -> string {
+  match r {
+    RunFailed(f) =>
+      "harness:${harness_failure_kind_name(f.kind)}@${f.interaction_position}|${f.actual_request_projection}",
+    RunCompleted(run) =>
+      match run.outcome {
+        Ok(ms) => "ok ${encode(messages_json(ms))}",
+        Err(e) => "err ${encode(jo([kv("code", js(e.code)), kv("message", js(e.message)), kv("retryable", jb(e.retryable))]))}"
+      }
+  }
+}
+
+-- What the run ended holding, in full. The counts and the telemetry are flat
+-- records of ints, which `show` prints whole.
+-- contracts: SKIPPED — encodes `Json`.
+pure func final_content(f: FinalState) -> string {
+  encode(jo([kv("history", messages_json(f.history)), kv("cumulative", js(show(f.cumulative))),
+             kv("telemetry", js(show(f.telemetry))), kv("ext_artifacts", f.ext_artifacts)]))
+}
+
+-- contracts: SKIPPED — compares encoded records, messages and `Json`.
+export pure func applied_twin_findings(
+  a: ExecutionUnderTest, b: ExecutionUnderTest
+) -> [AppliedTwinFinding] {
+  let la = a.world.log;
+  let lb = b.world.log;
+  let ta = trace_of(a.result).records;
+  let tb = trace_of(b.result).records;
+  let served_len = if List.length(la) == List.length(lb) then []
+                   else [TwinServedLengthDiffers(List.length(la), List.length(lb))];
+  let oa = returned_outcome(a.result);
+  let ob = returned_outcome(b.result);
+  let out = if oa == ob then [] else {
+    let p = parted(oa, ob);
+    [TwinOutcomeDiffers(p.a, p.b)]
+  };
+  let fa = final_content(a.final);
+  let fb = final_content(b.final);
+  let fin = if fa == fb then [] else {
+    let p = parted(fa, fb);
+    [TwinFinalStateDiffers(p.a, p.b)]
+  };
+  let trace_len = if List.length(ta) == List.length(tb) then []
+                  else [TwinTraceLengthDiffers(List.length(ta), List.length(tb))];
+  served_len ++ served_twin_positions(la, lb, 0) ++ out ++ fin
+    ++ trace_len ++ trace_twin_positions(ta, tb, 0)
+}
+
+-- contracts: SKIPPED — calls `applied_twin_findings`; see that function.
+export pure func applied_twin_ok(a: ExecutionUnderTest, b: ExecutionUnderTest) -> bool {
+  List.length(applied_twin_findings(a, b)) == 0
+}
+
+-- contracts: BLOCKED — RECURSIVE over the findings.
+export pure func has_applied_twin_rule(fs: [AppliedTwinFinding], rule: string) -> bool {
+  match fs {
+    [] => false,
+    f :: rest => if applied_twin_rule(f) == rule then true else has_applied_twin_rule(rest, rule)
   }
 }
 
