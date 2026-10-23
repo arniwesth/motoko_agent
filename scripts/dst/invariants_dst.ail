@@ -72,6 +72,7 @@ import src/core/phase_vocab (
   ProviderCallPrepared, RunSummary, CostExhausted, CompactionExhausted,
   DoneEvent, CheckpointTaken, TotalsUpdated, StreamDelta, StreamErrorRetry,
   InMemoryStageOutcome, TraceStageApplied,
+  HistorySeeded, HistoryAppended, NativeToolDenied, ToolArgumentsUndecodable, DelegatedToolDeferred,
   CheckpointInfo,
   zero_runtime_status_counts
 )
@@ -104,8 +105,20 @@ import src/core/ports (
 -- one: `empty_final_state` is the shape for an execution with no history, and
 -- writing the four fields out here would be a second definition of "empty" for
 -- the fold to disagree with.
-import std/ai (Message, AIError)
-import src/core/journal (empty_final_state, FinalState)
+import std/ai (Message, AIError, ToolCall)
+import src/core/journal (empty_final_state, FinalState,
+  -- 034 ADR-001 §2: the conversation fixture's journal, chained as the driver
+  -- chains it.
+  chain_digest_over, chain_digest_after, chain_digests_over, chain_digests_json, chain_empty_base,
+  messages_json, message_json)
+import std/json (encode, jo, kv, js, jb)
+import std/string as Str (contains)
+-- 034 ADR-001 §2: the REAL builders, whose bytes the survival rows hand the two
+-- rules. The rules themselves import none of these.
+import src/core/tool_phase (tool_outcome_message, denial_message, undecodable_arguments_message)
+import src/core/tool_dispatch_adapter (tool_result_item_to_json)
+import src/core/types (ToolErrorResult)
+import src/core/tool_fault (refused_fault)
 import src/core/ext/ctx_defaults (zero_token_telemetry, empty_ext_artifacts)
 import src/core/dst_fault_catalogue (
   fault_class_tool_failed,
@@ -125,7 +138,7 @@ import src/core/dst_invariants (
   TerminalSummary, EmissionParity, PhaseTransitions, ToolPairing,
   BudgetAccounting, BoundedProgress, CheckpointHistory, OutcomeAgreement,
   ReplayConsistency, WorldTransitions, VirtualTime, HarnessHygiene, JournalFold,
-  Violation,
+  Violation, EffectDisclosureUnsound, ToolCallRedispatched,
   all_families, family_id, family_obligation,
   violation_rule, violation_message, violation_family,
   evaluate, invariants_ok, first_failed_invariant,
@@ -959,6 +972,309 @@ pure func trace_records(x: ExecutionUnderTest) -> [LedgerRecord] {
 }
 
 -- ---------------------------------------------------------------------------
+-- 034 ADR-001 §2: P1 and P3 — what the two rules must NOT reject, and what
+-- they must
+-- ---------------------------------------------------------------------------
+--
+-- THE CONVERSATION. The surviving fixture's trace carries no projected message
+-- at all, so on it both rules are vacuous: P1 reads tool messages and P3 counts
+-- emissions. This is that fixture with the messages its interaction log
+-- implies, journalled the way the driver journals them — a seed, then one
+-- `HistoryAppended` per message, each `digest_after` the chain over everything
+-- before it — and with the `final` history that journal folds to, so the
+-- journal families agree and a survival row can ask `evaluate` for NOTHING.
+--
+-- Six calls, emitted by one assistant message:
+--   call-1  dispatched at #3, completed               the effect log: #3
+--   call-2  dispatched at #6, ToolFailed after dispatch, APPLIED   #6
+--   call-3  dispatched at #8, a correlation mismatch, not applied
+--   call-4  dispatched at #11, a deadline, not applied
+--   call-5  refused by policy, never dispatched       NativeToolDenied
+--   call-6  arguments not JSON, never dispatched      ToolArgumentsUndecodable
+--
+-- THE SURVIVING MESSAGES ARE THE REAL BUILDERS' BYTES (`tool_outcome_message`,
+-- `denial_message`, `undecodable_arguments_message`). The rule must not call
+-- them, and a fixture that hand-wrote what it thinks they say would test the
+-- rule against this file's reading of the wire rather than against the wire.
+-- The rejection rows' bytes are hand-written: each is one defect.
+
+pure func p_run_id() -> string { "dst.r0.0" }
+
+pure func p_call(id: string, name: string, args: string) -> ToolCall {
+  { id: id, name: name, arguments: args }
+}
+
+pure func p_calls() -> [ToolCall] {
+  [p_call("call-1", "BashExec", "{}"), p_call("call-2", "Read", "{}"),
+   p_call("call-3", "Read", "{}"), p_call("call-4", "BashExec", "{}"),
+   p_call("call-5", "BashExec", "{}"), p_call("call-6", "WriteFile", "{\"path\":\"a")]
+}
+
+pure func p_seed() -> [Message] {
+  [{ role: "system", content: "you are motoko", tool_calls: [], tool_call_id: "", images: [] },
+   { role: "user", content: "do the task", tool_calls: [], tool_call_id: "", images: [] }]
+}
+
+pure func p_assistant(calls: [ToolCall]) -> Message {
+  { role: "assistant", content: "p0", tool_calls: calls, tool_call_id: "", images: [] }
+}
+
+pure func p_tool_msg(id: string, content: string) -> Message {
+  { role: "tool", content: content, tool_calls: [], tool_call_id: id, images: [] }
+}
+
+pure func p_nth_call(cs: [ToolCall], k: int) -> ToolCall {
+  match cs {
+    [] => p_call("", "", ""),
+    c :: rest => if k == 0 then c else p_nth_call(rest, k - 1)
+  }
+}
+
+pure func p_c(k: int) -> ToolCall { p_nth_call(p_calls(), k - 1) }
+
+-- The six answers as the driver renders them, call-1 to call-6 in order.
+pure func p_answers() -> [Message] {
+  [tool_outcome_message(p_c(1), ToolCompleted({ tool_call_id: "call-1", content: "OUT", exit_code: -1 })),
+   p_failed_message(true),
+   tool_outcome_message(p_c(3), ToolCorrelationMismatch({ expected_id: "call-3", got_id: "call-X" })),
+   tool_outcome_message(p_c(4), ToolDeadlineExceeded({ tool_call_id: "call-4", elapsed_ms: 3000, timeout_ms: 1000 })),
+   denial_message(p_c(5), "no"),
+   undecodable_arguments_message(p_c(6), 10)]
+}
+
+pure func p_failed_message(after: bool) -> Message {
+  tool_outcome_message(p_c(2), ToolFailed({ tool_call_id: "call-2", code: "E42", message: "boom", after_dispatch: after }))
+}
+
+-- Replace call k's answer (1-based), so a row changes ONE message.
+pure func p_with_answer(ms: [Message], k: int, m: Message) -> [Message] {
+  match ms {
+    [] => [],
+    x :: rest => if k == 1 then m :: rest else x :: p_with_answer(rest, k - 1, m)
+  }
+}
+
+-- The journal the driver writes for `seed` then `appended`: the seed's digest
+-- and prefix chain, then each entry chained from the one before it.
+pure func p_journal(seed: [Message], appended: [Message]) -> [LedgerRecord] {
+  let base = chain_digest_over(chain_empty_base(), seed);
+  WireRecord(HistorySeeded({ run_id: p_run_id(), messages: messages_json(seed), digest: base,
+    digests: chain_digests_json(chain_digests_over(chain_empty_base(), seed)) }))
+    :: p_appends(appended, base)
+}
+
+pure func p_appends(ms: [Message], prev: string) -> [LedgerRecord] {
+  match ms {
+    [] => [],
+    m :: rest => {
+      let d = chain_digest_after(prev, m);
+      WireRecord(HistoryAppended({ run_id: p_run_id(), step: 1, message: message_json(m),
+        replaces_previous: false, digest_after: d })) :: p_appends(rest, d)
+    }
+  }
+}
+
+-- The two refusals' own records, as the tool phase emits them.
+pure func p_refusals() -> [LedgerRecord] {
+  [WireRecord(NativeToolDenied({ step: 1, stream_id: "step-1", tool: "BashExec", id: "call-5", reason: "no" })),
+   WireRecord(ToolArgumentsUndecodable({ step: 1, stream_id: "step-1", tool: "WriteFile", id: "call-6", raw_length: 10 }))]
+}
+
+pure func p_effect(ord: int, id: string, key: string) -> { ordinal: int, call_id: string, effect_key: string } {
+  { ordinal: ord, call_id: id, effect_key: key }
+}
+
+-- The world truth for the conversation: call-1's completion and call-2's
+-- applied fault.
+pure func p_effects() -> [{ ordinal: int, call_id: string, effect_key: string }] {
+  [p_effect(3, "call-1", "BashExec:{}"), p_effect(6, "call-2", "Read:{}")]
+}
+
+-- The general form: the given log (replayed against itself, so replay
+-- consistency stays green), effect log, emitted messages and answers, extra
+-- records, and the `final` history the journal folds to.
+pure func p_execution(
+  log: [Interaction], effects: [{ ordinal: int, call_id: string, effect_key: string }],
+  assistants: [Message], answers: [Message], extra: [LedgerRecord]
+) -> ExecutionUnderTest {
+  let appended = assistants ++ answers;
+  let w0 = fixture_world();
+  let w = { w0 | log: log, effect_log: effects };
+  let f0 = fixture();
+  let fin0 = f0.final;
+  let fin = { fin0 | history: p_seed() ++ appended };
+  let x = with_records(f0, p_journal(p_seed(), appended) ++ extra ++ fixture_trace().records);
+  { x | world: w, replay: StrictAgainst(log), final: fin }
+}
+
+pure func p_conversation(answers: [Message], effects: [{ ordinal: int, call_id: string, effect_key: string }]) -> ExecutionUnderTest {
+  p_execution(fixture_log(), effects, [p_assistant(p_calls())], answers, p_refusals())
+}
+
+pure func p_fixture() -> ExecutionUnderTest { p_conversation(p_answers(), p_effects()) }
+
+pure func has_rule_at(vs: [Violation], rule: string, ord: int, id: string) -> bool {
+  match vs {
+    [] => false,
+    v :: rest =>
+      (violation_rule(v) == rule && violation_message(v) != ""
+        && (match v { EffectDisclosureUnsound(o, c) => o == ord && c == id, ToolCallRedispatched(c) => c == id, _ => false }))
+        || has_rule_at(rest, rule, ord, id)
+  }
+}
+
+-- A mutation row that also names WHERE: the rule, at the dispatch ordinal and
+-- call id the row broke. A rule that fired on the wrong message is green on
+-- `mutant` alone.
+func mutant_at(label: string, x: ExecutionUnderTest, rule: string, ord: int, id: string) -> bool ! {IO} {
+  let vs = evaluate(x);
+  report("mutant: ${label} → ${rule} (${show(ord)}, ${id})", has_rule_at(vs, rule, ord, id),
+         if List.length(vs) == 0 then "the mutant produced NO violation at all — the rule cannot fire"
+         else "expected '${rule}' at (${show(ord)}, ${id}), the mutant produced: ${rule_list(vs)}\n      first: ${first_message(vs)}")
+}
+
+func absent(label: string, x: ExecutionUnderTest, rule: string) -> bool ! {IO} {
+  let vs = evaluate(x);
+  report("absent: ${label} is NOT ${rule}", not has_rule(vs, rule),
+         "the row reported '${rule}': ${first_message(vs)}")
+}
+
+pure func content_of(ms: [Message], k: int) -> string {
+  match ms {
+    [] => "",
+    m :: rest => if k == 1 then m.content else content_of(rest, k - 1)
+  }
+}
+
+-- A completion in the effect log, at the given ordinal: the journal world's
+-- shape, where every recorded result is served verbatim as its tool's content.
+pure func completed_at(ord: int, id: string, content: string) -> Interaction {
+  mk(ord, ToolIdentity("loop_v2", id, "BashExec"), "tool_exec call_id=${id} tool=BashExec timeout_ms=1000", 1000,
+     ok_out(0, encode_tool_outcome(ToolCompleted({ tool_call_id: id, content: content, exit_code: -1 }))))
+}
+
+-- The live renderer's refusal, through the live renderer.
+pure func live_refusal_content() -> string {
+  encode(tool_result_item_to_json(ToolErrorResult({ id: "call-1", tool: "BashExec", fault: refused_fault(),
+    message: "requires delegated backend (streaming/cancel features)" })))
+}
+
+func scenario_effect_disclosure_and_redispatch_survive() -> bool ! {IO} {
+  let _ = println("\n-- 034 ADR-001 §2, P1 and P3: what the two rules must not reject --");
+  let p = p_fixture();
+  -- The real builders' bytes, the world truth with one APPLIED fault answered
+  -- `unknown`: P1 is one-sided, and `unknown` is always permitted after dispatch.
+  let s1 = survives("the conversation: six answers from the real builders, one applied fault", p);
+  -- Asserted, because a conversation the rules cannot see certifies nothing.
+  let a = p_answers();
+  let s2 = report("the conversation holds what the rows above and below rely on",
+                  List.length(trace_records(p)) == List.length(fixture_trace().records) + 10
+                    && Str.contains(content_of(a, 2), "\"effects\":\"unknown\"")
+                    && Str.contains(content_of(a, 5), "\"effects\":\"none\"")
+                    && Str.contains(content_of(a, 6), "\"effects\":\"none\"")
+                    && List.length(p.world.effect_log) == 2,
+                  "the conversation fixture is not the one the comment describes");
+  -- `none` where nothing applied: a ToolFailed the world saw BEFORE dispatch,
+  -- with no effect-log entry. The rendered `none` is true.
+  let before = p_conversation(p_with_answer(p_answers(), 2, p_failed_message(false)),
+                              [p_effect(3, "call-1", "BashExec:{}")]);
+  let s3 = survives("a before-dispatch ToolFailed answered 'none', nothing applied", before);
+  -- The live arm: a completion with no effect-log entry. Its own bytes survive,
+  -- and so does the live renderer's refusal, which carries `fault`.
+  let s4 = survives("a live completion: no effect-log entry, the tool's own bytes",
+                    p_conversation(p_answers(), [p_effect(6, "call-2", "Read:{}")]));
+  let s5 = survives("a live completion answered by the live renderer's refusal",
+                    p_conversation(p_with_answer(p_answers(), 1, p_tool_msg("call-1", live_refusal_content())),
+                                   [p_effect(6, "call-2", "Read:{}")]));
+  -- P3. The PROVIDER emitted call-1 again in a second step, and the world
+  -- dispatched it twice: answered twice, legitimately. Review 2, finding 10.
+  let log2 = fixture_log() ++ [completed_at(21, "call-1", "OUT2")];
+  let twice = p_execution(log2, p_effects() ++ [p_effect(21, "call-1", "BashExec:{}")],
+                          [p_assistant(p_calls())],
+                          p_answers() ++ [p_assistant([p_c(1)]), p_tool_msg("call-1", "OUT2")], p_refusals());
+  let s6 = survives("call-1 emitted in two steps and dispatched twice", twice);
+  s1 && s2 && s3 && s4 && s5 && s6
+}
+
+func scenario_mutants_effect_disclosure_and_redispatch() -> bool ! {IO} {
+  let _ = println("\n-- mutants: 034 ADR-001 §2, P1 and P3 --");
+  let a = p_answers();
+  -- P1 SOUNDNESS, mutant p1a's shape: the applied after-dispatch ToolFailed at
+  -- #6 answered with the renderer's `none` bytes. The world log says after
+  -- dispatch and the effect log says applied; only the message changed.
+  let m1 = mutant_at("an applied after-dispatch ToolFailed answered 'none'",
+                     p_conversation(p_with_answer(a, 2, p_failed_message(false)), p_effects()),
+                     "effect-disclosure-unsound", 6, "call-2");
+  -- P1 PRESENCE, mutant p1b's shape: the typed fault message with `effects`
+  -- dropped from its `fault` object, and then with no `fault` at all.
+  let no_effects = p_tool_msg("call-2", encode(jo([kv("error", jb(true)), kv("tool", js("Read")),
+    kv("fault", jo([kv("kind", js("failed")), kv("note", js("n"))])),
+    kv("fault_class", js("tool_failed")), kv("detail", js("{}"))])));
+  let m2 = mutant_at("the typed fault message without fault.effects",
+                     p_conversation(p_with_answer(a, 2, no_effects), p_effects()),
+                     "effect-disclosure-unsound", 6, "call-2");
+  let no_fault = p_tool_msg("call-4", "{\"error\":true,\"tool\":\"BashExec\",\"fault_class\":\"tool_deadline_exceeded\",\"detail\":\"{}\"}");
+  let m3 = mutant_at("the deadline's fault message with no fault object",
+                     p_conversation(p_with_answer(a, 4, no_fault), p_effects()),
+                     "effect-disclosure-unsound", 11, "call-4");
+  -- An `effects` value that is neither of the two.
+  let m4 = mutant_at("the mismatch's fault message disclosing 'maybe'",
+                     p_conversation(p_with_answer(a, 3, p_tool_msg("call-3",
+                       "{\"error\":true,\"tool\":\"Read\",\"fault\":{\"kind\":\"correlation_mismatch\",\"effects\":\"maybe\"}}")), p_effects()),
+                     "effect-disclosure-unsound", 8, "call-3");
+  -- The refusals: answered without a dispatch, so the ordinal is -1. The
+  -- denial's bytes are a pre-W1 denial's, exactly.
+  let m5 = mutant_at("a policy denial without fault",
+                     p_conversation(p_with_answer(a, 5, p_tool_msg("call-5",
+                       "{\"error\":true,\"denied_by_policy\":true,\"tool\":\"BashExec\",\"reason\":\"no\"}")), p_effects()),
+                     "effect-disclosure-unsound", -1, "call-5");
+  let m6 = mutant_at("an undecodable-argument refusal without fault",
+                     p_conversation(p_with_answer(a, 6, p_tool_msg("call-6",
+                       "{\"error\":true,\"tool\":\"WriteFile\",\"code\":\"arguments_undecodable\",\"raw_length\":10}")), p_effects()),
+                     "effect-disclosure-unsound", -1, "call-6");
+  -- A delegated deferral: its own record, and its message without fault.
+  let deferred = p_execution(fixture_log(), p_effects(), [p_assistant(p_calls() ++ [p_call("call-7", "BashExec", "{}")])],
+    a ++ [p_tool_msg("call-7", "{\"error\":true,\"delegated_backend_not_wired\":true,\"tool\":\"BashExec\"}")],
+    p_refusals() ++ [WireRecord(DelegatedToolDeferred({ step: 1, stream_id: "step-1", tool: "BashExec", id: "call-7" }))]);
+  let m7 = mutant_at("a delegated deferral without fault", deferred, "effect-disclosure-unsound", -1, "call-7");
+  -- The live arm: call-1's completion has no effect-log entry, and its bytes
+  -- are the live renderer's refusal with `effects` dropped.
+  let live_no_effects = p_tool_msg("call-1", "{\"tool\":\"BashExec\",\"fault\":{\"kind\":\"refused\",\"note\":\"n\"},\"error\":true,\"message\":\"m\",\"exit_code\":1}");
+  let m8 = mutant_at("the live renderer's refusal without fault.effects",
+                     p_conversation(p_with_answer(a, 1, live_no_effects), [p_effect(6, "call-2", "Read:{}")]),
+                     "effect-disclosure-unsound", 3, "call-1");
+  -- THE JOURNAL'S SHAPE, and it must stay green: a journal world serves every
+  -- recorded result as a COMPLETION (`world.journal_tool`) and logs its effect.
+  -- A pre-W1 denial served that way carries no `fault`; a post-W1 one says
+  -- `none`. Neither is a harness disclosure in THIS run, and neither may turn
+  -- the rule red (034 W1.4, "PRE-W1 MESSAGES").
+  let pre_w1 = "{\"error\":true,\"denied_by_policy\":true,\"tool\":\"BashExec\",\"reason\":\"denied by operator\"}";
+  let m9 = absent("a pre-W1 denial served as a journal completion",
+                  p_conversation(p_with_answer(a, 1, p_tool_msg("call-1", pre_w1)), p_effects()),
+                  "effect-disclosure-unsound");
+  let m10 = absent("a post-W1 denial ('none') served as a journal completion, its effect logged",
+                   p_conversation(p_with_answer(a, 1, p_tool_msg("call-1", content_of(a, 5))), p_effects()),
+                   "effect-disclosure-unsound");
+  -- P3, mutant p3's shape: the driver re-dispatches call-4 after its deadline.
+  -- One emission, two dispatches.
+  let log2 = fixture_log() ++ [completed_at(21, "call-4", "OUT")];
+  let retried = p_execution(log2, p_effects() ++ [p_effect(21, "call-4", "BashExec:{}")],
+                            [p_assistant(p_calls())], a ++ [p_tool_msg("call-4", "OUT")], p_refusals());
+  let m11 = mutant_at("call-4 re-dispatched after its deadline", retried, "tool-call-redispatched", 0, "call-4");
+  -- And with no projected message at all (the bare fixture's shape): two
+  -- dispatches of one id are a re-dispatch whatever the trace holds.
+  let m12 = mutant("call-4 dispatched twice in a run with no projected message",
+                   with_log(fixture(), log2), "tool-call-redispatched");
+  -- The two absences between the rules: a re-dispatch is not a disclosure
+  -- defect, and a disclosure defect is not a re-dispatch.
+  let m13 = absent("the re-dispatch", retried, "effect-disclosure-unsound");
+  let m14 = absent("the applied fault answered 'none'",
+                   p_conversation(p_with_answer(a, 2, p_failed_message(false)), p_effects()),
+                   "tool-call-redispatched");
+  m1 && m2 && m3 && m4 && m5 && m6 && m7 && m8 && m9 && m10 && m11 && m12 && m13 && m14
+}
+
+-- ---------------------------------------------------------------------------
 -- The mutation rows. One per rule, each single-field, each asserting its own.
 -- ---------------------------------------------------------------------------
 
@@ -1367,9 +1683,11 @@ export func main() -> () ! {IO} {
   let c4 = scenario_parity_register_is_the_whole_gap();
   let c5 = scenario_stream_parity_branches_are_entered();
   let c5b = scenario_failed_runs_and_distinct_steps_survive();
+  let c5c = scenario_effect_disclosure_and_redispatch_survive();
   let c6 = scenario_mutants_family_1_to_4();
   let c7 = scenario_mutants_family_5_to_8();
   let c8 = scenario_mutants_family_9_to_13();
+  let c8b = scenario_mutants_effect_disclosure_and_redispatch();
   let c9 = scenario_every_family_is_reached_by_a_mutant();
   let c10 = scenario_discovery_contract();
   let c11 = scenario_family_evidence();
@@ -1377,7 +1695,7 @@ export func main() -> () ! {IO} {
   let _ = println("\n  i D6.4's remaining gap, ${List.length(d64_gap_register())} variant(s), each with a reason in dst_invariants.parity_gap_reasons():");
   let _ = print_gap(d64_gap_register());
 
-  if c1 && c2 && c3 && c4 && c5 && c5b && c6 && c7 && c8 && c9 && c10 && c11 then
+  if c1 && c2 && c3 && c4 && c5 && c5b && c5c && c6 && c7 && c8 && c8b && c9 && c10 && c11 then
     println("\ninvariants_dst PASS")
   else {
     let _ = println("\ninvariants_dst FAIL");

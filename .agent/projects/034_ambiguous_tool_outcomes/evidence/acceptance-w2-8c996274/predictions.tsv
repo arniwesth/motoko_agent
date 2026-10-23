@@ -1,0 +1,66 @@
+# Acceptance of 034 ADR-001 §2's properties P1-P3 by mutant (034 PLAN-001 W2.3) at 8c996274: predictions, written before any gate run.
+# Source: PLAN-001-effect-disclosure.md "### W2.3", PLAN-001.dagr.json W2.3's criteria; pattern 011 acceptance-ce9cb247.
+# This file is hashed (predictions.tsv.sha256) and the hash is the first line of sequence.log after the type-check note.
+# It is not edited after that. A prediction that turns out wrong is a prediction miss in mutants.tsv.
+#
+# BEFORE THE HASH, and nothing else: every edit was checked to occur once (scripts/apply-check.txt) and
+# type-checked with `ailang check src/core/tool_phase.ail` (runs/typecheck-*.log), and the reach probe
+# was type-checked. No gate, no probe and no test was RUN before this file was hashed.
+#
+# THE BASIS of every member set below is READING, not a run of this tree: the bank's own selection
+# comments (`corpus_pr_dst.fixed_bank()`), the CORPUSROW classes and the `applied_faults` lists of the
+# same bank recorded at 034 W1.7 (`../mutation-w1-f160eebb/runs/C-baseline/{bank,cp}.log`), and W2.2's
+# measured COUNT (13 pairs: 8 to applied, 5 to not; commit 8c996274's message). Nothing since W1.6
+# changed the generator, so the bank is assumed unchanged; if it moved, the member sets below miss.
+#
+# Members (18), as `JUDGE` labels: seed-1 seed-3 seed-4 seed-6 seed-8 seed-11 seed-14 seed-18 seed-29
+#   seed-31 seed-60 seed-61 seed-71 seed-102 seed-109 seed-165 seed-215 constructed-empty-terminal
+# APPLIEDFAILED3 = seed-102 seed-165 seed-215    an after-dispatch ToolFailed the world APPLIED
+#                                                (tool_effect_applied_then_failed; applied ordinals 15, 17, 32)
+# TOOLFAULT11    = seed-3 seed-11 seed-14 seed-18 seed-60 seed-61 seed-71 seed-102 seed-109 seed-165 seed-215
+#                  every member whose classes hold a dispatched tool fault: ToolCorrelationMismatch (3, 18, 215),
+#                  a deadline applied (11, 14) or not (60, 109, 215), a ToolFailed applied (102, 165, 215) or not (61, 71)
+# DEADLINE5      = seed-11 seed-14 seed-60 seed-109 seed-215    a ToolDeadlineExceeded, applied or not
+# FAILED5        = seed-61 seed-71 seed-102 seed-165 seed-215   the twin pairs on an after-dispatch ToolFailed:
+#                  61 and 71 flip not -> applied, 102, 165 and 215 flip applied -> not
+# OK3OFFAILED5   = seed-71 seed-102 seed-165                     the members of FAILED5 whose run ends Ok
+# ALL18          = every member
+# Controls of corpus_judge (4, as `CONTROL` labels): retry-with-two-steps-left no-retry-with-one-step-left
+#   tool-run-without-approval solver-feedback
+#
+# Two gates are run on every row, on the same tree, side by side: `make corpus_judge` (P1 and P3 are rules
+# of `dst_invariants.evaluate`, which it runs on every member and control) and `make applied_twin` (P2).
+#
+# Scoring rules, fixed here:
+#  S1. A corpus_judge row (gate=judge) is a KILL when the gate's output holds `JUDGE <member> <rule id> RED`
+#      for the rule id in `expect_red`, on at least one bank member. `CONTROL` and `SELFCHECK` rows do not
+#      count. The red ROWS are counted, one per finding.
+#  S2. An applied_twin row (gate=twin) is a KILL when a TWIN PAIR's line is `✗ <member> #<ord> (<dir>):
+#      identical served interactions, outcome, final state and trace — <n> finding(s) under <rules>` with the
+#      rule id in `expect_red` among <rules>, on at least one pair, AND every member's self-pair line ("the
+#      base program run twice is clean against itself") is ✓. A finding that also shows on a self-pair is
+#      noise in the comparison, not a kill.
+#  S3. Where `direction` is not `-`, that text must open the row's facts (`RED <direction>:`).
+#  S4. A compile or type error, a timeout, a non-zero exit with no row for the named rule, or another rule
+#      red alone is NOT a kill and is recorded as what it is. Exit status is not read as a verdict.
+#  S5. `members` is the predicted set with the named rule red (for gate=twin, the members whose pair is
+#      red). A different set with the rule red is a kill and a prediction miss. `rows:N` predicts the count
+#      of red rows of the named rule.
+#  S6. `also` is what else is predicted on the SAME gate. `none` predicts that no other rule id is red on
+#      any member; anything else red is a prediction miss. `-` predicts nothing either way. A list ending
+#      `; else -` predicts the listed items and nothing either way about the rest.
+#  S7. `other_gate` is the prediction for the gate the row is not scored on. It decides nothing about the
+#      kill; a miss there is a prediction miss.
+#  S8. A control row passes on its `expect` text; a control that does not is a stop-and-report.
+#
+# kind	id	gate	property	edit	expect_red	direction	members	also	other_gate	basis
+mutant	p1a	judge	P1 soundness	tool_phase.ail:293, tool_outcome_message renders `none` for every ToolFailed (failed_fault(false))	effect-disclosure-unsound	-	APPLIEDFAILED3 rows:3, at ordinals 15 (seed-102), 17 (seed-165), 32 (seed-215)	none	applied_twin passes unchanged: COUNT pairs=13 clean=13, 18 self-pairs clean, 6 of 6 controls red (the rendering no longer depends on world truth, so both sides of every pair carry the same bytes)	plan W2.3 row p1a; W2.1's rejection row m1 is this shape on a fixture; the after-dispatch unapplied ToolFailed of 61 and 71 answered `none` is SOUND, so they stay clean
+mutant	p1b	judge	P1 presence	tool_phase.ail:313, tool_fault_message drops `effects` from the fault object (kind and note kept)	effect-disclosure-unsound	-	TOOLFAULT11 rows:13 (seed-215 three: its mismatch, deadline and failed message; every other member one)	none	applied_twin passes unchanged: COUNT pairs=13 clean=13 (the message is the same on both sides of every pair)	plan W2.3 row p1b; W2.1's rejection rows m2-m4 on a fixture; approval/policy denials, undecodable refusals and deferrals do not go through tool_fault_message and stay present
+mutant	p2	twin	P2	tool_phase.ail:515, the message reads `applied` off next_state's effect log: an after-dispatch ToolFailed that did not apply is rendered `none`, one that applied `unknown`	applied-twin-trace-record	-	FAILED5 (5 pairs: seed-61 #?, seed-71 #? not -> applied; seed-102 #15, seed-165 #17, seed-215 #32 applied -> not); the other 8 pairs (mismatch and deadline ordinals) clean; COUNT pairs=13 clean=8	applied-twin-final-state on FAILED5; applied-twin-outcome on OK3OFFAILED5; applied-twin-served, applied-twin-served-length and applied-twin-trace-length red on no pair; the 18 self-pairs clean; 6 of 6 controls red	corpus_judge passes: exit 0, no JUDGE or CONTROL row RED, 18 members clean. The mutant is P1-sound (`none` only where nothing applied) and P1-present, so P1 cannot see it: this is the bug only P2 catches	plan W2.3 row p2; W2.2's throwaway mutant (one byte added when the effect log grew) turned all 13 pairs red under trace-record; this one touches ToolFailed only, so mismatch and deadline pairs stay clean
+mutant	p3	judge	P3	tool_phase.ail:507, the driver re-dispatches a call once when its first dispatch returns ToolDeadlineExceeded	tool-call-redispatched	-	DEADLINE5 rows:5	tool-dispatches-unbalanced, `log above trace`, on DEADLINE5 (one dispatch-start record, two tool interactions); else -	- (nothing predicted either way: the re-dispatch draws a second outcome, and what the twins do with it is not predicted)	plan W2.3 row p3; W2.1's rejection row m11 on a fixture; the retried call carries one emission and two dispatches
+# Controls. `expect` is in the `expect_red` column; the other columns are `-`.
+control	C-gate	both	P1 P2 P3	none: both gates at 8c996274 before any mutant	corpus_judge exit 0; 18 JUDGEROW with set=[] checks=[] not_evaluated=[]; 4 CONTROLROW clean; no JUDGE or CONTROL row RED. applied_twin exit 0; COUNT members=18 ran=18 identical_clean=18 pairs=13 clean=13 to_applied=8 to_unapplied=5 refused=0 controls=6 controls_red=6	-	-	-	-	survival: the unmutated bank is clean on all three properties (plan W2.3, "Survival")
+control	K0	both	-	tool_phase.ail:515, a comment-only edit	both gates exit 0; corpus_judge's JUDGEROW, JUDGE, CONTROLROW and CONTROL rows and applied_twin's ✓/✗/COUNT lines equal C-gate's line for line	-	-	-	-	a recompile alone is not a kill
+control	C-invariants	unit	P1 P3	none: make invariants	passes (`invariants_dst PASS`), with W2.1's P1/P3 survival rows and mutant rows ✓	-	-	-	-	the unit fixtures W2.1 added
+control	R-reach	probe	P1 P3	none: p1p3_reach.ail on the unmutated tree	P1 non-vacuous on members: fault_disp >= 1 on each of TOOLFAULT11 and 0 on the other 7; applied_faults 1 on seed-11 seed-14 seed-102 seed-165 seed-215 and 0 elsewhere (total 5); every fault dispatch answered by a disclosing message. P3 non-vacuous: tool_disp >= 1 on at least TOOLFAULT11, redispatched=0 on every member and control. Controls: tool-run-without-approval tool_disp=2 ids=2 emitted=2 fault_disp=0; the other three controls tool_disp=0 and tool_msgs=0 (P1 and P3 vacuous on them by construction: they dispatch nothing)	-	-	-	-	the task's "P1/P3 non-vacuous over members and controls"
+control	C-restored	both	P1 P2 P3	none: both gates after the last mutant, the file restored	equal to C-gate: the same exit codes, rows and COUNT line	-	-	-	-	the restore is byte-for-byte

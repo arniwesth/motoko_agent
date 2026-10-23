@@ -127,20 +127,25 @@
 
 module src/core/dst_invariants
 
-import std/list as List (length, foldl, map)
+import std/list as List (length, foldl, map, filter, reverse)
 import std/crypto (sha256Hex)
-import std/string as Str (startsWith, contains)
+import std/string as Str (startsWith, contains, length, substring, foldChars, intToStr, concat)
 import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
 
 import src/core/phase_vocab (
   LedgerTrace,
   LedgerRecord, WireRecord, CompactionStageRecord, DecisionRecord,
+  -- 034 PLAN-001 W2.2: the applied-twin relation compares records in full.
+  to_schema_v1, InMemoryStageOutcome, TraceStageApplied, TraceStageRejected, TraceStageObserved, TraceStagePassed,
   LedgerEvent, RunSummary, TotalsUpdated, CostExhausted, DoneEvent, CheckpointTaken,
   StreamDelta,
   -- 011 ADR-003 D3: the record that carries the DRIVER's own step number, read
   -- by `prepared_steps` in family 6.
   ProviderCallPrepared,
+  -- 034 ADR-001 §2: the harness's own refusal records, read by P1's presence
+  -- half as "this call was answered without a dispatch".
+  NativeToolDenied, ToolArgumentsUndecodable, DelegatedToolDeferred,
   -- ADR-003 D1's journal class, read by the payload-equality rows below.
   HistorySeeded, HistoryAppended, HistoryReplaced, StateDelta, ParkEntered, WakeReceived, ParkEnteredInfo, OperatorWait, wait_id,
   CheckpointInfo,
@@ -210,9 +215,12 @@ import src/core/journal (
   -- IMPORTED and not restated for the reason `journal.ail` states at their
   -- declaration: the chain digest has exactly one definition, and a second one
   -- here would be an invariant that agrees with itself.
-  chain_digest_over, chain_digests_over, chain_digests_json, chain_empty_base, messages_of_json
+  chain_digest_over, chain_digests_over, chain_digests_json, chain_empty_base, messages_of_json,
+  -- 034 ADR-001 §2: the projected message, as P1 and P3 read it.
+  message_of_json
 )
-import std/json (Json, encode)
+import std/json (Json, encode, decode, get, asString, asBool, jo, ja, kv, js, jb)
+import std/ai (Message)
 import src/core/ports (
   WorldState,
   ToolOutcomeRecord, ToolRecordDecoded, ToolRecordUndecodable,
@@ -225,7 +233,10 @@ import src/core/ports (
 --
 -- `/2` at 011 ADR-003: two rule ids added, `outcome-finish-disagrees` (D2) and
 -- `driver-step-repeated` (D3). No id was renamed or removed.
-export pure func invariant_set_version() -> string { "invariant-set/2" }
+--
+-- `/3` at 034 ADR-001 §2: two rule ids added, `effect-disclosure-unsound`
+-- (P1) and `tool-call-redispatched` (P3). No id was renamed or removed.
+export pure func invariant_set_version() -> string { "invariant-set/3" }
 
 -- ============================================================================
 -- PART 1 — the thirteen families, and D7's own words for its twelve
@@ -339,6 +350,8 @@ export type Violation
   | ToolCallUnpaired(int, string)
   | ToolResultUncorrelated(int, string)
   | DeniedCallDispatched(string)
+  | EffectDisclosureUnsound(int, string)
+  | ToolCallRedispatched(string)
   -- F5 budget / cost accounting
   | TokenRegression(string, int, int)
   | CostRegression(int, int)
@@ -401,6 +414,8 @@ export pure func violation_family(v: Violation) -> InvariantFamily {
     ToolCallUnpaired(_, _) => ToolPairing,
     ToolResultUncorrelated(_, _) => ToolPairing,
     DeniedCallDispatched(_) => ToolPairing,
+    EffectDisclosureUnsound(_, _) => ToolPairing,
+    ToolCallRedispatched(_) => ToolPairing,
     TokenRegression(_, _, _) => BudgetAccounting,
     CostRegression(_, _) => BudgetAccounting,
     NegativeCost(_) => BudgetAccounting,
@@ -448,6 +463,8 @@ export pure func violation_rule(v: Violation) -> string {
     ToolCallUnpaired(_, _) => "tool-call-unpaired",
     ToolResultUncorrelated(_, _) => "tool-result-uncorrelated",
     DeniedCallDispatched(_) => "denied-call-dispatched",
+    EffectDisclosureUnsound(_, _) => "effect-disclosure-unsound",
+    ToolCallRedispatched(_) => "tool-call-redispatched",
     TokenRegression(_, _, _) => "token-regression",
     CostRegression(_, _) => "cost-regression",
     NegativeCost(_) => "negative-cost",
@@ -508,6 +525,10 @@ export pure func violation_message(v: Violation) -> string {
       "[tool-result-uncorrelated] the tool interaction at position ${pos} carries a result the request did not ask for (${detail}); D2 never weakens tool-call/result correlation, and an uncorrelated answer recorded as an ordinary success is a silent substitution",
     DeniedCallDispatched(call_id) =>
       "[denied-call-dispatched] call '${call_id}' was denied at the approval boundary and a tool interaction for it appears afterwards; D3's approval_denied transition is 'no tool executes, so no logical update occurs', and this is the denial path failing open",
+    EffectDisclosureUnsound(ord, call_id) =>
+      "[effect-disclosure-unsound] the tool message for call '${call_id}' (dispatch at interaction ${ord}; -1 when nothing was dispatched) breaks 034 ADR-001's P1 in one of its two halves: it discloses fault.effects 'none' while the world's effect log records that dispatch's effect as APPLIED (soundness: 'none' is a promise the update did not happen, and 'unknown' is always permitted), or it is a harness-reported fault message — a fault the world served, a denial, an undecodable-argument refusal, a delegated deferral, the live renderer's error arm — that carries no fault.effects of 'none' or 'unknown' (presence). Read from the world's logs and the projected message, never from the renderer",
+    ToolCallRedispatched(call_id) =>
+      "[tool-call-redispatched] call '${call_id}' was dispatched to the world more than once, and more times than the provider's assistant messages emitted that id; 034 ADR-001's P3 is that the driver dispatches no tool call id twice, because re-dispatching a call whose effect may have happened is how one effect is applied twice. An id the PROVIDER emitted again in a later step is not this rule's, which is why emissions are counted (034 PLAN-001 review 2, finding 10)",
     TokenRegression(field, prev, seen) =>
       "[token-regression] '${field}' reports ${seen} after ${prev} in the returned trace; token totals are cumulative, so D7's monotone budget accounting makes a decrease a defect rather than a smaller step",
     CostRegression(prev, seen) =>
@@ -867,6 +888,15 @@ pure func contains_str(xs: [string], t: string) -> bool {
   match xs {
     [] => false,
     x :: rest => if x == t then true else contains_str(rest, t)
+  }
+}
+
+-- 034 ADR-001 §2: P1's message index and P3's per-id counts.
+-- contracts: BLOCKED — RECURSIVE over the list.
+pure func count_str(xs: [string], t: string) -> int {
+  match xs {
+    [] => 0,
+    x :: rest => (if x == t then 1 else 0) + count_str(rest, t)
   }
 }
 
@@ -1457,10 +1487,286 @@ pure func dispatched_after_denial(xs: [Interaction], denied: [string]) -> [Viola
   }
 }
 
+-- ---------------------------------------------------------------------------
+-- 034 ADR-001 §2: P1 (`effect-disclosure-unsound`) and P3
+-- (`tool-call-redispatched`)
+-- ---------------------------------------------------------------------------
+--
+-- AN INDEPENDENT ORACLE, AND THAT IS THE WHOLE DESIGN CONSTRAINT. Nothing below
+-- calls `tool_phase.tool_outcome_message` or anything it calls — not
+-- `tool_fault_message`, not `fault_to_json`, not `tool_fault`'s key and value
+-- constants. The four wire words this reads (`fault`, `effects`, `none`,
+-- `unknown`) are spelled HERE, a second time, on purpose: an oracle that asked
+-- the renderer's own constants what the key is would agree with a renderer
+-- that renamed it. What this reads instead is the run's own record:
+--
+--   * the world's interaction log (`x.world.log`): what was dispatched, under
+--     which id, and whether the world served a completion or a fault;
+--   * the world's effect log (`x.world.effect_log`, 034 W1.3): WORLD TRUTH,
+--     one entry per dispatch whose effect applied, keyed by the dispatch's
+--     interaction ordinal;
+--   * the returned trace's journal-class records: the messages the ledger
+--     projected (`HistoryAppended`, and the seed's `HistorySeeded`), and the
+--     harness's own refusal records (`NativeToolDenied`,
+--     `ToolArgumentsUndecodable`, `DelegatedToolDeferred`), each naming its
+--     call id.
+--
+-- THE JOIN. A tool message answers a dispatch by call id, and an id can repeat:
+-- a journal's provider may reuse one across steps, and P3 exists for the driver
+-- re-dispatching one. So the k-th tool message carrying id c is paired with the
+-- k-th tool interaction carrying c, never with "the" interaction for c. In the
+-- bank ids are unique (`gcall_<n>_<d>`) and k is always 0.
+
+-- The four wire words P1 reads. See above for why they are not imported.
+pure func p1_fault_key() -> string
+  ensures { result != "" }
+  { "fault" }
+pure func p1_effects_key() -> string
+  ensures { result != "" }
+  { "effects" }
+pure func p1_effects_none() -> string
+  ensures { result != "" }
+  { "none" }
+pure func p1_effects_unknown() -> string
+  ensures { result != "" }
+  { "unknown" }
+
+-- The projected messages of one run, in two lists: what the run was SEEDED
+-- with and what it APPENDED. `replaces_previous` supersedes the entry before it
+-- (the hybrid path's augmented assistant, ADR-003 D1), so the superseded one is
+-- dropped rather than counted twice. `HistoryReplaced` is not read: it re-states
+-- messages the history already held, and adds no emission and no answer.
+type ProjectedHistory = { seeded: [Message], appended_rev: [Message] }
+
+-- contracts: SKIPPED — decodes `Json` through `journal.message_of_json`, which
+-- the SMT fragment cannot encode.
+pure func projected_step(acc: ProjectedHistory, r: LedgerRecord) -> ProjectedHistory {
+  match r {
+    WireRecord(HistorySeeded(i)) =>
+      match messages_of_json(i.messages) {
+        Ok(ms) => { acc | seeded: acc.seeded ++ ms },
+        Err(_) => acc
+      },
+    WireRecord(HistoryAppended(i)) =>
+      match message_of_json(i.message) {
+        Ok(m) =>
+          if i.replaces_previous then
+            match acc.appended_rev {
+              [] => { acc | appended_rev: [m] },
+              _ :: rest => { acc | appended_rev: m :: rest }
+            }
+          else { acc | appended_rev: m :: acc.appended_rev },
+        Err(_) => acc
+      },
+    _ => acc
+  }
+}
+
+-- contracts: SKIPPED — a fold over `projected_step`; see that function.
+pure func projected_history(rs: [LedgerRecord]) -> ProjectedHistory {
+  List.foldl(projected_step, { seeded: [], appended_rev: [] }, rs)
+}
+
+-- contracts: BLOCKED — RECURSIVE over the message list.
+pure func reverse_messages_onto(xs: [Message], acc: [Message]) -> [Message] {
+  match xs {
+    [] => acc,
+    m :: rest => reverse_messages_onto(rest, m :: acc)
+  }
+}
+
+-- The tool-role messages this run appended, in order.
+-- contracts: SKIPPED — reads `projected_history`'s `Json` decode.
+pure func appended_tool_messages(rs: [LedgerRecord]) -> [Message] {
+  List.filter(\m. m.role == "tool", reverse_messages_onto(projected_history(rs).appended_rev, []))
+}
+
+-- What the message DISCLOSES: `fault.effects` read off its content, or "" when
+-- the content is not a JSON object, has no `fault` object, or that object has
+-- no string `effects`.
+-- contracts: SKIPPED — reads `std/json.decode`, whose result the SMT fragment
+-- cannot encode.
+pure func disclosed_effects(content: string) -> string {
+  match decode(content) {
+    Err(_) => "",
+    Ok(j) => match get(j, p1_fault_key()) {
+      None => "",
+      Some(f) => match get(f, p1_effects_key()) {
+        None => "",
+        Some(e) => match asString(e) { Some(v) => v, None => "" }
+      }
+    }
+  }
+}
+
+-- The live renderer's error shapes, read off the content: an object with
+-- `error: true` (`ToolErrorResult`, and `dispatch_one_typed`'s defensive arm),
+-- or one that renders a `fault` object at all (`BashExecResult` and
+-- `RunTestsResult` on their faulted arms). A faulted `BashExec` that dropped
+-- the WHOLE object is not visible here: its bytes are those of a command that
+-- exited 1 with only stderr, and the world records no process error.
+-- contracts: SKIPPED — reads `std/json.decode`; see `disclosed_effects`.
+pure func live_error_shaped(content: string) -> bool {
+  match decode(content) {
+    Err(_) => false,
+    Ok(j) =>
+      (match get(j, p1_fault_key()) { Some(_) => true, None => false })
+        || (match get(j, "error") {
+              Some(e) => (match asBool(e) { Some(b) => b, None => false }),
+              None => false
+            })
+  }
+}
+
+-- The tool interactions carrying `call_id`, in log order.
+-- contracts: SKIPPED — filters with a lambda over an ADT list.
+pure func dispatches_of(log: [Interaction], call_id: string) -> [Interaction] {
+  List.filter(\i. is_tool(i.identity.body) && tool_call_id(i.identity.body) == call_id, log)
+}
+
+-- contracts: BLOCKED — RECURSIVE over the interaction list.
+pure func nth_interaction(xs: [Interaction], k: int) -> Option[Interaction] {
+  match xs {
+    [] => None,
+    i :: rest => if k == 0 then Some(i) else nth_interaction(rest, k - 1)
+  }
+}
+
+-- contracts: BLOCKED — RECURSIVE over the effect log.
+pure func effect_applied_at(es: [{ ordinal: int, call_id: string, effect_key: string }], ord: int) -> bool {
+  match es {
+    [] => false,
+    e :: rest => e.ordinal == ord || effect_applied_at(rest, ord)
+  }
+}
+
+-- The call ids the harness's own refusal records name: a policy or operator
+-- denial (`NativeToolDenied`, both `tool_phase.denial_message` and
+-- `session.policy_denied_message`), arguments that were not JSON
+-- (`ToolArgumentsUndecodable`), and a delegated call the driver deferred
+-- (`DelegatedToolDeferred`). Each is a call answered WITHOUT a dispatch.
+-- contracts: BLOCKED — RECURSIVE over the trace records.
+pure func refused_call_ids(rs: [LedgerRecord]) -> [string] {
+  match rs {
+    [] => [],
+    r :: rest =>
+      match r {
+        WireRecord(NativeToolDenied(i)) => i.id :: refused_call_ids(rest),
+        WireRecord(ToolArgumentsUndecodable(i)) => i.id :: refused_call_ids(rest),
+        WireRecord(DelegatedToolDeferred(i)) => i.id :: refused_call_ids(rest),
+        _ => refused_call_ids(rest)
+      }
+  }
+}
+
+-- ONE TOOL MESSAGE AGAINST THE WORLD, both halves of P1.
+--
+-- `d` is the dispatch this message answers, if any: the k-th tool interaction
+-- carrying its id, k being the message's own index among that id's messages.
+--
+-- SOUNDNESS. A dispatch the world served as a FAULT and whose effect the effect
+-- log records as applied must not be answered with `effects: none`. A served
+-- COMPLETION is not read: a completed call applied by definition and carries no
+-- harness disclosure (ADR-001 D1), and a `fault` inside its content is the
+-- tool's bytes — a journal's recorded result, served verbatim.
+--
+-- PRESENCE. The message must carry `effects` of `none` or `unknown` when it is
+-- a harness-reported fault message, and the plan names exactly seven builders
+-- (PLAN-001 W2.1); each is recognised here from the run's record and not from
+-- the builder:
+--   * `tool_fault_message`: `d` is recorded `OutcomeFault`;
+--   * `denial_message`, `policy_denied_message`, `undecodable_arguments_message`,
+--     `delegated_deferred_message`: the id is in `refused_call_ids` and the
+--     world never dispatched it. An id both refused and dispatched (a provider
+--     reusing it) is not read, which under-reports in the safe direction;
+--   * `tool_result_item_to_json`'s faulted arms and `dispatch_one_typed`'s
+--     defensive arm: `d` is a completion with NO effect-log entry — the live
+--     arm, the one `world_tool` arm that writes none — and the content has the
+--     live renderer's error shape (`live_error_shaped`).
+-- A message from any other builder is not a fault message in this sense.
+-- contracts: SKIPPED — reads `disclosed_effects`' `Json` decode.
+pure func p1_message_findings(
+  x: ExecutionUnderTest, refused: [string], m: Message, d: Option[Interaction]
+) -> [Violation] {
+  let disclosed = disclosed_effects(m.content);
+  let carries = disclosed == p1_effects_none() || disclosed == p1_effects_unknown();
+  match d {
+    Some(i) => {
+      let ord = i.identity.ordinal;
+      let applied = effect_applied_at(x.world.effect_log, ord);
+      match i.outcome.status {
+        OutcomeOk =>
+          if not applied && live_error_shaped(m.content) && not carries
+          then [EffectDisclosureUnsound(ord, m.tool_call_id)] else [],
+        _ =>
+          if applied && disclosed == p1_effects_none() then [EffectDisclosureUnsound(ord, m.tool_call_id)]
+          else if not carries then [EffectDisclosureUnsound(ord, m.tool_call_id)]
+          else []
+      }
+    },
+    None =>
+      if contains_str(refused, m.tool_call_id) && not carries
+      then [EffectDisclosureUnsound(-1, m.tool_call_id)] else []
+  }
+}
+
+-- `seen` holds the ids of the messages already read, one entry per message, so
+-- its count of an id is the next message's index k.
+-- contracts: BLOCKED — RECURSIVE over the message list.
+pure func p1_walk(x: ExecutionUnderTest, refused: [string], ms: [Message], seen: [string]) -> [Violation] {
+  match ms {
+    [] => [],
+    m :: rest => {
+      let ds = dispatches_of(x.world.log, m.tool_call_id);
+      let d = nth_interaction(ds, count_str(seen, m.tool_call_id));
+      p1_message_findings(x, refused, m, d) ++ p1_walk(x, refused, rest, m.tool_call_id :: seen)
+    }
+  }
+}
+
+-- contracts: SKIPPED — reads the trace's `Json` messages; see `projected_step`.
+export pure func effect_disclosure_findings(x: ExecutionUnderTest) -> [Violation] {
+  let rs = trace_of(x.result).records;
+  p1_walk(x, refused_call_ids(rs), appended_tool_messages(rs), [])
+}
+
+-- P3. Per call id, the dispatches in the world-served log against the number
+-- of times the provider's assistant messages EMITTED that id — the seed's and
+-- this run's, so a call emitted before a resume and dispatched after it counts
+-- once. A finding needs two dispatches AND more dispatches than emissions: one
+-- dispatch with no emission in the trace is not a re-dispatch, and a provider
+-- that emitted an id in two steps is answered twice legitimately.
+-- contracts: SKIPPED — reads the trace's `Json` messages; see `projected_step`.
+pure func emitted_call_ids(rs: [LedgerRecord]) -> [string] {
+  let h = projected_history(rs);
+  let ms = h.seeded ++ reverse_messages_onto(h.appended_rev, []);
+  List.foldl(\acc m. if m.role == "assistant" then acc ++ List.map(\c. c.id, m.tool_calls) else acc, [], ms)
+}
+
+-- contracts: BLOCKED — RECURSIVE over the dispatched ids.
+pure func redispatched(dispatched: [string], emitted: [string], xs: [string], seen: [string]) -> [Violation] {
+  match xs {
+    [] => [],
+    id :: rest => {
+      let n = count_str(dispatched, id);
+      let here = if not contains_str(seen, id) && n > 1 && n > count_str(emitted, id)
+                 then [ToolCallRedispatched(id)] else [];
+      here ++ redispatched(dispatched, emitted, rest, id :: seen)
+    }
+  }
+}
+
+-- contracts: SKIPPED — reads the trace's `Json` messages; see `projected_step`.
+export pure func redispatch_findings(x: ExecutionUnderTest) -> [Violation] {
+  let ids = List.map(\i. tool_call_id(i.identity.body), List.filter(\i. is_tool(i.identity.body), x.world.log));
+  redispatched(ids, emitted_call_ids(trace_of(x.result).records), ids, [])
+}
+
 export pure func tool_pairing_findings(x: ExecutionUnderTest) -> [Violation] {
   let log = x.world.log;
   let denied = denied_call_ids(log);
   unpaired_tools(log) ++ uncorrelated_tools(log) ++ dispatched_after_denial(log, denied)
+    ++ effect_disclosure_findings(x) ++ redispatch_findings(x)
 }
 
 -- ============================================================================
@@ -2290,6 +2596,268 @@ export pure func has_determinism_rule(fs: [DeterminismFinding], rule: string) ->
 }
 
 -- ============================================================================
+-- PART 8 — 034 ADR-001 §2's P2: the applied-twin relation
+-- ============================================================================
+--
+-- "Two programs differing only in one `applied` field produce identical
+--  traces, outcomes and served interactions."
+--
+-- Over a PAIR, for the discovery contract's reason above, so it is not a family
+-- and its findings are not `Violation`s: a family that passed whenever it held
+-- one run would be green on every run it was ever given. Its runner is
+-- `scripts/dst/applied_twin_dst.ail` (`make applied_twin`), which builds each
+-- twin from a bank program by moving one ordinal into or out of
+-- `ExecutionProgram.applied_faults` (034 PLAN-001 W2.2). The served interactions
+-- of the two are equal by construction (W1.3 acceptance b), so any other
+-- difference is the HARNESS reading world truth, which D4 says only this
+-- relation stands between and the wire.
+--
+-- IT IS NOT `discovery_contract_findings` UNDER A NEW NAME, and the difference
+-- is the point. `trace_positions` compares `record_variant` alone. A harness
+-- that reads `applied` from `next_state` into a tool message changes that
+-- message's CONTENT and no record's variant (mutant p2, PLAN-001 W2.3), so a
+-- variant-only comparison is green on exactly the leak P2 exists for. Each side
+-- here is compared in full:
+--
+--   served interactions  identity, request, payload and advance — the key
+--                        `log_positions` uses, and for its reason.
+--   the outcome          the returned `Result[[Message], AIError]` itself, or a
+--                        harness failure's kind, position and request. Not
+--                        `outcome_label`, which is one of three words and is
+--                        equal for two runs that returned different messages.
+--   the final state      what the run ended holding: history, counts,
+--                        telemetry, artifacts.
+--   the trace            every record, every field.
+--
+-- "IN FULL" IS NOT `show`, AND THAT WAS MEASURED. `show` elides a value below
+-- about three levels (`JObject([{key: ..., value: ...}])`), which is exactly
+-- where a tool message's body sits inside `HistoryAppended`; the first build of
+-- this relation compared `show` and its content control stayed green on a
+-- replaced message body. So a wire record is compared by `show` (every
+-- top-level field, wire or not) AND by its wire encoding (`to_schema_v1`,
+-- which carries the Json payloads to the last byte); the two records that are
+-- not wire events, the outcome's messages and the final state are encoded field
+-- by field (`record_content`, `returned_outcome`, `final_content`).
+--
+-- NOT COMPARED: the world's effect log. It is world truth, and it is SUPPOSED
+-- to differ: that difference is what makes the pair a twin, and the runner
+-- asserts it does rather than assuming it.
+
+export type AppliedTwinFinding
+  = TwinServedLengthDiffers(int, int)
+  | TwinServedDiffers(int, string, string)
+  | TwinOutcomeDiffers(string, string)
+  | TwinFinalStateDiffers(string, string)
+  | TwinTraceLengthDiffers(int, int)
+  | TwinTraceRecordDiffers(int, string, string, string)
+
+export pure func applied_twin_rule(f: AppliedTwinFinding) -> string
+  ensures { result != "" }
+{
+  match f {
+    TwinServedLengthDiffers(_, _) => "applied-twin-served-length",
+    TwinServedDiffers(_, _, _) => "applied-twin-served",
+    TwinOutcomeDiffers(_, _) => "applied-twin-outcome",
+    TwinFinalStateDiffers(_, _) => "applied-twin-final-state",
+    TwinTraceLengthDiffers(_, _) => "applied-twin-trace-length",
+    TwinTraceRecordDiffers(_, _, _, _) => "applied-twin-trace-record"
+  }
+}
+
+-- It carried `ensures { result != "" }` until CI run 39492326554. Any body that
+-- builds a string (`concat`, `join`, interpolation) is outside the fragment, so
+-- the contract was never proven, and verify_classify's DETERMINE probe, which
+-- inlines this body into an `ensures`, gets SKIPPED or ERROR from AILANG v0.52.5
+-- at random on the same file (3 ERROR in 8 runs, measured). ERROR fails
+-- `verify_classify_check`; the contract bought only that.
+-- contracts: SKIPPED — built with `std/string.concat`, which the fragment cannot encode.
+export pure func applied_twin_message(f: AppliedTwinFinding) -> string
+{
+  match f {
+    TwinServedLengthDiffers(a, b) =>
+      Str.concat(["[applied-twin-served-length] the twins were served ", Str.intToStr(a), " and ", Str.intToStr(b), " interactions; two programs that differ only in one `applied` ordinal serve the same log (034 PLAN-001 W1.3 acceptance b), so the WORLD read the bit and every other row is about the world, not the harness"]),
+    TwinServedDiffers(pos, a, b) =>
+      Str.concat(["[applied-twin-served] at interaction position ", Str.intToStr(pos), " the twins were served '", a, "' and '", b, "'"]),
+    TwinOutcomeDiffers(a, b) =>
+      Str.concat(["[applied-twin-outcome] the twins returned '", a, "' and '", b, "'; 034 ADR-001 §2 P2 requires the same outcome from programs that differ only in world truth"]),
+    TwinFinalStateDiffers(a, b) =>
+      Str.concat(["[applied-twin-final-state] the twins ended holding '", a, "' and '", b, "'"]),
+    TwinTraceLengthDiffers(a, b) =>
+      Str.concat(["[applied-twin-trace-length] the twins returned traces of ", Str.intToStr(a), " and ", Str.intToStr(b), " records"]),
+    TwinTraceRecordDiffers(pos, variant, a, b) =>
+      Str.concat(["[applied-twin-trace-record] at trace position ", Str.intToStr(pos), " (", variant, ") the twins returned '", a, "' and '", b, "'; a difference in content with no difference in variant is the shape of a harness that read `applied` into a message"])
+  }
+}
+
+-- Where `a` and `b` first differ: the length of their common prefix. One pass
+-- over `a`, carrying `b`'s characters as a list, because `charAt` is itself a
+-- scan and an indexed loop would be quadratic in a record that can run to
+-- kilobytes. Called only once two values are known to differ.
+-- contracts: SKIPPED — folds with `std/string.foldChars`, whose signature the fragment cannot encode.
+pure func first_difference(a: string, b: string) -> int {
+  let bs = List.reverse(Str.foldChars(\acc c. c :: acc, [], b));
+  let r = Str.foldChars(\acc c.
+    if acc.at >= 0 then acc
+    else match acc.rest {
+      [] => { acc | at: acc.i },
+      d :: ds => if c == d then { acc | rest: ds, i: acc.i + 1 } else { acc | at: acc.i }
+    },
+    { rest: bs, i: 0, at: -1 }, a);
+  if r.at >= 0 then r.at else r.i
+}
+
+-- A window of `s` from shortly before `at`, so a finding shows where two
+-- values part and not the kilobytes they share.
+-- contracts: SKIPPED — built with `std/string.concat`; see `applied_twin_message`.
+pure func excerpt_at(s: string, at: int) -> string
+{
+  let n = Str.length(s);
+  let from = if at > 40 then at - 40 else 0;
+  let to = if from + 200 < n then from + 200 else n;
+  let head = if from > 0 then "…" else "";
+  let tail = if to < n then "…" else "";
+  Str.concat([head, Str.substring(s, from, to), tail])
+}
+
+-- The two windows at the point `a` and `b` first differ.
+-- contracts: SKIPPED — calls `first_difference`; see that function.
+pure func parted(a: string, b: string) -> { a: string, b: string } {
+  let at = first_difference(a, b);
+  { a: excerpt_at(a, at), b: excerpt_at(b, at) }
+}
+
+-- contracts: BLOCKED — RECURSIVE over the interaction lists.
+pure func served_twin_positions(a: [Interaction], b: [Interaction], pos: int) -> [AppliedTwinFinding] {
+  match a {
+    [] => [],
+    x :: xs =>
+      match b {
+        [] => [],
+        y :: ys => {
+          -- The key `log_positions` compares, for the reason stated there.
+          let kx = "${identity_projection(x.identity)}|${x.request_projection}|${x.outcome.payload}|${x.outcome.advance_ms}";
+          let ky = "${identity_projection(y.identity)}|${y.request_projection}|${y.outcome.payload}|${y.outcome.advance_ms}";
+          let here = if kx == ky then [] else {
+            let p = parted(kx, ky);
+            [TwinServedDiffers(pos, p.a, p.b)]
+          };
+          here ++ served_twin_positions(xs, ys, pos + 1)
+        }
+      }
+  }
+}
+
+-- contracts: BLOCKED — RECURSIVE over the trace records.
+pure func trace_twin_positions(a: [LedgerRecord], b: [LedgerRecord], pos: int) -> [AppliedTwinFinding] {
+  match a {
+    [] => [],
+    x :: xs =>
+      match b {
+        [] => [],
+        y :: ys => {
+          let sx = record_content(x);
+          let sy = record_content(y);
+          let here = if sx == sy then [] else {
+            let p = parted(sx, sy);
+            let va = record_variant(x);
+            let vb = record_variant(y);
+            [TwinTraceRecordDiffers(pos, if va == vb then va else "${va} / ${vb}", p.a, p.b)]
+          };
+          here ++ trace_twin_positions(xs, ys, pos + 1)
+        }
+      }
+  }
+}
+
+-- One trace record in full. See this part's header for why `show` alone is not.
+-- contracts: SKIPPED — matches on the `LedgerRecord` ADT and encodes `Json`.
+pure func record_content(r: LedgerRecord) -> string {
+  match r {
+    WireRecord(e) => "${show(r)}\n${encode(to_schema_v1(e))}",
+    CompactionStageRecord(c) =>
+      encode(jo([kv("record", js("compaction_stage")), kv("step", js(show(c.step))),
+                 kv("ext_id", js(c.ext_id)), kv("outcome", stage_outcome_json(c.outcome))])),
+    DecisionRecord(d) =>
+      encode(jo([kv("record", js("decision")), kv("step", js(show(d.step))), kv("decision", js(d.decision))]))
+  }
+}
+
+-- contracts: SKIPPED — matches on the `InMemoryStageOutcome` ADT.
+pure func stage_outcome_json(o: InMemoryStageOutcome) -> Json {
+  match o {
+    TraceStageApplied(s) => jo([kv("applied", js(s))]),
+    TraceStageRejected(s) => jo([kv("rejected", js(s))]),
+    TraceStageObserved(s, fs) =>
+      jo([kv("observed", js(s)), kv("fields", ja(List.map(\f. jo([kv("key", js(f.key)), kv("value", js(f.value))]), fs)))]),
+    TraceStagePassed => jo([kv("passed", js(""))])
+  }
+}
+
+-- The returned outcome in full. A harness failure is its kind, position and
+-- request; a completed run is every message it returned, or its error.
+-- contracts: SKIPPED — matches on the `DstResult` ADT and encodes `Json`.
+pure func returned_outcome(r: DstResult) -> string {
+  match r {
+    RunFailed(f) =>
+      "harness:${harness_failure_kind_name(f.kind)}@${f.interaction_position}|${f.actual_request_projection}",
+    RunCompleted(run) =>
+      match run.outcome {
+        Ok(ms) => "ok ${encode(messages_json(ms))}",
+        Err(e) => "err ${encode(jo([kv("code", js(e.code)), kv("message", js(e.message)), kv("retryable", jb(e.retryable))]))}"
+      }
+  }
+}
+
+-- What the run ended holding, in full. The counts and the telemetry are flat
+-- records of ints, which `show` prints whole.
+-- contracts: SKIPPED — encodes `Json`.
+pure func final_content(f: FinalState) -> string {
+  encode(jo([kv("history", messages_json(f.history)), kv("cumulative", js(show(f.cumulative))),
+             kv("telemetry", js(show(f.telemetry))), kv("ext_artifacts", f.ext_artifacts)]))
+}
+
+-- contracts: SKIPPED — compares encoded records, messages and `Json`.
+export pure func applied_twin_findings(
+  a: ExecutionUnderTest, b: ExecutionUnderTest
+) -> [AppliedTwinFinding] {
+  let la = a.world.log;
+  let lb = b.world.log;
+  let ta = trace_of(a.result).records;
+  let tb = trace_of(b.result).records;
+  let served_len = if List.length(la) == List.length(lb) then []
+                   else [TwinServedLengthDiffers(List.length(la), List.length(lb))];
+  let oa = returned_outcome(a.result);
+  let ob = returned_outcome(b.result);
+  let out = if oa == ob then [] else {
+    let p = parted(oa, ob);
+    [TwinOutcomeDiffers(p.a, p.b)]
+  };
+  let fa = final_content(a.final);
+  let fb = final_content(b.final);
+  let fin = if fa == fb then [] else {
+    let p = parted(fa, fb);
+    [TwinFinalStateDiffers(p.a, p.b)]
+  };
+  let trace_len = if List.length(ta) == List.length(tb) then []
+                  else [TwinTraceLengthDiffers(List.length(ta), List.length(tb))];
+  served_len ++ served_twin_positions(la, lb, 0) ++ out ++ fin
+    ++ trace_len ++ trace_twin_positions(ta, tb, 0)
+}
+
+-- contracts: SKIPPED — calls `applied_twin_findings`; see that function.
+export pure func applied_twin_ok(a: ExecutionUnderTest, b: ExecutionUnderTest) -> bool {
+  List.length(applied_twin_findings(a, b)) == 0
+}
+
+-- contracts: BLOCKED — RECURSIVE over the findings.
+export pure func has_applied_twin_rule(fs: [AppliedTwinFinding], rule: string) -> bool {
+  match fs {
+    [] => false,
+    f :: rest => if applied_twin_rule(f) == rule then true else has_applied_twin_rule(rest, rule)
+  }
+}
+
+-- ============================================================================
 -- Inline tests. The fixture-driven rows live in scripts/dst/invariants_dst.ail,
 -- which is where a real execution can be constructed; these are the derivations
 -- that need no world.
@@ -2398,7 +2966,7 @@ pure func test_rules_are_distinct_across_families() -> bool
   tests [((), true)]
   {
     let vs = sample_violations();
-    List.length(vs) == 42 && rules_distinct(vs, [])
+    List.length(vs) == 44 && rules_distinct(vs, [])
   }
 
 pure func rules_distinct(vs: [Violation], seen: [string]) -> bool {
@@ -2420,6 +2988,7 @@ pure func sample_violations() -> [Violation] {
    DisplayOnlySetChanged("d"), StreamParityCount(0, 1), StreamParityOrder(0, "a", "b"),
    RecordAfterTerminal(0, "n"), StepRegression("c", 1, 0),
    ToolCallUnpaired(0, "c"), ToolResultUncorrelated(0, "d"), DeniedCallDispatched("c"),
+   EffectDisclosureUnsound(0, "c"), ToolCallRedispatched("c"),
    TokenRegression("f", 1, 0), CostRegression(1, 0), NegativeCost(-1),
    DecisionBudgetExceeded(1, 2), RetryBoundExceeded(1, 2), ProviderStepRepeated(0, 2),
    DriverStepRepeated(0, 2),

@@ -1,0 +1,179 @@
+# normalised sweep-log diff: W1 baseline (24d347d2) < > this run (0e09e09d), complete (034 W2.4)
+# norm: ../baseline-w1-after-24d347d2/norm_sweep.sh on each .ailang/dst-last.log; groups: ../baseline-w1-after-24d347d2/classify.py
+# group counts:
+#   43 corpus-bank >
+#   2 timing <
+#   2 timing >
+#   other 58
+
+152a153,154
+> 
+> 
+1535c1537
+<   ✓ 13 InvariantFamily variants == 13 in all_families(); all 42 Violation constructors sampled by name
+---
+>   ✓ 13 InvariantFamily variants == 13 in all_families(); all 44 Violation constructors sampled by name
+1658a1661
+>   ✓ P2 held on 13 of 13 twin pair(s) over 18 program(s) (8 flipped to applied, 5 to not applied); 6 of 6 controls red on their own rule
+1756a1760,1763
+>   ✓ absent: a post-W1 denial ('none') served as a journal completion, its effect logged is NOT effect-disclosure-unsound
+>   ✓ absent: a pre-W1 denial served as a journal completion is NOT effect-disclosure-unsound
+>   ✓ absent: the applied fault answered 'none' is NOT tool-call-redispatched
+>   ✓ absent: the re-dispatch is NOT effect-disclosure-unsound
+1863a1871
+>   ✓ constructed-empty-terminal: the base program run twice is clean against itself (applied_faults [], 0 after-dispatch fault(s) to flip)
+1865a1874,1876
+>   ✓ control content (one tool message body, same record variant): red on applied-twin-trace-record and nothing else
+>   ✓ control content: the discovery contract's variant-only comparison does NOT see it — the reason P2 compares contents
+>   ✓ control final state: red on applied-twin-final-state and nothing else
+1866a1878,1881
+>   ✓ control outcome: red on applied-twin-outcome and nothing else
+>   ✓ control served interaction: red on applied-twin-served and nothing else
+>   ✓ control served length: red on applied-twin-served-length and nothing else
+>   ✓ control trace length: red on applied-twin-trace-length and nothing else
+1984,1985c1999,2000
+<   ✓ every manifest ABI pin in the tree is the declared one: 8.0 (34 pin(s) across 571 tracked .ail file(s))
+<   ✓ every manifest ABI pin in the tree is the declared one: 8.0 (34 pin(s) across 571 tracked .ail file(s))
+---
+>   ✓ every manifest ABI pin in the tree is the declared one: 8.0 (34 pin(s) across 573 tracked .ail file(s))
+>   ✓ every manifest ABI pin in the tree is the declared one: 8.0 (34 pin(s) across 573 tracked .ail file(s))
+2139c2154
+<   ✓ measured CI cost, WHOLE TARGET: 20000 ms against a declared ceiling of 180000 ms
+---
+>   ✓ measured CI cost, WHOLE TARGET: 73000 ms against a declared ceiling of 180000 ms
+2172a2188
+>   ✓ mutant: a delegated deferral without fault → effect-disclosure-unsound (-1, call-7)
+2182a2199
+>   ✓ mutant: a policy denial without fault → effect-disclosure-unsound (-1, call-5)
+2212a2230
+>   ✓ mutant: an applied after-dispatch ToolFailed answered 'none' → effect-disclosure-unsound (6, call-2)
+2213a2232,2234
+>   ✓ mutant: an undecodable-argument refusal without fault → effect-disclosure-unsound (-1, call-6)
+>   ✓ mutant: call-4 dispatched twice in a run with no projected message → tool-call-redispatched
+>   ✓ mutant: call-4 re-dispatched after its deadline → tool-call-redispatched (0, call-4)
+2223a2245
+>   ✓ mutant: the deadline's fault message with no fault object → effect-disclosure-unsound (11, call-4)
+2224a2247,2248
+>   ✓ mutant: the live renderer's refusal without fault.effects → effect-disclosure-unsound (3, call-1)
+>   ✓ mutant: the mismatch's fault message disclosing 'maybe' → effect-disclosure-unsound (8, call-3)
+2226a2251
+>   ✓ mutant: the typed fault message without fault.effects → effect-disclosure-unsound (6, call-2)
+2523a2549,2550
+>   ✓ seed-102 #15 (applied → not): identical served interactions, outcome, final state and trace
+>   ✓ seed-102 #15 (applied → not): the twin's world truth differs [15] → []
+2524a2552
+>   ✓ seed-102: the base program run twice is clean against itself (applied_faults [15], 1 after-dispatch fault(s) to flip)
+2526a2555,2556
+>   ✓ seed-109 #29 (not → applied): identical served interactions, outcome, final state and trace
+>   ✓ seed-109 #29 (not → applied): the twin's world truth differs [17,22] → [17,22,29]
+2527a2558
+>   ✓ seed-109: the base program run twice is clean against itself (applied_faults [], 1 after-dispatch fault(s) to flip)
+2529a2561,2562
+>   ✓ seed-11 #15 (applied → not): identical served interactions, outcome, final state and trace
+>   ✓ seed-11 #15 (applied → not): the twin's world truth differs [15] → []
+2530a2564
+>   ✓ seed-11: the base program run twice is clean against itself (applied_faults [15], 1 after-dispatch fault(s) to flip)
+2532a2567,2568
+>   ✓ seed-14 #19 (applied → not): identical served interactions, outcome, final state and trace
+>   ✓ seed-14 #19 (applied → not): the twin's world truth differs [19] → []
+2533a2570
+>   ✓ seed-14: the base program run twice is clean against itself (applied_faults [19], 1 after-dispatch fault(s) to flip)
+2535a2573,2574
+>   ✓ seed-165 #17 (applied → not): identical served interactions, outcome, final state and trace
+>   ✓ seed-165 #17 (applied → not): the twin's world truth differs [17,22] → [22]
+2536a2576
+>   ✓ seed-165: the base program run twice is clean against itself (applied_faults [17], 1 after-dispatch fault(s) to flip)
+2538a2579,2580
+>   ✓ seed-18 #20 (not → applied): identical served interactions, outcome, final state and trace
+>   ✓ seed-18 #20 (not → applied): the twin's world truth differs [15] → [15,20]
+2539a2582
+>   ✓ seed-18: the base program run twice is clean against itself (applied_faults [], 1 after-dispatch fault(s) to flip)
+2542a2586
+>   ✓ seed-1: the base program run twice is clean against itself (applied_faults [], 0 after-dispatch fault(s) to flip)
+2544a2589,2596
+>   ✓ seed-215 #15 (not → applied): identical served interactions, outcome, final state and trace
+>   ✓ seed-215 #15 (not → applied): the twin's world truth differs [22,27,32,37,42,59] → [15,22,27,32,37,42,59]
+>   ✓ seed-215 #32 (applied → not): identical served interactions, outcome, final state and trace
+>   ✓ seed-215 #32 (applied → not): the twin's world truth differs [22,27,32,37,42,59] → [22,27,37,42,59]
+>   ✓ seed-215 #47 (not → applied): identical served interactions, outcome, final state and trace
+>   ✓ seed-215 #47 (not → applied): the twin's world truth differs [22,27,32,37,42,59] → [22,27,32,37,42,47,59]
+>   ✓ seed-215 #54 (not → applied): identical served interactions, outcome, final state and trace
+>   ✓ seed-215 #54 (not → applied): the twin's world truth differs [22,27,32,37,42,59] → [22,27,32,37,42,54,59]
+2545a2598
+>   ✓ seed-215: the base program run twice is clean against itself (applied_faults [32], 4 after-dispatch fault(s) to flip)
+2548a2602
+>   ✓ seed-29: the base program run twice is clean against itself (applied_faults [], 0 after-dispatch fault(s) to flip)
+2550a2605,2606
+>   ✓ seed-3 #24 (not → applied): identical served interactions, outcome, final state and trace
+>   ✓ seed-3 #24 (not → applied): the twin's world truth differs [19,29] → [19,24,29]
+2551a2608
+>   ✓ seed-31: the base program run twice is clean against itself (applied_faults [], 0 after-dispatch fault(s) to flip)
+2554a2612
+>   ✓ seed-3: the base program run twice is clean against itself (applied_faults [], 1 after-dispatch fault(s) to flip)
+2557a2616
+>   ✓ seed-4: the base program run twice is clean against itself (applied_faults [], 0 after-dispatch fault(s) to flip)
+2559a2619,2620
+>   ✓ seed-60 #17 (not → applied): identical served interactions, outcome, final state and trace
+>   ✓ seed-60 #17 (not → applied): the twin's world truth differs [22] → [17,22]
+2560a2622
+>   ✓ seed-60: the base program run twice is clean against itself (applied_faults [], 1 after-dispatch fault(s) to flip)
+2563a2626
+>   ✓ seed-61: the base program run twice is clean against itself (applied_faults [], 0 after-dispatch fault(s) to flip)
+2566a2630
+>   ✓ seed-6: the base program run twice is clean against itself (applied_faults [], 0 after-dispatch fault(s) to flip)
+2568a2633,2634
+>   ✓ seed-71 #17 (not → applied): identical served interactions, outcome, final state and trace
+>   ✓ seed-71 #17 (not → applied): the twin's world truth differs [] → [17]
+2569a2636
+>   ✓ seed-71: the base program run twice is clean against itself (applied_faults [], 1 after-dispatch fault(s) to flip)
+2572a2640
+>   ✓ seed-8: the base program run twice is clean against itself (applied_faults [], 0 after-dispatch fault(s) to flip)
+2639c2707
+<   ✓ src/core/dst_invariants.ail: 16/16 passed
+---
+>   ✓ src/core/dst_invariants.ail: 23/23 passed
+2713a2782,2786
+>   ✓ survives: a before-dispatch ToolFailed answered 'none', nothing applied
+>   ✓ survives: a live completion answered by the live renderer's refusal
+>   ✓ survives: a live completion: no effect-log entry, the tool's own bytes
+>   ✓ survives: call-1 emitted in two steps and dispatched twice
+>   ✓ survives: the conversation: six answers from the real builders, one applied fault
+2756a2830
+>   ✓ the conversation holds what the rows above and below rely on
+2934a3009
+> -- 034 ADR-001 §2, P1 and P3: what the two rules must not reject --
+2968a3044
+> -- mutants: 034 ADR-001 §2, P1 and P3 --
+3006c3082
+< 011 ADR-003 D1 — the invariant set and six two-channel checks on every corpus member's real run (invariant-set/2)
+---
+> 011 ADR-003 D1 — the invariant set and six two-channel checks on every corpus member's real run (invariant-set/3)
+3012c3088
+< === invariants_dst (D7, invariant-set/2) ===
+---
+> === invariants_dst (D7, invariant-set/3) ===
+3090a3167
+> COUNT members=18 ran=18 identical_clean=18 pairs=13 clean=13 to_applied=8 to_unapplied=5 refused=0 controls=6 controls_red=6
+3092c3169
+< Error: type error in tmp/inline_1792516131421 (decl 0): undefined variable: undefined_symbol_xyz at tmp/inline_1792516131421.ail:3:35
+---
+> Error: type error in tmp/inline_1792527419381 (decl 0): undefined variable: undefined_symbol_xyz at tmp/inline_1792527419381.ail:3:35
+3560a3638,3639
+> applied_twin (034 ADR-001 §2 P2): every bank program against each of its one-ordinal twins
+> applied_twin PASS
+3866c3945
+< slowest against the <T> per-file cap: src/core/test/scripted_ports.ail <T> = 24%, 68 CPU-s, 0.5 cores; src/core/dst_invariants.ail <T> = 9%, 17 CPU-s, 0.3 cores; src/core/dst_run_report.ail <T> = 9%, 18 CPU-s, 0.3 cores
+---
+> slowest against the <T> per-file cap: src/core/session.ail <T> = 66%, 141 CPU-s, 0.4 cores; src/core/test/scripted_ports.ail <T> = 59%, 138 CPU-s, 0.4 cores; src/core/tool_phase.ail <T> = 30%, 57 CPU-s, 0.3 cores
+3868,3870c3947,3949
+< source revision    24d347d2a19f566df2ba8c0dcf40cdb2d629ce32
+< source revision    24d347d2a19f566df2ba8c0dcf40cdb2d629ce32
+< src/core: 73 .ail files discovered, 51 carry tests, 710 tests, 697 passed, 13 skipped
+---
+> source revision    0e09e09dc3c47ab553f31053153165467aaa5628
+> source revision    0e09e09dc3c47ab553f31053153165467aaa5628
+> src/core: 73 .ail files discovered, 51 carry tests, 717 tests, 704 passed, 13 skipped
+3884c3963
+< test_coverage: every file carrying inline tests was run; 697 of 710 passed, 13 skipped against a record
+---
+> test_coverage: every file carrying inline tests was run; 704 of 717 passed, 13 skipped against a record

@@ -1,0 +1,7 @@
+diff --git a/src/core/tool_phase.ail b/src/core/tool_phase.ail
+index 203aab47..cb57eb56 100644
+--- a/src/core/tool_phase.ail
++++ b/src/core/tool_phase.ail
+@@ -507 +507 @@ export func execute_allowed_tool_call(
+-            let execution = ports.tool_exec(advance(budget.next_state, EnvRead), invocation);
++            let execution0 = ports.tool_exec(advance(budget.next_state, EnvRead), invocation); let execution = match execution0.outcome { ToolDeadlineExceeded(_) => ports.tool_exec(advance(execution0.next_state, ToolExec), invocation), _ => execution0 };

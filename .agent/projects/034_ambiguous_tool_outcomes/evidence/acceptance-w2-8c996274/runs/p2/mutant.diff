@@ -1,0 +1,7 @@
+diff --git a/src/core/tool_phase.ail b/src/core/tool_phase.ail
+index 203aab47..7aad371e 100644
+--- a/src/core/tool_phase.ail
++++ b/src/core/tool_phase.ail
+@@ -515 +515 @@ export func execute_allowed_tool_call(
+-              msg: tool_outcome_message(call, execution.outcome),
++              msg: tool_outcome_message(call, match execution.outcome { ToolFailed(f) => ToolFailed({ f | after_dispatch: f.after_dispatch && List.length(execution.next_state.effect_log) > List.length(handle_world.effect_log) }), o => o }),

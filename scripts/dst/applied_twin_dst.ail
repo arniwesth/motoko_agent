@@ -1,0 +1,435 @@
+-- scripts/dst/applied_twin_dst.ail
+--
+-- 034 ADR-001 §2, PROPERTY P2, ON THE BANK'S REAL PROGRAMS (034 PLAN-001 W2.2).
+--
+-- "Two programs differing only in one `applied` field produce identical
+--  traces, outcomes and served interactions."
+--
+-- ============================================================================
+-- WHAT THIS GATE CLAIMS
+-- ============================================================================
+--
+-- That for every program in the PR bank (`corpus_pr_dst.fixed_bank()` and the
+-- constructed member, the same eighteen `make corpus_pr` builds) and for every
+-- tool call in it that was drawn AFTER DISPATCH, the program and its twin —
+-- the same program with that call's ordinal moved into or out of
+-- `ExecutionProgram.applied_faults` — replay to executions on which
+-- `dst_invariants.applied_twin_findings` is empty. The relation compares the
+-- served interactions, the returned outcome, the final state and every trace
+-- record IN FULL; its header in `dst_invariants.ail` (PART 8) says why the
+-- discovery contract's variant-only comparison is not enough.
+--
+-- The only existing caller of the discovery relation was a fixture
+-- (`invariants_dst.ail`), so P2 has this runner and its own target rather than
+-- a row in `make invariants`: a pair relation needs two runs, and that target
+-- runs none.
+--
+-- ============================================================================
+-- HOW A TWIN IS BUILT
+-- ============================================================================
+--
+-- One ordinal flipped in W1.2's world-truth list, nothing else touched. A
+-- candidate is a tool interaction whose recorded status is a fault and whose
+-- payload decodes AFTER DISPATCH: a completed call is never listed
+-- (`replay-refused-applied-fault-completed`) and a before-dispatch fault cannot
+-- have applied (D4, `replay-refused-applied-fault-before-dispatch`), so those
+-- are exactly the ordinals the list may hold. A listed ordinal is removed (an
+-- applied fault replayed as not applied); an unlisted one is inserted in order.
+-- Both programs are reconstituted by `dst_replay.world_state_of` and run on the
+-- bank's own recording rig, under ONE run id, so the id cannot be the
+-- difference.
+--
+-- ============================================================================
+-- THE WAYS THIS COULD BE GREEN AND WORTHLESS, AND WHAT STOPS EACH
+-- ============================================================================
+--
+--   * A TWIN THAT IS NOT ONE. If replay ignored the list, every pair would be
+--     two identical runs and the relation green for free (W1.7 mutant v05 is
+--     that bug). Each twin's effect log is required to hold exactly the
+--     ordinals its program says (`effect_ordinals_of`) AND to differ from the
+--     base's, so a pair counts only once world truth is seen to differ.
+--   * A BANK THAT FLIPS NOTHING. The COUNT line reports both directions, and
+--     the Makefile requires each to be non-zero: the bank lists applied faults
+--     (W1.6's world-only witnesses) and holds after-dispatch faults that did not
+--     apply.
+--   * A RELATION THAT CANNOT FIRE. Six controls on a real execution, each a
+--     single-part change the relation must report under ITS OWN rule and no
+--     other. The first changes one tool message's content and nothing else, and
+--     must ALSO be invisible to `discovery_contract_findings` — the evidence that
+--     comparing record variants would have missed it.
+--   * A RELATION THAT FIRES ON EVERYTHING. Each member's base program is run
+--     twice and the two runs must be clean against each other; a twin finding
+--     that also appears there is noise in the comparison, not a leak.
+--
+-- It builds, persists and keys nothing, so it does not race `corpus_pr`'s store.
+
+module scripts/dst/applied_twin_dst
+
+import std/io (println, exit)
+import std/list as List (length)
+import std/json (Json, jo, kv, js, get, asString)
+import std/ai (Message)
+import std/result (Result, Ok, Err)
+import src/core/session (TracedSessionResult)
+import src/core/ports (WorldState, ToolRecordDecoded, ToolRecordUndecodable, decode_tool_outcome)
+import src/core/phase_vocab (LedgerRecord, WireRecord, HistoryAppended, LedgerTrace)
+import src/core/dst_interaction (Interaction, ToolIdentity, OutcomeOk)
+import src/core/dst_execution (execution_of)
+import src/core/dst_result (DstResult, RunCompleted, RunFailed, unknown_replay_metadata)
+import src/core/dst_program (ExecutionProgram)
+import src/core/dst_replay (world_state_of, refusal_message, effect_ordinals_of, effect_log_ordinals)
+import src/core/dst_fault_catalogue (required_class_ids)
+import src/core/dst_invariants (
+  NoReplay, ExecutionUnderTest,
+  AppliedTwinFinding, applied_twin_findings, applied_twin_rule, applied_twin_message,
+  discovery_contract_findings
+)
+import scripts/dst/corpus_pr_dst (
+  BankEntry, MemberRun, fixed_bank, bank_step_budget,
+  run_seed_member, run_constructed_member, run_recording_at
+)
+
+func check(label: string, ok: bool, detail: string) -> bool ! {IO} {
+  let _ = if ok then println("  ✓ ${label}") else println("  ✗ ${label} — ${detail}");
+  ok
+}
+
+pure func join_ints(xs: [int]) -> string {
+  match xs { [] => "", x :: [] => show(x), x :: rest => "${show(x)},${join_ints(rest)}" }
+}
+
+pure func eq_ints(a: [int], b: [int]) -> bool {
+  match a {
+    [] => (match b { [] => true, _ => false }),
+    x :: xr => match b { [] => false, y :: yr => x == y && eq_ints(xr, yr) }
+  }
+}
+
+pure func has_int(xs: [int], t: int) -> bool {
+  match xs { [] => false, x :: rest => x == t || has_int(rest, t) }
+}
+
+-- ---------------------------------------------------------------------------
+-- The twin
+-- ---------------------------------------------------------------------------
+
+-- The ordinals `applied_faults` may hold: tool interactions recorded as a fault
+-- whose payload decodes after dispatch. The same two readings
+-- `dst_replay.applied_fault_check` makes — the recorder's status, then the
+-- payload's stage — so a candidate here is one replay accepts.
+pure func twin_ordinals(xs: [Interaction]) -> [int] {
+  match xs {
+    [] => [],
+    i :: rest => {
+      let tail = twin_ordinals(rest);
+      match i.identity.body {
+        ToolIdentity(_, _, _) =>
+          match i.outcome.status {
+            OutcomeOk => tail,
+            _ =>
+              match decode_tool_outcome(i.outcome.payload, i.outcome.advance_ms) {
+                ToolRecordUndecodable(_) => tail,
+                ToolRecordDecoded(t) => if t.after_dispatch then i.identity.ordinal :: tail else tail
+              }
+          },
+        _ => tail
+      }
+    }
+  }
+}
+
+-- One ordinal flipped: removed if listed, inserted in order if not.
+pure func toggled(listed: [int], ord: int) -> [int] {
+  match listed {
+    [] => [ord],
+    x :: rest =>
+      if x == ord then rest
+      else if x > ord then ord :: listed
+      else x :: toggled(rest, ord)
+  }
+}
+
+pure func twin_of(p: ExecutionProgram, ord: int) -> ExecutionProgram {
+  { p | applied_faults: toggled(p.applied_faults, ord) }
+}
+
+type Ran = { exec: ExecutionUnderTest, effects: [int] }
+
+-- A program reconstituted and run on the bank's recording rig. `id` is the
+-- caller's, and the caller passes one id for a base and all its twins.
+func run_program(id: string, p: ExecutionProgram)
+  -> Result[Ran, string] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  match world_state_of(p, required_class_ids()) {
+    Err(r) => Err(refusal_message(r)),
+    Ok(w) => {
+      let run = run_recording_at(id, w, bank_step_budget());
+      let x = execution_of(run, w.clock_ms, NoReplay, -1, -1, 0, [], unknown_replay_metadata());
+      Ok({ exec: x, effects: effect_log_ordinals(run.world.effect_log) })
+    }
+  }
+}
+
+pure func has_str(xs: [string], t: string) -> bool {
+  match xs { [] => false, x :: rest => x == t || has_str(rest, t) }
+}
+
+-- The rules a finding list names, each once, in first-seen order.
+pure func distinct_rules(fs: [AppliedTwinFinding], seen: [string]) -> string {
+  match fs {
+    [] => (match seen { [] => "no rule", _ => join_strs(seen) }),
+    f :: rest =>
+      if has_str(seen, applied_twin_rule(f)) then distinct_rules(rest, seen)
+      else distinct_rules(rest, seen ++ [applied_twin_rule(f)])
+  }
+}
+
+pure func join_strs(xs: [string]) -> string {
+  match xs { [] => "", x :: [] => x, x :: rest => "${x}, ${join_strs(rest)}" }
+}
+
+pure func first_message(fs: [AppliedTwinFinding]) -> string {
+  match fs { [] => "", f :: _ => applied_twin_message(f) }
+}
+
+-- ---------------------------------------------------------------------------
+-- One member
+-- ---------------------------------------------------------------------------
+
+type MemberTally = {
+  ran: bool,
+  identical_clean: bool,
+  pairs: int,
+  clean: int,
+  to_applied: int,
+  to_unapplied: int,
+  refused: int,
+  base: Option[ExecutionUnderTest]
+}
+
+-- Each candidate ordinal of one member, against the member's base run.
+func twins(id: string, label: string, p: ExecutionProgram, base: Ran, ords: [int], acc: MemberTally)
+  -> MemberTally ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  match ords {
+    [] => acc,
+    ord :: rest => {
+      let was = has_int(p.applied_faults, ord);
+      let dir = if was then "applied → not" else "not → applied";
+      let t = twin_of(p, ord);
+      let next = match run_program(id, t) {
+        Err(why) => {
+          let _ = check("${label} #${ord} (${dir}): the twin reconstitutes", false, why);
+          { acc | refused: acc.refused + 1 }
+        },
+        Ok(twin) => {
+          let truth = eq_ints(twin.effects, effect_ordinals_of(t)) && not eq_ints(twin.effects, base.effects);
+          let fs = applied_twin_findings(base.exec, twin.exec);
+          let _ = match fs { [] => (), _ => println("      first: ${first_message(fs)}") };
+          let a = check("${label} #${ord} (${dir}): the twin's world truth differs [${join_ints(base.effects)}] → [${join_ints(twin.effects)}]",
+                        truth, "the twin's effect log is [${join_ints(twin.effects)}], its program says [${join_ints(effect_ordinals_of(t))}], the base's is [${join_ints(base.effects)}]");
+          let b = check("${label} #${ord} (${dir}): identical served interactions, outcome, final state and trace",
+                        List.length(fs) == 0, "${show(List.length(fs))} finding(s) under ${distinct_rules(fs, [])}");
+          { acc |
+            pairs: acc.pairs + (if truth then 1 else 0),
+            clean: acc.clean + (if truth && b then 1 else 0),
+            to_applied: acc.to_applied + (if truth && not was then 1 else 0),
+            to_unapplied: acc.to_unapplied + (if truth && was then 1 else 0),
+            refused: acc.refused + (if a then 0 else 1) }
+        }
+      };
+      twins(id, label, p, base, rest, next)
+    }
+  }
+}
+
+func member(m: MemberRun)
+  -> MemberTally ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let id = "applied_twin_${m.label}";
+  let p = m.program;
+  let zero: MemberTally = { ran: false, identical_clean: false, pairs: 0, clean: 0,
+                            to_applied: 0, to_unapplied: 0, refused: 0, base: None };
+  match run_program(id, p) {
+    Err(why) => { let _ = check("${m.label}: the base program reconstitutes", false, why); zero },
+    Ok(base) =>
+      match run_program(id, p) {
+        Err(why) => { let _ = check("${m.label}: the base program reconstitutes twice", false, why); zero },
+        Ok(again) => {
+          let same = applied_twin_findings(base.exec, again.exec);
+          let _ = match same { [] => (), _ => println("      first: ${first_message(same)}") };
+          let ords = twin_ordinals(p.interactions);
+          let ok = check("${m.label}: the base program run twice is clean against itself (applied_faults [${join_ints(p.applied_faults)}], ${show(List.length(ords))} after-dispatch fault(s) to flip)",
+                         List.length(same) == 0, "${show(List.length(same))} finding(s) between two runs of ONE program");
+          twins(id, m.label, p, base, ords,
+                { zero | ran: true, identical_clean: ok, base: Some(base.exec) })
+        }
+      }
+  }
+}
+
+func members(es: [BankEntry])
+  -> [MemberTally] ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  match es {
+    [] => [],
+    e :: rest => {
+      let here = member(run_seed_member(e));
+      here :: members(rest)
+    }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- The controls: the relation fires, each part under its own rule
+-- ---------------------------------------------------------------------------
+
+pure func records_of(r: DstResult) -> [LedgerRecord] {
+  match r { RunCompleted(run) => run.ledger_trace.records, RunFailed(f) => f.partial_ledger_trace.records }
+}
+
+pure func with_records(r: DstResult, rs: [LedgerRecord]) -> DstResult {
+  match r {
+    RunCompleted(run) => RunCompleted({ run | ledger_trace: { records: rs } }),
+    RunFailed(f) => RunFailed({ f | partial_ledger_trace: { records: rs } })
+  }
+}
+
+pure func is_tool_message(m: Json) -> bool {
+  match get(m, "role") {
+    None => false,
+    Some(v) => match asString(v) { Some(r) => r == "tool", None => false }
+  }
+}
+
+-- The first appended TOOL message's body replaced, its record's variant and
+-- every other field kept: the shape of a harness that wrote `applied` into a
+-- tool message (mutant p2).
+pure func leak_into_tool_message(rs: [LedgerRecord]) -> [LedgerRecord] {
+  match rs {
+    [] => [],
+    r :: rest =>
+      match r {
+        WireRecord(HistoryAppended(i)) =>
+          if is_tool_message(i.message) then
+            WireRecord(HistoryAppended({ i | message: jo([kv("role", js("tool")), kv("content", js("{\"applied\":true}"))]) })) :: rest
+          else r :: leak_into_tool_message(rest),
+        _ => r :: leak_into_tool_message(rest)
+      }
+  }
+}
+
+pure func drop_last_record(rs: [LedgerRecord]) -> [LedgerRecord] {
+  match rs { [] => [], _ :: [] => [], r :: rest => r :: drop_last_record(rest) }
+}
+
+pure func drop_last_interaction(xs: [Interaction]) -> [Interaction] {
+  match xs { [] => [], _ :: [] => [], x :: rest => x :: drop_last_interaction(rest) }
+}
+
+-- The first served payload with one byte more.
+pure func serve_differently(xs: [Interaction]) -> [Interaction] {
+  match xs {
+    [] => [],
+    x :: rest => { x | outcome: { x.outcome | payload: "${x.outcome.payload} " } } :: rest
+  }
+}
+
+-- `spare` stands in when a completed run returned no messages; the control
+-- fails loudly if it is empty too, rather than build a `Message` by hand.
+pure func other_outcome(r: DstResult, spare: [Message]) -> DstResult {
+  match r {
+    RunFailed(f) => RunFailed({ f | interaction_position: f.interaction_position + 1 }),
+    RunCompleted(run) =>
+      match run.outcome {
+        Ok(ms) => (match ms {
+          [] => RunCompleted({ run | outcome: Ok(spare) }),
+          _ :: tail => RunCompleted({ run | outcome: Ok(tail) })
+        }),
+        Err(_) => RunCompleted({ run | outcome: Ok([]) })
+      }
+  }
+}
+
+-- The history without its first message; an empty history stays empty and the
+-- control reports that it saw no difference.
+pure func other_history(ms: [Message]) -> [Message] {
+  match ms { [] => [], _ :: tail => tail }
+}
+
+pure func only_rule(fs: [AppliedTwinFinding], rule: string) -> bool {
+  List.length(fs) > 0 && only_rule_in(fs, rule)
+}
+
+pure func only_rule_in(fs: [AppliedTwinFinding], rule: string) -> bool {
+  match fs { [] => true, f :: rest => applied_twin_rule(f) == rule && only_rule_in(rest, rule) }
+}
+
+pure func rules_of(fs: [AppliedTwinFinding]) -> string {
+  match fs { [] => "none", f :: [] => applied_twin_rule(f), f :: rest => "${applied_twin_rule(f)},${rules_of(rest)}" }
+}
+
+func control(label: string, rule: string, base: ExecutionUnderTest, other: ExecutionUnderTest) -> bool ! {IO} {
+  let fs = applied_twin_findings(base, other);
+  check("control ${label}: red on ${rule} and nothing else", only_rule(fs, rule), "reported: ${rules_of(fs)}")
+}
+
+func controls(x: ExecutionUnderTest) -> [bool] ! {IO} {
+  let rs = records_of(x.result);
+  let leaked = { x | result: with_records(x.result, leak_into_tool_message(rs)) };
+  let content = control("content (one tool message body, same record variant)", "applied-twin-trace-record", x, leaked);
+  let blind = check("control content: the discovery contract's variant-only comparison does NOT see it — the reason P2 compares contents",
+                    List.length(discovery_contract_findings(x, leaked)) == 0,
+                    "discovery_contract_findings reported ${show(List.length(discovery_contract_findings(x, leaked)))}");
+  [content && blind,
+   control("trace length", "applied-twin-trace-length", x, { x | result: with_records(x.result, drop_last_record(rs)) }),
+   control("outcome", "applied-twin-outcome", x, { x | result: other_outcome(x.result, x.final.history) }),
+   control("final state", "applied-twin-final-state", x, { x | final: { x.final | history: other_history(x.final.history) } }),
+   control("served interaction", "applied-twin-served", x, { x | world: { x.world | log: serve_differently(x.world.log) } }),
+   control("served length", "applied-twin-served-length", x, { x | world: { x.world | log: drop_last_interaction(x.world.log) } })]
+}
+
+-- ---------------------------------------------------------------------------
+-- Totals
+-- ---------------------------------------------------------------------------
+
+pure func sum(ts: [MemberTally], f: (MemberTally) -> int) -> int {
+  match ts { [] => 0, t :: rest => f(t) + sum(rest, f) }
+}
+
+pure func count_true(bs: [bool]) -> int {
+  match bs { [] => 0, b :: rest => (if b then 1 else 0) + count_true(rest) }
+}
+
+-- The controls' execution: the first member that had a twin, so its trace
+-- holds tool messages and its log tool interactions.
+pure func first_base(ts: [MemberTally]) -> Option[ExecutionUnderTest] {
+  match ts {
+    [] => None,
+    t :: rest => match t.base { Some(x) => if t.pairs > 0 then Some(x) else first_base(rest), None => first_base(rest) }
+  }
+}
+
+export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("applied_twin (034 ADR-001 §2 P2): every bank program against each of its one-ordinal twins");
+  let seeds = members(fixed_bank());
+  let constructed = member(run_constructed_member());
+  let ts = seeds ++ [constructed];
+  let n = List.length(ts);
+  let ran = sum(ts, \t. if t.ran then 1 else 0);
+  let identical = sum(ts, \t. if t.identical_clean then 1 else 0);
+  let pairs = sum(ts, \t. t.pairs);
+  let clean = sum(ts, \t. t.clean);
+  let to_applied = sum(ts, \t. t.to_applied);
+  let to_unapplied = sum(ts, \t. t.to_unapplied);
+  let refused = sum(ts, \t. t.refused);
+  let cs = match first_base(ts) {
+    None => { let _ = check("controls: a base execution to build them on", false, "no member ran"); [false] },
+    Some(x) => controls(x)
+  };
+  let reds = count_true(cs);
+  let _ = println("COUNT members=${n} ran=${ran} identical_clean=${identical} pairs=${pairs} clean=${clean} to_applied=${to_applied} to_unapplied=${to_unapplied} refused=${refused} controls=${List.length(cs)} controls_red=${reds}");
+  let ok = ran == n && identical == n && pairs > 0 && clean == pairs && to_applied > 0 && to_unapplied > 0
+           && refused == 0 && reds == List.length(cs) && reds == 6;
+  if ok then println("applied_twin PASS")
+  else {
+    let _ = println("applied_twin FAIL");
+    exit(1)
+  }
+}
