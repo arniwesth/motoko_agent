@@ -1868,6 +1868,16 @@ latency_pair:
 #      wall clock is compared against `pr_target_ceiling_ms()` read out of the
 #      source, so the measurement that the minimums are derived from has a gate
 #      behind it rather than a comment.
+#
+#   5. THE WORLD-ONLY ROWS, SPLIT BY THE RUN REPORT (034 W3.1). A world-only row
+#      is delivered as its twin's bytes (034 ADR-001 D4), so the ToolFailed and
+#      ToolDeadlineExceeded greps above count a twin and its world-only row
+#      together. `corpus_pr_dst` prints the run report's REPORTCOUNT lines, read
+#      off each member's effect log, and each twin id's wire count must equal its
+#      twin's count plus its world-only row's: more on the report side is one
+#      interaction counted under both rows, fewer is one counted under neither.
+#      The fault_class counts are occurrences, not lines, so a batch carrying two
+#      results is two.
 .PHONY: corpus_pr
 corpus_pr:
 	@set -eu; \
@@ -1879,9 +1889,9 @@ corpus_pr:
 	grep -v '^{' /tmp/corpus_pr.out; \
 	denied=$$(grep -c '"type":"native_tool_denied"' /tmp/corpus_pr.out || true); \
 	empty=$$(grep -c '"type":"empty_stop_finalize"' /tmp/corpus_pr.out || true); \
-	tf=$$(grep -c '"fault_class":"ToolFailed"' /tmp/corpus_pr.out || true); \
-	tcm=$$(grep -c '"fault_class":"ToolCorrelationMismatch"' /tmp/corpus_pr.out || true); \
-	tde=$$(grep -c '"fault_class":"ToolDeadlineExceeded"' /tmp/corpus_pr.out || true); \
+	tf=$$(grep -o '"fault_class":"ToolFailed"' /tmp/corpus_pr.out | wc -l); \
+	tcm=$$(grep -o '"fault_class":"ToolCorrelationMismatch"' /tmp/corpus_pr.out | wc -l); \
+	tde=$$(grep -o '"fault_class":"ToolDeadlineExceeded"' /tmp/corpus_pr.out | wc -l); \
 	retry=$$(grep -c '"type":"stream_error_retry"' /tmp/corpus_pr.out || true); \
 	pfail=$$(grep -o '"error":"generated E_PROVIDER_[A-Z_]*"' /tmp/corpus_pr.out | wc -l); \
 	badargs=$$(grep -o '"arguments":{}' /tmp/corpus_pr.out | wc -l); \
@@ -1924,6 +1934,41 @@ corpus_pr:
 		exit 1; \
 	fi; \
 	echo "  ✓ wire witness, dispatch stage: $$before before-dispatch ToolFailed(s) rendered with effects none, of $$tf ToolFailed"; \
+	rc_tf=$$(sed -n 's/^REPORTCOUNT ToolFailed=\([0-9]*\)$$/\1/p' /tmp/corpus_pr.out); \
+	rc_tfa=$$(sed -n 's/^REPORTCOUNT tool_effect_applied_then_failed=\([0-9]*\)$$/\1/p' /tmp/corpus_pr.out); \
+	rc_tde=$$(sed -n 's/^REPORTCOUNT ToolDeadlineExceeded=\([0-9]*\)$$/\1/p' /tmp/corpus_pr.out); \
+	rc_tdea=$$(sed -n 's/^REPORTCOUNT tool_effect_applied_then_deadline=\([0-9]*\)$$/\1/p' /tmp/corpus_pr.out); \
+	rc_tcm=$$(sed -n 's/^REPORTCOUNT ToolCorrelationMismatch=\([0-9]*\)$$/\1/p' /tmp/corpus_pr.out); \
+	if [ -z "$$rc_tf" ] || [ -z "$$rc_tfa" ] || [ -z "$$rc_tde" ] || [ -z "$$rc_tdea" ] || [ -z "$$rc_tcm" ]; then \
+		echo "FAIL: corpus_pr_dst printed no REPORTCOUNT line for one of the five tool rows."; \
+		echo "      034 W3.1: the wire carries a world-only row as its twin's bytes, so the"; \
+		echo "      greps above count a twin and its world-only row together. The split is"; \
+		echo "      the run report's, read off the effect log, and without it the check"; \
+		echo "      below would compare against nothing."; \
+		exit 1; \
+	fi; \
+	for pair in "ToolFailed:$$rc_tf" "tool_effect_applied_then_failed:$$rc_tfa" \
+	            "ToolDeadlineExceeded:$$rc_tde" "tool_effect_applied_then_deadline:$$rc_tdea"; do \
+		if [ "$${pair##*:}" -eq 0 ]; then \
+			echo "FAIL: the run report counts NO interaction for '$${pair%:*}' over the bank."; \
+			echo "      034 W3.1 counts each tool row from the effect log, a twin's NOT-applied"; \
+			echo "      interactions apart from its world-only row's applied ones; the bank"; \
+			echo "      holds two witnesses of each, so zero is a counter or a bank defect."; \
+			exit 1; \
+		fi; \
+	done; \
+	if [ "$$tf" -ne $$((rc_tf + rc_tfa)) ] || [ "$$tde" -ne $$((rc_tde + rc_tdea)) ] || [ "$$tcm" -ne "$$rc_tcm" ]; then \
+		echo "FAIL: the run report's tool counts do not add up to the wire's."; \
+		echo "      wire ToolFailed×$$tf against report ToolFailed×$$rc_tf + tool_effect_applied_then_failed×$$rc_tfa;"; \
+		echo "      wire ToolDeadlineExceeded×$$tde against report ToolDeadlineExceeded×$$rc_tde + tool_effect_applied_then_deadline×$$rc_tdea;"; \
+		echo "      wire ToolCorrelationMismatch×$$tcm against report ×$$rc_tcm."; \
+		echo "      A world-only row is delivered as its twin's bytes (034 ADR-001 D4), so each"; \
+		echo "      twin id's wire count is the twin's interactions plus its world-only row's."; \
+		echo "      More on the report side means an interaction was counted under both rows;"; \
+		echo "      fewer means one was counted under neither."; \
+		exit 1; \
+	fi; \
+	echo "  ✓ wire witness, world-only rows (034 W3.1): ToolFailed×$$tf on the wire = $$rc_tf not applied + $$rc_tfa tool_effect_applied_then_failed; ToolDeadlineExceeded×$$tde = $$rc_tde not applied + $$rc_tdea tool_effect_applied_then_deadline; ToolCorrelationMismatch×$$tcm = $$rc_tcm. The split is the run report's, from the effect log: the wire alone counts a twin and its world-only row together"; \
 	served=$$(grep -c '"type":"native_tool_calls"' /tmp/corpus_pr.out || true); \
 	if [ "$$served" -eq 0 ]; then \
 		echo "FAIL: the wire carries $$denied approval denials and NOT ONE executed tool call."; \

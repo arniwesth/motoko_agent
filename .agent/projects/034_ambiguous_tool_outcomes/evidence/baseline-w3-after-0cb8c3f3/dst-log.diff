@@ -1,0 +1,75 @@
+# normalised sweep-log diff: W2 baseline (0e09e09d) < > this run (0cb8c3f3), complete (034 W3.3)
+# norm: ../baseline-w1-after-24d347d2/norm_sweep.sh on each .ailang/dst-last.log; groups: ../baseline-w1-after-24d347d2/classify.py
+# group counts:
+#   2 corpus-bank >
+#   2 timing <
+#   2 timing >
+#   other 35
+
+154a155,156
+> 
+> 
+828a831,832
+>     world-only rows are counted from the effect log, and a twin's count excludes them: one tool call is one row
+>     world-only rows are counted from the effect log, and a twin's count excludes them: one tool call is one row
+1109a1114,1115
+>   effect keys:  duplicate effect keys: 1 of 3 applied effect(s) — describes the GENERATOR (in DST the scripted model is the generator); no live or journal figure is claimed, because neither has an effect log
+>   effect keys:  duplicate effect keys: 1 of 3 applied effect(s) — describes the GENERATOR (in DST the scripted model is the generator); no live or journal figure is claimed, because neither has an effect log
+1835a1842
+>   ✓ branch counts split the same way: each twin's branch count plus its world-only row's equals the twin id's 2 recorded interactions
+1962a1970,1971
+>   ✓ each twin is reached once, by its own NOT-applied witness, and not again by its world-only row's
+>   ✓ each world-only row is reached from the effect log, once: ToolFailed×1 tool_effect_applied_then_failed×1 ToolDeadlineExceeded×1 tool_effect_applied_then_deadline×1 ToolCorrelationMismatch×1
+2154c2163
+<   ✓ measured CI cost, WHOLE TARGET: 73000 ms against a declared ceiling of 180000 ms
+---
+>   ✓ measured CI cost, WHOLE TARGET: 17000 ms against a declared ceiling of 180000 ms
+2290a2300,2301
+>   ✓ on every member, each twin's count plus its world-only row's is the twin id's recorded interactions
+>   ✓ on every member, the rows the report counts are the tool rows the class observer reached
+2550a2562
+>   ✓ seed-102: and not under its twin: ToolFailed×0
+2553a2566
+>   ✓ seed-102: the report counts tool_effect_applied_then_failed from the effect log (×1)
+2721c2734
+<   ✓ src/core/dst_run_report.ail: 8/8 passed
+---
+>   ✓ src/core/dst_run_report.ail: 14/14 passed
+2777a2791
+>   ✓ survival: a log with no repeated key reports 0 duplicates
+2839a2854
+>   ✓ the duplicate-effect-key count reads 1 on a log with one repeated key (an applied fault, then its retry completing): duplicate effect keys: 1 of 3 applied effect(s) — describes the GENERATOR (in DST the scripted model is the generator); no live or journal figure is claimed, because neither has an effect log
+2930a2946
+>   ✓ the window's duplicate effect keys: 0 of 18 applied effect(s) — describes the GENERATOR (in DST the scripted model is the generator); no live or journal figure is claimed, because neither has an effect log
+2977a2994
+>   ✓ wire witness, world-only rows (034 W3.1): ToolFailed×5 on the wire = 2 not applied + 3 tool_effect_applied_then_failed; ToolDeadlineExceeded×5 = 3 not applied + 2 tool_effect_applied_then_deadline; ToolCorrelationMismatch×4 = 4. The split is the run report's, from the effect log: the wire alone counts a twin and its world-only row together
+3009a3027,3028
+> -- 034 W3.1: the run report's counter, on the bank's own runs and effect logs --
+> -- 034 W3.1: world-only rows, counted from the effect log --
+3169c3188
+< Error: type error in tmp/inline_1792527419381 (decl 0): undefined variable: undefined_symbol_xyz at tmp/inline_1792527419381.ail:3:35
+---
+> Error: type error in tmp/inline_1792776326823 (decl 0): undefined variable: undefined_symbol_xyz at tmp/inline_1792776326823.ail:3:35
+3346a3366,3371
+> REPORTCOUNT ToolCorrelationMismatch=4
+> REPORTCOUNT ToolDeadlineExceeded=3
+> REPORTCOUNT ToolFailed=2
+> REPORTCOUNT tool_effect_applied_then_deadline=2
+> REPORTCOUNT tool_effect_applied_then_failed=3
+> REPORTKEYS effects=18 duplicates=0
+3945c3970
+< slowest against the <T> per-file cap: src/core/session.ail <T> = 66%, 141 CPU-s, 0.4 cores; src/core/test/scripted_ports.ail <T> = 59%, 138 CPU-s, 0.4 cores; src/core/tool_phase.ail <T> = 30%, 57 CPU-s, 0.3 cores
+---
+> slowest against the <T> per-file cap: src/core/session.ail <T> = 48%, 115 CPU-s, 0.4 cores; src/core/test/scripted_ports.ail <T> = 46%, 104 CPU-s, 0.4 cores; src/core/tool_phase.ail <T> = 25%, 46 CPU-s, 0.3 cores
+3947,3949c3972,3974
+< source revision    0e09e09dc3c47ab553f31053153165467aaa5628
+< source revision    0e09e09dc3c47ab553f31053153165467aaa5628
+< src/core: 73 .ail files discovered, 51 carry tests, 717 tests, 704 passed, 13 skipped
+---
+> source revision    0cb8c3f392f713a5bd93d4e576675513a3ffc5d0
+> source revision    0cb8c3f392f713a5bd93d4e576675513a3ffc5d0
+> src/core: 73 .ail files discovered, 51 carry tests, 723 tests, 710 passed, 13 skipped
+3963c3988
+< test_coverage: every file carrying inline tests was run; 704 of 717 passed, 13 skipped against a record
+---
+> test_coverage: every file carrying inline tests was run; 710 of 723 passed, 13 skipped against a record

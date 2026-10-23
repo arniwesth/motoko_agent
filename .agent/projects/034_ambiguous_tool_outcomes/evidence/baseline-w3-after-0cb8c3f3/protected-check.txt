@@ -1,0 +1,16 @@
+# protected.py check --manifest tools/eval_protected/manifest-A.json --tree <worktree at 0cb8c3f3> (034 W3.3)
+# Byte-identical to ../baseline-w2-after-0e09e09d/protected-check.txt past its header (rc=1 there and here).
+
+REFUSED ProtectedRegionTouched changed src/core/dst_fault_catalogue.ail <imports:1>: L43-45: +import std/string (1 names, L45)
+REFUSED ProtectedRegionTouched changed src/core/ports.ail WorldState: L183-542 sha256 961a36f38a9a != f0cf83c9308d
+REFUSED ProtectedRegionTouched changed src/core/ports.ail ScriptedTool: L656-665 sha256 c101e7416a3c != b13be533ac81
+REFUSED ProtectedRegionTouched changed src/core/ports.ail ToolOutcome: L712-716 sha256 806f4ce30e47 != 5eaf8378b538
+REFUSED ProtectedRegionTouched changed src/core/ports.ail empty_world_state: L890-894 sha256 0e9c70b4f867 != 2a3fbcf26779
+REFUSED ProtectedRegionTouched changed src/core/ports.ail world_tool: L1788-1824 sha256 5985ab436a96 != b41220515de6
+REFUSED ProtectedRegionTouched changed src/core/ports.ail scripted_tool_outcome: L1849-1864 sha256 9b1d5d161a77 != 6c3233133815
+REFUSED ProtectedRegionTouched changed src/core/ports.ail encode_tool_outcome: L2659-2691 sha256 0c716ad5ee14 != 4f607cfd6c57
+REFUSED ProtectedRegionTouched changed src/core/ports.ail decode_tool_outcome: L2697-2781 sha256 afb2b37c3941 != 857064aaaf93
+REFUSED ProtectedRegionTouched changed src/core/session.ail dispatch_step@call: L3465-3465 sha256 770cc3670760 != 6f545bb08174
+REFUSED ProtectedRegionTouched changed src/core/session.ail <imports:1>: L28-196: -import std/process (3 names, was L37); -import std/bytes (1 names, was L38); -import src/core/parse (1 names, was L43); -import src/core/tool_dispatch_adapter (1 names, was L44); -import pkg/sunholo/motoko_ext_abi/types (19 names, was L48); -import src/core/ext_world (3 names, was L49); -import src/core/ext/ctx_defaults (2 names, was L53); -import src/core/phase_vocab (105 names, was L66); -import src/core/recovery (2 names, was L199); -import src/core/ports (28 names, was L201); +import std/process (2 names, L37); +import src/core/tool_dispatch_adapter (2 names, L42); +import src/core/tool_fault (2 names, L43); +import pkg/sunholo/motoko_ext_abi/types (20 names, L46); +import src/core/ext_world (4 names, L47); +import src/core/ext/ctx_defaults (4 names, L51); +import src/core/phase_vocab (102 names, L64); +import src/core/recovery (1 names, L194); +import src/core/ports (29 names, L196)
+REFUSED ProtectedRegionTouched changed src/core/test/stub_step.ail <imports:1>: L15-45: -import pkg/sunholo/motoko_ext_abi/types (16 names, was L38); +import pkg/sunholo/motoko_ext_abi/types (20 names, L38)
+eval_protected check: 119 spans, 12 findings, 0 pin drift reports -> REFUSED
