@@ -1,0 +1,48 @@
+# make dst at 0cb8c3f3 against W2's baseline at 0e09e09d (034 W3.3)
+
+## FAILED names
+base   ../baseline-w2-after-0e09e09d/dst-failed.txt: 0 name(s), 0 bytes: {}
+head   dst-failed.txt:                                0 name(s), 0 bytes: {}
+diff ../baseline-w2-after-0e09e09d/dst-failed.txt dst-failed.txt:
+  (no output) rc=0
+EQUAL: {} == {}. make dst rc=0 on both sides, 'all targets passed'.
+
+## corpus_pr.wire.sha256
+diff ../baseline-w2-after-0e09e09d/corpus_pr.wire.sha256 corpus_pr.wire.sha256:
+1,2c1,2
+< # corpus_pr's output (/tmp/corpus_pr.out) at 0e09e09d, with every "duration_ms":N masked to 0
+< lines 1907
+---
+> # corpus_pr's output (/tmp/corpus_pr.out) at 0cb8c3f3, with every "duration_ms":N masked to 0
+> lines 1920
+4c4
+< sha256_all_lines cbc0138c19eb8a713e90ef14517145205444d03584cadf2ecbcf88af3962e7db
+---
+> sha256_all_lines 4c64d73972cc6c84b832b9ea5db64f9bb9851cb7608dc77d5d135bb5d23bdcdd
+  rc=1
+json_lines 1621 and sha256_json_lines 5d83cdce…e29112d2e801: UNCHANGED. The wire does not move.
+lines 1907 -> 1920, sha256_all_lines cbc0138c… -> 4c64d739…: the 13 non-JSON lines W3.1's corpus_pr_dst prints
+(a blank line, the '-- 034 W3.1: the run report's counter …' header, 4 check rows, 5 REPORTCOUNT, REPORTKEYS, the duplicate-key row),
+lines 1755-1767 of /tmp/corpus_pr.out. With them deleted the masked output hashes to W2's all-lines hash exactly:
+  sed -E 's/"duration_ms":[0-9]+/"duration_ms":0/g' /tmp/corpus_pr.out | sed '1755,1767d' | sha256sum
+  cbc0138c19eb8a713e90ef14517145205444d03584cadf2ecbcf88af3962e7db  (1907 lines)
+
+## dst-summary.txt
+diff ../baseline-w2-after-0e09e09d/dst-summary.txt dst-summary.txt:
+1c1
+< # make dst at 0e09e09d: closing summary, make's error lines, corpus_pr's rows
+---
+> # make dst at 0cb8c3f3: closing summary, make's error lines, corpus_pr's rows
+4c4
+<   1336s wall, -j8, load 5.58 7.72 8.24
+---
+>   1074s wall, -j8, load 7.64 8.79 8.27
+130a131,136
+> -- 034 W3.1: the run report's counter, on the bank's own runs and effect logs --
+>   ✓ on every member, the rows the report counts are the tool rows the class observer reached
+>   ✓ seed-102: the report counts tool_effect_applied_then_failed from the effect log (×1)
+>   ✓ seed-102: and not under its twin: ToolFailed×0
+>   ✓ on every member, each twin's count plus its world-only row's is the twin id's recorded interactions
+>   ✓ the window's duplicate effect keys: 0 of 18 applied effect(s) — describes the GENERATOR (in DST the scripted model is the generator); no live or journal figure is claimed, because neither has an effect log
+  rc=1: the revision, the wall/load line, and W3.1's 6 new section lines (its header and 5 check rows; the
+  summary's grep keeps '-- ' and '  ✓ ' lines). Every CORPUSROW row and every W2 line is identical.

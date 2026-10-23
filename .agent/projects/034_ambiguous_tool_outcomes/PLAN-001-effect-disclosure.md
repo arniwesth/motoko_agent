@@ -5,7 +5,9 @@ by the operator on 2026-10-17 (its §6, rulings 1 to 5).
 
 Status: **W0 (Phase 0) merged, #277. W0b.1 probed; the operator withdrew Phase 0b at W0b.2
 (W0b.3 and W0b.4 canceled), #279. W1 in review, #280. W2 (Phase 2) in review, #281, stacked
-on #280; its W2.4 gate is in `evidence/baseline-w2-after-0e09e09d/`. W3 is next.** Phases 1, 2
+on #280; its W2.4 gate is in `evidence/baseline-w2-after-0e09e09d/`. W3 (Phase 3) in review,
+#282, stacked on #281: W3.1, W3.2 and W3.3 done; its W3.3 gate at `0cb8c3f3` is in
+`evidence/baseline-w3-after-0cb8c3f3/`. No task of this plan is left to start.** Phases 1, 2
 and 3 are planned to the task. Each opens with a re-grounding step, because each starts after
 the one before it has merged.
 Revised 2026-10-17 after two independent reviews. v1.1 answers Codex Sol (`gpt-6.1-sol`): one
