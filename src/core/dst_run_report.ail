@@ -114,8 +114,8 @@ import src/core/dst_fault_catalogue (
   FaultClass,
   RecoveryBranch, Branch, NoReachableBranch,
   Applicability, AlwaysApplicable, ConditionalOn,
-  FaultBoundary, ExtensionEffectBoundary,
-  Visibility, Wire,
+  FaultBoundary, ExtensionEffectBoundary, ToolBoundary,
+  Visibility, Wire, WorldOnly,
   branch_id,
   fault_catalogue,
   fault_catalogue_version,
@@ -137,6 +137,11 @@ import src/core/dst_discovery (driver_env_keys, EnvExpectation)
 import src/core/dst_invariants (
   Violation, violation_rule, violation_family, family_id
 )
+
+-- 034 W3.1: the world-only rows are counted from the recorded interactions and
+-- the world's effect log.
+import src/core/dst_interaction (Interaction, ToolIdentity, fault_outcome, ok_outcome)
+import src/core/dst_replay (effect_log_ordinals)
 
 export pure func run_report_version() -> string { "run-report/1" }
 
@@ -309,6 +314,202 @@ export pure func coverage_pair(cs: [ClassCoverage], bs: [BranchCoverage]) -> Cov
 }
 
 -- ============================================================================
+-- PART 2b — the world-only rows, counted from the effect log (034 W3.1)
+-- ============================================================================
+--
+-- 034 ADR-001 D4 adds two WORLD-ONLY tool classes, each delivered to the model
+-- as its wire twin's bytes: `tool_effect_applied_then_failed` as a
+-- `ToolFailed`, `tool_effect_applied_then_deadline` as a
+-- `ToolDeadlineExceeded`. The recorded `fault_class_id` of such an interaction
+-- IS the twin's, and so is every byte on the wire, which is why `corpus_pr`'s
+-- branch greps cannot tell the two apart. Only the world's effect log can: an
+-- interaction under the twin's id whose ordinal the log holds is the world-only
+-- row, and one the log does not hold is the twin.
+--
+-- ONE ROW PER INTERACTION. The twin's row says the update did NOT occur, so an
+-- applied fault is not a witness for it, and the two rows partition the twin
+-- id's interactions. Counting the world-only row's interaction under its twin
+-- too would report one tool call as two classes reached, and the twin's
+-- branch-reached counter would carry a "did not occur" witness the world
+-- contradicts.
+--
+-- Over the TOOL boundary's rows only. The other rows are not observed through
+-- `fault_class_id` (an approval denial is a served answer; an empty terminal
+-- response and malformed arguments are recorded `OutcomeOk`), and a counter that
+-- reported them as 0 here would state a gap it never looked for.
+
+export type ClassCount = { class_id: string, times: int }
+
+-- contracts: SKIPPED — calls `tool_counts_of`, RECURSIVE over the rows.
+export pure func tool_class_counts(rows: [FaultClass], xs: [Interaction],
+                                   effects: [{ ordinal: int, call_id: string, effect_key: string }]) -> [ClassCount] {
+  tool_counts_of(rows, rows, xs, effect_log_ordinals(effects))
+}
+
+-- contracts: BLOCKED — RECURSIVE over the rows.
+pure func tool_counts_of(rows: [FaultClass], each: [FaultClass], xs: [Interaction], applied: [int]) -> [ClassCount] {
+  match each {
+    [] => [],
+    r :: rest => match r.boundary {
+      ToolBoundary =>
+        ({ class_id: r.class_id, times: class_times(rows, r, xs, applied) })
+          :: tool_counts_of(rows, rest, xs, applied),
+      _ => tool_counts_of(rows, rest, xs, applied)
+    }
+  }
+}
+
+-- One row's interactions, read with world truth.
+-- contracts: SKIPPED — calls `count_partition` and `count_class`, RECURSIVE over the interactions.
+pure func class_times(rows: [FaultClass], r: FaultClass, xs: [Interaction], applied: [int]) -> int {
+  match r.visibility {
+    -- Delivered as the twin: the twin id's interactions the effect log holds.
+    WorldOnly(twin) => count_partition(xs, applied, twin, true),
+    Wire =>
+      -- A twin: only the interactions the effect log does NOT hold.
+      if is_a_twin(rows, r.class_id) then count_partition(xs, applied, r.class_id, false)
+      else count_class(xs, r.class_id)
+  }
+}
+
+-- contracts: BLOCKED — RECURSIVE over the rows.
+pure func is_a_twin(rows: [FaultClass], id: string) -> bool {
+  match rows {
+    [] => false,
+    r :: rest => match r.visibility {
+      WorldOnly(t) => if t == id then true else is_a_twin(rest, id),
+      Wire => is_a_twin(rest, id)
+    }
+  }
+}
+
+-- contracts: BLOCKED — RECURSIVE over the interactions.
+pure func count_partition(xs: [Interaction], applied: [int], cls: string, want: bool) -> int {
+  match xs {
+    [] => 0,
+    i :: rest =>
+      (if i.outcome.fault_class_id == cls && contains_int(applied, i.identity.ordinal) == want then 1 else 0)
+        + count_partition(rest, applied, cls, want)
+  }
+}
+
+-- contracts: BLOCKED — RECURSIVE over the interactions.
+pure func count_class(xs: [Interaction], cls: string) -> int {
+  match xs {
+    [] => 0,
+    i :: rest => (if i.outcome.fault_class_id == cls then 1 else 0) + count_class(rest, cls)
+  }
+}
+
+-- contracts: BLOCKED — RECURSIVE over the list.
+pure func contains_int(xs: [int], t: int) -> bool {
+  match xs {
+    [] => false,
+    x :: rest => if x == t then true else contains_int(rest, t)
+  }
+}
+
+-- Fold the counts into the two counters, which stay separate. A zero count
+-- leaves the row as it was, with its reason for not being reached. A positive
+-- one marks the row reached that many times. The branch fold is a second
+-- function and not a side effect of the first, because D11's point holds here
+-- too: the class count says the world delivered the class, and the evidence
+-- that the branch ran is the wire, which `corpus_pr` holds against these counts
+-- (the twin's plus its world-only row's equals the twin id's wire count).
+-- contracts: BLOCKED — RECURSIVE over the counts.
+export pure func observe_classes(cs: [ClassCoverage], counts: [ClassCount]) -> [ClassCoverage] {
+  match counts {
+    [] => cs,
+    n :: rest =>
+      observe_classes(if n.times > 0 then mark_class_times(cs, n.class_id, n.times) else cs, rest)
+  }
+}
+
+-- contracts: BLOCKED — RECURSIVE over the counts.
+export pure func observe_branches(bs: [BranchCoverage], counts: [ClassCount]) -> [BranchCoverage] {
+  match counts {
+    [] => bs,
+    n :: rest =>
+      observe_branches(if n.times > 0 then mark_branch_times(bs, n.class_id, n.times) else bs, rest)
+  }
+}
+
+-- contracts: BLOCKED — RECURSIVE over the coverage rows.
+pure func mark_class_times(cs: [ClassCoverage], id: string, n: int) -> [ClassCoverage] {
+  match cs {
+    [] => [],
+    c :: rest =>
+      if c.class_id == id then ({ c | status: Reached, times: c.times + n }) :: rest
+      else c :: mark_class_times(rest, id, n)
+  }
+}
+
+-- contracts: BLOCKED — RECURSIVE over the coverage rows.
+pure func mark_branch_times(bs: [BranchCoverage], id: string, n: int) -> [BranchCoverage] {
+  match bs {
+    [] => [],
+    b :: rest =>
+      if b.class_id == id then ({ b | status: Reached, times: b.times + n }) :: rest
+      else b :: mark_branch_times(rest, id, n)
+  }
+}
+
+-- contracts: BLOCKED — RECURSIVE over the counts.
+export pure func count_of(counts: [ClassCount], id: string) -> int {
+  match counts {
+    [] => 0,
+    n :: rest => if n.class_id == id then n.times else count_of(rest, id)
+  }
+}
+
+-- ============================================================================
+-- PART 2c — duplicate effect keys, a figure about the GENERATOR (034 W3.1)
+-- ============================================================================
+--
+-- Since 034 W1.3 the effect log holds every effect that applied: each completed
+-- call, and each fault with `applied` set. Two entries with the same key are the
+-- same tool and arguments applied twice, so an applied fault followed by a retry
+-- that completes is a duplicate. That is the shape Havoc's `DESTRUCTIVE` names:
+-- an effect repeated because its first application was reported as a failure.
+--
+-- AN ENTRY IS A DUPLICATE WHEN AN EARLIER ENTRY CARRIES ITS KEY. So [a, b, a] is
+-- one duplicate and [a, a, a] two: a key's first application is the effect, each
+-- later one a repeat. The number of DISTINCT keys is a different figure, and on
+-- a log with no repeat it equals the length, not 0.
+--
+-- IT DESCRIBES THE GENERATOR. In DST the model's calls are scripted, so a
+-- repeated key is the generator's choice, not a model's reaction to an
+-- `unknown` fault. It is not a figure about the live harness or a journal
+-- either: the live arm and journal tools never set `applied`, and a journal's
+-- world-truth list is empty, so there the count would always read 0. A live or
+-- journal measure has to come from transcripts (034 PLAN-001, *Follow-ups*).
+
+export type EffectKeyCount = { effects: int, duplicates: int }
+
+-- contracts: SKIPPED — calls `duplicates_after`, RECURSIVE over the effect log.
+export pure func duplicate_effect_keys(effects: [{ ordinal: int, call_id: string, effect_key: string }]) -> EffectKeyCount {
+  { effects: List.length(effects), duplicates: duplicates_after(effects, []) }
+}
+
+-- contracts: BLOCKED — RECURSIVE over the effect log.
+pure func duplicates_after(effects: [{ ordinal: int, call_id: string, effect_key: string }], seen: [string]) -> int {
+  match effects {
+    [] => 0,
+    e :: rest =>
+      if contains_str(seen, e.effect_key) then 1 + duplicates_after(rest, seen)
+      else duplicates_after(rest, e.effect_key :: seen)
+  }
+}
+
+-- The figure's label, in one home: the report renders it and `corpus_pr_dst`
+-- prints it beside the bank's count.
+export pure func generator_effect_keys_label() -> string
+  ensures { result != "" }
+{
+  "describes the GENERATOR (in DST the scripted model is the generator); no live or journal figure is claimed, because neither has an effect log"
+}
+
+-- ============================================================================
 -- PART 3 — completeness evidence, which comes in two kinds
 -- ============================================================================
 
@@ -431,6 +632,11 @@ export type RunReport = {
   branch_coverage: [BranchCoverage],
   terminal_reasons: [TerminalReasonCount],
   completeness: [CompletenessEvidence],
+
+  -- 034 W3.1: the window's duplicate effect keys, summed over its runs (a key in
+  -- one run and the same key in another are two worlds' effects, not a
+  -- repeat). The field name says whose figure it is: the generator's (PART 2c).
+  generator_effect_keys: EffectKeyCount,
 
   -- D8's first failed invariant, typed rather than a string a caller could
   -- invent. None on a clean window.
@@ -786,10 +992,12 @@ export pure func render_report(r: RunReport) -> string {
   COUNTERS (D11 keeps these separate; reaching a class is not evidence its branch ran)
     fault classes reached:     ${pair.classes_reached} of ${List.length(r.class_coverage)}
     recovery branches reached: ${pair.branches_reached} of ${List.length(r.branch_coverage)}
+    world-only rows are counted from the effect log, and a twin's count excludes them: one tool call is one row
   class coverage:${status_lines(r.class_coverage)}
   branch coverage:${branch_lines(r.branch_coverage)}
   terminal reasons reached:${terminal_lines(r.terminal_reasons)}
   completeness evidence (two KINDS; the second does not inherit the first's standing):${evidence_lines(r.completeness)}
+  effect keys:  duplicate effect keys: ${r.generator_effect_keys.duplicates} of ${r.generator_effect_keys.effects} applied effect(s) — ${generator_effect_keys_label()}
   elapsed:      ${r.elapsed_ms} ms of ${r.budget_ms} ms
   replay (D8: a digest without retained bytes is not sufficient):${replay_lines(r.replay_refs)}"
 }
@@ -947,3 +1155,129 @@ pure func rules_of_rejections(rs: [ReportRejection]) -> [string] {
     r :: rest => report_rule(r) :: rules_of_rejections(rest)
   }
 }
+
+-- ============================================================================
+-- 034 W3.1: the world-only rows and the duplicate-effect-key count. Each row
+-- below is the test 034 PLAN-001 W3.2 names for one mutant: r1 counts a
+-- world-only row from the typed outcome, r2 counts its interaction under its
+-- twin too, r3 counts distinct keys.
+-- ============================================================================
+
+pure func tool_at(ord: int, call_id: string, cls: string) -> Interaction {
+  { identity: { ordinal: ord, body: ToolIdentity("driver", call_id, "BashExec") },
+    request_projection: "", deadline_ms: 0,
+    outcome: if cls == "" then ok_outcome(0, "{}") else fault_outcome(0, "", cls) }
+}
+
+pure func effect_at(ord: int, call_id: string, key: string) -> { ordinal: int, call_id: string, effect_key: string } {
+  { ordinal: ord, call_id: call_id, effect_key: key }
+}
+
+-- Seed 102's shape, the bank's first witness for the world-only failed row: a
+-- completed call, then ONE `ToolFailed` whose effect applied, and no ToolFailed
+-- that did not. The log holds both: the completion and the applied fault.
+pure func applied_only_member() -> [Interaction] {
+  [tool_at(2, "gcall_1_0", ""), tool_at(5, "gcall_2_0", "ToolFailed")]
+}
+
+pure func applied_only_effects() -> [{ ordinal: int, call_id: string, effect_key: string }] {
+  [effect_at(2, "gcall_1_0", "BashExec:{\"cmd\":\"ls\"}"),
+   effect_at(5, "gcall_2_0", "BashExec:{\"cmd\":\"make build\"}")]
+}
+
+-- Both halves of each twin pair in one member: a ToolFailed that applied and
+-- one that did not, a ToolDeadlineExceeded that applied and one that did not,
+-- and a correlation mismatch, which has no world-only row.
+pure func mixed_member() -> [Interaction] {
+  [tool_at(3, "gcall_1_0", "ToolFailed"),
+   tool_at(5, "gcall_2_0", "ToolFailed"),
+   tool_at(7, "gcall_3_0", "ToolDeadlineExceeded"),
+   tool_at(9, "gcall_4_0", "ToolDeadlineExceeded"),
+   tool_at(11, "gcall_5_0", "ToolCorrelationMismatch")]
+}
+
+pure func mixed_effects() -> [{ ordinal: int, call_id: string, effect_key: string }] {
+  [effect_at(5, "gcall_2_0", "BashExec:{\"cmd\":\"make build\"}"),
+   effect_at(9, "gcall_4_0", "BashExec:{\"cmd\":\"make test\"}")]
+}
+
+-- r1. The world-only row is counted from the EFFECT LOG. Read from the typed
+-- outcome it is 0 (no interaction records its id) or the twin id's whole count
+-- (2 in the mixed member): both differ from the 1 asserted here.
+pure func test_a_world_only_row_is_counted_from_the_effect_log() -> bool
+  tests [((), true)]
+  {
+    let one = tool_class_counts(fault_catalogue(), applied_only_member(), applied_only_effects());
+    let mixed = tool_class_counts(fault_catalogue(), mixed_member(), mixed_effects());
+    count_of(one, "tool_effect_applied_then_failed") == 1
+      && count_of(mixed, "tool_effect_applied_then_failed") == 1
+      && count_of(mixed, "tool_effect_applied_then_deadline") == 1
+      && count_of(mixed, "ToolCorrelationMismatch") == 1
+  }
+
+-- r2. A twin and its world-only row are NOT counted together: on the member
+-- that reaches only the world-only row the twin is not reached at all, class or
+-- branch, and on the mixed member each half is counted once, summing to the
+-- twin id's recorded interactions.
+pure func test_a_twin_and_its_world_only_row_are_not_counted_together() -> bool
+  tests [((), true)]
+  {
+    let rows = fault_catalogue();
+    let one = tool_class_counts(rows, applied_only_member(), applied_only_effects());
+    let bs = observe_branches(empty_branch_coverage(rows), one);
+    let mixed = tool_class_counts(rows, mixed_member(), mixed_effects());
+    count_of(one, "ToolFailed") == 0
+      && branch_times(bs, "ToolFailed") == 0
+      && not branch_reached(bs, "ToolFailed")
+      && branch_times(bs, "tool_effect_applied_then_failed") == 1
+      && count_of(mixed, "ToolFailed") == 1
+      && count_of(mixed, "ToolDeadlineExceeded") == 1
+      && count_of(mixed, "ToolFailed") + count_of(mixed, "tool_effect_applied_then_failed") == 2
+  }
+
+pure func branch_times(bs: [BranchCoverage], id: string) -> int {
+  match find_branch_row(bs, id) { None => -1, Some(b) => b.times }
+}
+
+pure func branch_reached(bs: [BranchCoverage], id: string) -> bool {
+  match find_branch_row(bs, id) { None => false, Some(b) => is_reached(b.status) }
+}
+
+-- The class fold matches the branch fold, and a row nothing observed keeps its
+-- reason for not being reached.
+pure func test_the_counts_fold_into_both_counters() -> bool
+  tests [((), true)]
+  {
+    let rows = fault_catalogue();
+    let counts = tool_class_counts(rows, mixed_member(), mixed_effects());
+    let cs = observe_classes(empty_class_coverage(rows), counts);
+    match find_class_row(cs, "tool_effect_applied_then_deadline") {
+      None => false,
+      Some(c) => is_reached(c.status) && c.times == 1
+    } && match find_class_row(cs, "approval_denied") {
+      None => false,
+      Some(c) => not is_reached(c.status) && reach_reason(c.status) != ""
+    }
+  }
+
+-- r3. Duplicate effect keys are counted, not distinct keys. One key repeated:
+-- an applied fault followed by a retry of the same call that completes.
+pure func test_a_repeated_effect_key_is_one_duplicate() -> bool
+  tests [((), true)]
+  {
+    let k = duplicate_effect_keys(
+      [effect_at(5, "gcall_2_0", "BashExec:{\"cmd\":\"make build\"}"),
+       effect_at(7, "gcall_3_0", "BashExec:{\"cmd\":\"ls\"}"),
+       effect_at(9, "gcall_4_0", "BashExec:{\"cmd\":\"make build\"}")]);
+    k.duplicates == 1 && k.effects == 3
+  }
+
+-- The survival fixture: no key repeats, so the count is 0.
+pure func test_no_repeated_effect_key_reports_zero() -> bool
+  tests [((), true)]
+  {
+    let a = duplicate_effect_keys(mixed_effects());
+    let b = duplicate_effect_keys(applied_only_effects());
+    let c = duplicate_effect_keys([]);
+    a.duplicates == 0 && a.effects == 2 && b.duplicates == 0 && c.duplicates == 0 && c.effects == 0
+  }

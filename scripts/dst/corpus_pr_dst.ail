@@ -285,6 +285,12 @@ import src/core/test/ext_fixture (fixture_hooks)
 -- 034 W1.3: the builder reads the world-truth list off the effect log.
 import src/core/dst_replay (applied_faults_of_world, effect_log_ordinals)
 import src/core/phase_vocab (LedgerTrace)
+-- 034 W3.1: the run report's tool-class counter and the duplicate-effect-key
+-- count, fed from each member's own run.
+import src/core/dst_run_report (
+  ClassCount, EffectKeyCount,
+  tool_class_counts, count_of, duplicate_effect_keys, generator_effect_keys_label
+)
 
 -- ---------------------------------------------------------------------------
 -- Reporting
@@ -771,7 +777,11 @@ export type BuiltMember = {
   -- 034 W1.5: what the wire guard found in this run's trace, and how many
   -- tool-role messages it read there.
   wire_leaks: [string],
-  tool_messages: int
+  tool_messages: int,
+  -- 034 W3.1: the run report's counts for the tool-boundary rows, read off
+  -- this run's log and effect log, and the effect log's duplicate keys.
+  tool_counts: [ClassCount],
+  effect_keys: EffectKeyCount
 }
 
 func build(member_id: string, kind: MemberKind, p: ExecutionProgram, log: [Interaction],
@@ -801,7 +811,8 @@ func build(member_id: string, kind: MemberKind, p: ExecutionProgram, log: [Inter
   let m = member_of(member_id, kind, p, path, identity, bytes_len, classes, branches);
   { member: m, program: p, log: log, ended_ok: ended_ok,
     persisted: persisted, loaded_identity: loaded_identity,
-    wire_leaks: world_only_ids_on_wire(trace), tool_messages: tool_messages_on_wire(trace) }
+    wire_leaks: world_only_ids_on_wire(trace), tool_messages: tool_messages_on_wire(trace),
+    tool_counts: tool_class_counts(rows, log, effects), effect_keys: duplicate_effect_keys(effects) }
 }
 
 -- A MEMBER'S RUN, AND THIS IS ITS ONLY HOME: the label, the world it starts
@@ -1151,6 +1162,130 @@ pure func count_tool_messages(bs: [BuiltMember]) -> int {
   match bs { [] => 0, b :: rest => b.tool_messages + count_tool_messages(rest) }
 }
 
+-- 034 W3.1: THE RUN REPORT'S COUNTER ON THE BANK. `dst_run_report.tool_class_counts`
+-- counts each tool-boundary row from the log and the effect log, and this holds
+-- it, member by member, against W1.5's class observer above, which is a second
+-- implementation. On every member a row the report counts is a row the observer
+-- reached, and the reverse; a twin's count plus its world-only row's is the twin
+-- id's recorded interactions, so no interaction is counted under both. Seed 102
+-- is named because it reaches the world-only failed row and no ToolFailed that
+-- did not apply: 034 PLAN-001 W3.2's r1 (count the world-only row from the typed
+-- outcome) turns row b red there, and r2 (count it under the twin too) row c.
+--
+-- The REPORTCOUNT lines are the window's sums, and `make corpus_pr` holds each
+-- twin's plus its world-only row's against the twin id's count on the wire,
+-- which is the branch witness: the two rows share their twin's branch and its
+-- bytes, so the wire alone counts them together.
+func scenario_the_report_counts_world_only_rows_from_the_effect_log(bs: [BuiltMember]) -> bool ! {IO} {
+  let _ = println("\n-- 034 W3.1: the run report's counter, on the bank's own runs and effect logs --");
+  let disagree = report_disagreements(bs);
+  let a = report("on every member, the rows the report counts are the tool rows the class observer reached",
+                 List.length(disagree) == 0,
+                 "the report and the observer disagree: ${join_str(disagree)}");
+  let s102 = member_counts(bs, "seed-102");
+  let b = report("seed-102: the report counts ${fault_class_tool_effect_applied_then_failed()} from the effect log (×${count_of(s102, fault_class_tool_effect_applied_then_failed())})",
+                 count_of(s102, fault_class_tool_effect_applied_then_failed()) > 0,
+                 "seed 102's applied ToolFailed is not counted under the world-only row: it was counted from the typed outcome, which never records that id");
+  let c = report("seed-102: and not under its twin: ${fault_class_tool_failed()}×${count_of(s102, fault_class_tool_failed())}",
+                 count_of(s102, fault_class_tool_failed()) == 0,
+                 "seed 102 has no ToolFailed that did not apply, and the report counts one: the world-only row's interaction was counted under its twin too");
+  let split = split_mismatches(bs);
+  let d = report("on every member, each twin's count plus its world-only row's is the twin id's recorded interactions",
+                 List.length(split) == 0,
+                 "${join_str(split)}");
+  let totals = sum_counts(bs, tool_ids(bs));
+  let keys = sum_keys(bs);
+  let _ = emit_report_counts(totals);
+  let _ = println("REPORTKEYS effects=${keys.effects} duplicates=${keys.duplicates}");
+  let e = report("the window's duplicate effect keys: ${keys.duplicates} of ${keys.effects} applied effect(s) — ${generator_effect_keys_label()}",
+                 keys.effects > 0 && keys.duplicates <= keys.effects,
+                 "the bank's effect logs hold no entry, so the count measures nothing");
+  a && b && c && d && e
+}
+
+pure func member_counts(bs: [BuiltMember], id: string) -> [ClassCount] {
+  match bs {
+    [] => [],
+    b :: rest => if b.member.member_id == id then b.tool_counts else member_counts(rest, id)
+  }
+}
+
+pure func report_disagreements(bs: [BuiltMember]) -> [string] {
+  match bs {
+    [] => [],
+    b :: rest => disagreements_in(b.member.member_id, b.tool_counts, b.member.classes_reached)
+                   ++ report_disagreements(rest)
+  }
+}
+
+pure func disagreements_in(member: string, cs: [ClassCount], reached: [string]) -> [string] {
+  match cs {
+    [] => [],
+    c :: rest =>
+      (if (c.times > 0) == contains_str(reached, c.class_id) then []
+       else ["${member} ${c.class_id}: report ×${c.times}, observer ${if contains_str(reached, c.class_id) then "reached" else "not reached"}"])
+        ++ disagreements_in(member, rest, reached)
+  }
+}
+
+pure func split_mismatches(bs: [BuiltMember]) -> [string] {
+  match bs {
+    [] => [],
+    b :: rest =>
+      split_of(b, fault_class_tool_failed(), fault_class_tool_effect_applied_then_failed())
+        ++ split_of(b, fault_class_tool_deadline_exceeded(), fault_class_tool_effect_applied_then_deadline())
+        ++ split_mismatches(rest)
+  }
+}
+
+pure func split_of(b: BuiltMember, twin: string, world_only: string) -> [string] {
+  let recorded = count_fault_class(b.log, twin);
+  let counted = count_of(b.tool_counts, twin) + count_of(b.tool_counts, world_only);
+  if counted == recorded then []
+  else ["${b.member.member_id}: ${twin}×${count_of(b.tool_counts, twin)} + ${world_only}×${count_of(b.tool_counts, world_only)} against ${recorded} recorded ${twin} interaction(s)"]
+}
+
+pure func tool_ids(bs: [BuiltMember]) -> [string] {
+  match bs { [] => [], b :: _ => ids_of_counts(b.tool_counts) }
+}
+
+pure func ids_of_counts(cs: [ClassCount]) -> [string] {
+  match cs { [] => [], c :: rest => c.class_id :: ids_of_counts(rest) }
+}
+
+pure func sum_counts(bs: [BuiltMember], ids: [string]) -> [ClassCount] {
+  match ids {
+    [] => [],
+    id :: rest => ({ class_id: id, times: sum_count(bs, id) }) :: sum_counts(bs, rest)
+  }
+}
+
+pure func sum_count(bs: [BuiltMember], id: string) -> int {
+  match bs { [] => 0, b :: rest => count_of(b.tool_counts, id) + sum_count(rest, id) }
+}
+
+-- Summed over the members, because each run is its own world: the same key in
+-- two runs is two effects, not a repeat.
+pure func sum_keys(bs: [BuiltMember]) -> EffectKeyCount {
+  match bs {
+    [] => { effects: 0, duplicates: 0 },
+    b :: rest => {
+      let t = sum_keys(rest);
+      { effects: b.effect_keys.effects + t.effects, duplicates: b.effect_keys.duplicates + t.duplicates }
+    }
+  }
+}
+
+func emit_report_counts(cs: [ClassCount]) -> () ! {IO} {
+  match cs {
+    [] => (),
+    c :: rest => {
+      let _ = println("REPORTCOUNT ${c.class_id}=${c.times}");
+      emit_report_counts(rest)
+    }
+  }
+}
+
 -- The two keys, and the measurement that says one cannot stand for the other.
 func scenario_the_corpus_has_two_keys(bs: [BuiltMember]) -> bool ! {IO} {
   let _ = println("\n-- the two keys --");
@@ -1422,10 +1557,11 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   let g = scenario_every_rule_fires(bs);
   let h = scenario_the_minimum_is_selected_from_measured_cost(bs);
   let w = scenario_no_world_only_id_reaches_the_wire(bs);
+  let r = scenario_the_report_counts_world_only_rows_from_the_effect_log(bs);
 
   let _ = println("\n${render_corpus(the_corpus(bs, 0))}");
 
-  if a && b && c && d && e && e2 && f && g && h && w then
+  if a && b && c && d && e && e2 && f && g && h && w && r then
     println("\n✓ WI-A15 commit 1: the blocking PR corpus")
   else {
     let _ = println("\n✗ WI-A15 commit 1 FAILED");

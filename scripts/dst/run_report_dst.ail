@@ -66,6 +66,9 @@ import src/core/dst_invariants (
   Violation, NegativeAdvance
 )
 
+import src/core/dst_interaction (Interaction, ToolIdentity, fault_outcome, ok_outcome)
+import std/string (contains)
+
 import src/core/dst_run_report (
   RunReport, ReportRejection,
   ReachStatus, Reached, UnreachableStructurally, UnreachableUntilChange,
@@ -74,6 +77,9 @@ import src/core/dst_run_report (
   CompletenessEvidence, EvidenceKind, RuntimeWitness, SourceDerivedKeySet,
   ReplayReference,
   HarnessFailureCount, TerminalReasonCount,
+  ClassCount, EffectKeyCount,
+  tool_class_counts, observe_classes, observe_branches, count_of,
+  duplicate_effect_keys, generator_effect_keys_label,
   run_report_version,
   reach_id, reach_reason, is_reached, is_waived, all_reach_ids,
   empty_class_coverage, empty_branch_coverage, mark_class, mark_branch,
@@ -238,6 +244,7 @@ pure func complete_report() -> RunReport {
                        { reason: "max_steps", count: 1 },
                        { reason: "cost_exhausted", count: 1 }],
     completeness: complete_evidence(),
+    generator_effect_keys: duplicate_effect_keys(tool_witness_effects()),
     first_failed_invariant: None,
     elapsed_ms: 4200,
     budget_ms: 60000,
@@ -285,16 +292,45 @@ pure func documented_coverage() -> [ClassCoverage] {
   let c3 = mark_class(c2, "provider_protocol_inconsistent_result", Reached);
   let c4 = mark_class(c3, "provider_partial_stream_then_error", Reached);
   let c5 = mark_class(c4, "provider_empty_terminal_response", Reached);
-  let c6 = mark_class(c5, fault_class_tool_failed(), Reached);
-  let c7 = mark_class(c6, fault_class_tool_correlation_mismatch(), Reached);
-  let c8 = mark_class(c7, fault_class_tool_deadline_exceeded(), Reached);
-  -- 034 W1.6: the two world-only rows W1.5 declared, reached once the
-  -- generator drew `applied` — 4 and 7 seeds of 260, two bank witnesses each.
-  let c9 = mark_class(c8, fault_class_tool_effect_applied_then_failed(), Reached);
-  let c10 = mark_class(c9, fault_class_tool_effect_applied_then_deadline(), Reached);
-  mark_class(c10, "approval_denied", Reached)
+  -- 034 W3.1: the five TOOL-boundary rows are no longer marked by hand. A hand
+  -- mark cannot tell a world-only row from its twin, because both are reached
+  -- through the twin's bytes; the report's own counter can, from the effect log.
+  -- So they are counted, by `tool_class_counts`, over `tool_witnesses()`: one
+  -- witness per row, shaped as the bank's (below). The two world-only rows were
+  -- reached once W1.6's generator drew `applied`: 4 and 7 seeds of 260, two bank
+  -- witnesses each. The bank's MEASURED counts are `corpus_pr`'s, whose
+  -- REPORTCOUNT lines feed the same counter from each member's own run.
+  let tools = observe_classes(c5, tool_class_counts(fault_catalogue(), tool_witnesses(), tool_witness_effects()));
+  mark_class(tools, "approval_denied", Reached)
   -- The two conditional classes keep the Waived status empty_class_coverage
   -- gave them, carrying the catalogue's own condition verbatim.
+}
+
+-- 034 W3.1: one witness per tool-boundary row, at the bank's witnesses' shapes
+-- (`corpus_pr_dst.fixed_bank()`): seed 61's ToolFailed that did NOT apply, seed
+-- 102's that did, seed 60's ToolDeadlineExceeded that did not, seed 11's that
+-- did, and seed 3's correlation mismatch. Not a measurement; the ordinals are
+-- the fixture's own. The applied ToolFailed is followed by a retry of the same
+-- call that completes, which is the one repeated key in its effect log.
+pure func tool_witnesses() -> [Interaction] {
+  [tool_at(3, "gcall_1_0", fault_class_tool_failed()),
+   tool_at(5, "gcall_2_0", fault_class_tool_failed()),
+   tool_at(6, "gcall_3_0", ""),
+   tool_at(8, "gcall_4_0", fault_class_tool_deadline_exceeded()),
+   tool_at(10, "gcall_5_0", fault_class_tool_deadline_exceeded()),
+   tool_at(12, "gcall_6_0", fault_class_tool_correlation_mismatch())]
+}
+
+pure func tool_witness_effects() -> [{ ordinal: int, call_id: string, effect_key: string }] {
+  [{ ordinal: 5, call_id: "gcall_2_0", effect_key: "BashExec:{\"cmd\":\"make build\"}" },
+   { ordinal: 6, call_id: "gcall_3_0", effect_key: "BashExec:{\"cmd\":\"make build\"}" },
+   { ordinal: 10, call_id: "gcall_5_0", effect_key: "BashExec:{\"cmd\":\"make test\"}" }]
+}
+
+pure func tool_at(ord: int, call_id: string, cls: string) -> Interaction {
+  { identity: { ordinal: ord, body: ToolIdentity("driver", call_id, "BashExec") },
+    request_projection: "", deadline_ms: 0,
+    outcome: if cls == "" then ok_outcome(0, "{}") else fault_outcome(0, "", cls) }
 }
 
 -- The register's `status_id` is a STRING, because `ReachStatus` lives above
@@ -538,6 +574,75 @@ pure func not_waived(cs: [ClassCoverage], id: string) -> bool {
   match status_of(cs, id) { None => false, Some(s) => not is_waived(s) }
 }
 
+-- 034 W3.1: the world-only rows are counted from the effect log, a twin and its
+-- world-only row are never counted together, and the duplicate-effect-key count
+-- is reported as the generator's. Rows a, b and c are what 034 PLAN-001 W3.2's
+-- r1 and r2 turn red in this suite; d and e are r3's and its survival case.
+func scenario_world_only_rows_from_the_effect_log() -> bool ! {IO} {
+  let _ = println("\n-- 034 W3.1: world-only rows, counted from the effect log --");
+  let rows = fault_catalogue();
+  let cs = documented_coverage();
+  let counts = tool_class_counts(rows, tool_witnesses(), tool_witness_effects());
+  let bs = observe_branches(empty_branch_coverage(rows), counts);
+  let ids = [fault_class_tool_failed(), fault_class_tool_effect_applied_then_failed(),
+             fault_class_tool_deadline_exceeded(), fault_class_tool_effect_applied_then_deadline(),
+             fault_class_tool_correlation_mismatch()];
+  let a = report("each world-only row is reached from the effect log, once: ${count_line(counts, ids)}",
+                 times_of(cs, fault_class_tool_effect_applied_then_failed()) == 1
+                   && times_of(cs, fault_class_tool_effect_applied_then_deadline()) == 1,
+                 "a world-only row is not counted from the effect log: the typed outcome never records its id, and the twin id's whole count is not its count");
+  let b = report("each twin is reached once, by its own NOT-applied witness, and not again by its world-only row's",
+                 times_of(cs, fault_class_tool_failed()) == 1
+                   && times_of(cs, fault_class_tool_deadline_exceeded()) == 1
+                   && times_of(cs, fault_class_tool_correlation_mismatch()) == 1,
+                 "a twin's count includes its world-only row's interaction: one tool call counted as two classes");
+  let c = report("branch counts split the same way: each twin's branch count plus its world-only row's equals the twin id's 2 recorded interactions",
+                 bs_times(bs, fault_class_tool_failed()) == 1
+                   && bs_times(bs, fault_class_tool_effect_applied_then_failed()) == 1
+                   && bs_times(bs, fault_class_tool_deadline_exceeded()) == 1
+                   && bs_times(bs, fault_class_tool_effect_applied_then_deadline()) == 1,
+                 "branch counts: ${branch_count_line(bs, ids)}");
+  let k = duplicate_effect_keys(tool_witness_effects());
+  let d = report("the duplicate-effect-key count reads 1 on a log with one repeated key (an applied fault, then its retry completing): duplicate effect keys: ${k.duplicates} of ${k.effects} applied effect(s) — ${generator_effect_keys_label()}",
+                 k.duplicates == 1 && k.effects == 3 && contains(generator_effect_keys_label(), "GENERATOR"),
+                 "expected 1 duplicate of 3, labelled as the generator's; got ${k.duplicates} of ${k.effects}");
+  let none = duplicate_effect_keys([{ ordinal: 1, call_id: "a", effect_key: "BashExec:{}" },
+                                    { ordinal: 2, call_id: "b", effect_key: "ReadFile:{}" }]);
+  let e = report("survival: a log with no repeated key reports 0 duplicates",
+                 none.duplicates == 0 && none.effects == 2,
+                 "a log with no repeat reported ${none.duplicates}");
+  a && b && c && d && e
+}
+
+pure func times_of(cs: [ClassCoverage], id: string) -> int {
+  match cs {
+    [] => -1,
+    c :: rest => if c.class_id == id then (if is_reached(c.status) then c.times else 0) else times_of(rest, id)
+  }
+}
+
+pure func bs_times(bs: [BranchCoverage], id: string) -> int {
+  match bs {
+    [] => -1,
+    b :: rest => if b.class_id == id then (if is_reached(b.status) then b.times else 0) else bs_times(rest, id)
+  }
+}
+
+pure func count_line(counts: [ClassCount], ids: [string]) -> string {
+  match ids {
+    [] => "",
+    id :: [] => "${id}×${count_of(counts, id)}",
+    id :: rest => "${id}×${count_of(counts, id)} ${count_line(counts, rest)}"
+  }
+}
+
+pure func branch_count_line(bs: [BranchCoverage], ids: [string]) -> string {
+  match ids {
+    [] => "",
+    id :: rest => "${id}×${bs_times(bs, id)} ${branch_count_line(bs, rest)}"
+  }
+}
+
 -- Clusters 7/8: the env class's completeness evidence is a DIFFERENT KIND, and
 -- the difference is reported rather than dissolved into one "complete".
 func scenario_env_evidence_is_a_different_kind() -> bool ! {IO} {
@@ -722,6 +827,7 @@ export func main() -> () ! {IO} {
   let c5 = scenario_env_evidence_is_a_different_kind();
   let c6 = scenario_the_ci_replay_affordance();
   let c7 = scenario_mutants();
+  let c8 = scenario_world_only_rows_from_the_effect_log();
 
   let _ = println("\n-- the rendered report (a complete window) --");
   let _ = println(render_report(complete_report()));
@@ -734,7 +840,7 @@ export func main() -> () ! {IO} {
   let documented: RunReport = { doc_base | class_coverage: doc_classes };
   let _ = println(render_report(documented));
 
-  if c1 && c2 && c3 && c4 && c5 && c6 && c7 then println("\nrun_report_dst PASS")
+  if c1 && c2 && c3 && c4 && c5 && c6 && c7 && c8 then println("\nrun_report_dst PASS")
   else {
     let _ = println("\nrun_report_dst FAIL");
     exit(1)
