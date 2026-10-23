@@ -2664,10 +2664,14 @@ export pure func applied_twin_rule(f: AppliedTwinFinding) -> string
   }
 }
 
--- Built with `concat` and `intToStr`, not interpolation: interpolation lowers to
--- `show`, which `verify_classify`'s probes cannot encode.
+-- It carried `ensures { result != "" }` until CI run 39492326554. Any body that
+-- builds a string (`concat`, `join`, interpolation) is outside the fragment, so
+-- the contract was never proven, and verify_classify's DETERMINE probe, which
+-- inlines this body into an `ensures`, gets SKIPPED or ERROR from AILANG v0.52.5
+-- at random on the same file (3 ERROR in 8 runs, measured). ERROR fails
+-- `verify_classify_check`; the contract bought only that.
+-- contracts: SKIPPED — built with `std/string.concat`, which the fragment cannot encode.
 export pure func applied_twin_message(f: AppliedTwinFinding) -> string
-  ensures { result != "" }
 {
   match f {
     TwinServedLengthDiffers(a, b) =>
@@ -2704,8 +2708,8 @@ pure func first_difference(a: string, b: string) -> int {
 
 -- A window of `s` from shortly before `at`, so a finding shows where two
 -- values part and not the kilobytes they share.
+-- contracts: SKIPPED — built with `std/string.concat`; see `applied_twin_message`.
 pure func excerpt_at(s: string, at: int) -> string
-  ensures { result != "" || s == "" }
 {
   let n = Str.length(s);
   let from = if at > 40 then at - 40 else 0;
