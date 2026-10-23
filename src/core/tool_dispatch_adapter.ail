@@ -33,7 +33,7 @@ import std/result (Ok, Err)
 import std/string (contains)
 import std/string as Str (length)
 import src/core/tool_contract (ToolCallEnvelope)
-import src/core/types (ToolResultItem, SearchMatch, ReadFileResult, SearchResult, WriteFileResult, EditFileResult, BashExecResult, RunTestsResult, ToolErrorResult, ToolFault, FaultKind, FaultNotAllowed, FaultNotFound, FaultPermissionDenied, FaultSpawnFailed, FaultDeadline, FaultOutputLimit, FaultSignal, FaultRefused, FaultIoError, EffectsNone, EffectsUnknown)
+import src/core/types (ToolResultItem, SearchMatch, ReadFileResult, SearchResult, WriteFileResult, EditFileResult, BashExecResult, RunTestsResult, ToolErrorResult, ToolFault, FaultKind, FaultNotAllowed, FaultNotFound, FaultPermissionDenied, FaultSpawnFailed, FaultDeadline, FaultOutputLimit, FaultSignal, FaultRefused, FaultIoError, FaultFailed, FaultCorrelationMismatch, FaultDenied, FaultArgumentsUndecodable, EffectsNone, EffectsUnknown)
 import src/core/tool_fault (fault_key, fault_kind_key, fault_effects_key, fault_note_key, fault_elapsed_ms_key, fault_bytes_key, fault_signal_key, fault_signal_name_key, fault_kind_name, effects_value, effects_note, effects_note_none, effects_note_unknown, refused_fault, io_error_fault)
 import src/core/tool_runtime (run_native_batch, unknown_tool_refusal)
 import src/core/phase_vocab (tool_result_message)
@@ -210,7 +210,11 @@ func fault_extra_fields(k: FaultKind) -> [{ key: string, value: Json }] {
       kv(fault_signal_name_key(), js(name))
     ],
     FaultRefused => [],
-    FaultIoError => []
+    FaultIoError => [],
+    FaultFailed => [],
+    FaultCorrelationMismatch => [],
+    FaultDenied => [],
+    FaultArgumentsUndecodable => []
   }
 }
 

@@ -1,0 +1,11 @@
+--- a/src/core/ports.ail
++++ b/src/core/ports.ail
+@@ -1813,7 +1813,7 @@
+       -- by definition; a fault applied only when the world says so. The
+       -- outcome is computed first and without `t.applied`, so world truth
+       -- decides what is logged and never what is served.
+-      let applied = match outcome { ToolCompleted(_) => true, _ => t.applied };
++      let applied = match outcome { ToolCompleted(_) => true, _ => true };
+       let entry = { ordinal: List.length(state.log), call_id: inv.call.id,
+                     effect_key: "${inv.call.tool}:${encode(inv.call.arguments)}" };
+       let advanced = { state | tools: rest, clock_ms: state.clock_ms + t.duration_ms,

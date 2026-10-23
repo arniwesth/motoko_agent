@@ -1,0 +1,11 @@
+--- a/src/core/dst_fault_catalogue.ail
++++ b/src/core/dst_fault_catalogue.ail
+@@ -665,7 +665,7 @@
+     WorldOnly(t) =>
+       if t == "" then []
+       else match find_class(rows, t) {
+-        None => [WorldOnlyTwinMissing(r.class_id, t)],
++        None => [],
+         Some(twin) => {
+           let world_only = match twin.visibility {
+             Wire => [],

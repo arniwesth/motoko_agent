@@ -115,6 +115,7 @@ import src/core/dst_fault_catalogue (
   RecoveryBranch, Branch, NoReachableBranch,
   Applicability, AlwaysApplicable, ConditionalOn,
   FaultBoundary, ExtensionEffectBoundary,
+  Visibility, Wire,
   branch_id,
   fault_catalogue,
   fault_catalogue_version,
@@ -859,7 +860,8 @@ pure func structurally_unreachable_fixture() -> [FaultClass] {
      applicability: AlwaysApplicable,
      delivery_constructor: "fixture",
      recovery_branch: NoReachableBranch("the seam delivers no fault on this pin"),
-     logical_transition: "undefined at this seam" }]
+     logical_transition: "undefined at this seam",
+     visibility: Wire }]
 }
 
 pure func test_no_reachable_branch_becomes_a_structural_gap() -> bool

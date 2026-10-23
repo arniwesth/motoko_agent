@@ -1,0 +1,34 @@
+--- a/src/core/tool_phase.ail
++++ b/src/core/tool_phase.ail
+@@ -512,7 +512,7 @@
+             });
+             let _ = emit(complete_event);
+             {
+-              msg: tool_outcome_message(call, execution.outcome),
++              msg: w17_v12_render(call, execution.outcome, List.length(execution.next_state.effect_log) > List.length(budget.next_state.effect_log)),
+               next_state: advance(execution.next_state, ToolExec),
+               -- START then COMPLETE, which is the order they happened in. The
+               -- driver appends this log positionally, so a reversal here is a
+@@ -804,3 +804,22 @@
+       && m.content == "{\"error\":true,\"delegated_backend_not_wired\":true,\"tool\":\"BashExec\",\"fault\":{\"kind\":\"refused\",\"effects\":\"none\",\"note\":\"${effects_note_none()}\"},\"note\":\"v2 split_by_backend selected Delegated; the inbox-based ohmy_pi wait is deferred to a follow-up milestone. Re-run with settings.ohmy_pi=false or use a tool that resolves to the Native backend.\"}"
+   }
+ 
++
++-- 034 W1.7 mutant v12: the typed renderer, told whether the fault applied,
++-- names the world-only class in `fault_class`.
++pure func w17_v12_render(call: ToolCall, o: ToolOutcome, applied: bool) -> Message {
++  if not applied then tool_outcome_message(call, o)
++  else match o {
++    ToolFailed(f) =>
++      tool_fault_message(call, "tool_effect_applied_then_failed", failed_fault(f.after_dispatch), encode(jo([
++        kv("code", js(f.code)), kv("message", js(f.message)), kv("tool_call_id", js(f.tool_call_id))
++      ]))),
++    ToolDeadlineExceeded(d) =>
++      tool_fault_message(call, "tool_effect_applied_then_deadline", deadline_fault(d.elapsed_ms), encode(jo([
++        kv("tool_call_id", js(d.tool_call_id)),
++        kv("elapsed_ms", jnum(_int_to_float(d.elapsed_ms))),
++        kv("timeout_ms", jnum(_int_to_float(d.timeout_ms)))
++      ]))),
++    _ => tool_outcome_message(call, o)
++  }
++}

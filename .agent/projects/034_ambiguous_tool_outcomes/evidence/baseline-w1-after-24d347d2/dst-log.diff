@@ -1,0 +1,309 @@
+# make dst sweep log at 2ac0ff88 (<) against 24d347d2 (>), normalised and sorted (norm_sweep.sh, W0.7's).
+# The full diff is 3819 lines (772 KB) and is not committed. Its <,> lines by group:
+#   263 corpus-bank <
+#   303 corpus-bank >
+#   50 herdr-effect-site <
+#   51 herdr-effect-site >
+#   246 lock-warning >
+#   4 timing <
+#   4 timing >
+#   867 trace-json <
+#   1256 trace-json >
+#   other 296
+# Below: every line not in the four bulk groups (trace-json, lock-warning, herdr-effect-site, corpus-bank) or timing.
+>
+>
+>
+>
+<       MEASURED: seed 77 authors 4 generator interaction(s) at the declared bounds (log total 19)
+>       MEASURED: seed 86 authors 11 generator interaction(s) at the declared bounds (log total 28)
+<       [artifact-path-collision] .ailang/dst-artifacts/gen.specimen/gv-2/seed-23.artifact already holds a DIFFERENT artifact (existing identity ef3c8016ddf4eb2d248d1ec9eef6f81d1e0035dd20a147a425903d93ef50c545, incoming 3f955b1d8434f0c311476fe3e30734c4505a639c231fe69f03e0f181a980d25d) and was not overwritten. D8 names a preserved failure by (generator_id, generator_version, seed) and that triple is not unique — it omits the execution manifest the program is conditioned on, and cluster 11's site 22 measured that a version bump is currently only a seed offset. Two different programs can legitimately want this path; the store refuses rather than losing one
+<       [artifact-unknown-schema-version] this build writes 'execution-program/4' and can decode 4 schema version(s); it cannot decode 'execution-program/0' and will NOT reinterpret it. D8 forbids silently reinterpreting an old program: replay this artifact with the pinned runner for schema 'execution-program/0', or add a decode path for it to decodable_schema_versions() and to this module. Regenerating the artifact is not a migration — it destroys the evidence the artifact exists to carry
+>       [artifact-path-collision] .ailang/dst-artifacts/gen.specimen/gv-2/seed-23.artifact already holds a DIFFERENT artifact (existing identity 6581e5bb3e1859ca9e3cddba1428ba710c9145ed95cd48fda6fa48a1a7dd2768, incoming 3e1ce88f91b67e2e73c20ef904a1fa11e53b58aea591621cbb3b94593073bde9) and was not overwritten. D8 names a preserved failure by (generator_id, generator_version, seed) and that triple is not unique — it omits the execution manifest the program is conditioned on, and cluster 11's site 22 measured that a version bump is currently only a seed offset. Two different programs can legitimately want this path; the store refuses rather than losing one
+>       [artifact-unknown-schema-version] this build writes 'execution-program/5' and can decode 5 schema version(s); it cannot decode 'execution-program/0' and will NOT reinterpret it. D8 forbids silently reinterpreting an old program: replay this artifact with the pinned runner for schema 'execution-program/0', or add a decode path for it to decodable_schema_versions() and to this module. Regenerating the artifact is not a migration — it destroys the evidence the artifact exists to carry
+<       fast identity: 74f8bd11361eba7dc02bb57c37b2d7ffb46950c15ad382418eecd5456e23f322
+>       fast identity: 34d2e40a6ffd93ba0b54836d1ba99d4f19699f6f4b152b326a4dc96f3316623b
+<       profile:            driver_only/37
+<       profile:            driver_plus_compose/18
+<       profile:            driver_plus_no_ops/26
+>       profile:            driver_only/38
+>       profile:            driver_plus_compose/19
+>       profile:            driver_plus_no_ops/27
+<       slow identity: 4e5eab7c479a4737373bb879f0dbb2f9cc61f4528ff0a98484c49254f9a705cd
+>       slow identity: 220d05bfbb714ff905fd1f25dd90a7fc6609a1d81655fc538bcbf3043ab7119a
+>       tool/tool_effect_applied_then_deadline -> tool_phase.tool_outcome_message/ToolDeadlineExceeded
+>       tool/tool_effect_applied_then_failed -> tool_phase.tool_outcome_message/ToolFailed
+<     fault classes reached:     9 of 11
+<     fault classes reached:     9 of 11
+>     fault classes reached:     11 of 13
+>     fault classes reached:     11 of 13
+<     recovery branches reached: 9 of 11
+<     recovery branches reached: 9 of 11
+>     recovery branches reached: 11 of 13
+>     recovery branches reached: 11 of 13
+>     tool_effect_applied_then_deadline → tool_phase.tool_outcome_message/ToolDeadlineExceeded: reached ×1
+>     tool_effect_applied_then_deadline → tool_phase.tool_outcome_message/ToolDeadlineExceeded: reached ×1
+>     tool_effect_applied_then_deadline: reached ×1
+>     tool_effect_applied_then_deadline: reached ×1
+>     tool_effect_applied_then_failed → tool_phase.tool_outcome_message/ToolFailed: reached ×1
+>     tool_effect_applied_then_failed → tool_phase.tool_outcome_message/ToolFailed: reached ×1
+>     tool_effect_applied_then_failed: reached ×1
+>     tool_effect_applied_then_failed: reached ×1
+<     ⓘ the current encoder produces different bytes from the frozen v2 artifact, and the frozen artifact still decodes correctly — that is a backward-compatible encoding change and is permitted. The strict byte-identity assertion lives on the v3 row, at the version this build writes
+<     ⓘ the current encoder produces different bytes from the frozen v3 artifact, and the frozen artifact still decodes correctly — that is a backward-compatible encoding change and is permitted. The strict byte-identity assertion lives on the v4 row, at the version this build writes
+>     ⓘ the current encoder produces different bytes from the frozen v2 artifact, and the frozen artifact still decodes correctly — that is a backward-compatible encoding change and is permitted. The strict byte-identity assertion lives on the v5 row, at the version this build writes
+>     ⓘ the current encoder produces different bytes from the frozen v3 artifact, and the frozen artifact still decodes correctly — that is a backward-compatible encoding change and is permitted. The strict byte-identity assertion lives on the v5 row, at the version this build writes
+>     ⓘ the current encoder produces different bytes from the frozen v4 artifact, and the frozen artifact still decodes correctly — that is a backward-compatible encoding change and is permitted. The strict byte-identity assertion lives on the v5 row, at the version this build writes
+>     ✓ 0 identity class(es) round-tripped-but-not-frozen in the v4 bytes
+<     ✓ a one-field change moves exactly 2 of 88 lines — the field's own line and the digest (header=2, env value=2, interaction #7 payload=2)
+>     ✓ a one-field change moves exactly 2 of 97 lines — the field's own line and the digest (header=2, env value=2, interaction #7 payload=2)
+>     ✓ artifact-missing-section ← the execution-program/5 world-truth line (applied_faults) deleted
+>     ✓ artifact-not-an-integer ← the world-truth list holding something that is not an ordinal
+>     ✓ artifact-not-an-integer ← the world-truth list written without its brackets
+>     ✓ artifact-unknown-tag ← an execution-program/4 artifact carrying the world-truth line
+>     ✓ program-applied-fault-not-a-tool ← applied_faults lists ordinal 42, which no interaction carries
+>     ✓ program-applied-fault-not-a-tool ← applied_faults lists the extension effect #7
+>     ✓ program-applied-fault-not-a-tool ← applied_faults lists the provider interaction #0
+>     ✓ program-applied-fault-repeated ← applied_faults lists ordinal 1 twice
+>     ✓ the bytes hold one applied fault (#12, after dispatch, listed) and one non-applied fault (#13, before dispatch, unlisted)
+<   PASS  1 sandwich_discriminates     delayed projection puts every LIVE line AFTER RETURNED (first_live=5 > returned=4), so clause 1 is a real test
+>   PASS  1 sandwich_discriminates     delayed projection puts every LIVE line AFTER RETURNED (first_live=7 > returned=6), so clause 1 is a real test
+<   completed:    15
+>   completed:    17
+<   families the set did not evaluate, over all 16 members: replay-consistency (the obligation is NoReplay: a discovery run owes its program nothing)
+>   families the set did not evaluate, over all 18 members: replay-consistency (the obligation is NoReplay: a discovery run owes its program nothing)
+<   herdr -- 4 ambient source(s), 50 ExtPorts field call(s) in closure, 15 port-view projection(s)
+>   herdr -- 4 ambient source(s), 51 ExtPorts field call(s) in closure, 15 port-view projection(s)
+<   members:      16
+>   members:      18
+<   pairA: seed=132 v=1 interactions=23 draws=47 clock=15 ended=Ok
+<   pairB: seed=12 v=1 interactions=23 draws=47 clock=98 ended=Ok
+>   pairA: seed=9 v=2 interactions=21 draws=36 clock=18 ended=Ok
+>   pairB: seed=12 v=2 interactions=21 draws=36 clock=24 ended=Err
+<   profile:      driver_only/37 under manifest 'driver_only/3'
+<   profile:      driver_only/37 under manifest 'driver_only/3'
+>   profile:      driver_only/38 under manifest 'driver_only/3'
+>   profile:      driver_only/38 under manifest 'driver_only/3'
+<   repeat: seed=132 v=1 interactions=23 draws=47 clock=15 ended=Ok
+>   repeat: seed=9 v=2 interactions=21 draws=36 clock=18 ended=Ok
+<   rich: seed=110 v=1 interactions=42 draws=111 clock=138 ended=Ok
+>   rich: seed=632 v=2 interactions=42 draws=130 clock=224 ended=Ok
+<   schemas:      program=execution-program/4 vocabulary=event-vocabulary/4 catalogue=fault-catalogue/2
+<   schemas:      program=execution-program/4 vocabulary=event-vocabulary/4 catalogue=fault-catalogue/2
+>   schemas:      program=execution-program/5 vocabulary=event-vocabulary/4 catalogue=fault-catalogue/3
+>   schemas:      program=execution-program/5 vocabulary=event-vocabulary/4 catalogue=fault-catalogue/3
+<   seeds:        15 attempted (minimum 12): 1, 2, 4, 5, 7, 9, 10, 12, 15, 19, 30, 32, 62, 141, 244
+>   seeds:        17 attempted (minimum 12): 1, 3, 4, 6, 8, 11, 14, 18, 29, 31, 60, 61, 71, 102, 109, 165, 215
+<   src/core/tool_phase.ail:484   ports.clock_now              ClockRead  returned  [execute_allowed_tool_call]
+<   src/core/tool_phase.ail:485   ports.env_get                EnvRead    returned  [execute_allowed_tool_call]
+<   src/core/tool_phase.ail:492   ports.tool_exec              ToolExec   returned  [execute_allowed_tool_call]
+<   stderr: Error: type error in tmp/inline_1792339944892 (decl 0): undefined variable: undefined_symbol_xyz at tmp/inline_1792339944892.ail:3:35
+>   src/core/tool_phase.ail:499   ports.clock_now              ClockRead  returned  [execute_allowed_tool_call]
+>   src/core/tool_phase.ail:500   ports.env_get                EnvRead    returned  [execute_allowed_tool_call]
+>   src/core/tool_phase.ail:507   ports.tool_exec              ToolExec   returned  [execute_allowed_tool_call]
+>   stderr: Warning: dependency sunholo/motoko_ext_herdr content changed (locked: sha256:6928b495ef76aff83..., current: sha256:6ad70260565a80fa4...)
+<   versioned: seed=132 v=2 interactions=14 draws=11 clock=3 ended=Err
+>   versioned: seed=9 v=3 interactions=14 draws=11 clock=3 ended=Ok
+<   ✓ ...and at version 2, the one a legitimate version bump remaps to
+>   ✓ ...and at version 3, the one a legitimate version bump remaps to
+<   ✓ NAMED recovery branches reached: 9 of 11
+>   ✓ NAMED recovery branches reached: 11 of 13
+<   ✓ a member dispatched a tool (10 of 16)
+<   ✓ a member recorded a retry (4 of 16: seed-9, seed-19, seed-32, seed-141)
+>   ✓ a member dispatched a tool (12 of 18)
+>   ✓ a member recorded a retry (4 of 18: seed-8, seed-18, seed-31, seed-109)
+<   ✓ a report can reach every class and execute no branch (classes=9 branches=0)
+>   ✓ a report can reach every class and execute no branch (classes=11 branches=0)
+<   ✓ all 16 artifact identities are distinct
+<   ✓ all 16 members are clean: no finding from the invariant set, none from the six checks, none not evaluated
+<   ✓ all 16 members carry a terminal summary and were bridged
+<   ✓ all 16 trajectory keys are distinct
+>   ✓ all 18 artifact identities are distinct
+>   ✓ all 18 members are clean: no finding from the invariant set, none from the six checks, none not evaluated
+>   ✓ all 18 members carry a terminal summary and were bridged
+>   ✓ all 18 trajectory keys are distinct
+<   ✓ all five frozen specimens are present (67 lines of v1 bytes and 83 of v2 and 83 of v3, all three now predating this build's encoder, plus 87 lines of v4 bytes carrying the byte-identity assertion at the version this build writes)
+>   ✓ all six frozen specimens are present (67 lines of v1 bytes, 83 of v2, 83 of v3 and 87 of v4, all four now predating this build's encoder, plus 96 lines of v5 bytes carrying the byte-identity assertion at the version this build writes)
+<   ✓ constructed-empty-terminal: persisted (artifact-persisted) with retained bytes (2410)
+>   ✓ constructed-empty-terminal: persisted (artifact-persisted) with retained bytes (2428)
+<   ✓ different seeds produce different programs at EQUAL interaction count (n=23, digests 1470388103 vs 512601276)
+>   ✓ different seeds produce different programs at EQUAL interaction count (n=21, digests 1572020757 vs 1853958809)
+<   ✓ driver_only v37 LOADS CLEAN at the bound revision
+<   ✓ driver_plus_compose v18 LOADS CLEAN at the bound revision, with compose INSTALLED and on_tool_handle EXCLUDED
+<   ✓ driver_plus_herdr v7 LOADS CLEAN at the bound revision, with herdr INSTALLED, its TOOL path COVERED and only the lifecycle slot excluded
+<   ✓ driver_plus_no_ops v26 LOADS CLEAN at the bound revision, with 4 extensions INSTALLED
+>   ✓ driver_only v38 LOADS CLEAN at the bound revision
+>   ✓ driver_plus_compose v19 LOADS CLEAN at the bound revision, with compose INSTALLED and on_tool_handle EXCLUDED
+>   ✓ driver_plus_herdr v8 LOADS CLEAN at the bound revision, with herdr INSTALLED, its TOOL path COVERED and only the lifecycle slot excluded
+>   ✓ driver_plus_no_ops v27 LOADS CLEAN at the bound revision, with 4 extensions INSTALLED
+<   ✓ every manifest ABI pin in the tree is the declared one: 8.0 (34 pin(s) across 569 tracked .ail file(s))
+<   ✓ every manifest ABI pin in the tree is the declared one: 8.0 (34 pin(s) across 569 tracked .ail file(s))
+>   ✓ every manifest ABI pin in the tree is the declared one: 8.0 (34 pin(s) across 571 tracked .ail file(s))
+>   ✓ every manifest ABI pin in the tree is the declared one: 8.0 (34 pin(s) across 571 tracked .ail file(s))
+<   ✓ exempted, a fixture literal built to differ: src/eval/journal/admission.ail:993 pins '7.3' != 8.0 — the A9b fixture: a differing abi_version is what makes a9b_abi fire A9b:AbiVersionDiffers
+<   ✓ exempted, a fixture literal built to differ: src/eval/journal/admission.ail:993 pins '7.3' != 8.0 — the A9b fixture: a differing abi_version is what makes a9b_abi fire A9b:AbiVersionDiffers
+>   ✓ exempted, a fixture literal built to differ: src/eval/journal/admission.ail:1001 pins '7.3' != 8.0 — the A9b fixture: a differing abi_version is what makes a9b_abi fire A9b:AbiVersionDiffers
+>   ✓ exempted, a fixture literal built to differ: src/eval/journal/admission.ail:1001 pins '7.3' != 8.0 — the A9b fixture: a differing abi_version is what makes a9b_abi fire A9b:AbiVersionDiffers
+<   ✓ expected + unreachable == every required non-waived class (9)
+>   ✓ expected + unreachable == every required non-waived class (11)
+<   ✓ fast: its manifest validates against driver_only/37
+>   ✓ fast: its manifest validates against driver_only/38
+<   ✓ fault classes reached: 9 of 11
+>   ✓ fault classes reached: 11 of 13
+<   ✓ identity: (c0fbf10, sha256:38d8a67e903a949a9d07ac8e5b4a9eda4e786ab0ca879d1e4d6992424b316940)
+>   ✓ identity: (c0fbf10, sha256:8c5302b39f91bb0b3da332e430694637bc26fd217d3450a66d288276c3e0d154)
+<   ✓ maxsteps: the program's manifest validates against driver_only/37
+>   ✓ maxsteps: the program's manifest validates against driver_only/38
+>   ✓ no projected tool message contains a world-only class id
+<   ✓ pairA: every cursor started empty and the generator made 47 choices
+>   ✓ pairA: every cursor started empty and the generator made 36 choices
+<   ✓ pairB: every cursor started empty and the generator made 47 choices
+>   ✓ pairB: every cursor started empty and the generator made 36 choices
+<   ✓ repeat: every cursor started empty and the generator made 47 choices
+>   ✓ repeat: every cursor started empty and the generator made 36 choices
+<   ✓ rich: every cursor started empty and the generator made 111 choices
+>   ✓ rich: every cursor started empty and the generator made 130 choices
+<   ✓ rich: the program's manifest validates against driver_only/37
+>   ✓ rich: the program's manifest validates against driver_only/38
+<   ✓ seed 11: driver phase within depth 110 over 190 records
+<   ✓ seed 23: driver phase within depth 126 over 216 records
+<   ✓ seed 7: driver phase within depth 76 over 122 records
+>   ✓ seed 10: driver phase within depth 110 over 190 records
+>   ✓ seed 22: driver phase within depth 126 over 216 records
+>   ✓ seed 6: driver phase within depth 76 over 122 records
+<   ✓ shipped catalogue validates: 11 classes, all 11 required ids present
+>   ✓ shipped catalogue validates: 13 classes, all 13 required ids present
+<   ✓ slow: its manifest validates against driver_only/37
+>   ✓ slow: its manifest validates against driver_only/38
+<   ✓ src/core/dst_corpus.ail: 12/12 passed
+>   ✓ src/core/dst_corpus.ail: 15/15 passed
+<   ✓ src/core/dst_fault_catalogue.ail: 17/17 passed
+>   ✓ src/core/dst_fault_catalogue.ail: 28/28 passed
+<   ✓ src/core/dst_generator.ail: 21/21 passed
+>   ✓ src/core/dst_generator.ail: 23/23 passed
+<   ✓ src/core/dst_persistence.ail: 4/4 passed
+>   ✓ src/core/dst_persistence.ail: 7/7 passed
+<   ✓ src/core/dst_replay.ail: 21/21 passed
+>   ✓ src/core/dst_replay.ail: 28/28 passed
+<   ✓ src/core/ext_world.ail: 17/17 passed
+>   ✓ src/core/ext_world.ail: 21/21 passed
+<   ✓ src/core/ports.ail: 9/9 passed
+>   ✓ src/core/ports.ail: 12/12 passed
+<   ✓ src/core/session.ail: 40/40 passed
+>   ✓ src/core/session.ail: 41/41 passed
+<   ✓ src/core/tool_fault.ail: 36/43 passed (7 skipped)
+<   ✓ src/core/tool_phase.ail: 12/12 passed
+<   ✓ src/core/tool_phase.ail:388 still the mixed guard
+<   ✓ src/core/tool_phase.ail:389 still the call attributed to scratchpad
+<   ✓ src/core/tool_phase.ail:484 still the FIFTH routed core clock site (D4's table says four)
+>   ✓ src/core/tool_fault.ail: 48/55 passed (7 skipped)
+>   ✓ src/core/tool_phase.ail: 19/19 passed
+>   ✓ src/core/tool_phase.ail:403 still the mixed guard
+>   ✓ src/core/tool_phase.ail:404 still the call attributed to scratchpad
+>   ✓ src/core/tool_phase.ail:499 still the FIFTH routed core clock site (D4's table says four)
+<   ✓ the bank's SEED count meets the declared minimum (15 ≥ 12)
+>   ✓ the bank's SEED count meets the declared minimum (17 ≥ 12)
+>   ✓ the canary's contrast version is NOT the version this suite runs
+<   ✓ the corpus validates against 9 expected class(es): provider_error_retryable, provider_error_non_retryable, provider_protocol_inconsistent_result, provider_partial_stream_then_error, provider_empty_terminal_response, ToolFailed, ToolCorrelationMismatch, ToolDeadlineExceeded, approval_denied
+>   ✓ the corpus validates against 11 expected class(es): provider_error_retryable, provider_error_non_retryable, provider_protocol_inconsistent_result, provider_partial_stream_then_error, provider_empty_terminal_response, ToolFailed, ToolCorrelationMismatch, ToolDeadlineExceeded, tool_effect_applied_then_failed, tool_effect_applied_then_deadline, approval_denied
+<   ✓ the frozen v4 specimen decodes to the specimen, field by field (2496 bytes read from the tree)
+>   ✓ the frozen v4 specimen decodes to the program its own bytes hold, field by field, with an empty world-truth list (2496 bytes read from the tree)
+>   ✓ the frozen v5 specimen decodes to the specimen, field by field (2934 bytes read from the tree)
+>   ✓ the guard read 62 tool-role message(s) across 18 member trace(s)
+<   ✓ the named distinctness set is pairwise distinct: expected=9 unreachable=0 kinds=3 minimum=12 members=16
+>   ✓ the named distinctness set is pairwise distinct: expected=11 unreachable=0 kinds=3 minimum=12 members=18
+<   ✓ the recorded attribution reference is current: (c0fbf10, sha256:38d8a67e903a949a9d07ac8e5b4a9eda4e786ab0ca879d1e4d6992424b316940)
+<   ✓ the recorded attribution reference is current: (c0fbf10, sha256:38d8a67e903a949a9d07ac8e5b4a9eda4e786ab0ca879d1e4d6992424b316940)
+<   ✓ the recorded attribution reference is current: (c0fbf10, sha256:38d8a67e903a949a9d07ac8e5b4a9eda4e786ab0ca879d1e4d6992424b316940)
+<   ✓ the recorded attribution reference is current: (c0fbf10, sha256:38d8a67e903a949a9d07ac8e5b4a9eda4e786ab0ca879d1e4d6992424b316940)
+>   ✓ the recorded attribution reference is current: (c0fbf10, sha256:8c5302b39f91bb0b3da332e430694637bc26fd217d3450a66d288276c3e0d154)
+>   ✓ the recorded attribution reference is current: (c0fbf10, sha256:8c5302b39f91bb0b3da332e430694637bc26fd217d3450a66d288276c3e0d154)
+>   ✓ the recorded attribution reference is current: (c0fbf10, sha256:8c5302b39f91bb0b3da332e430694637bc26fd217d3450a66d288276c3e0d154)
+>   ✓ the recorded attribution reference is current: (c0fbf10, sha256:8c5302b39f91bb0b3da332e430694637bc26fd217d3450a66d288276c3e0d154)
+<   ✓ the same program encodes byte-identically twice (2496 bytes, 88 lines)
+>   ✓ the same program encodes byte-identically twice (2934 bytes, 97 lines)
+<   ✓ the seed-to-choices mapping at version 1 is the pinned one
+>   ✓ the seed-to-choices mapping at version 2, the one this suite runs, is the pinned one
+<   ✓ the specimen is a structurally valid program (stage 1's validator, 11 known class ids)
+<   ✓ the specimen round-trips field by field (36 header scalars, 12 interactions × 9 fields)
+>   ✓ the specimen is a structurally valid program (stage 1's validator, 13 known class ids)
+>   ✓ the specimen round-trips field by field (36 header scalars, 14 interactions × 9 fields)
+<   ✓ the tightened bound (3) is BELOW this seed's natural trajectory (4)
+>   ✓ the tightened bound (3) is BELOW this seed's natural trajectory (11)
+<   ✓ the two provider error classes reach DIFFERENT branches: retryable→stream_error_retry×4, non-retryable→provider_failure_finalize×6, and NO retry carries a non-retryable code
+>   ✓ the two provider error classes reach DIFFERENT branches: retryable→stream_error_retry×4, non-retryable→provider_failure_finalize×8, and NO retry carries a non-retryable code
+>   ✓ the v1, v2, v3 and v4 specimens all decode, each with an empty world-truth list (not applied: the recorded meaning of every pre-v5 tool fault)
+>   ✓ the versioned run's version ('3') is NOT the one this suite runs ('2')
+>   ✓ two world-only rows, each naming its wire twin: tool_effect_applied_then_failed → ToolFailed, tool_effect_applied_then_deadline → ToolDeadlineExceeded
+>   ✓ v08: a world-only row whose twin is not a row → world-only-twin-missing
+>   ✓ v09: a world-only row whose twin is itself world-only → world-only-twin-world-only
+>   ✓ v10: a world-only row whose delivery constructor differs from its twin's → world-only-twin-constructor-differs
+>   ✓ v11: a world-only row whose recovery branch differs from its twin's → world-only-twin-branch-differs
+>   ✓ v5_fixture: replay reproduces the effect log — #1 completed and #12 listed, #13 absent
+>   ✓ v5_fixture: the frozen bytes list #12 and not #13
+>   ✓ v5_fixture: the reconstituted tool queue (#1, #12, #13) has `applied` on #12 alone
+>   ✓ v5_fixture: the replayable specimen round-trips with its list
+>   ✓ v5_fixture: the replayed tool seam serves the recorded outcomes
+<   ✓ wire witness, branch-reached: approval_denied×35 empty_stop_finalize×1 ToolFailed×3 ToolCorrelationMismatch×5 ToolDeadlineExceeded×3 stream_error_retry×4 provider_failure_finalize×11 malformed_arguments×6 (against 67 executed dispatch batch(es), so neither side of the approval decision is unwalked)
+>   ✓ wire witness, branch-reached: approval_denied×32 empty_stop_finalize×1 ToolFailed×5 ToolCorrelationMismatch×4 ToolDeadlineExceeded×5 stream_error_retry×4 provider_failure_finalize×13 malformed_arguments×6 (against 66 executed dispatch batch(es), so neither side of the approval decision is unwalked)
+>   ✓ wire witness, dispatch stage: 1 before-dispatch ToolFailed(s) rendered with effects none, of 5 ToolFailed
+>   ✓ world_truth (b): two programs differing only in the list serve identical interactions, payload and advance alike
+>   ✓ world_truth (b): …and differ in world truth alone — the twin's effect log has no fault entry
+>   ✓ world_truth: each entry carries its call id and the tool-and-arguments key
+>   ✓ world_truth: no world-only class id in any projected tool message (standing rule 6), over 3 tool message(s)
+>   ✓ world_truth: replay rebuilds the effect log — the completed calls and the listed faults, at the listed ordinals
+>   ✓ world_truth: the builder lists exactly the applied fault
+>   ✓ world_truth: the decoded program replays to an identical interaction log
+>   ✓ world_truth: the discovery run dispatched the three scripted tools
+>   ✓ world_truth: the effect log holds the completed call and the applied fault, at their interaction ordinals
+>   ✓ world_truth: the program round-trips through the artifact codec with its list
+>   ✓ world_truth: the reconstituted queue has `applied` on the listed fault only
+> -- standing rule 6: no world-only class id in any projected tool message --
+< === fault_catalogue_dst (D3, fault-catalogue/2) ===
+> === fault_catalogue_dst (D3, fault-catalogue/3) ===
+< CENSUS pairA expect_provider=4 expect_tool=1 expect_approval=3 expect_wake=0 expect_extension_effect=0 environment_read=11 runtime_random_draw=0 advance_clock=4 file_write=0 file_remove=0 dir_make=0
+< CENSUS pairA_replay expect_provider=4 expect_tool=1 expect_approval=3 expect_wake=0 expect_extension_effect=0 environment_read=11 runtime_random_draw=0 advance_clock=4 file_write=0 file_remove=0 dir_make=0
+> CENSUS pairA expect_provider=3 expect_tool=1 expect_approval=2 expect_wake=0 expect_extension_effect=0 environment_read=11 runtime_random_draw=0 advance_clock=4 file_write=0 file_remove=0 dir_make=0
+> CENSUS pairA_replay expect_provider=3 expect_tool=1 expect_approval=2 expect_wake=0 expect_extension_effect=0 environment_read=11 runtime_random_draw=0 advance_clock=4 file_write=0 file_remove=0 dir_make=0
+> CENSUS rich expect_provider=11 expect_tool=3 expect_approval=9 expect_wake=0 expect_extension_effect=0 environment_read=13 runtime_random_draw=0 advance_clock=6 file_write=0 file_remove=0 dir_make=0
+< CENSUS rich expect_provider=9 expect_tool=4 expect_approval=8 expect_wake=0 expect_extension_effect=0 environment_read=14 runtime_random_draw=0 advance_clock=7 file_write=0 file_remove=0 dir_make=0
+< CENSUS rich_replay expect_provider=9 expect_tool=4 expect_approval=8 expect_wake=0 expect_extension_effect=0 environment_read=14 runtime_random_draw=0 advance_clock=7 file_write=0 file_remove=0 dir_make=0
+> CENSUS rich_replay expect_provider=11 expect_tool=3 expect_approval=9 expect_wake=0 expect_extension_effect=0 environment_read=13 runtime_random_draw=0 advance_clock=6 file_write=0 file_remove=0 dir_make=0
+> Error: type error in tmp/inline_1792516131421 (decl 0): undefined variable: undefined_symbol_xyz at tmp/inline_1792516131421.ail:3:35
+< HERDR-GRADED: PASS — the ToolProvider path is reachable under DST, the run is recorded, graded, validated and strictly replayed, and driver_plus_herdr/7 rests on it
+< HERDR-GRADED: PASS — the ToolProvider path is reachable under DST, the run is recorded, graded, validated and strictly replayed, and driver_plus_herdr/7 rests on it
+> HERDR-GRADED: PASS — the ToolProvider path is reachable under DST, the run is recorded, graded, validated and strictly replayed, and driver_plus_herdr/8 rests on it
+> HERDR-GRADED: PASS — the ToolProvider path is reachable under DST, the run is recorded, graded, validated and strictly replayed, and driver_plus_herdr/8 rests on it
+< SEEDROW pairA seed=132 version=1 n=23 outcomes_len=23 digest=1470388103
+< SEEDROW pairB seed=12 version=1 n=23 outcomes_len=23 digest=512601276
+< SEEDROW repeat seed=132 version=1 n=23 outcomes_len=23 digest=1470388103
+< SEEDROW rich seed=110 version=1 n=42 outcomes_len=42 digest=401955287
+< SEEDROW versioned seed=132 version=2 n=14 outcomes_len=14 digest=484041996
+> SEEDROW pairA seed=9 version=2 n=21 outcomes_len=21 digest=1572020757
+> SEEDROW pairB seed=12 version=2 n=21 outcomes_len=21 digest=1853958809
+> SEEDROW repeat seed=9 version=2 n=21 outcomes_len=21 digest=1572020757
+> SEEDROW rich seed=632 version=2 n=42 outcomes_len=42 digest=1717157530
+> SEEDROW versioned seed=9 version=3 n=14 outcomes_len=14 digest=1358919840
+< driver_only_dst  (driver_only v37)
+> driver_only_dst  (driver_only v38)
+< driver_plus_compose_dst  (driver_plus_compose v18)
+> driver_plus_compose_dst  (driver_plus_compose v19)
+< driver_plus_no_ops_dst  (driver_plus_no_ops v26)
+> driver_plus_no_ops_dst  (driver_plus_no_ops v27)
+< execution_program_dst  (execution-program/4)
+> execution_program_dst  (execution-program/5)
+< non-member port calls (92), recorded not gated:
+> non-member port calls (93), recorded not gated:
+< source revision    2ac0ff882f03456828721184fcac193ec6764c7a
+< source revision    2ac0ff882f03456828721184fcac193ec6764c7a
+< src/core: 73 .ail files discovered, 51 carry tests, 657 tests, 644 passed, 13 skipped
+> source revision    24d347d2a19f566df2ba8c0dcf40cdb2d629ce32
+> source revision    24d347d2a19f566df2ba8c0dcf40cdb2d629ce32
+> src/core: 73 .ail files discovered, 51 carry tests, 710 tests, 697 passed, 13 skipped
+< test_coverage: every file carrying inline tests was run; 644 of 657 passed, 13 skipped against a record
+> test_coverage: every file carrying inline tests was run; 697 of 710 passed, 13 skipped against a record
+> v5_fixture (034 W1.3): the frozen world-truth pair, persisted, reconstituted and replayed
+> world_truth (034 W1.3): the effect log, recorded, persisted and replayed
+> world_truth: discovery recorded 27 interactions; tool ordinals [15,19,23]; effect log #15 wt0a T:{}; #19 wt0b T:{};
+< ✓ corpus_judge: 16 members, the invariant set and six checks, two budget-edge controls, two branch controls
+> ✓ corpus_judge: 18 members, the invariant set and six checks, two budget-edge controls, two branch controls

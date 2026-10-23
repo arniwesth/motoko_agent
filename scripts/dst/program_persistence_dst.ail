@@ -109,6 +109,9 @@ import src/core/dst_generator (GeneratorBounds)
 import src/core/fs_node (FsNode, FsFile, FsDir, fs_kind_id, fs_content_of)
 import src/core/dst_profile (ExecutionManifest, PackageVersion)
 import src/core/dst_fault_catalogue (required_class_ids)
+-- 034 W1.2: the specimen's two tool-fault payloads are written BY the codec, so
+-- the frozen v5 bytes hold the stage exactly as this build serves it.
+import src/core/ports (ToolOutcome, ToolFailed, encode_tool_outcome)
 import src/core/dst_replay (
   RegressionReplay,
   regression_replay_findings,
@@ -785,8 +788,41 @@ pure func frozen_v1_interactions() -> [Interaction] {
 -- The frozen eight PLUS every class added since. This is what every row in this
 -- file except the two frozen-bytes rows uses.
 pure func specimen_interactions() -> [Interaction] {
-  frozen_v1_interactions() ++ post_v1_interactions()
+  frozen_v1_interactions() ++ post_v1_interactions() ++ post_v4_interactions()
 }
+
+-- 034 W1.2, THE WORLD-TRUTH PAIR, added after the v4 freeze for the reason every
+-- split in this file exists: a field added after a freeze cannot be in the
+-- frozen bytes. Two tool FAULTS, one listed in `applied_faults` and one not:
+--
+--   #12  failed AFTER dispatch, and APPLIED — the D4 class: its observation is a
+--        plain `ToolFailed`, and only the program's world-truth list says the
+--        effect happened anyway;
+--   #13  failed BEFORE dispatch, and NOT applied — the only value a
+--        before-dispatch fault may take (D4), and the stage token the legacy
+--        default can never produce, so the frozen bytes hold both tokens.
+--
+-- Every quantity is distinct from every other in the specimen (S7): advances
+-- 41/42, deadlines 8000/9000, and call ids, origins and names of their own.
+pure func post_v4_interactions() -> [Interaction] {
+  [inter(12, ToolIdentity("origin.zeta", "call.gamma", "tool.applied"),
+         "rq.tool.twelve", 8000,
+         { advance_ms: 41, chunks: [],
+           payload: encode_tool_outcome(ToolFailed({ tool_call_id: "call.gamma", code: "E_APPLIED",
+                                                     message: "failed after dispatch, effect applied",
+                                                     after_dispatch: true })),
+           status: OutcomeFault, fault_class_id: specimen_fault_class() }),
+   inter(13, ToolIdentity("origin.eta", "call.delta", "tool.not_applied"),
+         "rq.tool.thirteen", 9000,
+         { advance_ms: 42, chunks: [],
+           payload: encode_tool_outcome(ToolFailed({ tool_call_id: "call.delta", code: "E_REFUSED",
+                                                     message: "refused before dispatch",
+                                                     after_dispatch: false })),
+           status: OutcomeFault, fault_class_id: specimen_fault_class() })]
+}
+
+-- The world-truth list the specimen carries: #12 and not #13.
+pure func specimen_applied_faults() -> [int] { [12] }
 
 pure func post_v1_interactions() -> [Interaction] {
   pre_wake_post_v1_interactions() ++ [
@@ -814,7 +850,8 @@ pure func specimen_program() -> ExecutionProgram {
     initial_world: specimen_world(),
     bounds: specimen_bounds(),
     manifest: specimen_manifest(),
-    interactions: specimen_interactions() }
+    interactions: specimen_interactions(),
+    applied_faults: specimen_applied_faults() }
 }
 
 pure func encoded_specimen() -> string {
@@ -845,7 +882,9 @@ pure func frozen_v1_program() -> ExecutionProgram {
     schema_version: "execution-program/1",
     initial_world: frozen_v1_world(),
     bounds: bounds_before_v3(),
-    interactions: frozen_v1_interactions() }
+    interactions: frozen_v1_interactions(),
+    -- 034 W1.2: what every pre-v5 artifact decodes to. See `frozen_v4_program`.
+    applied_faults: [] }
 }
 
 pure func encoded_frozen_v1() -> string {
@@ -911,7 +950,8 @@ pure func frozen_v2_program() -> ExecutionProgram {
   { specimen_program() |
     schema_version: "execution-program/2",
     bounds: bounds_before_v3(),
-    interactions: frozen_v2_interactions() }
+    interactions: frozen_v2_interactions(),
+    applied_faults: [] }
 }
 
 -- The same shape as `encoded_frozen_v1`, and it will not match the v2 file: this
@@ -965,6 +1005,8 @@ pure func encoded_frozen_v2() -> string {
 -- that reads them asserts they equal `encoded_specimen()` — so the file is checked
 -- against the encoder rather than trusted. That is the same discipline WI-D22 used
 -- for these bytes and stage 5 uses for its canary pins.
+pure func v5_fixture_path() -> string { "scripts/dst/fixtures/execution-program-v5.artifact" }
+
 pure func v4_fixture_path() -> string { "scripts/dst/fixtures/execution-program-v4.artifact" }
 
 pure func v3_fixture_path() -> string { "scripts/dst/fixtures/execution-program-v3.artifact" }
@@ -1026,6 +1068,14 @@ pure func program_diff(a: ExecutionProgram, b: ExecutionProgram) -> [string] {
     ++ list_diff("manifest.unrouted_fields", am.unrouted_fields, bm.unrouted_fields)
     ++ list_diff("manifest.scan_roots", am.scan_roots, bm.scan_roots)
     ++ interactions_diff(a.interactions, b.interactions)
+    -- 034 W1.2. World truth, compared BY VALUE AND IN ORDER: a decoder that
+    -- read a legacy artifact as "every fault applied" (034 W1.7 mutant v01)
+    -- differs here and nowhere else.
+    ++ list_diff("applied_faults", ints_labels(a.applied_faults), ints_labels(b.applied_faults))
+}
+
+pure func ints_labels(xs: [int]) -> [string] {
+  match xs { [] => [], x :: rest => [show(x)] ++ ints_labels(rest) }
 }
 
 pure func d(name: string, a: string, b: string) -> [string] {
@@ -1441,7 +1491,7 @@ func scenario_the_frozen_v2_specimen_still_decodes() -> bool ! {IO, FS} {
           let _ = println("  ✗ THE FROZEN v2 SPECIMEN NO LONGER DECODES: ${first_decode_message(rs)}");
           let _ = println("      This build changed the encoding and dropped v2's decode path, or removed");
           let _ = println("      'execution-program/2' from decodable_schema_versions(). Restore the decode");
-          let _ = println("      path and bump to execution-program/4. Do NOT regenerate this file.");
+          let _ = println("      path and bump to execution-program/6. Do NOT regenerate this file.");
           false
         },
         ProgramDecoded(back) => {
@@ -1464,7 +1514,7 @@ func scenario_the_frozen_v2_specimen_still_decodes() -> bool ! {IO, FS} {
           let _ = if ok_default then println("    ✓ its five-field bounds line decodes to chunk_draw_hi = 3 — v2's own semantics, not int_at's 0, which would be a program that never draws chunks")
                   else println("    ✗ the v2 bounds line decoded to chunk_draw_hi = ${show(back.bounds.chunk_draw_hi)}, and 3 is what v2 MEANT: choose_provider drew from a literal 0,3 at that version. A 0 here is int_at answering a migration question — see dst_persistence.chunk_draw_hi_of");
           let _ = if matches_encoder then println("    ✓ this build can still write these exact bytes")
-                  else println("    ⓘ the current encoder produces different bytes from the frozen v2 artifact, and the frozen artifact still decodes correctly — that is a backward-compatible encoding change and is permitted. The strict byte-identity assertion lives on the v3 row, at the version this build writes");
+                  else println("    ⓘ the current encoder produces different bytes from the frozen v2 artifact, and the frozen artifact still decodes correctly — that is a backward-compatible encoding change and is permitted. The strict byte-identity assertion lives on the v5 row, at the version this build writes");
           let _ = if none_unfrozen then println("    ✓ the only round-tripped-but-not-frozen class is expect_wake (added after this freeze at execution-program/4; the v4 row freezes it)")
                   else println("    ✗ unexpected unfrozen set: ${join_keys(unfrozen)} — expect exactly [expect_wake]");
           ok && ok_default && none_unfrozen
@@ -1511,7 +1561,8 @@ pure func frozen_v3_interactions() -> [Interaction] {
 pure func frozen_v3_program() -> ExecutionProgram {
   { specimen_program() |
     schema_version: "execution-program/3",
-    interactions: frozen_v3_interactions() }
+    interactions: frozen_v3_interactions(),
+    applied_faults: [] }
 }
 
 func scenario_the_frozen_v3_specimen_still_decodes() -> bool ! {IO, FS} {
@@ -1523,7 +1574,7 @@ func scenario_the_frozen_v3_specimen_still_decodes() -> bool ! {IO, FS} {
         ProgramDecodeRefused(rs) => {
           let _ = println("  ✗ THE FROZEN v3 SPECIMEN NO LONGER DECODES: ${first_decode_message(rs)}");
           let _ = println("      This build changed the encoding without moving program_schema_version().");
-          let _ = println("      Add a decode path and bump to execution-program/5. Do NOT regenerate this file.");
+          let _ = println("      Add a decode path and bump to execution-program/6. Do NOT regenerate this file.");
           false
         },
         ProgramDecoded(back) => {
@@ -1534,7 +1585,7 @@ func scenario_the_frozen_v3_specimen_still_decodes() -> bool ! {IO, FS} {
           let _ = if ok then println("  ✓ the frozen v3 specimen decodes to the program its own bytes hold, field by field (${show(Str.length(bytes))} bytes read from the tree)")
                   else println("  ✗ the frozen v3 specimen decodes to a DIFFERENT program: ${join_keys(diff)}");
           let _ = if matches_encoder then println("    ⓘ note: the current encoder still produces the frozen v3 bytes (unexpected after the /4 bump — the wake line should have moved them)")
-                  else println("    ⓘ the current encoder produces different bytes from the frozen v3 artifact, and the frozen artifact still decodes correctly — that is a backward-compatible encoding change and is permitted. The strict byte-identity assertion lives on the v4 row, at the version this build writes");
+                  else println("    ⓘ the current encoder produces different bytes from the frozen v3 artifact, and the frozen artifact still decodes correctly — that is a backward-compatible encoding change and is permitted. The strict byte-identity assertion lives on the v5 row, at the version this build writes");
           let _ = if none_unfrozen then println("    ✓ the only round-tripped-but-not-frozen class is expect_wake (added after this freeze at execution-program/4; the v4 row freezes it)")
                   else println("    ✗ unexpected unfrozen set: ${join_keys(unfrozen)} — expect exactly [expect_wake]");
           ok && none_unfrozen
@@ -1544,28 +1595,87 @@ func scenario_the_frozen_v3_specimen_still_decodes() -> bool ! {IO, FS} {
   }
 }
 
--- PLAN-002 W4'S FROZEN v4 BYTES, AND WHY THEY ARE NOT A CONVENIENCE.
+-- PLAN-002 W4'S FROZEN v4 BYTES, NOW A PREDECESSOR ROW (034 PLAN-001 W1.2).
 --
--- This carries the assertion the v3 row can no longer make: that the encoder in
--- this tree produces these exact bytes. Both readings of a mismatch here are
--- defects — an encoding change that did not move `program_schema_version()`, or a
--- regenerated fixture — so it is a `✗` and not an `ⓘ`, exactly as the v3 row was
--- before the bump moved it.
+-- This carried the strict assertion that the encoder in this tree produces these
+-- exact bytes. 034 W1.2's bump to execution-program/5 made that false the way
+-- every bump before it did: this build writes a /5 header, an `applied_faults`
+-- line, and two more interactions, so it can no longer produce these bytes, and
+-- the difference is the permitted ⓘ. The strict assertion moves to v5 (next row).
+-- What this row keeps is the half that matters more: the v4 bytes decode to THE
+-- PROGRAM THEY HOLD — `frozen_v4_program()`, the twelve-interaction specimen
+-- WITHOUT the world-truth pair, and with an EMPTY world-truth list, which is what
+-- a pre-v5 artifact means (`dst_program.program_schema_version`).
 --
--- The v4 bytes were produced once, by a throwaway outside the tree, and the row
--- that reads them asserts they equal `encoded_specimen()` — so the file is checked
--- against the encoder rather than trusted. That is the same discipline WI-D22 used
--- for these bytes and stage 5 uses for its canary pins.
+-- The unfrozen count stays zero: the world-truth pair adds no identity class.
+pure func frozen_v4_interactions() -> [Interaction] {
+  frozen_v1_interactions() ++ post_v1_interactions()
+}
+
+pure func frozen_v4_program() -> ExecutionProgram {
+  { specimen_program() |
+    schema_version: "execution-program/4",
+    interactions: frozen_v4_interactions(),
+    applied_faults: [] }
+}
+
 func scenario_the_frozen_v4_specimen_still_decodes() -> bool ! {IO, FS} {
   match FS.readFileResult(v4_fixture_path()) {
-    Err(e) => { let _ = println("  ✗ the frozen v4 specimen could not be read (${e}); nothing then asserts that this build's encoder produces the bytes it claims to"); false },
+    Err(e) => { let _ = println("  ✗ the frozen v4 specimen could not be read (${e}); nothing then asserts that this build still reads the bytes the previous encoder wrote"); false },
     Ok(bytes) => {
       let matches_encoder = bytes == encoded_specimen();
       match decode_artifact(bytes) {
         ProgramDecodeRefused(rs) => {
           let _ = println("  ✗ THE FROZEN v4 SPECIMEN NO LONGER DECODES: ${first_decode_message(rs)}");
+          let _ = println("      This build changed the encoding without keeping the v4 decode path.");
+          let _ = println("      Restore it, or bump to execution-program/6. Do NOT regenerate this file.");
+          false
+        },
+        ProgramDecoded(back) => {
+          let diff = program_diff(frozen_v4_program(), back);
+          let ok = List.length(diff) == 0;
+          let unfrozen = kinds_absent(all_interaction_kinds(), back.interactions);
+          let none_unfrozen = List.length(unfrozen) == 0;
+          let _ = if ok then println("  ✓ the frozen v4 specimen decodes to the program its own bytes hold, field by field, with an empty world-truth list (${show(Str.length(bytes))} bytes read from the tree)")
+                  else println("  ✗ the frozen v4 specimen decodes to a DIFFERENT program: ${join_keys(diff)}");
+          let _ = if matches_encoder then println("    ⓘ note: the current encoder still produces the frozen v4 bytes (unexpected after the /5 bump — the world-truth line should have moved them)")
+                  else println("    ⓘ the current encoder produces different bytes from the frozen v4 artifact, and the frozen artifact still decodes correctly — that is a backward-compatible encoding change and is permitted. The strict byte-identity assertion lives on the v5 row, at the version this build writes");
+          let _ = if none_unfrozen then println("    ✓ 0 identity class(es) round-tripped-but-not-frozen in the v4 bytes")
+                  else println("    ✗ ${show(List.length(unfrozen))} identity class(es) are absent from the v4 bytes: ${join_keys(unfrozen)}");
+          ok && none_unfrozen
+        }
+      }
+    }
+  }
+}
+
+-- 034 W1.2'S FROZEN v5 BYTES, AND WHY THEY ARE NOT A CONVENIENCE.
+--
+-- This carries the assertion the v4 row can no longer make: that the encoder in
+-- this tree produces these exact bytes. Both readings of a mismatch here are
+-- defects — an encoding change that did not move `program_schema_version()`, or a
+-- regenerated fixture — so it is a `✗` and not an `ⓘ`, as the v4 row was before
+-- this bump moved it.
+--
+-- The bytes hold ONE APPLIED AND ONE NON-APPLIED FAULT (034 PLAN-001 W1.2): the
+-- `applied_faults` line reads `[12]`, #12 is a fault after dispatch, and #13 is a
+-- fault before dispatch that the list does not name. The row checks that against
+-- the DECODED program, not against the specimen it is compared with, so a
+-- fixture and specimen that drifted together still fail it.
+--
+-- The v5 bytes were produced once, by a throwaway outside the tree, and the row
+-- that reads them asserts they equal `encoded_specimen()` — so the file is checked
+-- against the encoder rather than trusted, WI-D22's discipline for these bytes.
+func scenario_the_frozen_v5_specimen_still_decodes() -> bool ! {IO, FS} {
+  match FS.readFileResult(v5_fixture_path()) {
+    Err(e) => { let _ = println("  ✗ the frozen v5 specimen could not be read (${e}); nothing then asserts that this build's encoder produces the bytes it claims to"); false },
+    Ok(bytes) => {
+      let matches_encoder = bytes == encoded_specimen();
+      match decode_artifact(bytes) {
+        ProgramDecodeRefused(rs) => {
+          let _ = println("  ✗ THE FROZEN v5 SPECIMEN NO LONGER DECODES: ${first_decode_message(rs)}");
           let _ = println("      This build changed the encoding without moving program_schema_version().");
-          let _ = println("      Add a decode path and bump to execution-program/5. Do NOT regenerate this file.");
+          let _ = println("      Add a decode path and bump to execution-program/6. Do NOT regenerate this file.");
           false
         },
         ProgramDecoded(back) => {
@@ -1573,16 +1683,65 @@ func scenario_the_frozen_v4_specimen_still_decodes() -> bool ! {IO, FS} {
           let ok = List.length(diff) == 0;
           let unfrozen = kinds_absent(all_interaction_kinds(), back.interactions);
           let none_unfrozen = List.length(unfrozen) == 0;
-          let _ = if ok then println("  ✓ the frozen v4 specimen decodes to the specimen, field by field (${show(Str.length(bytes))} bytes read from the tree)")
-                  else println("  ✗ the frozen v4 specimen decodes to a DIFFERENT program: ${join_keys(diff)}");
+          let world_truth = back.schema_version == "execution-program/5"
+                              && str_eq_list(ints_labels(back.applied_faults), ["12"])
+                              && fault_at(back.interactions, 12) && fault_at(back.interactions, 13)
+                              && payload_has(back.interactions, 12, "\"stage\":\"after_dispatch\"")
+                              && payload_has(back.interactions, 13, "\"stage\":\"before_dispatch\"");
+          let _ = if ok then println("  ✓ the frozen v5 specimen decodes to the specimen, field by field (${show(Str.length(bytes))} bytes read from the tree)")
+                  else println("  ✗ the frozen v5 specimen decodes to a DIFFERENT program: ${join_keys(diff)}");
           let _ = if matches_encoder then println("    ✓ the current encoder still produces those exact bytes")
-                  else println("    ✗ the current encoder no longer produces the frozen v4 bytes; these were frozen BY this encoder, so this is an encoding change that did not move the schema version — bump to execution-program/5 rather than regenerating the file");
+                  else println("    ✗ the current encoder no longer produces the frozen v5 bytes; these were frozen BY this encoder, so this is an encoding change that did not move the schema version — bump to execution-program/6 rather than regenerating the file");
+          let _ = if world_truth then println("    ✓ the bytes hold one applied fault (#12, after dispatch, listed) and one non-applied fault (#13, before dispatch, unlisted)")
+                  else println("    ✗ the v5 bytes do not hold the world-truth pair: applied_faults=[${Str.join(",", ints_labels(back.applied_faults))}]");
           let _ = if none_unfrozen then println("    ✓ 0 identity class(es) round-tripped-but-not-frozen (all ${show(List.length(all_interaction_kinds()))} classes are in frozen bytes at the version this build writes)")
                   else println("    ✗ ${show(List.length(unfrozen))} identity class(es) are frozen by nothing: ${join_keys(unfrozen)} — the fix is a further schema version, not an edit to these bytes");
-          ok && matches_encoder && none_unfrozen
+          ok && matches_encoder && world_truth && none_unfrozen
         }
       }
     }
+  }
+}
+
+pure func fault_at(xs: [Interaction], ord: int) -> bool {
+  match xs {
+    [] => false,
+    i :: rest => if i.identity.ordinal == ord then outcome_status_id(i.outcome.status) == "fault" else fault_at(rest, ord)
+  }
+}
+
+pure func payload_has(xs: [Interaction], ord: int, t: string) -> bool {
+  match xs {
+    [] => false,
+    i :: rest => if i.identity.ordinal == ord then Str.contains(i.outcome.payload, t) else payload_has(rest, ord, t)
+  }
+}
+
+-- 034 W1.2 ACCEPTANCE (d): EVERY LEGACY SPECIMEN DECODES AS BEFORE, WITH NO
+-- WORLD TRUTH. The four per-version rows above each compare their bytes with the
+-- program they hold, `applied_faults` included; this row states the one fact the
+-- bump added across all four at once, so 034 W1.7's mutant v01 ("decode a legacy
+-- program as all applied") is killed by a row named for it. Every legacy specimen
+-- holds tool interactions a mutant could list, so a non-empty list is reachable.
+func scenario_every_legacy_specimen_decodes_with_no_world_truth() -> bool ! {IO, FS} {
+  let r1 = legacy_has_no_world_truth(v1_fixture_path());
+  let r2 = legacy_has_no_world_truth(v2_fixture_path());
+  let r3 = legacy_has_no_world_truth(v3_fixture_path());
+  let r4 = legacy_has_no_world_truth(v4_fixture_path());
+  let ok = r1 && r2 && r3 && r4;
+  let _ = if ok then println("  ✓ the v1, v2, v3 and v4 specimens all decode, each with an empty world-truth list (not applied: the recorded meaning of every pre-v5 tool fault)")
+          else println("  ✗ a legacy specimen decodes with world truth it never recorded (v1=${show(r1)}, v2=${show(r2)}, v3=${show(r3)}, v4=${show(r4)})");
+  ok
+}
+
+func legacy_has_no_world_truth(path: string) -> bool ! {FS} {
+  match FS.readFileResult(path) {
+    Err(_) => false,
+    Ok(bytes) =>
+      match decode_artifact(bytes) {
+        ProgramDecodeRefused(_) => false,
+        ProgramDecoded(p) => List.length(p.applied_faults) == 0 && p.schema_version != program_schema_version()
+      }
   }
 }
 
@@ -1675,7 +1834,29 @@ func scenario_decode_mutants() -> bool ! {IO} {
           bytes: retag(good, "\tmissing\t", "\tmaybe\t") },
         { rule: "artifact-incomplete-interaction",
           label: "an interaction whose payload line is deleted",
-          bytes: without_line(good, "p\tpayload.tool.one") }])
+          bytes: without_line(good, "p\tpayload.tool.one") },
+        -- 034 W1.2 ACCEPTANCE (c), the persistence half. The world-truth line
+        -- is REQUIRED at execution-program/5: deleting it is `MissingSection`,
+        -- never an empty list (034 W1.7 mutant v02). This is the row a
+        -- repeatable tag could not have, because zero lines would mean both.
+        { rule: "artifact-missing-section",
+          label: "the execution-program/5 world-truth line (applied_faults) deleted",
+          bytes: without_line(good, "applied_faults\t") },
+        { rule: "artifact-not-an-integer",
+          label: "the world-truth list holding something that is not an ordinal",
+          bytes: retag(good, "applied_faults\t[12]", "applied_faults\t[12,twelve]") },
+        { rule: "artifact-not-an-integer",
+          label: "the world-truth list written without its brackets",
+          bytes: retag(good, "applied_faults\t[12]", "applied_faults\t12") },
+        -- And the line is v5's ONLY: a v4 artifact carrying it is refused, not
+        -- read, because v4's tag table has no such tag.
+        { rule: "artifact-unknown-tag",
+          label: "an execution-program/4 artifact carrying the world-truth line",
+          bytes: rebuild_at("execution-program/4", body_of_artifact(good)) }])
+}
+
+pure func rebuild_at(version: string, body: string) -> string {
+  "${version}\ndigest\t${program_digest(body)}\n${body}\n"
 }
 
 -- Corruption helpers. Each rebuilds the artifact WITHOUT recomputing the
@@ -1912,6 +2093,8 @@ export func main() -> () ! {IO, FS} {
   let l2 = scenario_the_frozen_v2_specimen_still_decodes();
   let l3 = scenario_the_frozen_v3_specimen_still_decodes();
   let l4 = scenario_the_frozen_v4_specimen_still_decodes();
+  let l5 = scenario_the_frozen_v5_specimen_still_decodes();
+  let l6 = scenario_every_legacy_specimen_decodes_with_no_world_truth();
   let m = scenario_an_unknown_schema_fails_closed();
   let _ = println("  decode mutation rows — one corruption at a time");
   let n = scenario_decode_mutants();
@@ -1921,7 +2104,7 @@ export func main() -> () ! {IO, FS} {
   let q = scenario_the_store_round_trips_and_refuses_a_collision();
   let _ = println("  regression replay over the frozen program");
   let r = scenario_regression_replay_consumes_the_frozen_program();
-  if a && b && c && d && e && f && g && h && i && j && k && l && l2 && l3 && l4 && m && n && o && q && r
+  if a && b && c && d && e && f && g && h && i && j && k && l && l2 && l3 && l4 && m && n && o && q && r && l5 && l6
   then println("program_persistence_dst PASS")
   else {
     let _ = println("program_persistence_dst FAIL");

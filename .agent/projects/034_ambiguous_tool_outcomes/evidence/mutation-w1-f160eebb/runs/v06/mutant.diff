@@ -1,0 +1,11 @@
+--- a/src/core/ports.ail
++++ b/src/core/ports.ail
+@@ -1853,7 +1853,7 @@
+     ToolDeadlineExceeded({ tool_call_id: inv.call.id, elapsed_ms: t.duration_ms, timeout_ms: inv.timeout_ms })
+   else if t.code != "" then
+     -- The stage is copied and `t.applied` is not read: D4's "no carrier".
+-    ToolFailed({ tool_call_id: inv.call.id, code: t.code, message: t.message,
++    ToolFailed({ tool_call_id: inv.call.id, code: t.code, message: if t.applied then "${t.message} applied" else t.message,
+                  after_dispatch: t.after_dispatch })
+   else
+     -- The scripted arm is the one that CAN say. This is the whole of what

@@ -1,0 +1,11 @@
+--- a/src/core/dst_replay.ail
++++ b/src/core/dst_replay.ail
+@@ -865,7 +865,7 @@
+     i :: rest =>
+       if i.identity.ordinal != ord then applied_fault_check(rest, ord)
+       else match i.outcome.status {
+-        OutcomeOk => Some(AppliedFaultCompleted(ord)),
++        OutcomeOk => None,
+         _ =>
+           match decode_tool_outcome(i.outcome.payload, i.outcome.advance_ms) {
+             ToolRecordUndecodable(why) => Some(ToolOutcomeUndecodable(ord, why)),

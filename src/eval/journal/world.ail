@@ -86,7 +86,7 @@ export pure func journal_results(jw: JournalWorld) -> [WorldTool] {
 }
 
 export pure func journal_tool(t: WorldTool) -> ScriptedTool {
-  { tool_call_id: t.call_id, duration_ms: 0, code: "", message: "", content: t.content, exit_code: -1 }
+  { tool_call_id: t.call_id, duration_ms: 0, code: "", message: "", content: t.content, exit_code: -1, after_dispatch: true, applied: false }
 }
 
 export pure func journal_tools(jw: JournalWorld) -> [ScriptedTool] {

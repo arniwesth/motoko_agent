@@ -263,7 +263,13 @@ pure func scripted_tool_json(t: ScriptedTool) -> Json {
     -- this codec's own header describes for `files`, one field over. Its
     -- decoder's fallback is `-1` ("nothing said"), not 0, for
     -- `ScriptedTool.exit_code`'s stated reason: 0 is a claim of success.
-    kv("exit_code", jint(t.exit_code))
+    kv("exit_code", jint(t.exit_code)),
+    -- 034 W1.2. The dispatch stage is an observation and crosses as one, or
+    -- every hook that adopts the world back would reset a before-dispatch fault
+    -- to the decoder's fallback. `applied` is WORLD TRUTH and is deliberately
+    -- not written (034 ADR-001 D4): a hook must not be handed it. `adopt_world`
+    -- re-seats it from the pre-hook world after adoption (034 W1.3).
+    kv("after_dispatch", jb(t.after_dispatch))
   ])
 }
 
@@ -280,7 +286,12 @@ pure func scripted_tools_of(xs: [Json]) -> [ScriptedTool] {
          code: str_field(x, "code", ""),
          message: str_field(x, "message", ""),
          content: str_field(x, "content", ""),
-         exit_code: int_field(x, "exit_code", -1) }) :: scripted_tools_of(rest)
+         exit_code: int_field(x, "exit_code", -1),
+         -- A token written before 034 W1.2 carries no stage, and decodes after
+         -- dispatch for the persistence codec's reason (`ports.decode_tool_outcome`).
+         after_dispatch: bool_field(x, "after_dispatch", true),
+         -- Never in the token; see `scripted_tool_json`.
+         applied: false }) :: scripted_tools_of(rest)
   }
 }
 
@@ -614,6 +625,10 @@ export pure func world_json(w: WorldState) -> Json {
     kv("ext_effects", ja(scripted_tools_json(w.ext_effects))),
     kv("holder_ext_id", js(w.holder_ext_id)),
     kv("log", ja(interactions_json(w.log))),
+    -- 034 W1.3: `effect_log` is NOT written, deliberately, and neither is any
+    -- tool's `applied` (`scripted_tool_json`). Both are world truth, and the
+    -- token is handed to every extension hook (034 ADR-001 D4). The world they
+    -- belong to stays in the driver's hands, and `adopt_world` re-seats them.
     kv("gen", generator_json(w.gen)),
     -- PLAN-001 P2 Part 1. Both cross, for the reason `ext_effects` does: every
     -- bridge closure in `session.ext_ports_of` decodes the driver's world from
@@ -638,6 +653,9 @@ export pure func world_of_json(j: Json) -> WorldState {
     ext_effects: scripted_tools_of(json_array(j, "ext_effects")),
     holder_ext_id: str_field(j, "holder_ext_id", ""),
     log: interactions_of(json_array(j, "log")),
+    -- 034 W1.3. Never in the token (see `world_json`): a decoded world has no
+    -- effect log, and `adopt_world` re-seats the pre-hook world's.
+    effect_log: [],
     gen: generator_of(obj_field(j, "gen")),
     ordinal: int_field(j, "ordinal", 0),
     pending: pending_of(json_array(j, "pending")) }
@@ -655,6 +673,68 @@ export pure func world_to_token(w: WorldState) -> ExtWorld {
 
 export pure func token_to_world(t: ExtWorld) -> WorldState {
   world_of_json(t.token)
+}
+
+-- 034 W1.3: ADOPTING A HOOK'S SUCCESSOR. `token_to_world`, then the world truth
+-- the token does not carry re-seated from `pre`, the live world the hook was
+-- handed — the same move `tool_phase` makes on the way IN, where it re-seats the
+-- token from its live `world` rather than trusting `ctx.world`.
+--
+--   effect_log  `pre`'s, whole. A hook cannot apply a scripted tool effect: the
+--               only append site is `world_tool`, which the driver calls after
+--               adoption, so the pre-hook log is the log.
+--   applied     on every tool still queued in the adopted world, `pre`'s flag
+--               for the entry it IS: the queues are aligned at the TAIL, since
+--               a queue is consumed from the head, and an entry takes its
+--               partner's flag only when the two carry the same `tool_call_id`.
+--               Otherwise, and on any entry the hook added, false: "not
+--               applied", the recorded meaning of every fault the world says
+--               nothing about. Not "the first entry with this id", because ids
+--               repeat — blank is the common case — and a first-match would
+--               hand every blank-id entry the first one's flag.
+--
+-- No hook in this tree touches `tools`: an extension's dispatch is served from
+-- `ext_effects` (`ports.world_ext_effect`). So in practice the two queues are
+-- equal and every flag survives; the rules above say what happens if one ever
+-- does, and they never invent an applied effect.
+--
+-- Without this, every native dispatch resets `applied` and drops the effect log,
+-- because every one round-trips the world through the token around the hook
+-- (034 PLAN-001 review 2, finding 1).
+-- contracts: SKIPPED — calls `token_to_world`, which decodes an opaque Json token; Json is unencodable.
+export pure func adopt_world(t: ExtWorld, pre: WorldState) -> WorldState {
+  let adopted = token_to_world(t);
+  { adopted | tools: reseat_applied(adopted.tools, pre.tools), effect_log: pre.effect_log }
+}
+
+-- contracts: BLOCKED — calls `reseat_aligned`, RECURSIVE over the tool queues.
+pure func reseat_applied(xs: [ScriptedTool], pre: [ScriptedTool]) -> [ScriptedTool] {
+  reseat_aligned(xs, List.length(xs), pre, List.length(pre))
+}
+
+-- contracts: BLOCKED — RECURSIVE over the two tool queues.
+pure func reseat_aligned(xs: [ScriptedTool], nx: int, pre: [ScriptedTool], np: int) -> [ScriptedTool] {
+  if nx > np then
+    match xs {
+      [] => [],
+      x :: rest => ({ x | applied: false }) :: reseat_aligned(rest, nx - 1, pre, np)
+    }
+  else if np > nx then
+    match pre {
+      [] => xs,
+      _ :: prest => reseat_aligned(xs, nx, prest, np - 1)
+    }
+  else
+    match xs {
+      [] => [],
+      x :: rest =>
+        match pre {
+          [] => [],
+          p :: prest =>
+            ({ x | applied: p.applied && p.tool_call_id == x.tool_call_id })
+              :: reseat_aligned(rest, nx - 1, prest, np - 1)
+        }
+    }
 }
 
 -- WI-D24. THE HOLDER STAMP, and this module is its home for the reason the
@@ -778,20 +858,28 @@ pure func codec_fixture_world() -> WorldState {
     -- fixture (199, 1213, 107, 109, 457, 5, 7, 311, 617, 23, 29, 31, 37), per
     -- S7 — a fixture holding -1 or 0 here could not distinguish a field that
     -- round-tripped from one the decoder defaulted.
+    -- 034 W1.2: `after_dispatch: false`, the value the decoder's fallback can
+    -- NOT supply, so a codec that drops the stage is visible here.
     tools: [{ tool_call_id: "t-17", duration_ms: 199, code: "E_TOOL",
-              message: "tool said no", content: "the content", exit_code: 211 }],
+              message: "tool said no", content: "the content", exit_code: 211,
+              after_dispatch: false, applied: false }],
     -- WI-D24's extension-effect cursor. TWO entries against the tool queue's
     -- one, and every quantity distinct from every other in this fixture (S7):
     -- the failure this catches is a decoder reading `ext_effects` out of
     -- `tools`, which a same-length pair of queues could not distinguish. The
     -- blank `tool_call_id` is this class's real shape, so the fixture holds it.
     ext_effects: [{ tool_call_id: "", duration_ms: 223, code: "",
-                    message: "", content: "ext content", exit_code: 227 },
+                    message: "", content: "ext content", exit_code: 227,
+                    after_dispatch: true, applied: false },
                   { tool_call_id: "", duration_ms: 229, code: "E_EXT",
-                    message: "ext said no", content: "", exit_code: 233 }],
+                    message: "ext said no", content: "", exit_code: 233,
+                    after_dispatch: true, applied: false }],
     -- The holder. A value no other field in this fixture holds, because the
     -- decoder's failure mode here is reading it out of some other string.
     holder_ext_id: "ext-holder-239",
+    -- 034 W1.3. EMPTY HERE, and the world-truth rows below seed their own: the
+    -- token never carries it, so this round-trip fixture has nothing to check.
+    effect_log: [],
     log: [
       { identity: { ordinal: 5, body: ProviderIdentity("origin-a", 7, "model-z") },
         request_projection: "proj-1",
@@ -1005,6 +1093,141 @@ pure func test_the_world_token_round_trips_the_extension_effect_cursor() -> bool
     }
   }
 
+-- ---------------------------------------------------------------------------
+-- 034 W1.3 ACCEPTANCE (g): WORLD TRUTH NEVER ENTERS THE TOKEN, AND ADOPTION
+-- RE-SEATS IT. `applied` and the effect log are D4's world truth: a hook holding
+-- the token must not be handed them, and the driver must not lose them because a
+-- hook ran. 034 W1.7's mutants v19 (write `applied` in `scripted_tool_json`),
+-- v20 (drop the `applied` re-seat) and v21 (drop the effect log's re-seat) each
+-- fail exactly one of the three rows below.
+-- ---------------------------------------------------------------------------
+
+-- A pre-hook world holding world truth. Three queued tools, the middle one
+-- applied, so a re-seat that reset every flag, set every flag, or shifted one
+-- position is visible; two effect-log entries with ordinals, ids and keys that
+-- appear nowhere else in this file (S7).
+pure func world_truth_world() -> WorldState {
+  { codec_fixture_world() |
+    tools: [{ tool_call_id: "wt-a", duration_ms: 271, code: "", message: "", content: "wt ok",
+              exit_code: 0, after_dispatch: true, applied: false },
+            { tool_call_id: "wt-b", duration_ms: 277, code: "E_WT", message: "wt applied",
+              content: "", exit_code: -1, after_dispatch: true, applied: true },
+            { tool_call_id: "wt-c", duration_ms: 281, code: "E_WT", message: "wt not applied",
+              content: "", exit_code: -1, after_dispatch: true, applied: false }],
+    effect_log: [{ ordinal: 283, call_id: "wt-e1", effect_key: "BashExec:{\"cmd\":\"wt-one\"}" },
+                 { ordinal: 293, call_id: "wt-e2", effect_key: "BashExec:{\"cmd\":\"wt-two\"}" }] }
+}
+
+pure func no_key_in(xs: [Json], key: string) -> bool {
+  match xs {
+    [] => true,
+    x :: rest => (match get(x, key) { None => true, Some(_) => false }) && no_key_in(rest, key)
+  }
+}
+
+pure func applied_flags(xs: [ScriptedTool]) -> [bool] {
+  match xs { [] => [], x :: rest => x.applied :: applied_flags(rest) }
+}
+
+pure func eq_bools(a: [bool], b: [bool]) -> bool {
+  match a {
+    [] => (match b { [] => true, _ => false }),
+    x :: xr => match b { [] => false, y :: yr => x == y && eq_bools(xr, yr) }
+  }
+}
+
+pure func eq_effect_logs(a: [{ ordinal: int, call_id: string, effect_key: string }],
+                         b: [{ ordinal: int, call_id: string, effect_key: string }]) -> bool {
+  match a {
+    [] => (match b { [] => true, _ => false }),
+    x :: xr => match b {
+      [] => false,
+      y :: yr => x.ordinal == y.ordinal && x.call_id == y.call_id && x.effect_key == y.effect_key
+                   && eq_effect_logs(xr, yr)
+    }
+  }
+}
+
+-- What an adopting hook does to the token: decode the world it was handed,
+-- perform something (the clock moves, one extension effect is consumed), and
+-- hand back the successor. Built the way `session.ext_ports_of`'s bridge
+-- closures build one, so the token it returns is exactly as world-truth-free as
+-- a real hook's.
+pure func adopting_hook(t: ExtWorld) -> ExtWorld {
+  let w = token_to_world(t);
+  world_to_token({ w | clock_ms: w.clock_ms + 307,
+                       ext_effects: match w.ext_effects { [] => [], _ :: rest => rest } })
+}
+
+-- (g), first half: the token holds neither. Read off the Json, by key, so a
+-- writer that put either in under any value is caught; and the decoded world
+-- holds neither, so a writer and a reader that agreed would be caught too.
+pure func test_the_world_token_holds_neither_applied_nor_the_effect_log() -> bool
+  tests [((), true)]
+  {
+    let w = world_truth_world();
+    let tok = world_to_token(w).token;
+    let back = token_to_world(world_to_token(w));
+    (match get(tok, "effect_log") { None => true, Some(_) => false })
+      && no_key_in(json_array(tok, "tools"), "applied")
+      && no_key_in(json_array(tok, "ext_effects"), "applied")
+      && List.length(json_array(tok, "tools")) == 3
+      && eq_bools(applied_flags(back.tools), [false, false, false])
+      && List.length(back.effect_log) == 0
+  }
+
+-- (g), second half: after a hook that adopts a world, the flags and the log
+-- equal the pre-hook world's — and the hook's own work is kept, so the re-seat
+-- is of world truth only and not a rollback. The control is the same hook
+-- adopted WITHOUT the re-seat, which loses both: the row is not vacuous.
+pure func test_adoption_re_seats_applied_from_the_pre_hook_world() -> bool
+  tests [((), true)]
+  {
+    let w = world_truth_world();
+    let hooked = adopting_hook(world_to_token(w));
+    let adopted = adopt_world(hooked, w);
+    eq_bools(applied_flags(adopted.tools), [false, true, false])
+      && adopted.clock_ms == w.clock_ms + 307
+      && List.length(adopted.ext_effects) == List.length(w.ext_effects) - 1
+      && eq_bools(applied_flags(token_to_world(hooked).tools), [false, false, false])
+  }
+
+pure func test_adoption_re_seats_the_effect_log_from_the_pre_hook_world() -> bool
+  tests [((), true)]
+  {
+    let w = world_truth_world();
+    let hooked = adopting_hook(world_to_token(w));
+    eq_effect_logs(adopt_world(hooked, w).effect_log, w.effect_log)
+      && List.length(w.effect_log) == 2
+      && List.length(token_to_world(hooked).effect_log) == 0
+  }
+
+-- The re-seat's matching rule, on the shapes a first-match-by-id would get
+-- wrong. Blank ids are the common case (every generated queue), so a blank-id
+-- queue with one applied entry in the middle must keep that flag where it is;
+-- and a hook that consumed the head or rewrote an id gets "not applied" on what
+-- it changed, never a flag borrowed from another entry.
+pure func blank_tool(applied: bool, d: int) -> ScriptedTool {
+  { tool_call_id: "", duration_ms: d, code: if applied then "E_WT" else "", message: "", content: "",
+    exit_code: -1, after_dispatch: true, applied: applied }
+}
+
+pure func test_adoption_matches_applied_by_position_and_id_not_first_id() -> bool
+  tests [((), true)]
+  {
+    let pre = { world_truth_world() | tools: [blank_tool(false, 311), blank_tool(true, 313), blank_tool(false, 317)] };
+    let same = adopt_world(world_to_token(pre), pre);
+    -- The hook consumed the head: the remaining two keep their own flags.
+    let consumed = adopt_world(world_to_token({ pre | tools: [blank_tool(false, 313), blank_tool(false, 317)] }), pre);
+    -- The hook rewrote the applied entry's id: it is no longer that entry.
+    let renamed = adopt_world(world_to_token({ pre | tools: [blank_tool(false, 311),
+                                                             { blank_tool(false, 313) | tool_call_id: "other" },
+                                                             blank_tool(false, 317)] }), pre);
+    eq_bools(applied_flags(same.tools), [false, true, false])
+      && eq_bools(applied_flags(consumed.tools), [true, false])
+      && eq_bools(applied_flags(renamed.tools), [false, false, false])
+  }
+
 -- The script cursor is what `ai_step` actually consumes, so its round trip is
 -- the one that decides whether the extension seam threads a real world or a
 -- plausible-looking empty one. Asserted entry by entry, both the clean and the
@@ -1111,7 +1334,10 @@ pure func test_the_world_token_round_trips_the_remaining_cursors() -> bool
                    -- WI-D22. An encoder that omitted this key leaves the
                    -- decoder's -1 behind, and every hook that adopts the world
                    -- back would erase the tool queue's exit codes mid-run.
-                   && t.exit_code == 211,
+                   && t.exit_code == 211
+                   -- 034 W1.2. The fixture holds before dispatch, which the
+                   -- decoder's fallback cannot produce.
+                   && not t.after_dispatch,
       _ => false
     };
     -- WI-D3. Asserted by VALUE and in order, for the reason the approvals queue

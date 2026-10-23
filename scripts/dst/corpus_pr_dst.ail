@@ -69,6 +69,38 @@
 -- selection alone. **A bank whose collective coverage exceeds any single
 -- member's is the shape D11 asks for**, and it still holds.
 --
+-- RE-SWEPT AT 034 W1.6, AND THE QUERY ITSELF WIDENED. `choose_tool` now draws
+-- the failed stage and `applied` and the generator is version "2", so every
+-- trajectory moved again; and W1.5's observer splits `ToolFailed` and
+-- `ToolDeadlineExceeded` by world truth, so eleven classes are now held to two
+-- witnesses each, both world-only rows and both of their wire twins among them.
+-- The answers over a re-run 260-seed sweep:
+--
+--   4, 215      the shortest and longest trajectories (n = 14 and 63).
+--   3, 6        approval_denied.          3, 18      ToolCorrelationMismatch.
+--   60, 109     ToolDeadlineExceeded, NOT applied.
+--   61, 71      ToolFailed, NOT applied.
+--   11, 14      tool_effect_applied_then_deadline.
+--   102, 165    tool_effect_applied_then_failed.
+--   8, 31       provider_error_retryable. 29, 31     provider_error_non_retryable.
+--   4, 6        provider_partial_stream_then_error.
+--   1, 3        provider_protocol_inconsistent_result.
+--   215         the richest Err-terminating trajectory (6 classes), PROMOTED.
+--
+-- The fifth selection's answer changed in kind: 215 is now the ONLY seed at
+-- the maximum (six of eleven reachable classes), and it is also the longest
+-- trajectory, so one member answers two selections and the bank is seventeen
+-- seeds. Still no seed reaches every class by itself. Seeds reaching each
+-- class: ToolFailed 10, ToolCorrelationMismatch 16, ToolDeadlineExceeded 11,
+-- tool_effect_applied_then_failed 4, tool_effect_applied_then_deadline 7,
+-- approval_denied 80, provider_error_retryable 12, provider_error_non_retryable
+-- 25, provider_partial_stream_then_error 97, provider_protocol_inconsistent_
+-- result 59, provider_empty_terminal_response 0. The thinnest is the applied
+-- failure at 4 of 260, which is why its witnesses are 102 and 165 and not two
+-- seeds that happen to be small. `make corpus_pr` also counts the before-
+-- dispatch `ToolFailed`s on the wire (one in this bank), because the stage draw
+-- exists so that the typed renderer's `none` arm runs here.
+--
 -- Two witnesses per class rather than one, deliberately: a bank with a single
 -- witness for a class loses that class to any generator drift that moves one
 -- seed, and loses it SILENTLY, because the remaining members still pass. WI-D1
@@ -224,6 +256,8 @@ import src/core/dst_fault_catalogue (
   fault_class_tool_failed,
   fault_class_tool_correlation_mismatch,
   fault_class_tool_deadline_exceeded,
+  fault_class_tool_effect_applied_then_failed,
+  fault_class_tool_effect_applied_then_deadline,
   fault_class_provider_error_retryable,
   fault_class_provider_error_non_retryable,
   fault_class_provider_partial_stream_then_error,
@@ -239,7 +273,8 @@ import src/core/dst_corpus (
   has_corpus_rule, first_corpus_message, corpus_rules_of,
   required_non_waived, bank_classes, bank_branches,
   UnreachableClass, unreachable_by_search, unreachable_class_ids, expected_bank_coverage,
-  render_corpus, corpus_rules_version
+  render_corpus, corpus_rules_version,
+  world_only_ids_on_wire, tool_messages_on_wire
 )
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
   BudgetPlan, BudgetPatch, Delegate, PureCtx, AiCtx, ProviderCtx, InterceptCtx, ProcessCtx, ExtRuntime, FinalizeDecision, NoDecision, ContinueWithFeedback, NoIntercept, PassThrough, Pending, DenyAfterTimeout, Allow,
@@ -247,6 +282,9 @@ import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, Resp
   ToolPolicyDecision, ToolSchema
 )
 import src/core/test/ext_fixture (fixture_hooks)
+-- 034 W1.3: the builder reads the world-truth list off the effect log.
+import src/core/dst_replay (applied_faults_of_world, effect_log_ordinals)
+import src/core/phase_vocab (LedgerTrace)
 
 -- ---------------------------------------------------------------------------
 -- Reporting
@@ -296,7 +334,9 @@ func budget() -> BudgetPlan { { total: 10, solver: 6, verifier: 4 } }
 func zero_rates() -> CostRates { { input_per_1m_millicents: 0, output_per_1m_millicents: 0 } }
 
 func generator_id() -> string { "motoko_driver_only" }
-func generator_version() -> string { "1" }
+-- 034 W1.6: "1" -> "2", this literal's first bump: `choose_tool` now draws the
+-- failed stage and `applied` (RECORD-W1.1 §4 lists the four producers).
+func generator_version() -> string { "2" }
 
 func bounds() -> GeneratorBounds {
   { max_interactions: 96,
@@ -443,7 +483,10 @@ pure func program_of(w: WorldState, initial: WorldState) -> ExecutionProgram {
     },
     bounds: initial.gen.bounds,
     manifest: run_manifest(),
-    interactions: w.log }
+    interactions: w.log,
+    -- 034 W1.3: the world's effect-log FAULT entries, by recorded ordinal.
+    -- Non-empty since W1.6, when the generator began drawing `applied`.
+    applied_faults: applied_faults_of_world(w) }
 }
 
 export pure func store_root() -> string { ".ailang/dst-corpus" }
@@ -456,6 +499,23 @@ pure func count_fault_class(xs: [Interaction], cls: string) -> int {
   match xs {
     [] => 0,
     i :: rest => (if i.outcome.fault_class_id == cls then 1 else 0) + count_fault_class(rest, cls)
+  }
+}
+
+-- 034 W1.5: the FIFTH observer, and the only one that reads world truth. A
+-- world-only class is delivered as its wire twin (ADR-001 D4), so the recorded
+-- `fault_class_id` of an applied `ToolFailed` IS `ToolFailed` and cannot tell
+-- the two apart; the world's effect log can. A tool interaction recorded under
+-- the twin's id whose ordinal the effect log holds is the world-only class; one
+-- the log does not hold is the twin. The two partition the twin's
+-- interactions: the twin's row says the update did NOT occur, so an applied
+-- fault is not a witness for it.
+pure func count_fault_class_applied(xs: [Interaction], applied: [int], cls: string, want: bool) -> int {
+  match xs {
+    [] => 0,
+    i :: rest =>
+      (if i.outcome.fault_class_id == cls && contains_int(applied, i.identity.ordinal) == want then 1 else 0)
+        + count_fault_class_applied(rest, applied, cls, want)
   }
 }
 
@@ -539,12 +599,21 @@ pure func any_args_undecodable(cs: [ToolCall]) -> bool {
 -- header above says a sweep graded on that field alone can name only the three
 -- tool classes. That sentence was true when it was written and is no longer;
 -- the field now names seven.
-pure func observed_classes(xs: [Interaction]) -> [string] {
-  (if count_fault_class(xs, fault_class_tool_failed()) > 0 then [fault_class_tool_failed()] else [])
+--
+-- 034 W1.5: and the world's effect log names two more, which the field cannot
+-- (`count_fault_class_applied`). `ToolFailed` and `ToolDeadlineExceeded` now
+-- count only their NON-applied interactions.
+pure func observed_classes(xs: [Interaction], effects: [{ ordinal: int, call_id: string, effect_key: string }]) -> [string] {
+  let applied = effect_log_ordinals(effects);
+  (if count_fault_class_applied(xs, applied, fault_class_tool_failed(), false) > 0 then [fault_class_tool_failed()] else [])
+    ++ (if count_fault_class_applied(xs, applied, fault_class_tool_failed(), true) > 0
+        then [fault_class_tool_effect_applied_then_failed()] else [])
     ++ (if count_fault_class(xs, fault_class_tool_correlation_mismatch()) > 0
         then [fault_class_tool_correlation_mismatch()] else [])
-    ++ (if count_fault_class(xs, fault_class_tool_deadline_exceeded()) > 0
+    ++ (if count_fault_class_applied(xs, applied, fault_class_tool_deadline_exceeded(), false) > 0
         then [fault_class_tool_deadline_exceeded()] else [])
+    ++ (if count_fault_class_applied(xs, applied, fault_class_tool_deadline_exceeded(), true) > 0
+        then [fault_class_tool_effect_applied_then_deadline()] else [])
     ++ (if count_fault_class(xs, fault_class_provider_error_retryable()) > 0
         then [fault_class_provider_error_retryable()] else [])
     ++ (if count_fault_class(xs, fault_class_provider_error_non_retryable()) > 0
@@ -625,22 +694,34 @@ export type BankEntry = { seed: int, kind: MemberKind }
 -- one seed, and loses it SILENTLY, because the remaining members still pass.
 -- WI-D3 is the item that WOULD have lost it, and did not only because the class
 -- it moved had two.
+--
+-- RE-DERIVED AT 034 W1.6, AND THE QUERY GREW BY TWO CLASSES. The generator now
+-- draws the failed stage and `applied` (and is version "2"), so every
+-- trajectory moved; and W1.5's observer partitions `ToolFailed` and
+-- `ToolDeadlineExceeded` by world truth, so the two-witnesses rule now binds
+-- FOUR tool-fault classes where it bound two: each wire twin counts only its
+-- NON-applied interactions, and each world-only row only its applied ones.
+-- Same five selections over a re-run 260-seed sweep. Seed 215 answers two of
+-- them at once, the longest trajectory and the richest Err-terminating one, and
+-- is carried once, as the promoted regression.
 export pure func fixed_bank() -> [BankEntry] {
-  [{ seed: 1, kind: FixedSeed("first of two witnesses for ToolFailed AND for ToolCorrelationMismatch — the smallest seed of 260 reaching either") },
-   { seed: 2, kind: FixedSeed("first of two witnesses for provider_protocol_inconsistent_result — the smallest seed of 260 reaching it") },
-   { seed: 4, kind: FixedSeed("second witness for provider_protocol_inconsistent_result") },
-   { seed: 5, kind: FixedSeed("first of two witnesses for provider_partial_stream_then_error — the smallest seed of 260 reaching it — and the SHORTEST trajectory of 260 (n=14): S8's complement says a bank that walks only the middle certifies only the middle") },
-   { seed: 7, kind: FixedSeed("second witness for provider_partial_stream_then_error, and first of two for approval_denied — the smallest seed of 260 reaching it") },
-   { seed: 9, kind: FixedSeed("first of two witnesses for provider_error_retryable — the smallest seed of 260 reaching it") },
-   { seed: 10, kind: FixedSeed("second witness for approval_denied; two per class, because a single witness is lost silently to any generator drift that moves one seed — which is exactly what WI-D3 did to this bank") },
-   { seed: 12, kind: FixedSeed("first of two witnesses for ToolDeadlineExceeded — the smallest seed of 260 reaching it") },
-   { seed: 15, kind: FixedSeed("second witness for ToolDeadlineExceeded") },
-   { seed: 19, kind: FixedSeed("second witness for ToolCorrelationMismatch") },
-   { seed: 30, kind: FixedSeed("first of two witnesses for provider_error_non_retryable — the smallest seed of 260 reaching it. WI-D1 measured this class at 0 of 260 BEFORE fixing session.c2_loop's unretried-failure branch, which finalized from the world the step was entered with and so discarded the interaction recording the fault — the fault reached production and the log did not record it") },
-   { seed: 32, kind: FixedSeed("second witness for provider_error_retryable AND for provider_error_non_retryable") },
-   { seed: 62, kind: FixedSeed("second witness for ToolFailed") },
-   { seed: 141, kind: PromotedRegression("the richest Err-terminating trajectory of 260: FIVE fault classes in one run that does NOT end Ok — ToolCorrelationMismatch, ToolDeadlineExceeded, provider_partial_stream_then_error, provider_protocol_inconsistent_result and approval_denied. D11's bank holds promoted regression programs as well as fixed seeds, and a bank whose every member terminates Ok pins only the happy shape of failure") },
-   { seed: 244, kind: FixedSeed("the LONGEST trajectory of 260 (n=61), the other trajectory extreme") }]
+  [{ seed: 1, kind: FixedSeed("first of two witnesses for provider_protocol_inconsistent_result — the smallest seed of 260 reaching it") },
+   { seed: 3, kind: FixedSeed("first of two witnesses for ToolCorrelationMismatch AND for approval_denied — the smallest seed of 260 reaching either — and second for provider_protocol_inconsistent_result") },
+   { seed: 4, kind: FixedSeed("first of two witnesses for provider_partial_stream_then_error — the smallest seed of 260 reaching it — and the SHORTEST trajectory of 260 (n=14): S8's complement says a bank that walks only the middle certifies only the middle") },
+   { seed: 6, kind: FixedSeed("second witness for provider_partial_stream_then_error AND for approval_denied; two per class, because a single witness is lost silently to any generator drift that moves one seed") },
+   { seed: 8, kind: FixedSeed("first of two witnesses for provider_error_retryable — the smallest seed of 260 reaching it") },
+   { seed: 11, kind: FixedSeed("first of two witnesses for tool_effect_applied_then_deadline — the smallest seed of 260 whose world APPLIED a call that was then reported late (034 ADR-001 D4)") },
+   { seed: 14, kind: FixedSeed("second witness for tool_effect_applied_then_deadline") },
+   { seed: 18, kind: FixedSeed("second witness for ToolCorrelationMismatch") },
+   { seed: 29, kind: FixedSeed("first of two witnesses for provider_error_non_retryable — the smallest seed of 260 reaching it") },
+   { seed: 31, kind: FixedSeed("second witness for provider_error_retryable AND for provider_error_non_retryable") },
+   { seed: 60, kind: FixedSeed("first of two witnesses for ToolDeadlineExceeded, NOT applied — the smallest seed of 260 reaching it since the world-only row took the applied deadlines") },
+   { seed: 61, kind: FixedSeed("first of two witnesses for ToolFailed, NOT applied — the smallest seed of 260 reaching it") },
+   { seed: 71, kind: FixedSeed("second witness for ToolFailed, NOT applied") },
+   { seed: 102, kind: FixedSeed("first of two witnesses for tool_effect_applied_then_failed — the smallest seed of 260 whose world APPLIED a call that was then reported failed (034 ADR-001 D4)") },
+   { seed: 109, kind: FixedSeed("second witness for ToolDeadlineExceeded, NOT applied") },
+   { seed: 165, kind: FixedSeed("second witness for tool_effect_applied_then_failed") },
+   { seed: 215, kind: PromotedRegression("the richest Err-terminating trajectory of 260: SIX fault classes in one run that does NOT end Ok — tool_effect_applied_then_failed, ToolCorrelationMismatch, ToolDeadlineExceeded, provider_partial_stream_then_error, provider_protocol_inconsistent_result and approval_denied — and the LONGEST trajectory of 260 (n=63), the other extreme. D11's bank holds promoted regression programs as well as fixed seeds, and a bank whose every member terminates Ok pins only the happy shape of failure") }]
 }
 
 -- The class no seed reaches and construction does. Its justification is
@@ -686,13 +767,19 @@ export type BuiltMember = {
   log: [Interaction],
   ended_ok: bool,
   persisted: string,
-  loaded_identity: string
+  loaded_identity: string,
+  -- 034 W1.5: what the wire guard found in this run's trace, and how many
+  -- tool-role messages it read there.
+  wire_leaks: [string],
+  tool_messages: int
 }
 
-func build(member_id: string, kind: MemberKind, p: ExecutionProgram, log: [Interaction], ended_ok: bool)
+func build(member_id: string, kind: MemberKind, p: ExecutionProgram, log: [Interaction],
+           effects: [{ ordinal: int, call_id: string, effect_key: string }], trace: LedgerTrace,
+           ended_ok: bool)
   -> BuiltMember ! {FS, IO} {
   let rows = fault_catalogue();
-  let classes = observed_classes(log);
+  let classes = observed_classes(log, effects);
   let branches = branches_for(classes, rows);
   let encoded = encode_artifact(p);
   let bytes_len = match encoded { Encoded(b) => Str.length(b), EncodeRefused(_) => 0 };
@@ -713,15 +800,16 @@ func build(member_id: string, kind: MemberKind, p: ExecutionProgram, log: [Inter
   };
   let m = member_of(member_id, kind, p, path, identity, bytes_len, classes, branches);
   { member: m, program: p, log: log, ended_ok: ended_ok,
-    persisted: persisted, loaded_identity: loaded_identity }
+    persisted: persisted, loaded_identity: loaded_identity,
+    wire_leaks: world_only_ids_on_wire(trace), tool_messages: tool_messages_on_wire(trace) }
 }
 
 -- A MEMBER'S RUN, AND THIS IS ITS ONLY HOME: the label, the world it starts
 -- from, the run and the program. `build_seed` and `build_constructed` call these
 -- two, and so does `corpus_judge_dst`, which evaluates the invariant set on the
--- same sixteen runs. A gate that restated the id, the world or the choice of
--- program would give the recipe a second home with nothing checking the two
--- agree.
+-- same runs (eighteen since 034 W1.6). A gate that restated the id, the world
+-- or the choice of program would give the recipe a second home with nothing
+-- checking the two agree.
 export type MemberRun = {
   label: string,
   initial: WorldState,
@@ -748,7 +836,7 @@ func build_seed(e: BankEntry)
   -> BuiltMember ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let m = run_seed_member(e);
   let ok = match m.run.result { Ok(_) => true, Err(_) => false };
-  build(m.label, e.kind, m.program, m.run.world.log, ok)
+  build(m.label, e.kind, m.program, m.run.world.log, m.run.world.effect_log, m.run.trace, ok)
 }
 
 func build_all(es: [BankEntry])
@@ -766,7 +854,7 @@ func build_constructed()
   -> BuiltMember ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let m = run_constructed_member();
   let ok = match m.run.result { Ok(_) => true, Err(_) => false };
-  build(m.label, constructed_kind(), m.program, m.run.world.log, ok)
+  build(m.label, constructed_kind(), m.program, m.run.world.log, m.run.world.effect_log, m.run.trace, ok)
 }
 
 pure func members_of(bs: [BuiltMember]) -> [CorpusMember] {
@@ -1027,6 +1115,40 @@ pure func constructed_classes(bs: [BuiltMember]) -> [string] {
          PromotedRegression(_) => []
        }) ++ constructed_classes(rest)
   }
+}
+
+-- 034 W1.5, STANDING RULE 6 (ADR-001 D4): no world-only class id reaches the
+-- wire. Read off every member's TRACE, the tool-role `HistoryAppended` entries
+-- the model was shown (`dst_corpus.world_only_ids_on_wire`), never this
+-- target's stdout: `render_corpus`'s `classes:` lines below list the world-only
+-- ids by design. The count row keeps the guard from passing over a bank whose
+-- traces hold no tool message. 034 PLAN-001 W1.7's v12 (the typed renderer puts
+-- a world-only id in `fault_class` for an applied fault) is killed here once
+-- W1.6's bank draws `applied`, and in `strict_replay_dst`'s world-truth run now.
+func scenario_no_world_only_id_reaches_the_wire(bs: [BuiltMember]) -> bool ! {IO} {
+  let _ = println("\n-- standing rule 6: no world-only class id in any projected tool message --");
+  let leaks = leaking_members(bs);
+  let n = count_tool_messages(bs);
+  let a = report("the guard read ${n} tool-role message(s) across ${List.length(bs)} member trace(s)",
+                 n > 0,
+                 "no member trace holds a tool-role HistoryAppended entry, so the guard below is vacuous");
+  let b = report("no projected tool message contains a world-only class id",
+                 List.length(leaks) == 0,
+                 "world-only id(s) on the wire: ${join_str(leaks)}");
+  a && b
+}
+
+pure func leaking_members(bs: [BuiltMember]) -> [string] {
+  match bs {
+    [] => [],
+    b :: rest =>
+      (match b.wire_leaks { [] => [], ls => ["${b.member.member_id}: ${join_str(ls)}"] })
+        ++ leaking_members(rest)
+  }
+}
+
+pure func count_tool_messages(bs: [BuiltMember]) -> int {
+  match bs { [] => 0, b :: rest => b.tool_messages + count_tool_messages(rest) }
 }
 
 -- The two keys, and the measurement that says one cannot stand for the other.
@@ -1299,10 +1421,11 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   let f = scenario_s7_the_bank_must_survive(bs);
   let g = scenario_every_rule_fires(bs);
   let h = scenario_the_minimum_is_selected_from_measured_cost(bs);
+  let w = scenario_no_world_only_id_reaches_the_wire(bs);
 
   let _ = println("\n${render_corpus(the_corpus(bs, 0))}");
 
-  if a && b && c && d && e && e2 && f && g && h then
+  if a && b && c && d && e && e2 && f && g && h && w then
     println("\n✓ WI-A15 commit 1: the blocking PR corpus")
   else {
     let _ = println("\n✗ WI-A15 commit 1 FAILED");

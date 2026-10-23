@@ -121,6 +121,27 @@
 # was measured on v0.33.0. That gap is there before this change and was not
 # traced, so the depth columns above are left as they were measured.
 #
+# RE-PINNED AT 034 W1.6 (2026-10-18): THE SEEDS ONLY, 7/11/23 to 6/10/22. No
+# record count and no ceiling moved. W1.6 bumped `export_trace`'s generator
+# version "1" -> "2" with `corpus_pr`'s, and `seed_state` adds the version's
+# hash to the seed, so version 2 at seed s draws version 1's stream at s+1 (the
+# alias `dst_generator.test_a_version_bump_is_currently_only_a_seed_offset`
+# pins). W1.6's new draws fire only on failed or late tool choices, and these
+# three trajectories take none, so 6/10/22 at version 2 export the SAME
+# trajectories 7/11/23 did at version 1: 122/190/216 records. Bisected on
+# AILANG v0.52.5 (7200786): floors 33/42/53 at W1.6, and 33/42/53 for 7/11/23
+# at its parent 59c16984, so the one frame above the W2-4 paragraph's
+# 32/41/52 predates W1.6. Seeds 7/11/23 at version 2 are 28, 66 and 63
+# records, too short to keep the pins' meaning.
+#
+# AND A FINDING FROM THAT RE-PIN, NOT ACTED ON HERE. The fault-present column
+# was NOT re-measured, and could not be the way it was: with
+# `runtime_status_counts` put back to hand-written TAIL recursion in a scratch
+# copy, tier 1 passed at every ceiling (seed 7 even at 40) and tier 0's probe
+# passed at 200, at W1.6 and at its parent alike. On this toolchain that mutant
+# is frame-free, so this gate no longer demonstrates that it fires on it; a
+# non-tail traversal is the shape it still sees. Recorded for its owner.
+#
 # IT FAILS CLOSED. A new traversal can only RAISE depth, so the failure mode of
 # the thing being guarded is the direction the gate is sensitive in.
 #
@@ -181,7 +202,7 @@ fi
 echo "depth canary — tier 1: the real driver, out of process"
 
 # seed:ceiling:expected_records  — see the pin table in the header
-for row in "7:76:122" "11:110:190" "23:126:216"; do
+for row in "6:76:122" "10:110:190" "22:126:216"; do
   seed="${row%%:*}"; rest="${row#*:}"; ceiling="${rest%%:*}"; want_records="${rest##*:}"
 
   set +e

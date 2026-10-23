@@ -49,6 +49,38 @@
 --       `AppendCountDiffers` at `Aggregate("transcript")`.
 --       `transcript_findings` carries no check tag, so P1.9b reuses it
 --       unchanged as K7 against the entry's seed digest and recorded chain.
+--
+--       PRE-W1 MESSAGES (034 PLAN-001 W1.4, review 2 finding 6). W1.4 gives
+--       the harness's own fault messages a `fault` member: `denial_message`,
+--       `policy_denied_message`, `undecodable_arguments_message`,
+--       `delegated_deferred_message` and the typed renderer. A journal
+--       recorded before W1 holds the old bytes. THE REMEDY IS THAT REPLAY
+--       CARRIES THOSE BYTES AND NEVER REBUILDS THEM, so A2 and K7 compare
+--       byte for byte as before, with no normalisation:
+--         * a denial (a policy `Deny`, an operator's `ApprovalDenied`) is a
+--           recorded tool result. The world serves every recorded result as
+--           its tool's content (`world.journal_tool`), and the admission and
+--           candidate runs install an empty registry (`admission_run.
+--           admission_rt`), whose tool policy denies nothing and leaves
+--           nothing pending, so the run appends the recorded bytes through
+--           `tool_outcome_message`'s `ToolCompleted` arm, unchanged; neither
+--           denial builder runs in a replay;
+--         * an undecodable-argument message answers a call whose non-blank
+--           argument string does not decode. D1 refuses such a call in the
+--           kept segment (`association.ail`, `MalformedToolArguments`) before
+--           anything runs, so in an admitted journal the message can only be
+--           in the seed, which the run is handed verbatim and A2 compares
+--           verbatim.
+--       `test_w14_pre_w1_messages_world` below checks both facts on a pre-W1
+--       journal (`fxs_w14_pre_w1_messages`); `source_checks_live_test.ail`'s
+--       `w14_pre_w1_messages` replays it after W1 and A1-A9 admit it, and
+--       `candidate_checks_live_test.ail`'s `w14_pre_w1_k7` gets K7 clean and
+--       `Reproduced` on it. NOT COVERED: a journal recorded with `ohmy_pi`
+--       true whose kept segment holds a call `backend_for_v2` delegates. The
+--       run rebuilds that message (`delegated_deferred_message`), so after W1
+--       A2 reports `MessageDiffers` at it; before W1 the same replay already
+--       left the recorded result in the tool queue, misaligning every later
+--       call. No fixture holds one.
 --   A3  requests, against the live excerpt. Per call k (1-based), the k-th
 --       provider interaction of the program: its projection's `payload=` and
 --       `system=` equal the associated `provider_call_prepared`'s
@@ -103,14 +135,14 @@ import src/eval/journal/reader (RunSelector, SegAppended, parse_lines)
 import src/eval/journal/association (arguments_equal)
 import src/eval/journal/configuration (eval_provider_api_model)
 import src/eval/journal/stopping (JournalWorld, ExpectedEnd, EndSuspended, EndFinalize, WorldRefusal, end_id, end_value, world_refusal_family, world_refusal_position, t0_omissions)
-import src/eval/journal/world (fixture_journal_world)
+import src/eval/journal/world (fixture_journal_world, journal_tools)
 import src/eval/journal/admission (
   Location, Interaction, Call, Source, Aggregate, SourceSide, Snapshot,
   AdmissionCheckId, A1, A2, A3, A4, A5, A6, A7, A8, A9, A9b,
   AdmissionFinding, check_label, location_label, finding_label, first_label
 )
 import src/eval/journal/testdata/world_fixtures (WorldFixture, fxw_m3_selector_end, fxw_m5_config_window, fxw_m4_hybrid_predicate_false)
-import src/eval/journal/testdata/source_check_fixtures (SourceCheckFixture, fxs_all, fxs_clean_m2)
+import src/eval/journal/testdata/source_check_fixtures (SourceCheckFixture, fxs_all, fxs_clean_m2, fxs_w14_pre_w1_messages)
 
 -- ============================================================================
 -- Findings without a check tag (A2's are K7's too).
@@ -892,3 +924,45 @@ pure func test_m10_verdict_mapping() -> bool
       }
     }
   }
+
+-- 034 PLAN-001 W1.4: the two facts the pre-W1 remedy rests on, on a journal
+-- recorded before W1 (header, "PRE-W1 MESSAGES"). D1 reads it: the seed holds
+-- a call whose argument JSON was cut off and the undecodable-argument message
+-- it got (in the kept segment D1 refuses such a call,
+-- `association.test_m2_malformed_tool_arguments`). A1 is clean on the
+-- generator's chain. The world serves run B's first tool result (e14, a
+-- pre-W1 denial) as its tool's content, byte for byte: the run appends it, it
+-- does not rebuild it. Both recorded messages carry no `fault` member.
+pure func test_w14_pre_w1_messages_world() -> bool
+  tests [((), true)]
+  {
+    let f = fxs_w14_pre_w1_messages();
+    match fixture_journal_world(sx_world(f)) {
+      Err(_) => false,
+      Ok(jw) => {
+        let c = source_chain(sx_lines(f), jw);
+        let undecodable = List.filter(\m. m.role == "tool" && m.tool_call_id == "c1", jw.seed);
+        let cut = List.foldl(\acc m. acc ++ List.map(\t. t.arguments, m.tool_calls), [], List.filter(\m. m.role == "assistant", jw.seed));
+        let denial = List.filter(\a. a.seq == 14, c.appends);
+        let served = List.filter(\t. t.tool_call_id == "c2a", journal_tools(jw));
+        List.length(check_a1(c)) == 0
+          && sx_strs_eq(List.map(\a. a.digest_after, c.appends), f.append_digests)
+          && (match cut { a :: _ => (match decode(a) { Ok(_) => false, Err(_) => true }), [] => false })
+          && (match undecodable {
+                [m] => startsWith(m.content, "{\"error\":true,\"tool\":\"BashExec\",\"code\":\"arguments_undecodable\",\"raw_length\":17,")
+                         && not sx_has(m.content, "\"fault\""),
+                _ => false
+              })
+          && (match (denial, served) {
+                ([a], [t]) => a.message.content == "{\"error\":true,\"denied_by_policy\":true,\"tool\":\"BashExec\",\"reason\":\"denied by operator\"}"
+                                && t.content == a.message.content,
+                _ => false
+              })
+      }
+    }
+  }
+
+pure func sx_has(s: string, part: string) -> bool {
+  List.length(split(s, part)) > 1
+}
+

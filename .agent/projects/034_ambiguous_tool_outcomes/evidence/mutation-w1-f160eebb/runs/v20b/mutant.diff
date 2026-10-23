@@ -1,0 +1,11 @@
+--- a/src/core/tool_phase.ail
++++ b/src/core/tool_phase.ail
+@@ -449,7 +449,7 @@
+     -- under that condition all three answers — drop, re-seat, rewind — produce
+     -- identical worlds. WI-D19 §3.2's argument, one slot over.
+     let handled = dispatch_tool_handle(rt, { ctx | world: world_to_token(world) }, envelope);
+-    let handle_world = adopt_world(handled.next_state, world); -- 034 W1.3: `applied` and the effect log are not in the token (D4); re-seated from the live `world`, as the token is on the way in
++    let handle_world = adopt_world(handled.next_state, { world | tools: [] }); -- 034 W1.3: `applied` and the effect log are not in the token (D4); re-seated from the live `world`, as the token is on the way in
+     match handled.decision {
+       Handled(result_env) => {
+         let handled_event = ExtToolHandled({

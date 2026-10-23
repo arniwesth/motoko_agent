@@ -1,0 +1,13 @@
+--- a/src/core/ports.ail
++++ b/src/core/ports.ail
+@@ -2674,8 +2674,8 @@
+     -- a `bool_field` fallback. `applied` is not written, and must never be
+     -- (D4): replay rebuilds every `ScriptedTool` from these bytes alone.
+     ToolFailed(f) =>
+-      encode(jo([kv("result", js("failed")), kv("code", js(f.code)), kv("message", js(f.message)),
+-                 kv("stage", js(if f.after_dispatch then "after_dispatch" else "before_dispatch"))])),
++      encode(jo([kv("result", js("failed")), kv("code", js(f.code)), kv("message", js(f.message))
++                 ])),
+     -- `got_id` is the SCRIPT's id, which is what the world must be re-seeded
+     -- with for `world_tool` to take the correlation branch again. Recording the
+     -- expected id instead would replay as an ordinary success.

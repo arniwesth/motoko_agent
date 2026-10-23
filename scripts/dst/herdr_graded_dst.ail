@@ -62,6 +62,7 @@ import src/core/dst_program (
   program_schema_version
 )
 import src/core/dst_replay (
+  applied_faults_of_world,
   ReplayMismatch,
   ReconstitutionFinding,
   world_state_of,
@@ -149,14 +150,16 @@ func bash_envelope(stdout: string) -> string {
 }
 
 func eff(duration_ms: int, exit_code: int, stdout: string)
-  -> { tool_call_id: string, duration_ms: int, code: string, message: string, content: string, exit_code: int } {
+  -> { tool_call_id: string, duration_ms: int, code: string, message: string, content: string, exit_code: int,
+    after_dispatch: bool, applied: bool } {
   { tool_call_id: "", duration_ms: duration_ms, code: "", message: "",
-    content: bash_envelope(stdout), exit_code: exit_code }
+    content: bash_envelope(stdout), exit_code: exit_code, after_dispatch: true, applied: false }
 }
 
 -- Durations 101..113 and codes 127/131: distinct from every queue constant in
 -- the tree (S7), which uses 41…61, 43/47/53/59 and 79/83.
-func herdr_effects() -> [{ tool_call_id: string, duration_ms: int, code: string, message: string, content: string, exit_code: int }] {
+func herdr_effects() -> [{ tool_call_id: string, duration_ms: int, code: string, message: string, content: string, exit_code: int,
+    after_dispatch: bool, applied: bool }] {
   [ -- 0. THE STARTUP SWEEP, and missing it is what this spike caught. `sweep_once`
     --    runs on the FIRST tool call, before `do_delegate` does anything, and
     --    issues `pane list`. A fixture that starts at the split serves the
@@ -408,7 +411,7 @@ pure func graded_program(w: WorldState, initial: WorldState) -> ExecutionProgram
       synthetic_environment: initial.env,
       files: [],
       clock_epoch: initial.clock_ms,
-      extension_profile: "driver_plus_herdr/7"
+      extension_profile: "driver_plus_herdr/8"
     },
     bounds: {
       max_interactions: 256,
@@ -419,7 +422,10 @@ pure func graded_program(w: WorldState, initial: WorldState) -> ExecutionProgram
       chunk_draw_hi: 3
     },
     manifest: herdr_manifest(),
-    interactions: w.log
+    interactions: w.log,
+    -- 034 W1.3: the world's effect-log FAULT entries, by recorded ordinal; empty
+    -- unless the scenario scripts an applied fault.
+    applied_faults: applied_faults_of_world(w)
   }
 }
 
@@ -527,7 +533,7 @@ pure func head_inventory() -> [CoreSite] {
   unconditional_core_sites()
     ++ [{ site: { file: "src/core/ext/runtime.ail", line: 199 }, effect: "Clock",
           routed: false, note: "" },
-        { site: { file: "src/core/tool_phase.ail", line: 389 }, effect: "Process",
+        { site: { file: "src/core/tool_phase.ail", line: 404 }, effect: "Process",
           routed: false, note: "" }]
 }
 
@@ -789,7 +795,7 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, SharedMem, Stream, Trac
   let rec = scenario_the_record();
   let _ = println("HERDR-GRADED: the profile record loads clean and its clauses bind:  ${show(rec)}");
   if dispatched && succeeded && served && disc && rec then
-    println("HERDR-GRADED: PASS — the ToolProvider path is reachable under DST, the run is recorded, graded, validated and strictly replayed, and driver_plus_herdr/7 rests on it")
+    println("HERDR-GRADED: PASS — the ToolProvider path is reachable under DST, the run is recorded, graded, validated and strictly replayed, and driver_plus_herdr/8 rests on it")
   else {
     let _ = println("HERDR-GRADED: FAIL — the call sequence desynchronised or an effect reached the live world");
     let _ = show_each(tools);

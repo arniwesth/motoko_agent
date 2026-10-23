@@ -153,8 +153,12 @@ import src/core/dst_profile (
 import src/core/dst_fault_catalogue (
   FaultClass,
   fault_catalogue, required_class_ids, conditional_class_ids, find_class,
-  RecoveryBranch, Branch, NoReachableBranch, branch_id
+  RecoveryBranch, Branch, NoReachableBranch, branch_id,
+  world_only_class_ids, ids_occurring_in
 )
+-- 034 W1.5: the wire guard reads the trace's tool-role history entries.
+import std/json (Json, get, asString, encode, jo, kv, js)
+import src/core/phase_vocab (LedgerTrace, LedgerRecord, WireRecord, HistoryAppended)
 
 export pure func corpus_rules_version() -> string { "corpus-rules/1" }
 
@@ -344,6 +348,16 @@ export type CorpusJob = {
 -- Taking the 317 would have restored the comfortable margin under `pr_job()` by
 -- choosing the more flattering of two honest numbers, which is the move that
 -- paragraph exists to forbid.
+--
+-- RE-CHECKED AT 034 W1.6 AND NOT MOVED. The stage and `applied` draws and the
+-- version bump re-phase every seed, so the question was whether the median
+-- trajectory got dearer. The harness above was run A/B on one machine, warm,
+-- interleaved: HEAD before W1.6 at 42.1 s per 100 seeds (421 ms, which
+-- reproduces this constant), W1.6 at 37.0 s (370 ms). The harness needed a
+-- scratch copy to run at all — it predates `ExecutionProgram.applied_faults`
+-- (W1.3), which is recorded evidence and was not edited. No rise, so neither
+-- this constant nor `pr_target_ceiling_ms()` moves; `make corpus_pr` took 24 s
+-- of its 180 s ceiling with the new bank.
 export pure func measured_ms_per_seed() -> int { 416 }
 
 export pure func seeds_affordable_in(budget_ms: int) -> int {
@@ -1206,6 +1220,74 @@ export pure func render_corpus(c: Corpus) -> string {
 }
 
 -- ---------------------------------------------------------------------------
+-- PART 10 — 034 W1.5: no world-only class id reaches the wire
+-- ---------------------------------------------------------------------------
+--
+-- Standing rule 6 of 034 PLAN-001, ADR-001 D4. A world-only class says the
+-- tool's update DID occur; the model is shown its wire twin's bytes and must
+-- not be able to learn otherwise. The guard reads what the model was shown: the
+-- tool-role messages the driver appended to its history, as the trace records
+-- them (`HistoryAppended`, one per tool result, `session.c2_append_step`), and
+-- reports every world-only id that occurs anywhere in one, lexically.
+--
+-- It reads the TRACE, not a target's stdout. `make corpus_pr`'s output carries
+-- `render_corpus`'s `classes:` lines, which list the world-only ids by design,
+-- so a grep there is red on correct source.
+--
+-- The ids are read off the catalogue (`world_only_class_ids`), so a third
+-- world-only row is guarded by being written.
+
+-- contracts: BLOCKED — RECURSIVE over the trace's records.
+export pure func world_only_ids_on_wire(t: LedgerTrace) -> [string] {
+  leaks_in(t.records, world_only_class_ids(fault_catalogue()))
+}
+
+-- How many tool-role messages the guard read. A guard over a trace with none
+-- is vacuous, and a caller asserts this is non-zero beside the guard.
+-- contracts: BLOCKED — RECURSIVE over the trace's records.
+export pure func tool_messages_on_wire(t: LedgerTrace) -> int {
+  count_tool_messages(t.records)
+}
+
+-- contracts: BLOCKED — RECURSIVE over the records.
+pure func leaks_in(rs: [LedgerRecord], ids: [string]) -> [string] {
+  match rs {
+    [] => [],
+    r :: rest => {
+      let here = match tool_message_of(r) {
+        Some(m) => ids_occurring_in(encode(m), ids),
+        None => []
+      };
+      here ++ leaks_in(rest, ids)
+    }
+  }
+}
+
+-- contracts: BLOCKED — RECURSIVE over the records.
+pure func count_tool_messages(rs: [LedgerRecord]) -> int {
+  match rs {
+    [] => 0,
+    r :: rest => (match tool_message_of(r) { Some(_) => 1, None => 0 }) + count_tool_messages(rest)
+  }
+}
+
+-- The appended message, when it is a tool-role one.
+-- contracts: BLOCKED — matches on `LedgerRecord` and `Json`, neither in the verifier's fragment.
+pure func tool_message_of(r: LedgerRecord) -> Option[Json] {
+  match r {
+    WireRecord(HistoryAppended(i)) =>
+      match get(i.message, "role") {
+        Some(v) => match asString(v) {
+          Some(role) => if role == "tool" then Some(i.message) else None,
+          None => None
+        },
+        None => None
+      },
+    _ => None
+  }
+}
+
+-- ---------------------------------------------------------------------------
 -- Inline tests. The rotation's tests come first: they are the executable
 -- statement of this module's whole risk, and they were written and run RED
 -- against a frozen window before `rotating_window` existed.
@@ -1419,4 +1501,42 @@ pure func test_required_non_waived_drops_exactly_the_conditional_classes() -> bo
       && waived == 2
       && not contains_str(required_non_waived(rows), "approval_deadline_exceeded")
       && not contains_str(required_non_waived(rows), "extension_effect_fault")
+  }
+
+-- 034 W1.5: the wire guard, on hand-built traces. The bank and
+-- `strict_replay_dst` run it on real ones.
+pure func appended(role: string, content: string) -> LedgerRecord {
+  WireRecord(HistoryAppended({
+    run_id: "r", step: 1,
+    message: jo([kv("role", js(role)), kv("content", js(content)), kv("tool_call_id", js("c1"))]),
+    replaces_previous: false, digest_after: "sha256:a" }))
+}
+
+pure func test_the_wire_guard_passes_twin_bytes_and_reads_tool_messages() -> bool
+  tests [((), true)]
+  {
+    let t: LedgerTrace = { records: [appended("assistant", "calling"),
+                                     appended("tool", "{\"fault_class\":\"ToolFailed\",\"code\":\"E\"}"),
+                                     appended("tool", "{\"fault_class\":\"ToolDeadlineExceeded\"}")] };
+    List.length(world_only_ids_on_wire(t)) == 0 && tool_messages_on_wire(t) == 2
+  }
+
+-- 034 PLAN-001 W1.7's v12 breaks the rule this reports: a world-only id in a
+-- tool message's `fault_class` is a hit, and so is one anywhere else in it.
+pure func test_the_wire_guard_finds_a_world_only_id_in_a_tool_message() -> bool
+  tests [((), true)]
+  {
+    let in_class: LedgerTrace = { records: [appended("tool", "{\"fault_class\":\"tool_effect_applied_then_failed\"}")] };
+    let in_prose: LedgerTrace = { records: [appended("tool", "the effect applied: tool_effect_applied_then_deadline")] };
+    world_only_ids_on_wire(in_class) == ["tool_effect_applied_then_failed"]
+      && world_only_ids_on_wire(in_prose) == ["tool_effect_applied_then_deadline"]
+  }
+
+-- The guard is about tool messages. A non-tool entry is not read, and a trace
+-- with no tool message reads none — which is why callers assert the count.
+pure func test_the_wire_guard_reads_only_tool_role_entries() -> bool
+  tests [((), true)]
+  {
+    let t: LedgerTrace = { records: [appended("user", "tool_effect_applied_then_failed")] };
+    List.length(world_only_ids_on_wire(t)) == 0 && tool_messages_on_wire(t) == 0
   }

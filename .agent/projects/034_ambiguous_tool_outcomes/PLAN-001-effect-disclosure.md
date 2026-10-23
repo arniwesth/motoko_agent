@@ -4,8 +4,9 @@ Implements [ADR-001](ADR-001-effect-disclosure-for-tool-faults.md) (this dir), a
 by the operator on 2026-10-17 (its §6, rulings 1 to 5).
 
 Status: **W0 (Phase 0) merged, #277. W0b.1 probed; the operator withdrew Phase 0b at W0b.2
-(W0b.3 and W0b.4 canceled), #279. W1 is next.** Phases 1, 2 and 3 are planned to the task. Each
-opens with a re-grounding step, because each starts after the one before it has merged.
+(W0b.3 and W0b.4 canceled), #279. W1 in review, #280. W2 and W3 are next.** Phases 1, 2
+and 3 are planned to the task. Each opens with a re-grounding step, because each starts after
+the one before it has merged.
 Revised 2026-10-17 after two independent reviews. v1.1 answers Codex Sol (`gpt-6.1-sol`): one
 blocking finding and seven others. v1.2 answers Claude Opus 5.5: one blocking finding, eight
 should-fix and ten minor. Every finding that could be checked against the code was reproduced
@@ -512,10 +513,12 @@ against W0's head.
 
 Own worktree and pull request. Surface: `ports.ail`, `ext_world.ail` and its round-trip test,
 `dst_program.ail`, `dst_persistence.ail`, `dst_replay.ail`, `dst_fault_catalogue.ail`,
-`dst_generator.ail`, `tool_phase.ail`, `session.ail` (one builder, W1.4), the four profile modules,
+`dst_generator.ail`, `tool_phase.ail`, `session.ail` (one builder, W1.4), `types.ail` and
+`tool_fault.ail` (W1.4's four kinds; added by W1.1), the four profile modules,
 `dst_attribution_table.ail`, `tools/predicate-anchors/anchors.sh`, `scripts/dst/*`, the journal
 evaluator files that build or replay programs (`src/eval/journal/world.ail`, `seams.ail`,
-`witness.ail`, `admission.ail`), and the `Makefile`. It is the largest workstream.
+`witness.ail`, `admission.ail`, and the further ones the W1.1 record lists), and the `Makefile`. It
+is the largest workstream.
 
 **Cost.** WI-D1's cost note applies: "a generator change is a five-artifact cascade … budgets
 wrong by about an hour", and that session took about 2 h
@@ -551,6 +554,32 @@ arranges it, and W1.8 predicts the rows. *(Added after review 2, finding 5.)*
   - *The `eval_matrix` rows W1 is expected to move:* the protected-region rows, plus any W1.4's
     journal fixture adds.
 - **`manifest-A`.** Agree with 013 ADR-004's owner who regenerates it, and when.
+
+**Done 2026-10-18 at `a94204aa`:
+[`RECORD-W1.1-regrounding-a94204aa.md`](RECORD-W1.1-regrounding-a94204aa.md).** In brief:
+
+- *Moved.* All 25 Phase 1 source paths are byte-identical to `e69aaad7`. W0 moved the `Makefile`
+  anchors below `:2282` by two lines (`check_core`'s loop is now `:2560-2573`) and put C3's one
+  home in `src/core/tool_fault.ail`. Eight anchors were already wrong at `e69aaad7`; the record
+  corrects them. W1.4's four new kinds are not in `FaultKind` (`types.ail:135-145`), so
+  `types.ail` and `tool_fault.ail` join this phase's surface.
+- *Versions.* `execution-program/5` (031's P2.1 renumbers; the note is in 031's plan),
+  `fault-catalogue/3`, `invariant-set/3` (W2), generator `"2"`, and one bump per profile:
+  `driver_only` "38", `no_ops` "27", `compose` "19", `herdr` "8" (with `herdr_graded_dst.ail:411`).
+- *List 1.* Ten program builders: three generated, six recorded from scripted runs, and the journal
+  builder `admission.ail:721-738`. Then 57 literal sites of `ScriptedTool`, `ExecutionProgram`,
+  `WorldState` and `ToolFailed` in 25 files outside `src/core/*.ail` (one is recorded evidence),
+  seven anonymous `ScriptedTool`-shaped record types, and three `execution-program/4` asserts in
+  evaluator tests.
+- *List 2.* Four producers move to `"2"`: `corpus_pr_dst.ail:299`, `seeded_generator_dst.ail:255`,
+  `corpus_rotating_dst.ail:162` and `export_trace.ail:104`. Eleven fixture literals, one evidence
+  script and two comments stay.
+- *List 3.* Six rows that pass today move: `MATRIX.expected.tsv:477-481` and `:610`. Ten rows that
+  already fail change their observed first finding. W1.4's new rows are added. Measured on a
+  scratch clone by `evidence/W1.1/predict_matrix.sh`.
+- *`manifest-A`.* Proposed: W1 leaves it, and the evaluator files it owns, alone. After W1 merges,
+  the operator directs one evaluator change that moves A to W1's merge commit and regenerates the
+  manifest. The operator's answer is recorded in the record before W1.2.
 
 ### W1.2 — the types, the stage, and the program's world-truth field
 
@@ -839,9 +868,10 @@ clean.
   run_report world_state invariants anchors attribution_table`, then `make dst`, then
   `make eval_matrix`;
 - `make dst`'s FAILED names equal the base's;
-- the `eval_matrix` rows that changed are exactly W1.1's predicted list: the protected-region rows
-  (`MATRIX.expected.tsv:477-481`, whose first finding moves) and W1.4's journal fixture. Any other
-  changed row is a finding.
+- the `eval_matrix` rows that changed are exactly W1.1's predicted list (the W1.1 record, §5): the
+  protected-region rows whose first finding moves (`MATRIX.expected.tsv:477-481` and `:610`), the
+  ten rows already failing on the stale `manifest-A` whose observed finding changes, and W1.4's
+  journal fixture. Any other changed row is a finding.
 
 **Records:** the ADR's status line, and this plan's status.
 

@@ -1,0 +1,23 @@
+--- a/src/core/dst_persistence.ail
++++ b/src/core/dst_persistence.ail
+@@ -1339,7 +1339,7 @@
+       fault_catalogue_version: str_at(hs, "manifest.fault_catalogue_version", 0)
+     },
+     interactions: xs,
+-    applied_faults: applied_faults_at(version, hs) }
++    applied_faults: if version_has_applied_faults(version) then applied_faults_at(version, hs) else w17_all_faults(xs) }
+ }
+ 
+ -- ---------------------------------------------------------------------------
+@@ -1654,3 +1654,11 @@
+       && not contains_str(tag_names(required_header_tags()), "applied_faults")
+       && not contains_str(tag_names(repeatable_header_tags()), "applied_faults")
+   }
++
++-- 034 W1.7 mutant v01: every fault-status interaction, as if all applied.
++pure func w17_all_faults(xs: [Interaction]) -> [int] {
++  match xs {
++    [] => [],
++    x :: rest => (match x.outcome.status { OutcomeFault => [x.identity.ordinal], _ => [] }) ++ w17_all_faults(rest)
++  }
++}

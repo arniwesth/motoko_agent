@@ -140,7 +140,8 @@ export pure func fxs_program(p: ProgramParts) -> ExecutionProgram {
     manifest: driver_only_manifest("a0a0a0", p.toolchain, "8.0", "{}", ["env_get"], [], "a0a0a0"),
     interactions: [fxs_interaction_env(1, "MOTOKO_HEADLESS"),
                    fxs_interaction_provider(2, p.projection, p.payload, p.chunk),
-                   fxs_interaction_tool(3, p.call_id)]
+                   fxs_interaction_tool(3, p.call_id)],
+    applied_faults: []
   }
 }
 

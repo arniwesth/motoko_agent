@@ -1,0 +1,11 @@
+--- a/src/core/tool_phase.ail
++++ b/src/core/tool_phase.ail
+@@ -219,7 +219,7 @@
+     kv("error", jb(true)),
+     kv("delegated_backend_not_wired", jb(true)),
+     kv("tool", js(call.name)),
+-    kv(fault_key(), fault_to_json(refused_fault())),
++    kv(fault_key(), fault_to_json({ refused_fault() | effects: failed_fault(true).effects })),
+     kv("note", js("v2 split_by_backend selected Delegated; the inbox-based ohmy_pi wait is deferred to a follow-up milestone. Re-run with settings.ohmy_pi=false or use a tool that resolves to the Native backend."))
+   ]));
+   {

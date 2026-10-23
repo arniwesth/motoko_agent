@@ -231,7 +231,10 @@ export func eval_tool_exec(base: Ports) -> ((WorldState, ToolInvocation) -> Tool
         let o = ToolFailed({
           tool_call_id: inv.call.id,
           code: replay_unrecorded_code(),
-          message: "replay: no recorded result for tool call ${inv.call.id}"
+          message: "replay: no recorded result for tool call ${inv.call.id}",
+          -- 034 W1.2: BEFORE dispatch. The queue is empty and nothing ran —
+          -- this arm answers instead of calling `base.tool_exec`.
+          after_dispatch: false
         });
         {
           outcome: o,
@@ -251,7 +254,10 @@ export func eval_tool_exec(base: Ports) -> ((WorldState, ToolInvocation) -> Tool
             outcome: ToolFailed({
               tool_call_id: inv.call.id,
               code: seam_cardinality_code(),
-              message: "tool seam: the recorder did not append exactly one interaction to an equal prefix"
+              message: "tool seam: the recorder did not append exactly one interaction to an equal prefix",
+              -- 034 W1.2: AFTER dispatch. `base.tool_exec` already ran; this
+              -- fault is about what its recorder did, not about whether it ran.
+              after_dispatch: true
             }),
             next_state: ex.next_state
           },
@@ -335,7 +341,7 @@ pure func sm_inv(id: string, command: string) -> ToolInvocation {
 }
 
 pure func sm_tool(id: string, content: string, duration: int) -> ScriptedTool {
-  { tool_call_id: id, duration_ms: duration, code: "", message: "", content: content, exit_code: -1 }
+  { tool_call_id: id, duration_ms: duration, code: "", message: "", content: content, exit_code: -1, after_dispatch: true, applied: false }
 }
 
 -- M8 provider, empty script: the harness's exhausted record, exactly, and a

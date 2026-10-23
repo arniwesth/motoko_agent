@@ -106,7 +106,7 @@ import src/core/dst_program (
 import src/core/dst_profile (ExecutionManifest, validate_manifest)
 import src/core/dst_driver_only (driver_only, driver_only_version, driver_only_manifest)
 import src/core/dst_replay (
-  ReplayMismatch, replay_message, strict_replay_findings, world_state_of,
+  ReplayMismatch, replay_message, strict_replay_findings, world_state_of, applied_faults_of_world,
   refusal_message, refusal_rule
 )
 import src/core/dst_persistence (
@@ -207,7 +207,7 @@ pure func tool_of(duration: int) -> ScriptedTool {
   -- WI-D22: `exit_code` is part of "the underlying completion result held
   -- constant" — both worlds take it from here, so the pair still differs in
   -- `duration_ms` and only there.
-  { tool_call_id: "", duration_ms: duration, code: "", message: "", content: shared_content(), exit_code: -1 }
+  { tool_call_id: "", duration_ms: duration, code: "", message: "", content: shared_content(), exit_code: -1, after_dispatch: true, applied: false }
 }
 
 pure func env_of(limit_ms: int) -> [{ key: string, value: string }] {
@@ -235,7 +235,7 @@ pure func manifest() -> ExecutionManifest {
                        ["ai_step", "env_get", "tool_handle"], ["clock_now"], "HEAD")
 }
 
-pure func program_of(log: [Interaction], initial: WorldState, tag: string) -> ExecutionProgram {
+pure func program_of(w: WorldState, initial: WorldState, tag: string) -> ExecutionProgram {
   { schema_version: program_schema_version(),
     generator_id: "latency_pair_${tag}",
     generator_version: "1",
@@ -255,7 +255,10 @@ pure func program_of(log: [Interaction], initial: WorldState, tag: string) -> Ex
               max_payload_bytes: 4096, max_resource_size: 4096,
               max_clock_advance_ms: 60000, chunk_draw_hi: 3 },
     manifest: manifest(),
-    interactions: log }
+    interactions: w.log,
+    -- 034 W1.3: the world's effect-log FAULT entries, by recorded ordinal; empty
+    -- unless the scenario scripts an applied fault.
+    applied_faults: applied_faults_of_world(w) }
 }
 
 -- ---------------------------------------------------------------------------
@@ -328,7 +331,7 @@ func scenario_the_pair_differs_only_in_latency() -> bool ! {IO} {
 
 pure func head_tool(ts: [ScriptedTool]) -> ScriptedTool {
   match ts {
-    [] => { tool_call_id: "<absent>", duration_ms: -1, code: "", message: "", content: "", exit_code: -1 },
+    [] => { tool_call_id: "<absent>", duration_ms: -1, code: "", message: "", content: "", exit_code: -1, after_dispatch: true, applied: false },
     t :: _ => t
   }
 }
@@ -465,7 +468,7 @@ func scenario_no_deadline_no_fault() -> bool
 func replay_half(label: string, w: WorldState) -> bool
   ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let discovery = run_recording("latd_${label}", w);
-  let program = program_of(discovery.world.log, w, label);
+  let program = program_of(discovery.world, w, label);
   let structural = validate_program(program, required_class_ids());
   let c1 = check("${label}: the discovered program validates",
                  List.length(structural) == 0 && List.length(validate_bounds(program)) == 0,
@@ -539,8 +542,8 @@ func scenario_the_pair_is_two_programs() -> bool
   let _ = println("\n-- the pair is TWO programs, not one reported twice --");
   let fast_run = run_recording("latid_fast", fast_world());
   let slow_run = run_recording("latid_slow", slow_world());
-  let pa = program_of(fast_run.world.log, fast_world(), "fast");
-  let pb = program_of(slow_run.world.log, slow_world(), "slow");
+  let pa = program_of(fast_run.world, fast_world(), "fast");
+  let pb = program_of(slow_run.world, slow_world(), "slow");
   match encode_artifact(pa) {
     EncodeRefused(_) => check("the fast program encodes", false, "refused"),
     Encoded(bytes_a) => match encode_artifact(pb) {

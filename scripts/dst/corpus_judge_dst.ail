@@ -923,7 +923,7 @@ pure func two_tool_step() -> ScriptedStep {
 }
 
 pure func tool_answer(content: string) -> ScriptedTool {
-  { tool_call_id: "", duration_ms: 1, code: "", message: "", content: content, exit_code: 0 - 1 }
+  { tool_call_id: "", duration_ms: 1, code: "", message: "", content: content, exit_code: 0 - 1, after_dispatch: true, applied: false }
 }
 
 pure func feedback_steps(rs: [LedgerRecord]) -> [int] {

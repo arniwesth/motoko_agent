@@ -107,8 +107,10 @@ echo "attribution anchors:"
 # notes mean it.
 
 check src/core/ext/runtime.ail 199 'now()' "the ambient clock read attributed to test_dummy"
-check src/core/tool_phase.ail 388 'is_scratchpad_tool_name' "the mixed guard"
-check src/core/tool_phase.ail 389 'exec_scratchpad_cell_ws' "the call attributed to scratchpad"
+# 034 PLAN-001 W1.4 (2026-10-18) RE-BASELINED THESE TWO AND :484 BELOW,
+# 388/389/484 -> 403/404/499, all +15 -- see the W1.4 note at the foot.
+check src/core/tool_phase.ail 403 'is_scratchpad_tool_name' "the mixed guard"
+check src/core/tool_phase.ail 404 'exec_scratchpad_cell_ws' "the call attributed to scratchpad"
 # WI-D16 RE-BASELINED the five session.ail anchors 881/1126/1232/2677/2787 ->
 # 911/1160/1266/2711/2821, WI-D17 RE-BASELINED THEM AGAIN to
 # 931/1185/1291/2736/2846, and WI-D18 A THIRD TIME to 965/1224/1330/2775/2885 —
@@ -758,10 +760,37 @@ check src/core/test/stub_step.ail 203 'now()' "the one remaining ambient clock (
 # green and printed `driver_plus_herdr/6 rests on it` for a profile at v7.
 # File 8 is still a convention that no check enforces.
 
+# 034 PLAN-001 W1.4 RE-BASELINED THE THREE tool_phase.ail ANCHORS --
+# `388/389/484 -> 403/404/499`, all +15 -- AND IT IS THE CASCADE THE PLAN
+# PRICED (PLAN-001 C1): W1.4 gives the harness's own fault messages the
+# `fault` object (ADR-001 D2/D3), and all four builders sit above the guard:
+# `denial_message` (+3: a two-line comment and the key), the `tool_fault`
+# import (+1), `delegated_deferred_message` (+3), `tool_outcome_message`'s
+# comment (+5), `tool_fault_message`'s key (+1) and
+# `undecodable_arguments_message` (+2: comment and key). Compressing them onto
+# existing lines was not taken: the profiles take one bump in W1 anyway
+# (catalogue `/3`, W1.5), so this is where it is paid.
+#
+# THE D4 JUDGEMENT, with the evidence: the three anchored expressions were
+# compared with `git show dd493a1a:src/core/tool_phase.ail` at :388/:389/:484
+# and are byte-identical at their new offsets. No site was added, removed or
+# re-routed: W1.4 adds no effect, only JSON keys to pure builders. The
+# session.ail edit (`policy_denied_message` and its import) was written
+# line-neutral, so the five session anchors did not move.
+#
+# WIDTH: the widened grep finds every pin of `tool_phase.ail:389`, so this is
+# the wide form -- this file; `dst_attribution_table.ail` (2 rows, 3 test
+# literals, 2 notes); `attribution_table_dst.ail` (3 literals); the five
+# discovered-site fixtures `driver_only_dst.ail`, `driver_plus_no_ops_dst.ail`,
+# `driver_plus_compose_dst.ail`, `profile_definition_dst.ail`,
+# `herdr_graded_dst.ail`; the four profiles (driver_only v37 -> v38, no_ops v26
+# -> v27, compose v18 -> v19, herdr v7 -> v8, each with the new content hash);
+# and `driver_plus_herdr/7` -> `/8` in herdr_graded_dst.ail. The table's
+# content hash goes `sha256:38d8a67e...` -> `sha256:8c5302b3...`.
 for l in 1463 1722 1834 3834 4013; do
   check src/core/session.ail "$l" 'clock_now' "a routed core clock site"
 done
-check src/core/tool_phase.ail 484 'clock_now' "the FIFTH routed core clock site (D4's table says four)"
+check src/core/tool_phase.ail 499 'clock_now' "the FIFTH routed core clock site (D4's table says four)"
 
 if [ "$fail" -ne 0 ]; then
   echo

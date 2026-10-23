@@ -47,6 +47,15 @@
 --     (the world reads), then the admission's first finding and its typed
 --     location are pinned; for the A3 rows the call equals the generator's
 --     independent `first_request_divergence`, and A1, A2 pass.
+--   w14_pre_w1_messages (034 PLAN-001 W1.4)
+--     a journal recorded before W1 (`fxs_w14_pre_w1_messages`: a pre-W1
+--     undecodable-argument message in the seed, a pre-W1 denial at e14),
+--     replayed by this build: admitted with no finding (A1-A9), A2 clean on
+--     the run's own transcript, both messages in the run's final history byte
+--     for byte; and the recorded bytes are exactly this build's builders'
+--     (`denial_message`, `undecodable_arguments_message`) with the `fault`
+--     member removed, so a rebuild would have differed. `source_checks.ail`,
+--     "PRE-W1 MESSAGES", states the remedy.
 --
 -- Synthetic fixtures only (§0.6).
 
@@ -58,6 +67,7 @@ import std/list as List (length, map, foldl, filter)
 import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
 import std/string (join, replace)
+import std/string as Str (length)
 import src/core/dst_interaction (Interaction, ProviderIdentity, ToolIdentity, OutcomeFault)
 import src/core/phase_vocab (LedgerRecord, WireRecord, HistorySeeded, HistoryAppended)
 import src/core/dst_driver_only (driver_only_manifest)
@@ -84,7 +94,11 @@ import src/eval/journal/testdata/world_fixtures (WorldFixture, fxw_all, fxw_m3_s
 import src/eval/journal/testdata/admission_fixtures (fxa_all)
 import src/eval/journal/testdata/journal_fixtures (fxj_near_miss_chain_break, fxj_near_miss_malformed_entry, fxj_clean)
 import src/eval/journal/testdata/association_fixtures (fxr_m2_clean, fxr_m15_unexpected_tool_result, fxr_m15_malformed_tool_arguments, fxr_m15_duplicate_call_id_swap, fxr_m15_association)
-import src/eval/journal/testdata/source_check_fixtures (SourceCheckFixture, fxs_clean_base, fxs_clean_m2, fxs_near_miss_chain_break, fxs_near_miss_malformed_entry, fxs_m15_unexpected_tool_result, fxs_m15_malformed_tool_arguments, fxs_m15_duplicate_call_id_swap, fxs_m15_association)
+import src/eval/journal/testdata/source_check_fixtures (SourceCheckFixture, fxs_clean_base, fxs_clean_m2, fxs_near_miss_chain_break, fxs_near_miss_malformed_entry, fxs_m15_unexpected_tool_result, fxs_m15_malformed_tool_arguments, fxs_m15_duplicate_call_id_swap, fxs_m15_association, fxs_w14_pre_w1_messages)
+import src/core/tool_phase (denial_message, undecodable_arguments_message)
+import src/core/tool_dispatch_adapter (fault_to_json)
+import src/core/tool_fault (denied_fault, arguments_undecodable_fault)
+import std/json (encode)
 
 type Case = { name: string, journal: [string], log: [string], sel: RunSelector, env: RecordedEnv, rederived: string }
 
@@ -446,6 +460,39 @@ func m15_row(name: string, f: SourceCheckFixture, family_journal: [string], fami
       && admission_position(a) == want_position)
 }
 
+-- 034 PLAN-001 W1.4: the pre-W1 journal, replayed after W1.
+pure func lt_without_fault(content: string, fault_json: string) -> string {
+  replace(content, ",\"fault\":${fault_json}", "")
+}
+
+func w14_pre_w1_messages() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let f = fxs_w14_pre_w1_messages();
+  let r = admit_case(source_case(f), SyntheticEntry);
+  let _ = lt_print("w14_pre_w1_messages", r);
+  let a = match r { Ok(o) => o.admission, Err(x) => x };
+  let denied = "{\"error\":true,\"denied_by_policy\":true,\"tool\":\"BashExec\",\"reason\":\"denied by operator\"}";
+  let cut = "{\"command\":\"ls c1";
+  let post_denial = denial_message({ id: "c2a", name: "BashExec", arguments: "{}" }, "denied by operator").content;
+  let post_undecodable = undecodable_arguments_message({ id: "c1", name: "BashExec", arguments: cut }, Str.length(cut)).content;
+  let shapes = post_denial != denied
+                 && lt_without_fault(post_denial, encode(fault_to_json(denied_fault()))) == denied;
+  match lt_run_world(lt_world_fixture(f)) {
+    None => lt_report("w14_pre_w1_messages", false),
+    Some(ran) => {
+      let e = transcript_expectation(source_chain(ran.lines, ran.jw));
+      let o = transcript_observation(ran.run);
+      let pre_undecodable = List.foldl(\acc m. if m.role == "tool" && m.tool_call_id == "c1" then m.content else acc, "", o.final_history);
+      let in_history = List.length(List.filter(\m. m.role == "tool" && m.tool_call_id == "c2a" && m.content == denied, o.final_history)) == 1;
+      let undecodable_shape = pre_undecodable != "" && post_undecodable != pre_undecodable
+                                && lt_without_fault(post_undecodable, encode(fault_to_json(arguments_undecodable_fault()))) == pre_undecodable;
+      let _ = println("w14_pre_w1_messages: verdict=${admission_verdict_word(a)} first=${admission_first_finding_name(a)} position=${admission_position(a)} a2=[${join(";", lt_labels(check_a2(e, o)))}] denial_in_history=${if in_history then "true" else "false"} denial_shape=${if shapes then "true" else "false"} undecodable_shape=${if undecodable_shape then "true" else "false"}");
+      lt_report("w14_pre_w1_messages",
+        admission_verdict_word(a) == "admitted" && admission_first_finding_name(a) == "-" && admission_position(a) == "-"
+          && lt_source_empty(r) && List.length(check_a2(e, o)) == 0 && in_history && shapes && undecodable_shape)
+    }
+  }
+}
+
 export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let c1 = p17a_clean("p17a_clean_suspended", fxw_m3_selector_end(), "SourceFaithful(calls=3,end=EndSuspended(3))");
   let c2 = p17a_clean("p17a_clean_finalize", fxw_m4_stop_call_last(), "SourceFaithful(calls=3,end=EndFinalize(model_stop))");
@@ -478,6 +525,7 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
                    Some(fxr_m2_clean().log), "A2:MessageDiffers", "refused", "snapshot:14", false);
   let n6 = m15_row("m15_association", fxs_m15_association(), fxr_m15_association().journal,
                    Some(fxr_m15_association().log), "A3:PayloadDiffers", "refused", "call:1", true);
-  if c1 && c2 && c3 && c4 && m10 && t1 && t2 && n1 && n2 && n3 && n4 && n5 && n6 then println("source_checks_live_test: all checks passed")
+  let w14 = w14_pre_w1_messages();
+  if c1 && c2 && c3 && c4 && m10 && t1 && t2 && n1 && n2 && n3 && n4 && n5 && n6 && w14 then println("source_checks_live_test: all checks passed")
   else { let _ = println("source_checks_live_test: FAILED"); exit(1) }
 }

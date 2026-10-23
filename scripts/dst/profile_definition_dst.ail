@@ -108,7 +108,7 @@ pure func head_inventory() -> [CoreSite] {
   unconditional_core_sites()
     ++ [{ site: { file: "src/core/ext/runtime.ail", line: 199 }, effect: "Clock",
           routed: false, note: "" },
-        { site: { file: "src/core/tool_phase.ail", line: 389 }, effect: "Process",
+        { site: { file: "src/core/tool_phase.ail", line: 404 }, effect: "Process",
           routed: false, note: "" }]
 }
 
@@ -204,7 +204,8 @@ pure func clean_manifest() -> ExecutionManifest {
     profile_rules_version: "profile-rules/3",
     coverage_rules_version: "coverage-rules/1",
     attribution_rules_version: "attribution-rules/1",
-    fault_catalogue_version: "fault-catalogue/2"
+    -- 034 W1.5: /2 -> /3, the visibility field and the two world-only rows.
+    fault_catalogue_version: "fault-catalogue/3"
   }
 }
 

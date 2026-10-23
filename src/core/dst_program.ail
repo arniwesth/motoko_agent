@@ -129,7 +129,38 @@ import src/core/dst_interaction (
 -- the v3 row now reads those bytes as a v3 program (a permitted
 -- backward-compatible decode), while the strict byte-identity assertion moves
 -- to v4, frozen BY this encoder.
-export pure func program_schema_version() -> string { "execution-program/4" }
+--
+-- 034 PLAN-001 W1.2 MOVED THIS TO `execution-program/5`, and TWO payloads
+-- travel with the move — one in the program, one in a tool outcome:
+--
+--   `ExecutionProgram.applied_faults`  WORLD TRUTH: the ordinals of the tool
+--                             interactions that are faults whose effect was
+--                             applied anyway (034 ADR-001 D4). It is a
+--                             version-gated REQUIRED header line holding an
+--                             explicit, possibly empty list, and absence before
+--                             v5 decodes to the EMPTY list. That is a DEFAULT and
+--                             it is admissible by the rule above: "not applied"
+--                             is the recorded meaning of every existing tool
+--                             fault row (`ToolFailed`'s "did NOT occur" in
+--                             `dst_fault_catalogue`), so the old versions' own
+--                             semantics fixed the list at empty. At v5 absence is
+--                             `MissingSection`, not empty — a repeatable tag could
+--                             not tell the two apart. See
+--                             `dst_persistence.required_header_tags_at`.
+--   the `ToolFailed` dispatch stage  an OBSERVATION, carried in the outcome
+--                             payload rather than the program (`ports.decode_tool_outcome`).
+--                             Absent before v5, and absence decodes to AFTER
+--                             dispatch. The rule above does not reach this one,
+--                             because no old version had a stage at all; it is
+--                             chosen as the conservative value instead — it
+--                             renders `unknown`, which 034's property P1 always
+--                             permits.
+--
+-- 031 PLAN-001 P2.1 had claimed `/5` without landing; 034 RECORD-W1.1 §2 took it
+-- and 031's plan carries the note that P2.1 renumbers. The strict byte-identity
+-- assertion moves to v5, frozen BY this encoder; the v4 bytes are untouched and
+-- now decode as a predecessor.
+export pure func program_schema_version() -> string { "execution-program/5" }
 
 -- Every schema version this build can decode. A migration extends this list
 -- and keeps the old decode path, or it does not extend it and old programs
@@ -149,7 +180,8 @@ export pure func program_schema_version() -> string { "execution-program/4" }
 -- is the first; `test_current_schema_is_decodable_and_an_unknown_one_is_not`
 -- pins the relationship between them.
 export pure func decodable_schema_versions() -> [string] {
-  ["execution-program/1", "execution-program/2", "execution-program/3", program_schema_version()]
+  ["execution-program/1", "execution-program/2", "execution-program/3", "execution-program/4",
+   program_schema_version()]
 }
 
 -- ---------------------------------------------------------------------------
@@ -248,7 +280,23 @@ export type ExecutionProgram = {
   initial_world: InitialWorld,
   bounds: GeneratorBounds,
   manifest: ExecutionManifest,
-  interactions: [Interaction]
+  interactions: [Interaction],
+  -- 034 W1.2. WORLD TRUTH, beside the interactions and not inside them: the
+  -- ordinals of the tool interactions that are faults whose effect APPLIED.
+  -- Completed calls are not listed — their outcome already says the tool
+  -- reported. It lives here and not in any interaction because every
+  -- interaction is served on replay, and D4 forbids a carrier: two programs
+  -- that differ only in this list serve identical interactions, which is the
+  -- precondition 034's property P2 compares on.
+  --
+  -- Its rules are split by what they need. Whether each ordinal names a tool
+  -- interaction, once, is STRUCTURAL and is `validate_program`'s
+  -- (`AppliedFaultNotATool`, `AppliedFaultRepeated`). Whether that interaction
+  -- is a fault observed after dispatch needs the outcome PAYLOAD decoded, which
+  -- is port code this module must not import (header, and `ba272abc`), so it is
+  -- `dst_replay.world_state_of`'s. A journal program carries the empty list,
+  -- which there means "no world truth recorded", not "not applied".
+  applied_faults: [int]
 }
 
 -- ---------------------------------------------------------------------------
@@ -273,6 +321,9 @@ export type ProgramRejection
   | ChunkOffsetsNotMonotone(int)                -- ordinal
   | OutcomeStatusDisagreesWithFault(int, string) -- ordinal, why
   | EmptyProgram
+  -- 034 W1.2: the world-truth list's two structural rules.
+  | AppliedFaultNotATool(int, string)          -- listed ordinal, what it names
+  | AppliedFaultRepeated(int)                  -- the ordinal listed twice
 
 export pure func program_rule(r: ProgramRejection) -> string {
   match r {
@@ -288,7 +339,9 @@ export pure func program_rule(r: ProgramRejection) -> string {
     StreamOnNonProvider(_) => "program-stream-on-non-provider",
     ChunkOffsetsNotMonotone(_) => "program-chunk-offsets-not-monotone",
     OutcomeStatusDisagreesWithFault(_, _) => "program-outcome-status-disagrees-with-fault",
-    EmptyProgram => "program-empty"
+    EmptyProgram => "program-empty",
+    AppliedFaultNotATool(_, _) => "program-applied-fault-not-a-tool",
+    AppliedFaultRepeated(_) => "program-applied-fault-repeated"
   }
 }
 
@@ -319,7 +372,11 @@ export pure func program_message(r: ProgramRejection) -> string {
     OutcomeStatusDisagreesWithFault(ord, why) =>
       "[program-outcome-status-disagrees-with-fault] interaction #${ord} ${why}; a fault with no class id is uncountable by D11's class-reached counter and an ok outcome naming one inflates it",
     EmptyProgram =>
-      "[program-empty] the program records no interactions; an execution that requested nothing is not a reproduction of a run, and a replay of it would assert nothing at all"
+      "[program-empty] the program records no interactions; an execution that requested nothing is not a reproduction of a run, and a replay of it would assert nothing at all",
+    AppliedFaultNotATool(ord, what) =>
+      "[program-applied-fault-not-a-tool] applied_faults lists ordinal ${ord}, which ${what}; the world-truth list names tool interactions whose fault applied its effect anyway (034 ADR-001 D4), and only a tool dispatch has an effect the driver's tool queue can apply",
+    AppliedFaultRepeated(ord) =>
+      "[program-applied-fault-repeated] applied_faults lists ordinal ${ord} more than once; the list is a set of interactions, and a repeat would count one applied effect twice"
   }
 }
 
@@ -580,6 +637,36 @@ pure func validate_interactions(xs: [Interaction], known_class_ids: [string]) ->
   }
 }
 
+-- 034 W1.2. The world-truth list's structural rules: every listed ordinal names
+-- a TOOL interaction in this program, and none is listed twice. Whether that
+-- interaction is a fault observed after dispatch is NOT checked here — it needs
+-- the outcome payload decoded, and the decoder is port code. See
+-- `dst_replay.world_state_of` for that half.
+-- contracts: BLOCKED — RECURSIVE over the interaction list.
+pure func interaction_at(xs: [Interaction], ord: int) -> Option[Interaction] {
+  match xs {
+    [] => None,
+    i :: rest => if i.identity.ordinal == ord then Some(i) else interaction_at(rest, ord)
+  }
+}
+
+-- contracts: SKIPPED — calls `interaction_at`, whose Option[Interaction] result is unencodable.
+pure func validate_applied_faults(xs: [Interaction], listed: [int], seen: [int]) -> [ProgramRejection] {
+  match listed {
+    [] => [],
+    ord :: rest =>
+      (if contains_int(seen, ord) then [AppliedFaultRepeated(ord)] else [])
+        ++ (match interaction_at(xs, ord) {
+              None => [AppliedFaultNotATool(ord, "names no interaction in this program")],
+              Some(i) => match i.identity.body {
+                ToolIdentity(_, _, _) => [],
+                _ => [AppliedFaultNotATool(ord, "is a ${interaction_kind(i)} interaction")]
+              }
+            })
+        ++ validate_applied_faults(xs, rest, seen ++ [ord])
+  }
+}
+
 -- The whole structural gate, in one call.
 --
 -- `known_class_ids` is an ARGUMENT rather than a call to the catalogue, for the
@@ -593,6 +680,7 @@ export pure func validate_program(p: ExecutionProgram, known_class_ids: [string]
     ++ duplicate_ordinals(p.interactions, [])
     ++ dense_ordinals(p.interactions, 0)
     ++ validate_interactions(p.interactions, known_class_ids)
+    ++ validate_applied_faults(p.interactions, p.applied_faults, [])
 }
 
 export pure func program_ok(p: ExecutionProgram, known_class_ids: [string]) -> bool {
@@ -712,9 +800,11 @@ pure func test_current_schema_is_decodable_and_an_unknown_one_is_not() -> bool
       -- same reason — a third bump that kept the length at three by dropping
       -- v1 would satisfy a count.
       && contains_str(decodable_schema_versions(), "execution-program/3")
-      && List.length(decodable_schema_versions()) == 4
-      -- And the bump actually happened: this build does not WRITE v3.
-      && program_schema_version() == "execution-program/4"
+      -- 034 W1.2: and v4 across the fourth bump, for the same reason.
+      && contains_str(decodable_schema_versions(), "execution-program/4")
+      && List.length(decodable_schema_versions()) == 5
+      -- And the bump actually happened: this build does not WRITE v4.
+      && program_schema_version() == "execution-program/5"
   }
 
 -- WI-D21. THE `ExtPorts.tool_handle` BRIDGE BUILDS AN INVOCATION THIS VALIDATOR

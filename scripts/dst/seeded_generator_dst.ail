@@ -184,8 +184,8 @@ import src/core/dst_generator (
   first_seed_message,
   CanaryFinding,
   canary_generator_id,
-  pinned_canary_v1,
   pinned_canary_v2,
+  pinned_canary_v3,
   check_canary,
   check_canary_version_axis,
   canary_ok,
@@ -204,6 +204,7 @@ import src/core/dst_program (
   validate_bounds
 )
 import src/core/dst_replay (
+  applied_faults_of_world,
   ReplayMismatch,
   ReconstitutionFinding,
   ReplayRefusal,
@@ -252,7 +253,9 @@ func budget() -> BudgetPlan { { total: 10, solver: 6, verifier: 4 } }
 func zero_rates() -> CostRates { { input_per_1m_millicents: 0, output_per_1m_millicents: 0 } }
 
 func generator_id() -> string { "motoko_driver_only" }
-func generator_version() -> string { "1" }
+-- 034 W1.6: "1" -> "2", this literal's first bump: `choose_tool` now draws the
+-- failed stage and `applied` (RECORD-W1.1 §4 lists the four producers).
+func generator_version() -> string { "2" }
 
 -- The DECLARED bounds. Sized so that no honest run reaches one — a bound that
 -- fires on a legitimate trajectory would report every run as a generator
@@ -616,7 +619,10 @@ pure func program_of(w: WorldState, initial: WorldState) -> ExecutionProgram {
     },
     bounds: initial.gen.bounds,
     manifest: generated_manifest(),
-    interactions: w.log
+    interactions: w.log,
+    -- 034 W1.3: the world's effect-log FAULT entries, by recorded ordinal.
+    -- Non-empty since W1.6, when the generator began drawing `applied`.
+    applied_faults: applied_faults_of_world(w)
   }
 }
 
@@ -769,14 +775,23 @@ func axis_bounds(honest: [GeneratedRun])
   -- justification on one producer, which is the S16 defect this file already
   -- carries a row against — and `ok_is_tightening` is what goes red if the
   -- generator's trajectories ever move underneath it.
-  let natural = generate("bounded", 77, 77, generator_version(), bounds());
+  --
+  -- 034 W1.6 moved the seed 77 -> 86: the stage and `applied` draws re-phased
+  -- every trajectory and seed 77 now terminates at its first provider choice,
+  -- so `ok_is_tightening` went red on it, as designed. The budget is spent only
+  -- at a PROVIDER request, so `ok_bounded`'s `==` also needs a trajectory whose
+  -- authored count lands on the budget there: of 77..100, 78, 80, 81, 87, 89,
+  -- 95, 98 and 100 overshoot it (an approval and a tool between two provider
+  -- requests), and 86 is taken because it clears the literal by the most among
+  -- those that land (11 authored at the declared bounds, 4 under the squeeze).
+  let natural = generate("bounded", 86, 86, generator_version(), bounds());
   let natural_authored = generator_authored_count(natural.run.world.log);
-  let _ = println("      MEASURED: seed 77 authors ${show(natural_authored)} generator interaction(s) at the declared bounds (log total ${show(List.length(natural.run.world.log))})");
+  let _ = println("      MEASURED: seed 86 authors ${show(natural_authored)} generator interaction(s) at the declared bounds (log total ${show(List.length(natural.run.world.log))})");
   let tight = { bounds() | max_interactions: 3 };
   let ok_is_tightening = check("the tightened bound (${show(tight.max_interactions)}) is BELOW this seed's natural trajectory (${show(natural_authored)})",
                                tight.max_interactions < natural_authored,
                                "a 'tightened' bound at or above the natural trajectory is not a tightening: the generator would terminate on its own and the rows below would grade a bound that never bound anything");
-  let squeezed = generate("bounded", 77, 77, generator_version(), tight);
+  let squeezed = generate("bounded", 86, 86, generator_version(), tight);
   let failures = squeezed.run.world.gen.failures;
   let _ = report_bound_failures(failures);
   let ok_fires = check("a tightened max_interactions is reported as a GENERATOR failure",
@@ -1049,8 +1064,8 @@ func axis_mutations(rich: GeneratedRun, poor: GeneratedRun, w_rich: DiscoveryWit
   let _ = println("");
   let _ = println("axis I — mutations (each must go red):");
 
-  -- The anti-count control. Two real rows whose interaction counts differ (38
-  -- and 14) offer no equal-count pair, so the axis must say the evidence could
+  -- The anti-count control. Two real rows whose interaction counts differ (42
+  -- and 21 since 034 W1.6) offer no equal-count pair, so the axis must say the evidence could
   -- be a length difference rather than passing on it.
   let count_shaped = check_seed_sensitivity([rich.row, poor.row]);
   let m1 = check("generator-seed-evidence-is-count-shaped ← evidence with no equal-count pair",
@@ -1132,25 +1147,37 @@ func axis_canary() -> bool ! {IO} {
   let _ = println("");
   let _ = println("axis K — D8's generator canary (pinned by hand; there is no regeneration path):");
 
+  -- 034 W1.6: the pinned pair is (current, next) = ("2", "3"). It was ("1",
+  -- "2") until the first real bump made "2" the running version, and a pair
+  -- whose "next" equals the running version contrasts the suite against itself
+  -- (review 2, finding 8). `ok_contrast` refuses that shape, so the next bump
+  -- cannot leave it behind silently. Both are bound once here, so the row
+  -- that asserts the contrast reads the version the checks below use.
+  let pinned = "2";
+  let next = "3";
   let ok_identity = check("the canary pins the generator id and version this suite actually runs",
-                          generator_id() == canary_generator_id() && generator_version() == "1",
-                          "the suite generates under '${generator_id()}/${generator_version()}' and the canary pins '${canary_generator_id()}/1' — a canary pinned to an identity nothing runs under is green forever, which is cluster 10's correction 1 one layer up");
+                          generator_id() == canary_generator_id() && generator_version() == pinned,
+                          "the suite generates under '${generator_id()}/${generator_version()}' and the canary pins '${canary_generator_id()}/${pinned}' — a canary pinned to an identity nothing runs under is green forever, which is cluster 10's correction 1 one layer up");
 
-  let v1 = check_canary(canary_generator_id(), "1", 0, pinned_canary_v1());
-  let _ = report_canary(v1);
-  let ok_v1 = check("the seed-to-choices mapping at version 1 is the pinned one",
-                    canary_ok(v1),
-                    "${show(List.length(v1))} finding(s) above — read them before touching the pins");
+  let ok_contrast = check("the canary's contrast version is NOT the version this suite runs",
+                          next != generator_version() && next != pinned,
+                          "the suite runs at '${generator_version()}' and the contrast is '${next}' — a version bump checked against the running version compares the generator with itself; move the pinned pair to (current, next)");
 
-  let v2 = check_canary(canary_generator_id(), "2", 0, pinned_canary_v2());
+  let v2 = check_canary(canary_generator_id(), pinned, 0, pinned_canary_v2());
   let _ = report_canary(v2);
-  let ok_v2 = check("...and at version 2, the one a legitimate version bump remaps to",
+  let ok_v2 = check("the seed-to-choices mapping at version 2, the one this suite runs, is the pinned one",
                     canary_ok(v2),
-                    "${show(List.length(v2))} finding(s) above");
+                    "${show(List.length(v2))} finding(s) above — read them before touching the pins");
+
+  let v3 = check_canary(canary_generator_id(), next, 0, pinned_canary_v3());
+  let _ = report_canary(v3);
+  let ok_v3 = check("...and at version 3, the one a legitimate version bump remaps to",
+                    canary_ok(v3),
+                    "${show(List.length(v3))} finding(s) above");
 
   -- C5, and here it is the entire point of the artifact rather than a
   -- supporting row: an artifact that cannot fail certifies nothing.
-  let remapped = check_canary(canary_generator_id(), "1", 1, pinned_canary_v1());
+  let remapped = check_canary(canary_generator_id(), pinned, 1, pinned_canary_v2());
   let ok_red = check("a deliberate seed remap with NO version bump turns the canary RED",
                      not canary_ok(remapped)
                        && has_canary_rule(remapped, "generator-seed-remapped-without-a-version-bump")
@@ -1158,16 +1185,16 @@ func axis_canary() -> bool ! {IO} {
                      "the canary stayed green on a remapped stream, which means it is pinning something not reachable through a choice — site 21's defect, committed inside the artifact built to prevent it");
 
   let ok_version = check("the two pinned versions disagree at every shared seed",
-                         canary_ok(check_canary_version_axis(pinned_canary_v1(), pinned_canary_v2()))
-                           && not canary_ok(check_canary_version_axis(pinned_canary_v1(), pinned_canary_v1())),
+                         canary_ok(check_canary_version_axis(pinned_canary_v2(), pinned_canary_v3()))
+                           && not canary_ok(check_canary_version_axis(pinned_canary_v2(), pinned_canary_v2())),
                          "D8 requires the generator version to travel with every preserved failure; a version that changes nothing observable makes that axis decorative");
 
   let ok_vacuous = check("an empty pinned table is REPORTED rather than passing quietly",
-                         has_canary_rule(check_canary(canary_generator_id(), "1", 0, []),
+                         has_canary_rule(check_canary(canary_generator_id(), pinned, 0, []),
                                          "generator-canary-is-vacuous"),
                          "a canary over an empty table compares nothing and passes, and that is the one failure mode a pinned artifact cannot report about itself");
 
-  ok_identity && ok_v1 && ok_v2 && ok_red && ok_version && ok_vacuous
+  ok_identity && ok_contrast && ok_v2 && ok_v3 && ok_red && ok_version && ok_vacuous
 }
 
 -- ---------------------------------------------------------------------------
@@ -1175,8 +1202,8 @@ func axis_canary() -> bool ! {IO} {
 -- ---------------------------------------------------------------------------
 
 export func wire_witness() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
-  let rich = generate("rich", 110, 110, generator_version(), bounds());
-  let a = generate("pairA", 132, 132, generator_version(), bounds());
+  let rich = generate("rich", 632, 632, generator_version(), bounds());
+  let a = generate("pairA", 9, 9, generator_version(), bounds());
   let b = generate("pairB", 12, 12, generator_version(), bounds());
   let _ = emit_rows([rich, a, b]);
   ()
@@ -1221,11 +1248,36 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   -- WI-D4 also made the salts count only GENERATOR-authored interactions, so
   -- this re-pin is the last one a change to the driver's environment surface can
   -- force: the trajectories are now a function of the seed and nothing else.
-  let rich = generate("rich", 110, 110, generator_version(), bounds());
-  let pair_a = generate("pairA", 132, 132, generator_version(), bounds());
+  --
+  -- RE-PINNED AT 034 W1.6, and this time the GENERATOR moved them, on purpose:
+  -- `choose_tool` draws the failed stage and `applied`, and the bump to version
+  -- "2" re-seeds every stream. The same two predicates, graded the same way
+  -- (shapes on the generated log, distinctness on the REPLAYED witness, and the
+  -- whole of `axis_program` green), over a re-sweep. Within 1..260 NO seed
+  -- satisfies all three: five carry every shape (3, 18, 41, 109, 126), four of
+  -- them collide on the replayed witness, and seed 3 fails axis G's tool
+  -- witness. So the sweep was widened to 261..780, where exactly two satisfy
+  -- all three — 349 (43 interactions) and 632 (42) — and 632 is taken because
+  -- it ALSO carries an applied fault, so the surviving fixture's replay crosses
+  -- `applied_faults` and not only the wire.
+  --
+  -- `pairB` stays 12 (21 interactions). `pairA` moves 132 -> 9: 132 now ends
+  -- with no tool served, which axis G's non-vacuity row refuses, and 9 is the
+  -- lowest seed whose program passes axis E/F/G, lacks shapes (axis I's `m4`),
+  -- and has 12's interaction count with different contents. `repeat` and
+  -- `versioned` follow `pairA`.
+  --
+  -- `versioned` is D8's version axis and it needs a version the suite does NOT
+  -- run. Until W1.6 it was the literal "2", which the bump made the running
+  -- version — a same-version repeat that would have dropped the run-level
+  -- version witness silently. It is now bound once and asserted unequal below,
+  -- so the next bump goes red here instead of repeating this.
+  let rich = generate("rich", 632, 632, generator_version(), bounds());
+  let pair_a = generate("pairA", 9, 9, generator_version(), bounds());
   let pair_b = generate("pairB", 12, 12, generator_version(), bounds());
-  let repeat = generate("repeat", 132, 132, generator_version(), bounds());
-  let versioned = generate("versioned", 132, 132, "2", bounds());
+  let repeat = generate("repeat", 9, 9, generator_version(), bounds());
+  let other_version = "3";
+  let versioned = generate("versioned", 9, 9, other_version, bounds());
   let honest = [rich, pair_a, pair_b, repeat, versioned];
 
   let _ = println("");
@@ -1234,11 +1286,15 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   let _ = emit_rows(honest);
 
   -- The mutant: three DIFFERENT requested seeds, all built with a constant.
-  let m1 = generate("mutantA", 132, 0, generator_version(), bounds());
+  let m1 = generate("mutantA", 9, 0, generator_version(), bounds());
   let m2 = generate("mutantB", 12, 0, generator_version(), bounds());
-  let m3 = generate("mutantC", 110, 0, generator_version(), bounds());
+  let m3 = generate("mutantC", 632, 0, generator_version(), bounds());
   let mutant = [m1, m2, m3];
 
+  let _ = println("");
+  let ok_versioned = check("the versioned run's version ('${other_version}') is NOT the one this suite runs ('${generator_version()}')",
+                           other_version != generator_version(),
+                           "D8's version axis compares a run against itself — a same-version repeat passes every row and witnesses no version; move it to a version unequal to the current one");
   let ok_a = axis_seed_sensitivity(honest, mutant);
   let ok_c = axis_consulted(honest);
   let ok_d = axis_bounds(honest);
@@ -1249,7 +1305,7 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   let ok_k = axis_canary();
 
   let _ = println("");
-  if ok_a && ok_c && ok_d && ok_efg && ok_efg2 && ok_i && ok_j && ok_k then {
+  if ok_versioned && ok_a && ok_c && ok_d && ok_efg && ok_efg2 && ok_i && ok_j && ok_k then {
     let _ = println("seeded generator: all axes green");
     ()
   } else {

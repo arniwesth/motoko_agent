@@ -103,6 +103,8 @@ import src/core/dst_fault_catalogue (
   fault_class_tool_failed,
   fault_class_tool_correlation_mismatch,
   fault_class_tool_deadline_exceeded,
+  fault_class_tool_effect_applied_then_failed,
+  fault_class_tool_effect_applied_then_deadline,
   fault_catalogue, find_class, branch_id
 )
 import src/core/dst_corpus (
@@ -124,6 +126,8 @@ import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, Resp
   ToolPolicyDecision, ToolSchema
 )
 import src/core/test/ext_fixture (fixture_hooks)
+-- 034 W1.3: the builder reads the world-truth list off the effect log.
+import src/core/dst_replay (applied_faults_of_world, effect_log_ordinals)
 
 func report(label: string, ok: bool, detail: string) -> bool ! {IO} {
   let _ = if ok then println("  ✓ ${label}")
@@ -159,7 +163,9 @@ func budget() -> BudgetPlan { { total: 10, solver: 6, verifier: 4 } }
 func zero_rates() -> CostRates { { input_per_1m_millicents: 0, output_per_1m_millicents: 0 } }
 
 func generator_id() -> string { "motoko_driver_only" }
-func generator_version() -> string { "1" }
+-- 034 W1.6: "1" -> "2", this literal's first bump: `choose_tool` now draws the
+-- failed stage and `applied` (RECORD-W1.1 §4 lists the four producers).
+func generator_version() -> string { "2" }
 
 func bounds() -> GeneratorBounds {
   { max_interactions: 96,
@@ -240,7 +246,10 @@ pure func program_of(w: WorldState, initial: WorldState) -> ExecutionProgram {
     },
     bounds: initial.gen.bounds,
     manifest: run_manifest(),
-    interactions: w.log }
+    interactions: w.log,
+    -- 034 W1.3: the world's effect-log FAULT entries, by recorded ordinal.
+    -- Non-empty since W1.6, when the generator began drawing `applied`.
+    applied_faults: applied_faults_of_world(w) }
 }
 
 pure func count_fault_class(xs: [Interaction], cls: string) -> int {
@@ -260,12 +269,29 @@ pure func count_approval_denied(xs: [Interaction]) -> int {
   }
 }
 
-pure func observed_classes(xs: [Interaction]) -> [string] {
-  (if count_fault_class(xs, fault_class_tool_failed()) > 0 then [fault_class_tool_failed()] else [])
+-- 034 W1.5: the world-only tool classes are read off the world's effect log,
+-- as `corpus_pr_dst.observed_classes` reads them: a twin-id interaction whose
+-- ordinal the log holds is the world-only class, one it does not is the twin.
+pure func count_fault_class_applied(xs: [Interaction], applied: [int], cls: string, want: bool) -> int {
+  match xs {
+    [] => 0,
+    i :: rest =>
+      (if i.outcome.fault_class_id == cls && contains_int(applied, i.identity.ordinal) == want then 1 else 0)
+        + count_fault_class_applied(rest, applied, cls, want)
+  }
+}
+
+pure func observed_classes(xs: [Interaction], effects: [{ ordinal: int, call_id: string, effect_key: string }]) -> [string] {
+  let applied = effect_log_ordinals(effects);
+  (if count_fault_class_applied(xs, applied, fault_class_tool_failed(), false) > 0 then [fault_class_tool_failed()] else [])
+    ++ (if count_fault_class_applied(xs, applied, fault_class_tool_failed(), true) > 0
+        then [fault_class_tool_effect_applied_then_failed()] else [])
     ++ (if count_fault_class(xs, fault_class_tool_correlation_mismatch()) > 0
         then [fault_class_tool_correlation_mismatch()] else [])
-    ++ (if count_fault_class(xs, fault_class_tool_deadline_exceeded()) > 0
+    ++ (if count_fault_class_applied(xs, applied, fault_class_tool_deadline_exceeded(), false) > 0
         then [fault_class_tool_deadline_exceeded()] else [])
+    ++ (if count_fault_class_applied(xs, applied, fault_class_tool_deadline_exceeded(), true) > 0
+        then [fault_class_tool_effect_applied_then_deadline()] else [])
     ++ (if count_approval_denied(xs) > 0 then ["approval_denied"] else [])
 }
 
@@ -297,7 +323,7 @@ func run_seed(seed: int)
   let enc = encode_artifact(p);
   let ident = match enc { Encoded(b) => artifact_identity(b), EncodeRefused(_) => "" };
   let nbytes = match enc { Encoded(b) => Str.length(b), EncodeRefused(_) => 0 };
-  let classes = observed_classes(r.world.log);
+  let classes = observed_classes(r.world.log, r.world.effect_log);
   member_of("rot-seed-${seed}",
             FixedSeed("drawn by the rotating window, not pinned"),
             p, "(in-memory)", ident, nbytes, classes, branches_for(classes))

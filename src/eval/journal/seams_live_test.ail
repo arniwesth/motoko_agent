@@ -100,9 +100,9 @@ func m8_tool_empty_queue_no_live_effect() -> bool ! {AI, Clock, Env, FS, IO, Pro
   };
   let ex = eval_ports(recording_ports(empty_rt())).tool_exec(w, inv);
   let absent_after = not fileExists(lt_sentinel());
-  let expected_payload = encode_tool_outcome(ToolFailed({ tool_call_id: "c9", code: "replay_unrecorded_invocation", message: "replay: no recorded result for tool call c9" }));
+  let expected_payload = encode_tool_outcome(ToolFailed({ tool_call_id: "c9", code: "replay_unrecorded_invocation", message: "replay: no recorded result for tool call c9", after_dispatch: false }));
   let outcome_ok = match ex.outcome {
-    ToolFailed(f) => f.tool_call_id == "c9" && f.code == "replay_unrecorded_invocation",
+    ToolFailed(f) => f.tool_call_id == "c9" && f.code == "replay_unrecorded_invocation" && not f.after_dispatch,
     _ => false
   };
   let rec_ok = match one_appended(w.log, ex.next_state.log) {
@@ -150,7 +150,8 @@ pure func lt_program(log: [Interaction], w: WorldState) -> ExecutionProgram {
               max_resource_size: 4096, max_clock_advance_ms: 60000, chunk_draw_hi: 0 },
     manifest: driver_only_manifest("HEAD", "ailang 0.33.0", "8.0", "{}",
                                    ["ai_step", "env_get", "tool_handle"], ["clock_now"], "HEAD"),
-    interactions: log
+    interactions: log,
+    applied_faults: []
   }
 }
 

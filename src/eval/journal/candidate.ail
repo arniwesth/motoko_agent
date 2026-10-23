@@ -40,7 +40,8 @@ import std/string (replace)
 import src/core/dst_program (ExecutionProgram, validate_program, program_rule)
 import src/core/dst_replay (
   world_state_of, refusal_rule, ReplayRefusal, ProgramStructurallyInvalid,
-  ProviderOutcomeUndecodable, ToolOutcomeUndecodable
+  ProviderOutcomeUndecodable, ToolOutcomeUndecodable,
+  AppliedFaultCompleted, AppliedFaultBeforeDispatch
 )
 import src/core/dst_fault_catalogue (required_class_ids)
 import src/core/dst_interaction (Interaction)
@@ -76,7 +77,11 @@ export pure func replay_refusal_label(r: ReplayRefusal) -> string {
   match r {
     ProgramStructurallyInvalid(rule) => "ProgramStructurallyInvalid(${rule})",
     ProviderOutcomeUndecodable(o, _) => "ProviderOutcomeUndecodable(${show(o)})",
-    ToolOutcomeUndecodable(o, _) => "ToolOutcomeUndecodable(${show(o)})"
+    ToolOutcomeUndecodable(o, _) => "ToolOutcomeUndecodable(${show(o)})",
+    -- 034 W1.2. Unreachable for a journal, whose world-truth list is empty;
+    -- labelled so the match stays total.
+    AppliedFaultCompleted(o) => "AppliedFaultCompleted(${show(o)})",
+    AppliedFaultBeforeDispatch(o) => "AppliedFaultBeforeDispatch(${show(o)})"
   }
 }
 

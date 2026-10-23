@@ -42,10 +42,11 @@ import src/core/tool_contract (ToolResultEnvelope)
 -- WI-D20. The world token's codec, imported HERE because `on_tool_handle` is the
 -- second hook slot to perform world-threading effects and this is the site that
 -- both feeds it a world and receives its successor. See `execute_allowed_tool_call`.
-import src/core/ext_world (world_to_token, token_to_world) import src/core/world_ordinal (advance) import src/core/ports (ClockRead, EnvRead, ToolExec) -- PLAN-001 P2 Part 1, joined onto this line: tool_phase.ail:388/:389/:484 are attribution anchors
-import src/core/tool_dispatch_adapter (dispatch_one, tool_call_to_envelope)
+import src/core/ext_world (world_to_token, adopt_world) import src/core/world_ordinal (advance) import src/core/ports (ClockRead, EnvRead, ToolExec) -- PLAN-001 P2 Part 1, joined onto this line: tool_phase.ail:403/:404/:499 are attribution anchors
+import src/core/tool_dispatch_adapter (dispatch_one, tool_call_to_envelope, fault_to_json)
 import src/core/tool_runtime (backend_for_v2)
-import src/core/types (ToolBackend)
+import src/core/types (ToolBackend, ToolFault)
+import src/core/tool_fault (fault_key, effects_note_none, effects_note_unknown, failed_fault, deadline_fault, correlation_mismatch_fault, denied_fault, arguments_undecodable_fault, refused_fault) -- 034 W1.4: the `fault` object's one home (PLAN-001 C3)
 import pkg/sunholo/motoko_ext_scratchpad/ws_loopback (exec_scratchpad_cell_ws)
 
 export type PendingApprovalPlan = {
@@ -105,11 +106,14 @@ export pure func resolve_approval(raw: string, default_allow: bool, eof: bool) -
   }
 }
 
+-- 034 W1.4 (ADR-001 D2): a policy `Deny` is refused before the tool runs, so
+-- the message carries `fault` with `effects: none`, kind `denied`.
 export pure func denial_message(call: ToolCall, reason: string) -> Message {
   let payload = encode(jo([
     kv("error", jb(true)),
     kv("denied_by_policy", jb(true)),
     kv("tool", js(call.name)),
+    kv(fault_key(), fault_to_json(denied_fault())),
     kv("reason", js(reason))
   ]));
   {
@@ -208,11 +212,14 @@ func scratchpad_cells_arg(args: Json) -> Json {
   }
 }
 
+-- 034 W1.4: nothing is dispatched on this path, so `fault` says `none`, kind
+-- `refused` (a refusal before the effect, D2 row 3).
 func delegated_deferred_message(call: ToolCall) -> Message {
   let payload = encode(jo([
     kv("error", jb(true)),
     kv("delegated_backend_not_wired", jb(true)),
     kv("tool", js(call.name)),
+    kv(fault_key(), fault_to_json(refused_fault())),
     kv("note", js("v2 split_by_backend selected Delegated; the inbox-based ohmy_pi wait is deferred to a follow-up milestone. Re-run with settings.ohmy_pi=false or use a tool that resolves to the Native backend."))
   ]));
   {
@@ -274,19 +281,24 @@ pure func parse_timeout_ms(raw: string) -> int {
 -- change. Two vocabularies for one concept is the drift D3's "one catalogue is
 -- the single source of truth" exists to prevent, and nothing would have caught
 -- it: both spellings type-check and neither was validated.
+--
+-- 034 W1.4 (PLAN-001 C2): each fault also carries the `fault` object. Only a
+-- `ToolFailed` the harness saw fail BEFORE dispatch discloses `none`; after
+-- dispatch, a deadline and a misaddressed answer are `unknown` by
+-- construction, because the tool may have run.
 export pure func tool_outcome_message(call: ToolCall, o: ToolOutcome) -> Message {
   match o {
     ToolCompleted(c) => tool_result_message(call, c.content),
     ToolFailed(f) =>
-      tool_fault_message(call, fault_class_tool_failed(), encode(jo([
+      tool_fault_message(call, fault_class_tool_failed(), failed_fault(f.after_dispatch), encode(jo([
         kv("code", js(f.code)), kv("message", js(f.message)), kv("tool_call_id", js(f.tool_call_id))
       ]))),
     ToolCorrelationMismatch(m) =>
-      tool_fault_message(call, fault_class_tool_correlation_mismatch(), encode(jo([
+      tool_fault_message(call, fault_class_tool_correlation_mismatch(), correlation_mismatch_fault(), encode(jo([
         kv("expected_id", js(m.expected_id)), kv("got_id", js(m.got_id))
       ]))),
     ToolDeadlineExceeded(d) =>
-      tool_fault_message(call, fault_class_tool_deadline_exceeded(), encode(jo([
+      tool_fault_message(call, fault_class_tool_deadline_exceeded(), deadline_fault(d.elapsed_ms), encode(jo([
         kv("tool_call_id", js(d.tool_call_id)),
         kv("elapsed_ms", jnum(_int_to_float(d.elapsed_ms))),
         kv("timeout_ms", jnum(_int_to_float(d.timeout_ms)))
@@ -294,10 +306,11 @@ export pure func tool_outcome_message(call: ToolCall, o: ToolOutcome) -> Message
   }
 }
 
-pure func tool_fault_message(call: ToolCall, fault_class: string, detail: string) -> Message {
+pure func tool_fault_message(call: ToolCall, fault_class: string, fault: ToolFault, detail: string) -> Message {
   tool_result_message(call, encode(jo([
     kv("error", jb(true)),
     kv("tool", js(call.name)),
+    kv(fault_key(), fault_to_json(fault)),
     kv("fault_class", js(fault_class)),
     kv("detail", js(detail))
   ])))
@@ -341,13 +354,15 @@ pure func arguments_undecodable(raw: string) -> bool
 -- What the model is told instead of `missing path`. It names the length, because
 -- that is what discriminates a malformed emission from an output budget that ran
 -- out mid-argument, and it says what to do about the second — which is the case
--- that was measured and the one a model can act on.
+-- that was measured and the one a model can act on. 034 W1.4: it also carries
+-- `fault`, `effects: none`, kind `arguments_undecodable`; the sentence stays.
 -- contracts: SKIPPED — builds `Json` and a `Message`; see `tool_fault_message`
 -- above, which is the same shape and the same obstacle.
-pure func undecodable_arguments_message(call: ToolCall, raw_length: int) -> Message {
+export pure func undecodable_arguments_message(call: ToolCall, raw_length: int) -> Message {
   tool_result_message(call, encode(jo([
     kv("error", jb(true)),
     kv("tool", js(call.name)),
+    kv(fault_key(), fault_to_json(arguments_undecodable_fault())),
     kv("code", js("arguments_undecodable")),
     kv("raw_length", jnum(_int_to_float(raw_length))),
     kv("message", js("The arguments for this call were not valid JSON and the tool was NOT run — nothing was written, read or executed. ${show(raw_length)} bytes arrived. This is almost always the response being cut at the output-token limit part-way through the argument JSON: emit the tool call FIRST, before any explanation, and split a large `content` into several smaller calls."))
@@ -434,7 +449,7 @@ export func execute_allowed_tool_call(
     -- under that condition all three answers — drop, re-seat, rewind — produce
     -- identical worlds. WI-D19 §3.2's argument, one slot over.
     let handled = dispatch_tool_handle(rt, { ctx | world: world_to_token(world) }, envelope);
-    let handle_world = token_to_world(handled.next_state);
+    let handle_world = adopt_world(handled.next_state, world); -- 034 W1.3: `applied` and the effect log are not in the token (D4); re-seated from the live `world`, as the token is on the way in
     match handled.decision {
       Handled(result_env) => {
         let handled_event = ExtToolHandled({
@@ -444,7 +459,7 @@ export func execute_allowed_tool_call(
           id: call.id,
           exit_code: result_env.exit_code
         });
-        let _ = emit(handled_event); let waits = apply_tool_lifecycle(open_waits, call, result_env); let wait_diag = match wait_diagnostic_event(step_idx, call, result_env) { Some(d) => { let _ = emit(d); [d] }, None => [] }; -- PLAN-002 W2 Part 2 (ADR-002 D3): the wait is lifted from the ENVELOPE, before `handled_tool_message` caps the encoded message, and rides the fold as `open_waits`; an invalid one registers nothing and leaves its diagnostic in `emitted`. Joined onto this line so tool_phase.ail:484 does not move
+        let _ = emit(handled_event); let waits = apply_tool_lifecycle(open_waits, call, result_env); let wait_diag = match wait_diagnostic_event(step_idx, call, result_env) { Some(d) => { let _ = emit(d); [d] }, None => [] }; -- PLAN-002 W2 Part 2 (ADR-002 D3): the wait is lifted from the ENVELOPE, before `handled_tool_message` caps the encoded message, and rides the fold as `open_waits`; an invalid one registers nothing and leaves its diagnostic in `emitted`. Joined onto this line so tool_phase.ail:499 does not move
         let scratch = emit_scratchpad_result_if_present(emit, "step-${show(step_idx)}", step_idx, call.id, result_env);
         { msg: handled_tool_message(call.id, result_env), next_state: handle_world, emitted: handled_event :: (wait_diag ++ scratch), open_waits: waits }
       },
@@ -674,7 +689,7 @@ pure func test_denial_message_uses_tool_role_and_call_id() -> bool
     m.role == "tool"
       && m.tool_call_id == "tc"
       && List.length(m.tool_calls) == 0
-      && m.content == "{\"error\":true,\"denied_by_policy\":true,\"tool\":\"BashExec\",\"reason\":\"no\"}"
+      && m.content == "{\"error\":true,\"denied_by_policy\":true,\"tool\":\"BashExec\",\"fault\":{\"kind\":\"denied\",\"effects\":\"none\",\"note\":\"${effects_note_none()}\"},\"reason\":\"no\"}"
   }
 
 pure func test_resolve_approval_live_protocol() -> bool
@@ -719,3 +734,73 @@ pure func test_execution_order_after_approval() -> bool
       None => false
     }
   }
+
+-- ---------------------------------------------------------------------------
+-- 034 W1.4: the `fault` object on the typed renderer and on the harness's own
+-- fault messages, one exact-bytes test per case (PLAN-001 W1.7's mutants v13,
+-- v14, v15a, v15b, v16c, v16d; v16a is the denial test above, v16b is
+-- `session.ail`'s). `fault` follows `tool`, as on the live renderer.
+-- ---------------------------------------------------------------------------
+
+pure func t_failed(after_dispatch: bool) -> ToolOutcome {
+  ToolFailed({ tool_call_id: "tc", code: "E", message: "boom", after_dispatch: after_dispatch })
+}
+
+-- v13: a `ToolFailed` seen before dispatch changed nothing.
+pure func test_w14_tool_failed_before_dispatch_none() -> bool
+  tests [((), true)]
+  {
+    tool_outcome_message(call("tc", "BashExec"), t_failed(false)).content
+      == "{\"error\":true,\"tool\":\"BashExec\",\"fault\":{\"kind\":\"failed\",\"effects\":\"none\",\"note\":\"${effects_note_none()}\"},\"fault_class\":\"ToolFailed\",\"detail\":\"{\\\"code\\\":\\\"E\\\",\\\"message\\\":\\\"boom\\\",\\\"tool_call_id\\\":\\\"tc\\\"}\"}"
+  }
+
+-- v14: after dispatch the tool may have run.
+pure func test_w14_tool_failed_after_dispatch_unknown() -> bool
+  tests [((), true)]
+  {
+    tool_outcome_message(call("tc", "BashExec"), t_failed(true)).content
+      == "{\"error\":true,\"tool\":\"BashExec\",\"fault\":{\"kind\":\"failed\",\"effects\":\"unknown\",\"note\":\"${effects_note_unknown()}\"},\"fault_class\":\"ToolFailed\",\"detail\":\"{\\\"code\\\":\\\"E\\\",\\\"message\\\":\\\"boom\\\",\\\"tool_call_id\\\":\\\"tc\\\"}\"}"
+  }
+
+-- v15a: a deadline fired while the tool was in flight; `elapsed_ms` rides on
+-- the kind (C3).
+pure func test_w14_deadline_unknown() -> bool
+  tests [((), true)]
+  {
+    tool_outcome_message(call("tc", "BashExec"), ToolDeadlineExceeded({ tool_call_id: "tc", elapsed_ms: 1500, timeout_ms: 1000 })).content
+      == "{\"error\":true,\"tool\":\"BashExec\",\"fault\":{\"kind\":\"deadline\",\"effects\":\"unknown\",\"elapsed_ms\":1500,\"note\":\"${effects_note_unknown()}\"},\"fault_class\":\"ToolDeadlineExceeded\",\"detail\":\"{\\\"tool_call_id\\\":\\\"tc\\\",\\\"elapsed_ms\\\":1500,\\\"timeout_ms\\\":1000}\"}"
+  }
+
+-- v15b: an answer for another call says nothing about this one.
+pure func test_w14_correlation_mismatch_unknown() -> bool
+  tests [((), true)]
+  {
+    tool_outcome_message(call("tc", "BashExec"), ToolCorrelationMismatch({ expected_id: "tc", got_id: "tx" })).content
+      == "{\"error\":true,\"tool\":\"BashExec\",\"fault\":{\"kind\":\"correlation_mismatch\",\"effects\":\"unknown\",\"note\":\"${effects_note_unknown()}\"},\"fault_class\":\"ToolCorrelationMismatch\",\"detail\":\"{\\\"expected_id\\\":\\\"tc\\\",\\\"got_id\\\":\\\"tx\\\"}\"}"
+  }
+
+-- The success path carries no `fault`: byte-identical to `tool_result_message`.
+pure func test_w14_completed_has_no_fault() -> bool
+  tests [((), true)]
+  {
+    tool_outcome_message(call("tc", "BashExec"), ToolCompleted({ tool_call_id: "tc", content: "ok", exit_code: 0 })).content == "ok"
+  }
+
+-- v16c: undecodable arguments; the existing sentence is kept after `fault`.
+pure func test_w14_undecodable_arguments_none() -> bool
+  tests [((), true)]
+  {
+    let m = undecodable_arguments_message(call("tc", "WriteFile"), 12);
+    m.role == "tool" && m.tool_call_id == "tc"
+      && m.content == "{\"error\":true,\"tool\":\"WriteFile\",\"fault\":{\"kind\":\"arguments_undecodable\",\"effects\":\"none\",\"note\":\"${effects_note_none()}\"},\"code\":\"arguments_undecodable\",\"raw_length\":12,\"message\":\"The arguments for this call were not valid JSON and the tool was NOT run — nothing was written, read or executed. 12 bytes arrived. This is almost always the response being cut at the output-token limit part-way through the argument JSON: emit the tool call FIRST, before any explanation, and split a large `content` into several smaller calls.\"}"
+  }
+
+-- v16d: a delegated call is deferred and nothing is dispatched.
+func test_w14_delegated_deferred_none() -> bool
+  tests [((), true)]
+  {
+    let m = delegated_deferred_message(call("tc", "BashExec"));
+    m.role == "tool" && m.tool_call_id == "tc"
+      && m.content == "{\"error\":true,\"delegated_backend_not_wired\":true,\"tool\":\"BashExec\",\"fault\":{\"kind\":\"refused\",\"effects\":\"none\",\"note\":\"${effects_note_none()}\"},\"note\":\"v2 split_by_backend selected Delegated; the inbox-based ohmy_pi wait is deferred to a follow-up milestone. Re-run with settings.ohmy_pi=false or use a tool that resolves to the Native backend.\"}"
+  }
+

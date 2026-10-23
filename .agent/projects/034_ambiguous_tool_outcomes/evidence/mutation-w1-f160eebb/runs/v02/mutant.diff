@@ -1,0 +1,11 @@
+--- a/src/core/dst_persistence.ail
++++ b/src/core/dst_persistence.ail
+@@ -1244,7 +1244,7 @@
+     [] => {
+       let hs = header_lines(parsed.lines);
+       let bs = body_lines(parsed.lines);
+-      let structural = check_required(hs, req)
++      let structural = check_required(hs, with_bounds_arity(required_header_tags(), bounds_arity_at(version)))
+                          ++ check_integers(hs, integer_header_tags())
+                          ++ check_bounds_line(version, hs)
+                          ++ check_file_entries(hs)

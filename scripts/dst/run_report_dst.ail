@@ -49,7 +49,8 @@ import src/core/dst_fault_catalogue (
   fault_catalogue, fault_catalogue_version, required_class_ids,
   conditional_class_ids, waiving_condition,
   fault_class_tool_failed, fault_class_tool_correlation_mismatch,
-  fault_class_tool_deadline_exceeded
+  fault_class_tool_deadline_exceeded,
+  fault_class_tool_effect_applied_then_failed, fault_class_tool_effect_applied_then_deadline
 )
 
 import src/core/dst_program (program_schema_version)
@@ -287,7 +288,11 @@ pure func documented_coverage() -> [ClassCoverage] {
   let c6 = mark_class(c5, fault_class_tool_failed(), Reached);
   let c7 = mark_class(c6, fault_class_tool_correlation_mismatch(), Reached);
   let c8 = mark_class(c7, fault_class_tool_deadline_exceeded(), Reached);
-  mark_class(c8, "approval_denied", Reached)
+  -- 034 W1.6: the two world-only rows W1.5 declared, reached once the
+  -- generator drew `applied` — 4 and 7 seeds of 260, two bank witnesses each.
+  let c9 = mark_class(c8, fault_class_tool_effect_applied_then_failed(), Reached);
+  let c10 = mark_class(c9, fault_class_tool_effect_applied_then_deadline(), Reached);
+  mark_class(c10, "approval_denied", Reached)
   -- The two conditional classes keep the Waived status empty_class_coverage
   -- gave them, carrying the catalogue's own condition verbatim.
 }

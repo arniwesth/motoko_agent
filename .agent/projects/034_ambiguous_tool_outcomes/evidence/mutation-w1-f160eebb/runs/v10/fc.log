@@ -1,0 +1,36 @@
+Warning: dependency sunholo/motoko_ext_herdr content changed (locked: sha256:6928b495ef76aff83..., current: sha256:6ad70260565a80fa4...)
+Run 'ailang lock' to update
+=== fault_catalogue_dst (D3, fault-catalogue/3) ===
+  ✓ shipped catalogue validates: 13 classes, all 13 required ids present
+  ✓ every required class resolves, names a boundary and states a transition
+  ✓ emitted fault_class equals the catalogue class id for all three tool classes
+  ✓ two conditional classes, each carrying its waiving condition:
+      approval_deadline_exceeded: the production approval policy declares a deadline AND the request's default_allow is false; with default_allow true the same input resolves to ApprovalAllowed and the class is not exercised
+      extension_effect_fault: the selected D5 profile installs an extension with an effectful hook that issues this world request; driver_only installs none, so it waives this class by construction (plan P4)
+  i class -> recovery branch:
+      provider/provider_error_retryable -> session.c2_loop/stream_error_retry
+      provider/provider_error_non_retryable -> session.c2_loop/provider_failure_finalize
+      provider/provider_protocol_inconsistent_result -> tool_dispatch_adapter.tool_call_to_envelope/malformed_arguments
+      provider/provider_partial_stream_then_error -> session.c2_loop/stream_error_retry
+      provider/provider_empty_terminal_response -> session.c2_loop/empty_stop_finalize
+      tool/ToolFailed -> tool_phase.tool_outcome_message/ToolFailed
+      tool/ToolCorrelationMismatch -> tool_phase.tool_outcome_message/ToolCorrelationMismatch
+      tool/ToolDeadlineExceeded -> tool_phase.tool_outcome_message/ToolDeadlineExceeded
+      tool/tool_effect_applied_then_failed -> tool_phase.tool_outcome_message/ToolFailed
+      tool/tool_effect_applied_then_deadline -> tool_phase.tool_outcome_message/ToolDeadlineExceeded
+      approval/approval_denied -> session.c2_loop/approval_denied
+      approval/approval_deadline_exceeded -> tool_phase.resolve_approval/eof
+      extension_effect/extension_effect_fault -> compaction_ai.compact_with_ai/summarizer_failed
+  i 4 recorded coverage gap(s):
+      provider_protocol_inconsistent_result — an internally inconsistent StepResult, as opposed to a malformed ToolCall.arguments string
+      provider_partial_stream_then_error — an ADVERSARIAL partial stream: emissions whose content the driver has begun to act on before the error arrives
+      approval_deadline_exceeded — a CLOCK-DRIVEN approval deadline
+      extension_effect_fault — every world-request class reached through ExtPorts OTHER than the provider fault, which WI-B2b closed
+  ✓ physical-fault exclusion carries all five 007 D1.3 reopen triggers
+  ✓ two world-only rows, each naming its wire twin: tool_effect_applied_then_failed → ToolFailed, tool_effect_applied_then_deadline → ToolDeadlineExceeded
+  ✓ v08: a world-only row whose twin is not a row → world-only-twin-missing
+  ✓ v09: a world-only row whose twin is itself world-only → world-only-twin-world-only
+  ✗ v10: a world-only row whose delivery constructor differs from its twin's: expected only 'world-only-twin-constructor-differs', the validator produced: (none)
+  ✓ v11: a world-only row whose recovery branch differs from its twin's → world-only-twin-branch-differs
+  ✓ control: an empty catalogue is rejected
+fault_catalogue_dst FAIL

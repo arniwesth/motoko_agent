@@ -187,7 +187,12 @@ pure func valid_program() -> ExecutionProgram {
     initial_world: fixture_world(),
     bounds: fixture_bounds(),
     manifest: fixture_manifest(),
-    interactions: fixture_interactions() }
+    interactions: fixture_interactions(),
+    -- 034 W1.2. ONE ordinal, #1, the BashExec fault, so the negative control
+    -- carries the world-truth list through the validator with a value rather
+    -- than only through its empty case — and so a validator that rejected every
+    -- non-empty list turns that control red.
+    applied_faults: [1] }
 }
 
 -- ---------------------------------------------------------------------------
@@ -346,7 +351,35 @@ pure func mutants() -> [Mutant] {
    -- 13. A program that recorded nothing.
    { name: "no interactions at all",
      rule: "program-empty",
-     program: { valid_program() | interactions: [] } }]
+     program: { valid_program() | interactions: [] } },
+
+   -- 14. 034 W1.2 ACCEPTANCE (c), THE STRUCTURAL HALF. The world-truth list
+   --     names TOOL interactions, each once. Whether the named interaction is a
+   --     fault observed after dispatch is NOT this validator's — it needs the
+   --     payload decoded — and its rows are `dst_replay`'s
+   --     (`test_a_listed_completed_tool_outcome_refuses_replay`,
+   --     `test_a_listed_before_dispatch_fault_refuses_replay`). So listing #8,
+   --     the completed retry, is structurally VALID here, and refused at replay.
+   { name: "applied_faults lists the provider interaction #0",
+     rule: "program-applied-fault-not-a-tool",
+     program: { valid_program() | applied_faults: [0] } },
+
+   -- 14b. An ordinal no interaction carries: the out-of-range case.
+   { name: "applied_faults lists ordinal 42, which no interaction carries",
+     rule: "program-applied-fault-not-a-tool",
+     program: { valid_program() | applied_faults: [1, 42] } },
+
+   -- 14c. The extension-effect class decodes through the SAME payload codec as
+   --      a tool, and is still not a tool interaction: its effect is the
+   --      extension's, not the driver queue's.
+   { name: "applied_faults lists the extension effect #7",
+     rule: "program-applied-fault-not-a-tool",
+     program: { valid_program() | applied_faults: [7] } },
+
+   -- 14d. A repeat.
+   { name: "applied_faults lists ordinal 1 twice",
+     rule: "program-applied-fault-repeated",
+     program: { valid_program() | applied_faults: [1, 1] } }]
 }
 
 -- ---------------------------------------------------------------------------

@@ -124,7 +124,7 @@ func p16_end_case(name: string, f: WorldFixture, want_end: string) -> bool ! {AI
       let _ = lt_print_report(r);
       let program_ok = match r.program {
         None => false,
-        Some(p) => p.generator_id == "journal_admission" && p.schema_version == "execution-program/4"
+        Some(p) => p.generator_id == "journal_admission" && p.schema_version == "execution-program/5"
                      && List.length(p.interactions) == r.interactions && p.initial_world.clock_epoch == lt_epoch()
       };
       lt_report(name, report_ok(r) && r.calls == 3 && r.observed_end == want_end && r.expected_end == want_end

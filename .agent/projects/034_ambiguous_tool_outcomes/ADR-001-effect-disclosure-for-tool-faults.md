@@ -1,7 +1,8 @@
 # ADR-001: Effect disclosure for tool faults whose effect may have happened
 
 Date: 2026-10-02. Status: **Accepted 2026-10-17, as amended by the re-grounding of that day.
-Phase 0 implemented in #277. Phase 0b probed (W0b.1) and withdrawn at W0b.2 in #279.**
+Phase 0 implemented in #277. Phase 0b probed (W0b.1) and withdrawn at W0b.2 in #279.
+Phase 1 implemented in #280.**
 The operator accepted D1 to D9 with the amendments in §7, ruled `PermissionDenied` to `unknown`,
 had the three remaining upstream asks filed, and chose the deterministic suites as Phase 0's eval
 baselines (*§6 Rulings*). Nothing is executed. The plan is `PLAN-001-effect-disclosure.md`.

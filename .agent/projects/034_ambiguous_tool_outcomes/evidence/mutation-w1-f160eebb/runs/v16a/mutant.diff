@@ -1,0 +1,11 @@
+--- a/src/core/tool_phase.ail
++++ b/src/core/tool_phase.ail
+@@ -113,7 +113,7 @@
+     kv("error", jb(true)),
+     kv("denied_by_policy", jb(true)),
+     kv("tool", js(call.name)),
+-    kv(fault_key(), fault_to_json(denied_fault())),
++    kv(fault_key(), fault_to_json({ denied_fault() | effects: failed_fault(true).effects })),
+     kv("reason", js(reason))
+   ]));
+   {

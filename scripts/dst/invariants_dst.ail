@@ -218,7 +218,7 @@ pure func fixture_log() -> [Interaction] {
    -- Tool fault 1 of 3: a typed execution failure.
    mk(6, ToolIdentity("loop_v2", "call-2", "Read"),
       "tool_exec call_id=call-2 tool=Read timeout_ms=1000", 1000,
-      fault_out(5, encode_tool_outcome(ToolFailed({ tool_call_id: "call-2", code: "E42", message: "boom" })),
+      fault_out(5, encode_tool_outcome(ToolFailed({ tool_call_id: "call-2", code: "E42", message: "boom", after_dispatch: true })),
                 fault_class_tool_failed())),
    mk(7, ApprovalIdentity("loop_v2", "call-3", "Read"),
       "approval_read call_id=call-3 tool=Read", 0, ok_out(0, "approve")),
@@ -1180,11 +1180,11 @@ func scenario_mutants_family_9_to_13() -> bool ! {IO} {
 
   -- F10. A fault with a blank class id: uncountable by D11's class counter.
   let m3 = mutant("a fault carrying no class id",
-                  mutate_outcome(f, 6, fault_out(5, encode_tool_outcome(ToolFailed({ tool_call_id: "call-2", code: "E", message: "m" })), "")),
+                  mutate_outcome(f, 6, fault_out(5, encode_tool_outcome(ToolFailed({ tool_call_id: "call-2", code: "E", message: "m", after_dispatch: true })), "")),
                   "fault-without-class");
   -- F10. A fault class the catalogue does not declare.
   let m4 = mutant("a fault class the catalogue does not declare",
-                  mutate_outcome(f, 6, fault_out(5, encode_tool_outcome(ToolFailed({ tool_call_id: "call-2", code: "E", message: "m" })), "MadeUpClass")),
+                  mutate_outcome(f, 6, fault_out(5, encode_tool_outcome(ToolFailed({ tool_call_id: "call-2", code: "E", message: "m", after_dispatch: true })), "MadeUpClass")),
                   "fault-class-unknown");
   -- F10. A fault whose payload nonetheless carries a completed result: the
   -- world both faulted and committed, which is the ambiguity D3 forbids.
@@ -1268,7 +1268,7 @@ pure func all_mutant_violations(f: ExecutionUnderTest) -> [Violation] {
     ++ evaluate({ f | decision_budget: 6 })
     ++ evaluate(with_records(f, break_chain(rs)))
     ++ evaluate({ f | replay: StrictAgainst(log ++ [mk(16, ClockAdvanceIdentity, "c", -1, ok_out(0, "9"))]) })
-    ++ evaluate(mutate_outcome(f, 6, fault_out(5, encode_tool_outcome(ToolFailed({ tool_call_id: "call-2", code: "E", message: "m" })), "")))
+    ++ evaluate(mutate_outcome(f, 6, fault_out(5, encode_tool_outcome(ToolFailed({ tool_call_id: "call-2", code: "E", message: "m", after_dispatch: true })), "")))
     ++ evaluate(mutate_outcome(f, 4, ok_out(-1, "47")))
     ++ evaluate({ f | ambient_rng_reads: 1 })
     ++ evaluate({ f | final: final_with_history() })

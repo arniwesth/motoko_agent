@@ -125,6 +125,7 @@
 module scripts/dst/strict_replay_dst
 
 import std/json (Json, jo)
+import std/fs as FS (readFileResult)
 import std/io (println, exit)
 import std/list as List (length)
 import std/string (contains)
@@ -136,14 +137,17 @@ import src/core/session as Session
 import src/core/session (TracedSessionResult)
 import src/core/phase_vocab (LedgerRecord, WireRecord, ProviderCallPrepared)
 import src/core/test/stub_step (RecordingWorld)
-import src/core/ports (ScriptedStep, WorldState, ScriptedTool, empty_world_state)
+import src/core/ports (ScriptedStep, WorldState, ScriptedTool, empty_world_state,
+  -- 034 W1.3: the frozen v5 fixture's tool seam is replayed through the recorder.
+  ToolInvocation, ToolCompleted, ToolFailed, recording_tool, encode_tool_outcome,
+  encode_provider_outcome, encode_exhausted_provider_outcome)
 import src/core/types (Msg)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/dst_interaction (
   Interaction,
-  ProviderIdentity, ToolIdentity, ApprovalIdentity,
+  ProviderIdentity, ToolIdentity, ApprovalIdentity, ExtensionEffectIdentity,
   EnvironmentReadIdentity, ClockAdvanceIdentity,
-  OutcomeMissing,
+  OutcomeMissing, OutcomeOk,
   identity_kind,
   identity_projection,
   interaction_kind,
@@ -169,6 +173,10 @@ import src/core/dst_program (
   validate_bounds
 )
 import src/core/dst_replay (
+  applied_faults_of_world,
+  effect_ordinals_of,
+  effect_log_ordinals,
+  outcome_projection,
   ReplayMismatch,
   ReconstitutionFinding,
   RegressionReplay,
@@ -189,12 +197,19 @@ import src/core/dst_replay (
   world_state_of,
   provider_steps_served
 )
+-- 034 W1.3: acceptance (a) round-trips the program through the artifact codec.
+import src/core/dst_persistence (
+  EncodeOutcome, Encoded, EncodeRefused, encode_artifact,
+  ProgramDecode, ProgramDecoded, ProgramDecodeRefused, decode_artifact, first_decode_message
+)
 import src/core/dst_result (
   RunCompleted, RunFailed, harness_failure_kind_name
 )
 import src/core/dst_driver_only (driver_only, driver_only_manifest, driver_only_version)
 import src/core/dst_profile (ExecutionManifest, validate_manifest, replay_metadata_of)
-import src/core/dst_fault_catalogue (required_class_ids)
+import src/core/dst_fault_catalogue (required_class_ids, fault_class_tool_failed)
+-- 034 W1.5: standing rule 6's wire guard, run on a trace that holds an applied fault.
+import src/core/dst_corpus (world_only_ids_on_wire, tool_messages_on_wire)
 import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, ResponseInterceptOutcome, FinalizeOutcome, 
   BudgetPlan,
   BudgetPatch,
@@ -634,7 +649,7 @@ pure func discovered_manifest() -> ExecutionManifest {
                        ["ai_step", "env_get", "tool_handle"], ["clock_now"], "HEAD")
 }
 
-pure func program_of(log: [Interaction], initial: WorldState) -> ExecutionProgram {
+pure func program_of(w: WorldState, initial: WorldState) -> ExecutionProgram {
   {
     schema_version: program_schema_version(),
     -- WI-A13 stage 4 renamed this from "driver_only_discovery". The world this
@@ -668,7 +683,10 @@ pure func program_of(log: [Interaction], initial: WorldState) -> ExecutionProgra
       chunk_draw_hi: 3
     },
     manifest: discovered_manifest(),
-    interactions: log
+    interactions: w.log,
+    -- 034 W1.3: the world's effect-log FAULT entries, by recorded ordinal; empty
+    -- unless the scenario scripts an applied fault.
+    applied_faults: applied_faults_of_world(w)
   }
 }
 
@@ -707,7 +725,7 @@ func run_scenario(
 
   -- ---- Discovery: produce the exact program ------------------------------
   let discovery = run_recording("srdisc_${label}", initial, step_budget);
-  let program = program_of(discovery.world.log, initial);
+  let program = program_of(discovery.world, initial);
 
   let _ = println("");
   let _ = println("${label}: discovery recorded ${show(List.length(discovery.world.log))} interactions");
@@ -1016,7 +1034,7 @@ func run_scenario(
                          "two replays of one reconstituted world disagree");
 
       -- ---- The program the REPLAY produced is itself a valid program --------
-      let replayed_program = program_of(actual, replay_world);
+      let replayed_program = program_of(replay.world, replay_world);
       let ok_valid = check("${label}: the replayed log is itself a structurally valid program",
                            List.length(validate_program(replayed_program, required_class_ids())) == 0
                              && List.length(validate_bounds(replayed_program)) == 0,
@@ -1048,7 +1066,7 @@ func run_scenario(
 export func wire_witness() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let initial = base_world(rich_script(), rich_answers(), rich_tools());
   let discovery = run_recording("srwire_disc", initial, 12);
-  let program = program_of(discovery.world.log, initial);
+  let program = program_of(discovery.world, initial);
   let _ = println("CENSUS discovery ${census_line(census(discovery.world.log))}");
   match world_state_of(program, required_class_ids()) {
     Err(r) => println("REFUSED ${refusal_rule(r)}"),
@@ -1119,9 +1137,9 @@ func rich_answers() -> [string] { [approve_line(), deny_line("bravo"), approve_l
 func rich_tools() -> [ScriptedTool] {
   -- WI-D22's `exit_code`. All three are -1 ("nothing said"): these are scripted
   -- answers for a tool named "T", not process runs.
-  [{ tool_call_id: "", duration_ms: 7,  code: "",       message: "",     content: "OK-ALPHA",   exit_code: -1 },
-   { tool_call_id: "", duration_ms: 11, code: "E_BOOM", message: "boom", content: "",           exit_code: -1 },
-   { tool_call_id: "", duration_ms: 13, code: "",       message: "",     content: "OK-CHARLIE", exit_code: -1 }]
+  [{ tool_call_id: "", duration_ms: 7,  code: "",       message: "",     content: "OK-ALPHA",   exit_code: -1, after_dispatch: true, applied: false },
+   { tool_call_id: "", duration_ms: 11, code: "E_BOOM", message: "boom", content: "",           exit_code: -1, after_dispatch: true, applied: false },
+   { tool_call_id: "", duration_ms: 13, code: "",       message: "",     content: "OK-CHARLIE", exit_code: -1, after_dispatch: true, applied: false }]
 }
 
 -- THE FAILURE-PATH SCENARIO. A step budget of 1 against a script of three
@@ -1142,14 +1160,335 @@ func rich_tools() -> [ScriptedTool] {
 -- exercise the Err path.
 func failure_answers() -> [string] { [approve_line(), deny_line("bravo")] }
 
+-- ---------------------------------------------------------------------------
+-- 034 W1.3 ACCEPTANCE (a) AND (b): THE WORLD-TRUTH LIST, RECORDED AND REPLAYED
+-- ---------------------------------------------------------------------------
+--
+-- One step with three tool calls, all approved, against three scripted answers:
+--
+--   wt0a  completes                                  -> an effect-log entry
+--   wt0b  fails AFTER dispatch, `applied` set        -> an effect-log entry, listed
+--   wt0c  fails AFTER dispatch, `applied` not set    -> no entry, not listed
+--
+-- The non-applied fault is after dispatch on purpose: it is the one a mutant
+-- that appends on every fault (034 W1.7 v07) or keys on the stage would log, so
+-- only `applied` separates it from wt0b. A fourth entry is surplus, for
+-- `rich_tools`' reason: an exhausted queue delegates to the real dispatcher.
+--
+-- The run goes through the REAL driver, so every world adoption the run makes
+-- (the pre-step chain, the response intercept, the tool-handle hook: all three
+-- are installed by `approval_rt`) is on the path. Each of them round-trips the
+-- world through the extension token, which carries neither `applied` nor the
+-- effect log; a site that adopted without re-seating (v20, v21) loses wt0b's
+-- flag before it is dispatched, or the log before the run ends, and the recorded
+-- list or the recorded log below comes out wrong.
+func world_truth_script() -> [ScriptedStep] {
+  [multi_step("wt", [tc("wt0a"), tc("wt0b"), tc("wt0c")], [])]
+}
+
+func world_truth_answers() -> [string] { [approve_line(), approve_line(), approve_line()] }
+
+func world_truth_tools() -> [ScriptedTool] {
+  [{ tool_call_id: "", duration_ms: 17, code: "",          message: "",               content: "WT-OK", exit_code: 0,  after_dispatch: true, applied: false },
+   { tool_call_id: "", duration_ms: 19, code: "E_APPLIED", message: "effect applied", content: "",      exit_code: -1, after_dispatch: true, applied: true },
+   { tool_call_id: "", duration_ms: 23, code: "E_NOT",     message: "effect not",     content: "",      exit_code: -1, after_dispatch: true, applied: false },
+   { tool_call_id: "", duration_ms: 29, code: "",          message: "",               content: "WT-SPARE", exit_code: 0, after_dispatch: true, applied: false }]
+}
+
+pure func tool_ordinals(xs: [Interaction]) -> [int] {
+  match xs {
+    [] => [],
+    i :: rest => match i.identity.body {
+      ToolIdentity(_, _, _) => i.identity.ordinal :: tool_ordinals(rest),
+      _ => tool_ordinals(rest)
+    }
+  }
+}
+
+pure func nth_int(xs: [int], n: int) -> int {
+  match xs { [] => -1, x :: rest => if n == 0 then x else nth_int(rest, n - 1) }
+}
+
+pure func applied_flags(xs: [ScriptedTool]) -> [bool] {
+  match xs { [] => [], t :: rest => t.applied :: applied_flags(rest) }
+}
+
+pure func eq_bools(a: [bool], b: [bool]) -> bool {
+  match a {
+    [] => (match b { [] => true, _ => false }),
+    x :: xr => match b { [] => false, y :: yr => x == y && eq_bools(xr, yr) }
+  }
+}
+
+pure func show_bools(xs: [bool]) -> string {
+  match xs { [] => "", x :: [] => show(x), x :: rest => "${show(x)},${show_bools(rest)}" }
+}
+
+pure func eq_effect_logs(a: [{ ordinal: int, call_id: string, effect_key: string }],
+                         b: [{ ordinal: int, call_id: string, effect_key: string }]) -> bool {
+  match a {
+    [] => (match b { [] => true, _ => false }),
+    x :: xr => match b {
+      [] => false,
+      y :: yr => x.ordinal == y.ordinal && x.call_id == y.call_id && x.effect_key == y.effect_key
+                   && eq_effect_logs(xr, yr)
+    }
+  }
+}
+
+pure func effect_log_line(xs: [{ ordinal: int, call_id: string, effect_key: string }]) -> string {
+  match xs {
+    [] => "",
+    e :: rest => "#${show(e.ordinal)} ${e.call_id} ${e.effect_key}; ${effect_log_line(rest)}"
+  }
+}
+
+func persist_round_trip(p: ExecutionProgram) -> Result[ExecutionProgram, string] {
+  match encode_artifact(p) {
+    EncodeRefused(_) => Err("the artifact encoder refused the program (secret scan)"),
+    Encoded(bytes) => match decode_artifact(bytes) {
+      ProgramDecodeRefused(rs) => Err("the artifact did not decode: ${first_decode_message(rs)}"),
+      ProgramDecoded(back) => Ok(back)
+    }
+  }
+}
+
+func world_truth_scenario() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("");
+  let _ = println("world_truth (034 W1.3): the effect log, recorded, persisted and replayed");
+  let initial = base_world(world_truth_script(), world_truth_answers(), world_truth_tools());
+  let discovery = run_recording("srwt_disc", initial, 12);
+  let program = program_of(discovery.world, initial);
+  let tools = tool_ordinals(discovery.world.log);
+  let t0 = nth_int(tools, 0); let t1 = nth_int(tools, 1); let t2 = nth_int(tools, 2);
+  let _ = println("world_truth: discovery recorded ${show(List.length(discovery.world.log))} interactions; tool ordinals [${join_ints(tools)}]; effect log ${effect_log_line(discovery.world.effect_log)}");
+
+  -- RECORDING. Three tool interactions, the effect log holds the completed call
+  -- and the applied fault (v22 drops the first, v07 adds the third), and the
+  -- builder lists the applied fault alone.
+  let ok_shape = check("world_truth: the discovery run dispatched the three scripted tools",
+                       List.length(tools) == 3,
+                       "tool ordinals [${join_ints(tools)}]");
+  let ok_log = check("world_truth: the effect log holds the completed call and the applied fault, at their interaction ordinals",
+                     eq_ints(effect_log_ordinals(discovery.world.effect_log), [t0, t1]),
+                     "effect log [${join_ints(effect_log_ordinals(discovery.world.effect_log))}], expected [${show(t0)},${show(t1)}] — the non-applied fault #${show(t2)} must be absent and the completed call #${show(t0)} present");
+  let ok_keys = check("world_truth: each entry carries its call id and the tool-and-arguments key",
+                      eq_effect_logs(discovery.world.effect_log,
+                                     [{ ordinal: t0, call_id: "wt0a", effect_key: "T:{}" },
+                                      { ordinal: t1, call_id: "wt0b", effect_key: "T:{}" }]),
+                      effect_log_line(discovery.world.effect_log));
+  let ok_listed = check("world_truth: the builder lists exactly the applied fault",
+                        eq_ints(program.applied_faults, [t1]),
+                        "applied_faults [${join_ints(program.applied_faults)}], expected [${show(t1)}]");
+  -- 034 W1.5, STANDING RULE 6 (ADR-001 D4). This run's second tool call is an
+  -- APPLIED fault, the world-only class `tool_effect_applied_then_failed`, and
+  -- the model must be shown its twin's bytes: no tool-role message in the trace
+  -- may contain a world-only id. Three tool calls, three tool messages read, so
+  -- the guard is not vacuous. 034 PLAN-001 W1.7's v12 target.
+  let leaks = world_only_ids_on_wire(discovery.trace);
+  let ok_wire = check("world_truth: no world-only class id in any projected tool message (standing rule 6), over ${show(tool_messages_on_wire(discovery.trace))} tool message(s)",
+                      List.length(leaks) == 0 && tool_messages_on_wire(discovery.trace) == 3,
+                      "world-only id(s) on the wire: [${join_strs(leaks)}]; tool messages read ${show(tool_messages_on_wire(discovery.trace))}, expected 3");
+
+  match persist_round_trip(program) {
+    Err(why) => check("world_truth: the program round-trips through the artifact codec", false, why),
+    Ok(back) => {
+      let ok_persisted = check("world_truth: the program round-trips through the artifact codec with its list",
+                               eq_ints(back.applied_faults, program.applied_faults)
+                                 && List.length(back.interactions) == List.length(program.interactions),
+                               "applied_faults [${join_ints(back.applied_faults)}]");
+      match world_state_of(back, required_class_ids()) {
+        Err(r) => check("world_truth: the decoded program reconstitutes a world", false, refusal_rule(r)),
+        Ok(rw) => {
+          -- REPLAY. The queue says which fault applied (v05 says none did).
+          let ok_flags = check("world_truth: the reconstituted queue has `applied` on the listed fault only",
+                               eq_bools(applied_flags(rw.tools), [false, true, false]),
+                               "[${show_bools(applied_flags(rw.tools))}]");
+          let replay = run_recording("srwt_play", rw, 12);
+          let ms = strict_replay_findings(back.interactions, replay.world.log);
+          let _ = if List.length(ms) > 0 then report_replay(ms) else ();
+          let ok_replay = check("world_truth: the decoded program replays to an identical interaction log",
+                                List.length(ms) == 0, "${show(List.length(ms))} mismatch(es) above");
+          let ok_rebuilt = check("world_truth: replay rebuilds the effect log — the completed calls and the listed faults, at the listed ordinals",
+                                 eq_ints(effect_log_ordinals(replay.world.effect_log), effect_ordinals_of(back))
+                                   && eq_effect_logs(replay.world.effect_log, discovery.world.effect_log)
+                                   && eq_ints(applied_faults_of_world(replay.world), back.applied_faults),
+                                 "replayed ${effect_log_line(replay.world.effect_log)} expected [${join_ints(effect_ordinals_of(back))}]");
+
+          -- (b) THE TWIN: the same program with the list emptied. It must serve
+          -- the same interactions, payload and advance alike — property P2's
+          -- precondition, and what 034 W1.7's v06 (`applied` in the payload)
+          -- breaks — while its effect log loses the fault, so the list is read.
+          let twin = { back | applied_faults: [] };
+          match world_state_of(twin, required_class_ids()) {
+            Err(r) => check("world_truth (b): the twin reconstitutes a world", false, refusal_rule(r)),
+            Ok(tw) => {
+              let twin_run = run_recording("srwt_play", tw, 12);
+              let between = strict_replay_findings(replay.world.log, twin_run.world.log);
+              let _ = if List.length(between) > 0 then report_replay(between) else ();
+              let ok_twin = check("world_truth (b): two programs differing only in the list serve identical interactions, payload and advance alike",
+                                  List.length(between) == 0
+                                    && List.length(strict_replay_findings(twin.interactions, twin_run.world.log)) == 0
+                                    && eq_list(served_outcomes(replay.world.log), served_outcomes(twin_run.world.log)),
+                                  "${show(List.length(between))} difference(s) above");
+              let ok_twin_truth = check("world_truth (b): …and differ in world truth alone — the twin's effect log has no fault entry",
+                                        eq_ints(effect_log_ordinals(twin_run.world.effect_log), [t0])
+                                          && eq_ints(applied_faults_of_world(twin_run.world), []),
+                                        "twin effect log ${effect_log_line(twin_run.world.effect_log)}");
+              ok_shape && ok_log && ok_keys && ok_listed && ok_wire && ok_persisted && ok_flags
+                && ok_replay && ok_rebuilt && ok_twin && ok_twin_truth
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+-- The served outcome of every interaction, rendered by `outcome_projection`,
+-- which reads every field: payload, status, advance, chunks. Compared as
+-- strings, position by position, beside the strict walk above.
+pure func served_outcomes(xs: [Interaction]) -> [string] {
+  match xs { [] => [], i :: rest => outcome_projection(i) :: served_outcomes(rest) }
+}
+
+-- ---------------------------------------------------------------------------
+-- 034 W1.3 ACCEPTANCE (a) ON THE FROZEN FIXTURE
+-- ---------------------------------------------------------------------------
+--
+-- `scripts/dst/fixtures/execution-program-v5.artifact` holds a completed tool
+-- call (#1), an applied fault (#12, listed) and a non-applied fault (#13,
+-- unlisted). Its provider, tool-#1 and extension-effect payloads are SPECIMEN
+-- PLACEHOLDERS (`payload.provider.zero`, `payload.tool.one`, …): they freeze the
+-- line codec, not a run, so the program as frozen reconstitutes no world. The
+-- row therefore makes the specimen REPLAYABLE by replacing exactly those
+-- placeholders with codec-written payloads that carry the same text — the
+-- ordinals, statuses, advances, deadlines and the world-truth list are the
+-- frozen bytes' own — and then:
+--
+--   1. round-trips it through the artifact codec (persistence and decode);
+--   2. reconstitutes the world, whose tool queue must carry `applied` on #12
+--      alone (034 W1.7 v05);
+--   3. replays the TOOL SEAM: every tool interaction, in order, through
+--      `recording_tool` on the reconstituted queue, with every other
+--      interaction appended as recorded so each call gets its program ordinal.
+--      The driver is not run, because the fixture's script is a placeholder;
+--      the end-to-end replay is `world_truth_scenario` above.
+--
+-- The replayed effect log must be #1 and #12 — the completed call present
+-- (v22), the non-applied fault absent (v07) — and the served tool outcomes must
+-- equal the recorded ones.
+pure func v5_fixture_path() -> string { "scripts/dst/fixtures/execution-program-v5.artifact" }
+
+pure func placeholder_step(text: string) -> ScriptedStep {
+  { prose: text, tool_calls: [], input_tokens: 1, output_tokens: 2, finish_reason: "stop",
+    chunks: [], error_code: "", error_message: "", advance_ms: 0 }
+}
+
+pure func replayable_at(i: Interaction) -> Interaction {
+  match i.identity.body {
+    ProviderIdentity(_, _, _) =>
+      { i | outcome: { i.outcome | payload: encode_provider_outcome(placeholder_step(i.outcome.payload)) } },
+    ToolIdentity(_, call_id, _) =>
+      match i.outcome.status {
+        -- Only the completed call is a placeholder; #12 and #13 were codec-written.
+        OutcomeOk => { i | outcome: { i.outcome | payload: encode_tool_outcome(ToolCompleted({ tool_call_id: call_id, content: i.outcome.payload, exit_code: 0 })) } },
+        _ => i
+      },
+    ExtensionEffectIdentity(_, _, _) =>
+      { i | outcome: { i.outcome | payload: encode_tool_outcome(ToolFailed({ tool_call_id: "", code: "E_EXT", message: i.outcome.payload, after_dispatch: true })) } },
+    _ => i
+  }
+}
+
+pure func replayable(xs: [Interaction]) -> [Interaction] {
+  match xs { [] => [], i :: rest => replayable_at(i) :: replayable(rest) }
+}
+
+-- The tool seam of a replay. `w.log` is the prefix recorded so far, so the
+-- ordinal `world_tool` records an effect under is the interaction's own.
+func replay_tool_seam(xs: [Interaction], w: WorldState) -> WorldState ! {IO, Process, FS} {
+  match xs {
+    [] => w,
+    i :: rest =>
+      match i.identity.body {
+        ToolIdentity(_, call_id, tool) => {
+          let inv: ToolInvocation = { call: { id: call_id, tool: tool, arguments: jo([]) },
+                                      workdir: "", timeout_ms: i.deadline_ms, started_at_ms: 0 };
+          replay_tool_seam(rest, recording_tool(w, inv).next_state)
+        },
+        _ => replay_tool_seam(rest, { w | log: w.log ++ [i] })
+      }
+  }
+}
+
+pure func tool_outcomes(xs: [Interaction]) -> [string] {
+  match xs {
+    [] => [],
+    i :: rest => match i.identity.body {
+      ToolIdentity(_, _, _) => outcome_projection(i) :: tool_outcomes(rest),
+      _ => tool_outcomes(rest)
+    }
+  }
+}
+
+func v5_fixture_scenario() -> bool ! {FS, IO, Process} {
+  let _ = println("");
+  let _ = println("v5_fixture (034 W1.3): the frozen world-truth pair, persisted, reconstituted and replayed");
+  match FS.readFileResult(v5_fixture_path()) {
+    Err(e) => check("v5_fixture: the frozen v5 specimen is read", false, e),
+    Ok(bytes) => match decode_artifact(bytes) {
+      ProgramDecodeRefused(rs) => check("v5_fixture: the frozen v5 specimen decodes", false, first_decode_message(rs)),
+      ProgramDecoded(frozen) => {
+        let ok_frozen = check("v5_fixture: the frozen bytes list #12 and not #13",
+                              eq_ints(frozen.applied_faults, [12]),
+                              "applied_faults [${join_ints(frozen.applied_faults)}]");
+        match persist_round_trip({ frozen | interactions: replayable(frozen.interactions) }) {
+          Err(why) => check("v5_fixture: the replayable specimen round-trips through the artifact codec", false, why),
+          Ok(back) => match world_state_of(back, [fault_class_tool_failed()]) {
+            Err(r) => {
+              let _ = println("      ${refusal_message(r)}");
+              check("v5_fixture: the replayable specimen reconstitutes a world", false, refusal_rule(r))
+            },
+            Ok(rw) => {
+              let ok_persisted = check("v5_fixture: the replayable specimen round-trips with its list",
+                                       eq_ints(back.applied_faults, [12]),
+                                       "applied_faults [${join_ints(back.applied_faults)}]");
+              let ok_flags = check("v5_fixture: the reconstituted tool queue (#1, #12, #13) has `applied` on #12 alone",
+                                   eq_bools(applied_flags(rw.tools), [false, true, false]),
+                                   "[${show_bools(applied_flags(rw.tools))}]");
+              let replayed = replay_tool_seam(back.interactions, { rw | log: [] });
+              let ok_served = check("v5_fixture: the replayed tool seam serves the recorded outcomes",
+                                    eq_list(tool_outcomes(replayed.log), tool_outcomes(back.interactions)),
+                                    "replayed [${join_strs(tool_outcomes(replayed.log))}] recorded [${join_strs(tool_outcomes(back.interactions))}]");
+              let ok_effects = check("v5_fixture: replay reproduces the effect log — #1 completed and #12 listed, #13 absent",
+                                     eq_ints(effect_log_ordinals(replayed.effect_log), [1, 12])
+                                       && eq_ints(effect_ordinals_of(back), [1, 12])
+                                       && eq_ints(applied_faults_of_world(replayed), back.applied_faults),
+                                     "effect log ${effect_log_line(replayed.effect_log)}");
+              ok_frozen && ok_persisted && ok_flags && ok_served && ok_effects
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+pure func join_strs(xs: [string]) -> string {
+  match xs { [] => "", x :: [] => x, x :: rest => "${x} | ${join_strs(rest)}" }
+}
+
 export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("strict_replay_dst: WI-A13 stage 3 — strict replay against driver_only");
 
   let ok_rich = run_scenario("rich", rich_script(), rich_answers(), rich_tools(), 12, true, true, 1);
   let ok_fail = run_scenario("maxsteps", rich_script(), failure_answers(), rich_tools(), 1, false, false, 1);
+  let ok_world_truth = world_truth_scenario();
+  let ok_v5_fixture = v5_fixture_scenario();
 
   let _ = println("");
-  if ok_rich && ok_fail then
+  if ok_rich && ok_fail && ok_world_truth && ok_v5_fixture then
     println("strict_replay_dst PASS")
   else {
     let _ = println("strict_replay_dst FAIL");

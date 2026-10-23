@@ -1,0 +1,11 @@
+--- a/src/core/dst_replay.ail
++++ b/src/core/dst_replay.ail
+@@ -870,7 +870,7 @@
+           match decode_tool_outcome(i.outcome.payload, i.outcome.advance_ms) {
+             ToolRecordUndecodable(why) => Some(ToolOutcomeUndecodable(ord, why)),
+             ToolRecordDecoded(t) =>
+-              if t.code != "" && not t.after_dispatch then Some(AppliedFaultBeforeDispatch(ord))
++              if false then Some(AppliedFaultBeforeDispatch(ord))
+               else None
+           }
+       }

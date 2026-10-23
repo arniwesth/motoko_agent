@@ -1026,7 +1026,7 @@ pure func test_m12_artifact_frame() -> bool
     a == concat([program_schema_version(), "\ndigest\t", program_digest(body), "\n", body, "\n"])
       && recorded_digest(a) == artifact_digest(p)
       && Str.length(artifact_digest(p)) == 64
-      && program_schema_version() == "execution-program/4"
+      && program_schema_version() == "execution-program/5"
   }
 
 -- The layout: the D6 file set, the sources' SHA-256, the migrated exposure.

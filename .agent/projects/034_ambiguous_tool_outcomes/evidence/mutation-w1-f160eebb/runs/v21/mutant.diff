@@ -1,0 +1,11 @@
+--- a/src/core/ext_world.ail
++++ b/src/core/ext_world.ail
+@@ -704,7 +704,7 @@
+ -- contracts: SKIPPED — calls `token_to_world`, which decodes an opaque Json token; Json is unencodable.
+ export pure func adopt_world(t: ExtWorld, pre: WorldState) -> WorldState {
+   let adopted = token_to_world(t);
+-  { adopted | tools: reseat_applied(adopted.tools, pre.tools), effect_log: pre.effect_log }
++  { adopted | tools: reseat_applied(adopted.tools, pre.tools) }
+ }
+ 
+ -- contracts: BLOCKED — calls `reseat_aligned`, RECURSIVE over the tool queues.
