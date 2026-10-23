@@ -1,0 +1,11 @@
+--- a/src/core/dst_run_report.ail
++++ b/src/core/dst_run_report.ail
+@@ -364,7 +364,7 @@
+ pure func class_times(rows: [FaultClass], r: FaultClass, xs: [Interaction], applied: [int]) -> int {
+   match r.visibility {
+     -- Delivered as the twin: the twin id's interactions the effect log holds.
+-    WorldOnly(twin) => count_partition(xs, applied, twin, true),
++    WorldOnly(_) => count_class(xs, r.class_id),
+     Wire =>
+       -- A twin: only the interactions the effect log does NOT hold.
+       if is_a_twin(rows, r.class_id) then count_partition(xs, applied, r.class_id, false)

@@ -1,0 +1,13 @@
+--- a/src/core/dst_run_report.ail
++++ b/src/core/dst_run_report.ail
+@@ -496,8 +496,8 @@
+   match effects {
+     [] => 0,
+     e :: rest =>
+-      if contains_str(seen, e.effect_key) then 1 + duplicates_after(rest, seen)
+-      else duplicates_after(rest, e.effect_key :: seen)
++      if contains_str(seen, e.effect_key) then duplicates_after(rest, seen)
++      else 1 + duplicates_after(rest, e.effect_key :: seen)
+   }
+ }
+ 

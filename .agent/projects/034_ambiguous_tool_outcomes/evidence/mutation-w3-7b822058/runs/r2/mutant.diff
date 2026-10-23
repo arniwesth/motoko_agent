@@ -1,0 +1,11 @@
+--- a/src/core/dst_run_report.ail
++++ b/src/core/dst_run_report.ail
+@@ -367,7 +367,7 @@
+     WorldOnly(twin) => count_partition(xs, applied, twin, true),
+     Wire =>
+       -- A twin: only the interactions the effect log does NOT hold.
+-      if is_a_twin(rows, r.class_id) then count_partition(xs, applied, r.class_id, false)
++      if is_a_twin(rows, r.class_id) then count_class(xs, r.class_id)
+       else count_class(xs, r.class_id)
+   }
+ }
