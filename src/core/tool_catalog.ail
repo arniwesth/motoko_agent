@@ -52,7 +52,7 @@ pure func edit_file_schema() -> ToolSchema = {
 pure func bash_exec_schema() -> ToolSchema = {
   name: "BashExec",
   description: "Run a shell command in the workdir with capability gating. Output is captured to stdout/stderr. If the command passes the runtime's output cap or time limit, its output is not returned and the result carries a `fault` whose `effects` is `unknown`: the command may still have done its work.",
-  parameters: "{\"type\":\"object\",\"properties\":{\"cmd\":{\"type\":\"string\"},\"args\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"timeout_secs\":{\"type\":\"integer\"}},\"required\":[\"cmd\"]}"
+  parameters: "{\"type\":\"object\",\"properties\":{\"cmd\":{\"type\":\"string\"},\"args\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"cmd\"]}"
 }
 
 pure func run_tests_schema() -> ToolSchema = {
@@ -193,6 +193,16 @@ export pure func tools_with_extensions(rt: ExtRuntime) -> [ToolSchema] {
 pure func test_base_tools_count() -> bool
   tests [((), true)]
   { List.length(tools()) == 7 }
+
+-- `timeout_secs` was advertised but never parsed into ProcessExecReq. Do not
+-- promise a per-call wall until a native per-call wall exists.
+pure func test_bash_schema_does_not_advertise_ignored_timeout_secs() -> bool
+  tests [((), true)]
+  {
+    not contains(bash_exec_schema().parameters, "timeout_secs")
+      && contains(bash_exec_schema().parameters, "cmd")
+      && contains(bash_exec_schema().parameters, "args")
+  }
 
 pure func test_no_extensions_returns_base_tools() -> bool
   tests [((), true)]
