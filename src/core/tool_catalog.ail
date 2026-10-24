@@ -195,7 +195,7 @@ pure func test_base_tools_count() -> bool
   { List.length(tools()) == 7 }
 
 -- `timeout_secs` was advertised but never parsed into ProcessExecReq. Do not
--- promise a per-call wall until native and delegated semantics both exist.
+-- promise a per-call wall until a native per-call wall exists.
 pure func test_bash_schema_does_not_advertise_ignored_timeout_secs() -> bool
   tests [((), true)]
   {

@@ -265,9 +265,9 @@ export function normalizeRuntimeWarning(line: string): string | null {
 }
 
 // The AILANG producer for the legacy delegated tool_calls event was removed
-// at M10b. It remains in AgentEvent only so old sessions can still be rendered;
-// RuntimeProcess never executes that event. A future delegated protocol must
-// be designed and versioned explicitly rather than reviving this executor.
+// at M10b. RuntimeProcess must not execute that event. The wire variants and
+// presentation arms are retained only to scope this deletion; their protocol
+// cleanup is separate. A future delegated protocol must be designed explicitly.
 
 function asRecord(v: unknown): Record<string, unknown> | null {
   return v && typeof v === "object" ? (v as Record<string, unknown>) : null;
@@ -988,7 +988,7 @@ export class RuntimeProcess {
     // in ailang/internal/effects/process.go -- reported to the model as
     // `timeout after 35005ms` with exit 1 and EMPTY stdout. Nothing in a
     // profile reaches that flag by itself, and the tool schema's
-    // `timeout_secs` is not read by the dispatcher, so MOTOKO_PROCESS_TIMEOUT
+    // `timeout_secs` is no longer advertised, so MOTOKO_PROCESS_TIMEOUT
     // (a Go duration such as "300s") is the one knob: index.ts publishes the
     // profile's `tools.process_timeout` under that name unless the shell set
     // it. The binary rejects a malformed value at startup rather than running
@@ -1098,16 +1098,6 @@ export class RuntimeProcess {
       if (unexplained) this.onEvent({ type: "error", message: unexplained });
       onExit();
     });
-  }
-
-  private resolveCwd(cwd?: string): string {
-    if (!cwd || cwd.trim() === "") return this.workdir;
-    return path.isAbsolute(cwd) ? cwd : path.resolve(this.workdir, cwd);
-  }
-
-  private truncate(s: string, max: number): { text: string; truncated: boolean } {
-    if (s.length <= max) return { text: s, truncated: false };
-    return { text: s.slice(0, max), truncated: true };
   }
 
 

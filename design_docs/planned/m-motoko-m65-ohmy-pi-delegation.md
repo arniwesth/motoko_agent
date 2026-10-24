@@ -45,7 +45,7 @@ Restore the inbox-based delegation pipeline against the new v2 architecture:
 
 4. **Re-port `decode_delegated_results`, `delegated_results_from_entries`, `delegated_result_for_call`, `find_exec_result`** — the result-shape extraction layer. These were ~80 LOC in legacy rpc.ail; trimmer in v2 because we don't need to bridge ToolResultItem ADT (we go straight to JSON Message content).
 
-5. **Coordinate with the TS env-server** to make sure the request_id / tool_calls / tool_results contract still matches what `runtime-process.ts` emits and consumes. This was unchanged by M10's wire-format fix so should be a no-op verification.
+5. **Coordinate with the TS env-server** on a new request_id / tool_calls / tool_results contract. **Update 2026-10-24 (project 041):** the dormant consumer in `runtime-process.ts` was removed because current AILANG emits no such event. This is not a no-op compatibility check: M6.5 must implement and test a new TS consumer as well as the AILANG producer/consumer.
 
 ## Acceptance criteria
 
@@ -71,7 +71,7 @@ This means M6.5 is **purely additive** — no architectural change, just filling
 
 - The legacy code that did this is preserved in git history (commit `6350b7a` deleted it; revert/cherry-pick the relevant `wait_for_tool_results` + `decode_delegated_results` blocks for reference).
 - Look at PR #4 commit `0117803f` (the streaming PR's foundation) for the inbox plumbing pattern motoko already uses for non-tool-call commands (`abort`, `model_change`, `user_message` in `conversation_loop_v2`).
-- The TS-side env-server's contract is in `src/tui/src/env-server.ts` — search for `tool_calls` / `tool_results` event handlers; should be unchanged from before the migration.
+- The legacy TypeScript consumer was removed in project 041 after it was shown unreachable. The old text referring to handlers in `env-server.ts` is stale; use the planned new consumer and its real round-trip test as the contract.
 
 ## Cross-references
 

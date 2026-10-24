@@ -8,9 +8,10 @@ Interim relief landed in `242eeb4d` (`MOTOKO_PROCESS_TIMEOUT` → `--process-tim
 per-session global and not a fix for either knob. **The per-session half was then closed the same
 day:** a profile's `tools.process_timeout` is forwarded to `--process-timeout` (`index.ts`,
 `resolveProfileAgentConfig` → `applyToolProfileConfig`, with the shell env var taking precedence),
-so a profile now states a budget that is applied. Still open: `timeout_secs` is advertised and
-unparsed, and `tools.delegated_timeout_ms` is still loaded, copied and read by nothing — it should
-be deleted so no profile states a budget nobody applies.
+so a profile now states a budget that is applied. The live BashExec schema no longer advertises
+`timeout_secs`; it was never parsed. `tools.delegated_timeout_ms` is still loaded, copied and read
+by nothing after M10b removed its delegated-result consumer — it should be deleted so no profile
+states a budget nobody applies.
 
 **2026-10-24 update, corrected after independent review:** the additional TUI
 `RuntimeProcess.runDelegatedCall` timer was unreachable in current sessions. M10b deleted its
@@ -19,10 +20,11 @@ The reported long-demo timeout and the surviving-descendant reproduction are the
 AILANG behavior, not delegated TUI behavior. The delegated timeout patch was rejected and is being
 replaced by dormant-path removal. It did not fix the native defect.
 
-The live native issue remains: AILANG `exec.CommandContext` kills the immediate process, and a
-descendant can survive and write after the timeout while `WaitDelay` bounds pipe waiting. A native
-process-group cancellation change is required, with `WaitDelay` retained. The revised architecture
-and scope are recorded in
+The live native issue on the pinned v0.52.5 remains: AILANG `exec.CommandContext` kills the
+immediate process, and a descendant can survive and write after the timeout while `WaitDelay`
+bounds pipe waiting. Upstream v0.54.14 already implements process-group cancellation with
+`WaitDelay`; project 034 assigned Motoko's adoption to the pin move in project 012. The revised
+architecture and scope are recorded in
 [project 041 ADR-001](../projects/041_process_execution_timeouts/ADR-001-delegated-process-timeouts.md).
 The live schema no longer advertises `timeout_secs`; consistent per-call semantics remain follow-up work.
 
