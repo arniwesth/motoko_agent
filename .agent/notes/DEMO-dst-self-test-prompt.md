@@ -77,10 +77,10 @@ Point out:
 
 ## Act 3: Break myself (about 2½ min)
 
-In the same response as the command below, explain the bug in two sentences. `session_policy_init`, the function that configured this very session, reads four environment variables and passes the simulated world from each read to the next. You'll make the third read start from the first read's world instead of the second's. That silently drops the record that `MOTOKO_RETRY_STREAM_ERROR` was ever read.
+In the same response as the command below, explain the bug in two sentences. `session_policy_init`, the function that configured this very session, reads three environment variables and passes the simulated world from each read to the next. You'll make the second read start from the initial world instead of the first read's successor. That silently drops the record that `MOTOKO_RETRY_STREAM_ERROR` was ever read.
 
 ```bash
-sed -i 's/let r_base = ports.env_get(advance(r_retry.next_state, EnvRead)/let r_base = ports.env_get(advance(r_persist.next_state, EnvRead)/' src/core/session.ail
+sed -i 's/let r_base = ports.env_get(advance(r_retry.next_state, EnvRead)/let r_base = ports.env_get(world/' src/core/session.ail
 git diff -U0 src/core/session.ail
 ```
 
@@ -123,7 +123,7 @@ Walk through it in this order:
 ## Act 4: Put it back (about 2 min)
 
 ```bash
-sed -i 's/let r_base = ports.env_get(advance(r_persist.next_state, EnvRead)/let r_base = ports.env_get(advance(r_retry.next_state, EnvRead)/' src/core/session.ail
+sed -i 's/let r_base = ports.env_get(world/let r_base = ports.env_get(advance(r_retry.next_state, EnvRead)/' src/core/session.ail
 git diff --quiet HEAD -- src/core/session.ail && echo "session.ail byte-identical to HEAD" || echo "NOT RESTORED"
 ```
 
