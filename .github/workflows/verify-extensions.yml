@@ -145,12 +145,13 @@ jobs:
       - name: DST AILANG gates — heavy
         run: make --keep-going terminal_trace smoke_driver world_state
 
-  # ~9 min. The remaining fifteen gates. The first fourteen were 302 s cold
-  # together: phase_c_l1 65, compaction_dst 59, profile_definition 47,
-  # ext_hook_scope(_selftest) 35, driver_only 29, fault_catalogue 19,
-  # event_vocabulary 17, conformance 13, ext_call_inventory(_selftest) 15,
-  # attribution_table + profile_coverage + predicate_anchors 3. recorded_stream
-  # adds 11 (below).
+  # ~9 min. The remaining sixteen gates, as named on the make line below.
+  # Fourteen of them were 302 s cold together: phase_c_l1 65, compaction_dst
+  # 59, profile_definition 47, ext_hook_scope(_selftest) 35, driver_only 29,
+  # fault_catalogue 19, event_vocabulary 17, conformance 13,
+  # ext_call_inventory(_selftest) 15, attribution_table + profile_coverage +
+  # predicate_anchors 3. tool_catalog_registry is not in that measurement, and
+  # recorded_stream adds 11 (below).
   #
   # ext_hook_scope and its self-test joined on 2026-10-07. The registration-shape
   # gate they carry was red on main from 2026-10-01 with no job running it: a

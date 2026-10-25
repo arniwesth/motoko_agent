@@ -23,10 +23,12 @@ both deliberate:
 
   REQUEST_LOG=<path>  also append one line per request about the body's
                       `tools` key: `tools=absent` when the key is missing,
-                      `tools=<n>` for an array of n, and `tools=<json>` for
-                      anything else (`tools=null`). Issue #263's live rows read
-                      it, and their negative controls post `null` and `[]` to
-                      show the three answers stay distinct.
+                      `tools=array:<n>` for an array of n, and
+                      `tools=json:<value>` for anything else (`tools=json:null`,
+                      `tools=json:7`). The prefixes keep the three forms
+                      disjoint, so an array of seven and the number 7 cannot
+                      log alike. Issue #263's live rows read it, and their
+                      negative controls post `null`, `[]` and `7`.
 """
 import json
 import os
@@ -65,9 +67,9 @@ class Handler(BaseHTTPRequestHandler):
             if "tools" not in body:
                 entry = "tools=absent"
             elif isinstance(body["tools"], list):
-                entry = f"tools={len(body['tools'])}"
+                entry = f"tools=array:{len(body['tools'])}"
             else:
-                entry = f"tools={json.dumps(body['tools'])}"
+                entry = f"tools=json:{json.dumps(body['tools'])}"
             with open(REQUEST_LOG, "a") as log:
                 log.write(entry + "\n")
 

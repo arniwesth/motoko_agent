@@ -848,7 +848,7 @@ func assert_ordinal_class() -> bool ! {Env, FS, IO, Trace} {
 --              `${tool_offer_projection(offer)}` removed from either arm in
 --              `recording_model_step`): an offer-only change then records the
 --              same interaction and strict replay accepts it.
--- None of the three sees `live_ports` ignore `offered_tools`. That binding is
+-- None of these four rows sees `live_ports` ignore `offered_tools`. That binding is
 -- `make recorded_stream`'s `T tool_offer_*` rows, on a real request body.
 func offer_echo_step(state: WorldState, _model: string, _msgs: [Message], offer: ToolOffer, _on_chunk: (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace} {
   let text = match offer { AgentTools => "offer=agent-tools", NoTools => "offer=no-tools" };
