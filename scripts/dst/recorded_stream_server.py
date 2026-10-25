@@ -20,6 +20,10 @@ both deliberate:
 
   MODE=success        deltas, then a finish chunk and [DONE]
   MODE=partial_error  deltas, then an abrupt mid-chunked-body close
+
+  REQUEST_LOG=<path>  also append one line per request: `tools=<n>` for the
+                      length of the body's `tools` array, or `tools=absent`
+                      when the body has none. Issue #263's live rows read it.
 """
 import json
 import os
@@ -28,6 +32,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 MODE = os.environ.get("MODE", "partial_error")
 PORT = int(os.environ.get("PORT", "8819"))
+REQUEST_LOG = os.environ.get("REQUEST_LOG", "")
 
 # The adjacent "rep" pair is the duplication control: exact parity must preserve
 # it. An implementation that de-duplicated, or that returned a set rather than
@@ -51,7 +56,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", "0"))
-        self.rfile.read(length)
+        raw = self.rfile.read(length)
+        if REQUEST_LOG:
+            tools = json.loads(raw or b"{}").get("tools")
+            with open(REQUEST_LOG, "a") as log:
+                log.write("tools=absent\n" if tools is None else f"tools={len(tools)}\n")
 
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")

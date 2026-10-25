@@ -44,8 +44,8 @@ import std/ai (stepWithStreamRecorded, Message, StreamChunk, ContentDelta, Think
 import std/io (println)
 import std/list as List (length, foldl)
 import std/result (Result, Ok, Err)
-import src/core/ports (Ports, ProviderExchange, WorldState, empty_world_state)
-import src/core/test/stub_step (live_ports, empty_rt)
+import src/core/ports (Ports, ProviderExchange, WorldState, empty_world_state, AgentTools, NoTools)
+import src/core/test/stub_step (live_ports, empty_rt, offered_tools)
 
 -- Live projection. Stands in for the production TUI renderer: it does exactly
 -- what a real sink does, which is print and return unit.
@@ -152,7 +152,7 @@ func main_adoption() -> () ! {AI, Clock, Env, FS, IO, Trace} {
   let _ = emit_evidence("adoption");
   let ports = live_ports(empty_rt());
   let _ = println("CALL begin");
-  let ex = ports.model_step(empty_world_state(), "", probe_messages(), render);
+  let ex = ports.model_step(empty_world_state(), "", probe_messages(), AgentTools, render);
   let _ = println("RETURNED count=${show(List.length(ex.emissions))} order=${List.foldl(join, "", ex.emissions)}");
   -- The Err-branch guard, in-process and on the record. `chunks` is populated on
   -- BOTH outcomes, and the natural adoption — `match rec.outcome { Ok(..) =>
@@ -164,5 +164,27 @@ func main_adoption() -> () ! {AI, Clock, Env, FS, IO, Trace} {
   match ex.result {
     Ok(result) => println("OUTCOME ok ${result.finish_reason}"),
     Err(error) => println("OUTCOME err ${error.code}")
+  }
+}
+
+-- #263: the tool offer on a real request. Two calls through `live_ports`' own
+-- `model_step` closure, the agent's turn and then an extension's, and the
+-- server records the `tools` field of each body (`REQUEST_LOG`). The runner
+-- expects the catalogue size this prints, then `tools=absent`. This is the one
+-- row that sees `live_ports` ignore the offer; world_state_probe's rows stop at
+-- the port. The order of the two calls is fixed and the runner relies on it.
+export func main_tool_offer() -> () ! {AI, Clock, Env, FS, IO, Trace} {
+  let _ = emit_evidence("tool_offer");
+  let ports = live_ports(empty_rt());
+  let _ = println("OFFER agent=${show(List.length(offered_tools(empty_rt(), AgentTools)))}");
+  let agent = ports.model_step(empty_world_state(), "", probe_messages(), AgentTools, discard);
+  let none = ports.model_step(empty_world_state(), "", probe_messages(), NoTools, discard);
+  let _ = match agent.result {
+    Ok(result) => println("OUTCOME agent ok ${result.finish_reason}"),
+    Err(error) => println("OUTCOME agent err ${error.code}")
+  };
+  match none.result {
+    Ok(result) => println("OUTCOME none ok ${result.finish_reason}"),
+    Err(error) => println("OUTCOME none err ${error.code}")
   }
 }

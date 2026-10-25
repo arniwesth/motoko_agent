@@ -947,8 +947,25 @@ export type ProviderExchange = {
   next_state: WorldState
 }
 
+-- Which tools a provider request offers the model. Issue #263: before this,
+-- `live_ports` attached the agent's full catalogue to EVERY request, including
+-- the ones an extension makes through `ExtPorts.ai_step`. That port returns the
+-- reply text only, so a tool call in its answer is discarded, and a summariser
+-- offered fifteen tools sometimes answered with one: no text, then
+-- `summarize_attempt`'s retry (75 s and 77 s for one fold, measured on
+-- 2026-10-13). The driver's own step offers `AgentTools`; `session.ext_ai_step`
+-- offers `NoTools`; `stub_step.offered_tools` maps the two to schemas.
+--
+-- A sum and not a `[ToolSchema]` because the catalogue belongs to the adapter
+-- that holds the runtime, as it did before. The caller states what kind of
+-- request this is; it does not rebuild the list.
+export type ToolOffer = AgentTools | NoTools
+
 export type Ports = {
-  model_step: (WorldState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace},
+  -- #263 added the `ToolOffer`, a THIRD widening, on the ground in its note
+  -- above. Wrappers pass it through unchanged, so a recording or replaying
+  -- adapter sees the same offer the driver made.
+  model_step: (WorldState, string, [Message], ToolOffer, (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace},
   -- WI-A12's approval class. State-threaded, and it returns the raw input
   -- rather than a resolution — see `ApprovalInput`. The `ApprovalRequest` is
   -- passed so a recorded world can correlate the read with the call it is
@@ -3052,7 +3069,7 @@ pure func test_a_stage_two_tool_payload_is_undecodable_rather_than_a_silent_succ
 -- both fail identically, so it is the arity and not the argument form. Record
 -- update over a one-parameter constructor avoids the inference path entirely.
 export func ports_shape_probe(
-  model_step: (WorldState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace}
+  model_step: (WorldState, string, [Message], ToolOffer, (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace}
 ) -> Ports {
   {
     model_step: model_step,

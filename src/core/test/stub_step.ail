@@ -12,7 +12,7 @@
 -- with deny_all_rt() so the tool calls don't actually run.
 module src/core/test/stub_step
 
-import std/ai (step, stepWithCache, stepWithStream, stepWithStreamRecorded, StepResult, ToolCall, Message, AIError, CacheBreakpoint, StreamChunk, ContentDelta)
+import std/ai (step, stepWithCache, stepWithStream, stepWithStreamRecorded, StepResult, ToolCall, Message, AIError, CacheBreakpoint, StreamChunk, ContentDelta, ToolSchema)
 import std/trace as Trace
 import std/clock (now)
 import std/io (readLine, println)
@@ -27,7 +27,7 @@ import src/core/tool_contract (ToolCallEnvelope)
 import src/core/config (VerificationConfig)
 import src/core/ports (
   Ports, ProviderExchange, WorldState, ClockReading, ApprovalInput, EnvRead,
-  ScriptedStep, empty_world_state, ports_shape_probe, virtual_clock,
+  ScriptedStep, empty_world_state, ports_shape_probe, virtual_clock, ToolOffer, AgentTools, NoTools, -- #263, on this line for the same S18 reason as the line below
   ambient_env, ambient_file, ambient_file_write, ambient_file_remove, ambient_path_stat, ambient_dir_list, ambient_dir_make, -- WI-D18's directory trio, widened onto THIS line rather than a new one: stub_step.ail:203 is an A5 attribution anchor (S18)
   record_interaction, recording_clock, recording_approval, recording_env, recording_tool, recording_ext_effect, recording_file_write, recording_file_remove, recording_dir_make, encode_provider_outcome, encode_exhausted_provider_outcome, generated_provider_entry, generating_tool, generating_approval, scripted_step_ai_error, scripted_step_faults, provider_outcome_record
 )
@@ -184,10 +184,10 @@ pure func system_prompt_cache_breakpoint() -> [CacheBreakpoint] {
 -- It is also stateless, so it returns its input state unchanged. That identity
 -- transition is D1's specified answer, not a decision left to construction sites.
 export func live_ports(rt: ExtRuntime) -> Ports ! {AI, Clock, Env, FS, IO} {
-  let model_step: (WorldState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace} =
-    func(state: WorldState, model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
+  let model_step: (WorldState, string, [Message], ToolOffer, (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace} =
+    func(state: WorldState, model: string, msgs: [Message], offer: ToolOffer, on_chunk: (StreamChunk) -> () ! {IO})
     -> ProviderExchange ! {AI, IO, Trace} {
-      let rec = stepWithStreamRecorded(model, msgs, tools_with_extensions(rt), system_prompt_cache_breakpoint(), on_chunk);
+      let rec = stepWithStreamRecorded(model, msgs, offered_tools(rt, offer), system_prompt_cache_breakpoint(), on_chunk);
       { emissions: rec.chunks, result: rec.outcome, next_state: state }
     };
   -- The live clock: read ambient wall time, return the world unchanged. The
@@ -275,6 +275,19 @@ export func live_ports(rt: ExtRuntime) -> Ports ! {AI, Clock, Env, FS, IO} {
     dir_make: ambient_dir_make }
 }
 
+-- The schemas `live_ports` sends for a `ToolOffer` (#263). The driver's step
+-- gets the agent's catalogue, as every request did before; an extension's
+-- `ai_step` gets none, so `std/ai` omits the `tools` field from the request.
+-- Defined here, below `live_ports`, because a new line above stub_step.ail:203
+-- would move an A5 attribution anchor (S18).
+-- contracts: SKIPPED — calls `tools_with_extensions`, which is not SMT-encodable. Tried `ensures { offer == AgentTools || length(result) == 0 }`.
+export pure func offered_tools(rt: ExtRuntime, offer: ToolOffer) -> [ToolSchema] {
+  match offer {
+    AgentTools => tools_with_extensions(rt),
+    NoTools => []
+  }
+}
+
 -- PLAN-002 W4 Part 5: the live wake's wire. The request line the host's waiter
 -- reads (`runtime-process.ts`): the `ParkRequest`, waits in the producer's key
 -- order.
@@ -350,8 +363,8 @@ export func live_wake_await(state: WorldState, req: ParkRequest) -> WakeInput ! 
 -- close to indistinguishable from a real result. See F6, and
 -- scripts/dst/scripted_cursor_probe.ail, which is its executable statement.
 export func scripted_ports() -> Ports ! {IO, Trace} {
-  let model_step: (WorldState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace} =
-    func(state: WorldState, _model: string, _msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
+  let model_step: (WorldState, string, [Message], ToolOffer, (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace} =
+    func(state: WorldState, _model: string, _msgs: [Message], _offer: ToolOffer, on_chunk: (StreamChunk) -> () ! {IO})
     -> ProviderExchange ! {AI, IO, Trace} {
       match state.script {
         [] => { emissions: [], result: Ok(terminal_step()), next_state: state },
@@ -428,8 +441,8 @@ export pure func scripted_provider_over_capacity(capacity: ScriptedProviderCapac
 -- requests delegate to scripted_ports unchanged.
 export func bounded_scripted_ports(capacity: ScriptedProviderCapacity) -> Ports ! {AI, IO, Trace} {
   let base = scripted_ports();
-  let model_step: (WorldState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace} =
-    func(state: WorldState, model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
+  let model_step: (WorldState, string, [Message], ToolOffer, (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace} =
+    func(state: WorldState, model: string, msgs: [Message], offer: ToolOffer, on_chunk: (StreamChunk) -> () ! {IO})
     -> ProviderExchange ! {AI, IO, Trace} {
       if scripted_provider_over_capacity(capacity, msgs) then {
         emissions: [],
@@ -440,7 +453,7 @@ export func bounded_scripted_ports(capacity: ScriptedProviderCapacity) -> Ports 
         }),
         next_state: state
       }
-      else base.model_step(state, model, msgs, on_chunk)
+      else base.model_step(state, model, msgs, offer, on_chunk)
     };
   { base | model_step: model_step }
 }
@@ -475,8 +488,8 @@ export func bounded_scripted_ports(capacity: ScriptedProviderCapacity) -> Ports 
 --    "loop_v2" is used for every driver-issued request, matching the name stage
 --    1's inline test already assumed, so that a future second producer is a
 --    NEW origin rather than a redefinition of this one.
-func recording_model_step(rt: ExtRuntime) -> ((WorldState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace}) ! {IO, Trace} {
-  func(state: WorldState, model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
+func recording_model_step(rt: ExtRuntime) -> ((WorldState, string, [Message], ToolOffer, (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace}) ! {IO, Trace} {
+  func(state: WorldState, model: string, msgs: [Message], _offer: ToolOffer, on_chunk: (StreamChunk) -> () ! {IO})
   -> ProviderExchange ! {AI, IO, Trace} {
     -- NOT named `step`: this module imports `std/ai (step, ...)`, and a local
     -- binding of that name does not shadow the import on this pin — the
@@ -689,8 +702,8 @@ export func recording_ports(rt: ExtRuntime) -> Ports ! {Clock, Env, FS, IO, Proc
 -- that ever stopped being true. A leftover tail is a response the world can
 -- serve that the generator did not choose for this request, which is the
 -- anonymous-response-queue shape D2's ordered protocol exists to replace.
-func generating_model_step(rt: ExtRuntime) -> ((WorldState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace}) ! {AI, IO, Trace} {
-  func(state: WorldState, model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
+func generating_model_step(rt: ExtRuntime) -> ((WorldState, string, [Message], ToolOffer, (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace}) ! {AI, IO, Trace} {
+  func(state: WorldState, model: string, msgs: [Message], offer: ToolOffer, on_chunk: (StreamChunk) -> () ! {IO})
   -> ProviderExchange ! {AI, IO, Trace} {
     let seeded =
       match state.script {
@@ -701,7 +714,7 @@ func generating_model_step(rt: ExtRuntime) -> ((WorldState, string, [Message], (
         },
         _ :: _ => state
       };
-    recording_model_step(rt)(seeded, model, msgs, on_chunk)
+    recording_model_step(rt)(seeded, model, msgs, offer, on_chunk)
   }
 }
 
@@ -795,7 +808,9 @@ export func dispatch_step(
   msgs: [Message],
   on_chunk: (StreamChunk) -> () ! {IO, Trace}
 ) -> ProviderExchange ! {AI, IO, Trace} {
-  let exchange = ports.model_step(state, model, msgs, on_chunk);
+  -- `AgentTools`: this is the agent's own turn. Extension calls do not come
+  -- through here; `session.ext_ai_step` calls the port with `NoTools` (#263).
+  let exchange = ports.model_step(state, model, msgs, AgentTools, on_chunk);
   -- PLAN-001 P2 Part 1: the driver's one helped ModelStep leaf. The exchange is
   -- still propagated whole; only its successor is advanced.
   { exchange | next_state: advance(exchange.next_state, ModelStep) }

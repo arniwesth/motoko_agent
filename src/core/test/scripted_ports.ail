@@ -10,7 +10,7 @@ import std/json (jo)
 import std/list as List (length)
 import std/result (Result, Ok, Err)
 import std/trace as Trace
-import src/core/ports (ScriptedStep, ApprovalResolution, ApprovalAllowed, ApprovalDenied, Ports, ProviderExchange, WorldState, ports_shape_probe, virtual_clock)
+import src/core/ports (ScriptedStep, ApprovalResolution, ApprovalAllowed, ApprovalDenied, Ports, ProviderExchange, WorldState, ports_shape_probe, virtual_clock, ToolOffer, AgentTools)
 import src/core/phase_vocab (ApprovalRequest, ExecNative)
 import src/core/test/stub_step (StepProvider, Scripted, ScriptedWorld, LiveAI, Ported, scripted_to_step_result, scripted_world_state, bounded_scripted_ports, scripted_provider_input_tokens)
 import src/core/config (CostRates, VerificationConfig)
@@ -66,7 +66,7 @@ export pure func scripted_clock_next(state: ScriptedPortsState) -> { value: int,
   }
 }
 
-func fake_model(state: WorldState, _model: string, _msgs: [Message], _on_chunk: (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace} {
+func fake_model(state: WorldState, _model: string, _msgs: [Message], _offer: ToolOffer, _on_chunk: (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace} {
   let err: AIError = { code: "ScriptedPorts", message: "use scripted_model_next for state-threaded tests", retryable: false };
   { emissions: [], result: Err(err), next_state: state }
 }
@@ -219,6 +219,7 @@ func bounded_exchange(context_window: int, max_output_tokens: int, content: stri
     scripted_world_state([scripted_step()]),
     "bounded-test-model",
     [{ role: "user", content: content, tool_calls: [], tool_call_id: "", images: [] }],
+    AgentTools,
     on_chunk
   )
 }

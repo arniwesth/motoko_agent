@@ -202,9 +202,44 @@ run_subject main_substrate substrate partial_error "err ConnectionFailed"
 run_subject main_adoption  adoption  success       "ok stop"
 run_subject main_adoption  adoption  partial_error "err ConnectionFailed"
 
+# Issue #263: what `live_ports` puts in the request body for each `ToolOffer`.
+# `main_tool_offer` makes the agent's call and then an extension's; the server
+# logs each body's `tools` field. The agent's must carry the catalogue size the
+# probe prints, and the extension's must have no `tools` field at all.
+tool_offer_rows() {
+  local out log agent first second
+  log="$(mktemp)"
+  MODE=success PORT="$PORT" REQUEST_LOG="$log" python3 "$SERVER" >/dev/null 2>&1 &
+  srv_pid=$!
+  sleep 1.5
+  out="$(cd "$ROOT" && \
+    OPENAI_BASE_URL="http://127.0.0.1:$PORT" OPENAI_API_KEY=probe \
+    ailang run --caps AI,IO,Clock,Env,Trace --ai gpt5-mini --entry main_tool_offer "$PROBE" 2>&1)"
+  kill "$srv_pid" 2>/dev/null; srv_pid=""
+
+  echo "subject=tool_offer mode=success"
+  agent="$(sed -n 's/^OFFER agent=\([0-9]*\)$/\1/p' <<<"$out")"
+  first="$(sed -n 1p "$log")"
+  second="$(sed -n 2p "$log")"
+  rm -f "$log"
+  if [ -z "$agent" ] || [ "$agent" -eq 0 ]; then
+    echo "  FAIL  probe printed no catalogue size, or 0 — the agent row below would be vacuous"
+    echo "$out" | sed 's/^/      | /'
+    failures=$((failures + 1))
+    echo
+    return
+  fi
+  check "T tool_offer_agent" "request 1 (AgentTools)" "$first"  "tools=$agent"
+  check "T tool_offer_none"  "request 2 (NoTools)"    "$second" "tools=absent"
+  echo
+}
+
+tool_offer_rows
+
 if [ "$failures" -eq 0 ]; then
   echo "recorded_stream: PASS — D1's five clauses hold on both outcomes, for the API"
-  echo "                 AND for live_ports' adoption of it."
+  echo "                 AND for live_ports' adoption of it. live_ports sends the"
+  echo "                 catalogue for AgentTools and no tools field for NoTools (#263)."
   exit 0
 fi
 echo "recorded_stream: FAIL — $failures row(s) failed"

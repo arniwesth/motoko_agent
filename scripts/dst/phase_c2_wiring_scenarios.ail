@@ -46,7 +46,7 @@ import src/core/session (TracedSessionResult)
 import src/core/journal (chain_digest_over, chain_empty_base)
 import src/core/session as Session
 import src/core/test/stub_step (Scripted, prose_step, chunked_prose_step, tool_step, tool_step_finish, continuing_token_step, empty_rt, deny_all_rt, scripted_ports, scripted_world_state)
-import src/core/ports (ScriptedStep)
+import src/core/ports (ScriptedStep, AgentTools)
 import src/core/test/dst_harness (Scenario, ScenarioFailure, ok_or_failure, run_all)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/types (Msg)
@@ -719,7 +719,7 @@ func scenario_scripted_exchange_reports_the_chunks_it_played() -> Result[(), Sce
   let played = ["chunk-a", "chunk-b"];
   let state = scripted_world_state([chunked_prose_step("done", played)]);
   let swallow = func(_c: StreamChunk) -> () ! {IO} { () };
-  let exchange = ports.model_step(state, "phase-c-model", base, swallow);
+  let exchange = ports.model_step(state, "phase-c-model", base, AgentTools, swallow);
   let emission_count = length(exchange.emissions);
   let served = match exchange.result {
     Ok(r) => r.message.content,
