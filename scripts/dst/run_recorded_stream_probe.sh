@@ -202,9 +202,73 @@ run_subject main_substrate substrate partial_error "err ConnectionFailed"
 run_subject main_adoption  adoption  success       "ok stop"
 run_subject main_adoption  adoption  partial_error "err ConnectionFailed"
 
+# Issue #263: what `live_ports` puts in the request body for each `ToolOffer`.
+# `main_tool_offer` makes the agent's call and then an extension's; the server
+# logs each body's `tools` field. The agent's must carry the catalogue size the
+# probe prints, and the extension's must have no `tools` field at all.
+#
+# The three controls are posted to the same server after the probe. They are
+# what make `tools=absent` mean absent and `tools=array:<n>` mean an array, and
+# each one exists for one way the logger could blur the two rows above:
+#   null   RED when a missing key and a null log alike (`body.get("tools") is
+#          None`), which would let a NoTools request carrying `null` pass.
+#   empty  RED when an empty array logs as absent (`if not body.get("tools")`),
+#          which would let a NoTools request carrying `[]` pass.
+#   number RED when an array's length and a non-array value share one form
+#          (`tools=7` for both, as the logger had before this note), which would
+#          let an agent request carrying `"tools": 7` pass as seven schemas.
+post_tools_control() { # post_tools_control <json body>
+  python3 -I - "http://127.0.0.1:$PORT/v1/chat/completions" "$1" <<'PY'
+import sys, urllib.request
+req = urllib.request.Request(sys.argv[1], data=sys.argv[2].encode(),
+                             headers={"Content-Type": "application/json"})
+urllib.request.urlopen(req, timeout=10).read()
+PY
+}
+
+tool_offer_rows() {
+  local out log agent first second null_ctl empty_ctl number_ctl
+  log="$(mktemp)"
+  MODE=success PORT="$PORT" REQUEST_LOG="$log" python3 "$SERVER" >/dev/null 2>&1 &
+  srv_pid=$!
+  sleep 1.5
+  out="$(cd "$ROOT" && \
+    OPENAI_BASE_URL="http://127.0.0.1:$PORT" OPENAI_API_KEY=probe \
+    ailang run --caps AI,IO,Clock,Env,Trace --ai gpt5-mini --entry main_tool_offer "$PROBE" 2>&1)"
+  post_tools_control '{"tools":null}' || echo "  (null control request failed)"
+  post_tools_control '{"tools":[]}'   || echo "  (empty-array control request failed)"
+  post_tools_control '{"tools":7}'    || echo "  (number control request failed)"
+  kill "$srv_pid" 2>/dev/null; srv_pid=""
+
+  echo "subject=tool_offer mode=success"
+  agent="$(sed -n 's/^OFFER agent=\([0-9]*\)$/\1/p' <<<"$out")"
+  first="$(sed -n 1p "$log")"
+  second="$(sed -n 2p "$log")"
+  null_ctl="$(sed -n 3p "$log")"
+  empty_ctl="$(sed -n 4p "$log")"
+  number_ctl="$(sed -n 5p "$log")"
+  rm -f "$log"
+  check "T tool_offer_null_control"   "posted {\"tools\":null}" "$null_ctl"   "tools=json:null"
+  check "T tool_offer_empty_control"  "posted {\"tools\":[]}"   "$empty_ctl"  "tools=array:0"
+  check "T tool_offer_number_control" "posted {\"tools\":7}"    "$number_ctl" "tools=json:7"
+  if [ -z "$agent" ] || [ "$agent" -eq 0 ]; then
+    echo "  FAIL  probe printed no catalogue size, or 0 — the agent row below would be vacuous"
+    echo "$out" | sed 's/^/      | /'
+    failures=$((failures + 1))
+    echo
+    return
+  fi
+  check "T tool_offer_agent" "request 1 (AgentTools)" "$first"  "tools=array:$agent"
+  check "T tool_offer_none"  "request 2 (NoTools)"    "$second" "tools=absent"
+  echo
+}
+
+tool_offer_rows
+
 if [ "$failures" -eq 0 ]; then
   echo "recorded_stream: PASS — D1's five clauses hold on both outcomes, for the API"
-  echo "                 AND for live_ports' adoption of it."
+  echo "                 AND for live_ports' adoption of it. live_ports sends the"
+  echo "                 catalogue for AgentTools and no tools field for NoTools (#263)."
   exit 0
 fi
 echo "recorded_stream: FAIL — $failures row(s) failed"

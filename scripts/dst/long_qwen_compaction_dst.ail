@@ -10,7 +10,7 @@ import std/string (contains, length as string_length, substring)
 import std/trace as Trace
 import src/core/config (CostRates, VerificationConfig)
 import src/core/compaction (estimate_tokens_messages, usage_percent_with_limit)
-import src/core/ports (Ports, ProviderExchange, WorldState, empty_world_state, ports_shape_probe, ClockReading, EnvRead, FileRead, ToolInvocation, ToolExecution, ToolCompleted)
+import src/core/ports (Ports, ProviderExchange, WorldState, empty_world_state, ports_shape_probe, ToolOffer, AgentTools, NoTools, ClockReading, EnvRead, FileRead, ToolInvocation, ToolExecution, ToolCompleted)
 import src/core/ext_world (token_to_world, world_to_token, dropped_successor, world_advanced, world_interaction_count)
 import src/core/test/stub_step (StepProvider, Ported, recording_ports, scripted_ports, bounded_scripted_ports, scripted_provider_input_tokens, scripted_world_state, prose_step, empty_rt)
 import src/core/session as Session
@@ -387,7 +387,7 @@ func runtime_hooks() -> ExtRuntime ! {AI, Clock, Env, FS, IO, Net, Process, Shar
 }
 
 func long_ports(max_tools: int) -> Ports ! {AI, IO, Trace} {
-  let model_step = func(state: WorldState, model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
+  let model_step = func(state: WorldState, model: string, msgs: [Message], _offer: ToolOffer, on_chunk: (StreamChunk) -> () ! {IO})
     -> ProviderExchange ! {AI, IO, Trace} {
     { emissions: [], result: routed_step(max_tools, model, msgs, on_chunk), next_state: state }
   };
@@ -520,7 +520,7 @@ func routed_step_strict(_model: string, msgs: [Message], _on_chunk: (StreamChunk
 }
 
 func strict_ports() -> Ports ! {AI, IO, Trace} {
-  let model_step = func(state: WorldState, model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
+  let model_step = func(state: WorldState, model: string, msgs: [Message], _offer: ToolOffer, on_chunk: (StreamChunk) -> () ! {IO})
     -> ProviderExchange ! {AI, IO, Trace} {
     { emissions: [], result: routed_step_strict(model, msgs, on_chunk), next_state: state }
   };
@@ -1053,8 +1053,8 @@ func scenario_output_headroom_exact_boundary() -> Result[(), ScenarioFailure] ! 
   let discard_chunk = func(_chunk: StreamChunk) -> () ! {IO} { () };
   let boundary_msgs = [msg("user", headroom_block((raw_limit - allowance) * 4))];
   let over_boundary_msgs = [msg("user", headroom_block(((raw_limit - allowance) * 4) + 4))];
-  let boundary_exchange = provider.model_step(empty_world_state(), qwen_model, boundary_msgs, discard_chunk);
-  let over_boundary_exchange = provider.model_step(empty_world_state(), qwen_model, over_boundary_msgs, discard_chunk);
+  let boundary_exchange = provider.model_step(empty_world_state(), qwen_model, boundary_msgs, AgentTools, discard_chunk);
+  let over_boundary_exchange = provider.model_step(empty_world_state(), qwen_model, over_boundary_msgs, AgentTools, discard_chunk);
   let provider_accepts_boundary = match boundary_exchange.result { Ok(_) => true, Err(_) => false };
   let provider_rejects_over_boundary = match over_boundary_exchange.result {
     Err(e) => e.code == "E_PROVIDER_CONTEXT_LENGTH" && not e.retryable,
@@ -1261,7 +1261,8 @@ func direct_ctx_with_task_step(limit: int, ports: Ports, artifacts: Json, task: 
       ai_step: func(world: ExtWorld, model: string, msgs: [Msg]) -> AiStepOutcome ! {AI, IO, Trace} {
         let on_chunk = func(_chunk: StreamChunk) -> () ! {IO} { () };
         let w0 = token_to_world(world);
-        let exchange = ports.model_step(w0, model, msgs_to_messages(msgs), on_chunk);
+        -- `NoTools`, as `session.ext_ai_step` passes it (#263).
+        let exchange = ports.model_step(w0, model, msgs_to_messages(msgs), NoTools, on_chunk);
         {
           result: match exchange.result {
             Ok(r) => Ok(r.message.content),
@@ -1280,7 +1281,7 @@ func direct_ctx(limit: int, ports: Ports, artifacts: Json) -> AiCtx ! {AI, IO, T
 }
 
 func summary_ports(summary: string) -> Ports ! {AI, IO, Trace} {
-  let model_step = func(state: WorldState, _model: string, _msgs: [Message], _on_chunk: (StreamChunk) -> () ! {IO})
+  let model_step = func(state: WorldState, _model: string, _msgs: [Message], _offer: ToolOffer, _on_chunk: (StreamChunk) -> () ! {IO})
     -> ProviderExchange ! {AI, IO, Trace} {
     { emissions: [], result: Ok(step_result(summary, [], "stop")), next_state: state }
   };

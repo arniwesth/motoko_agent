@@ -20,6 +20,15 @@ both deliberate:
 
   MODE=success        deltas, then a finish chunk and [DONE]
   MODE=partial_error  deltas, then an abrupt mid-chunked-body close
+
+  REQUEST_LOG=<path>  also append one line per request about the body's
+                      `tools` key: `tools=absent` when the key is missing,
+                      `tools=array:<n>` for an array of n, and
+                      `tools=json:<value>` for anything else (`tools=json:null`,
+                      `tools=json:7`). The prefixes keep the three forms
+                      disjoint, so an array of seven and the number 7 cannot
+                      log alike. Issue #263's live rows read it, and their
+                      negative controls post `null`, `[]` and `7`.
 """
 import json
 import os
@@ -28,6 +37,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 MODE = os.environ.get("MODE", "partial_error")
 PORT = int(os.environ.get("PORT", "8819"))
+REQUEST_LOG = os.environ.get("REQUEST_LOG", "")
 
 # The adjacent "rep" pair is the duplication control: exact parity must preserve
 # it. An implementation that de-duplicated, or that returned a set rather than
@@ -51,7 +61,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", "0"))
-        self.rfile.read(length)
+        raw = self.rfile.read(length)
+        if REQUEST_LOG:
+            body = json.loads(raw or b"{}")
+            if "tools" not in body:
+                entry = "tools=absent"
+            elif isinstance(body["tools"], list):
+                entry = f"tools=array:{len(body['tools'])}"
+            else:
+                entry = f"tools=json:{json.dumps(body['tools'])}"
+            with open(REQUEST_LOG, "a") as log:
+                log.write(entry + "\n")
 
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")

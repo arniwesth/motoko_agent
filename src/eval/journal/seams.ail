@@ -17,7 +17,7 @@
 --   provider  ProviderIdentity("loop_v2", k, <api model>) with k = the number
 --             of ProviderIdentity records already in `state.log`, counted
 --             HERE (`provider_calls_in` is private, stub_step.ail:561; C2);
---             projection `model_step model=<m> msg_count=<n> replay=exhausted`;
+--             projection `model_step model=<m> msg_count=<n><O> replay=exhausted`;
 --             deadline -1; exactly the harness's exhausted record
 --             { advance_ms 0, chunks [], payload
 --               encode_exhausted_provider_outcome() (`{"served":false}`),
@@ -39,10 +39,12 @@
 -- exactly one interaction, and replace ONLY that interaction's
 -- `request_projection`:
 --
---   provider  `model_step model=<m> msg_count=<n> payload=<D> system=<S> raw=<R>`
+--   provider  `model_step model=<m> msg_count=<n> payload=<D> system=<S> raw=<R><O>`
 --   tool      `tool_exec call_id=… tool=… args=<A> workdir=… timeout_ms=… started_at_ms=…`
 --
 -- D, S, R, A are the evaluator's private digests (`digests.ail`, pinned at A).
+-- <O> is `ports.tool_offer_projection` of the request's `ToolOffer` (#263):
+-- empty for `AgentTools`, ` tools=none` for `NoTools`.
 -- Identity, outcome, chunks, emissions, cursors, clock, `ordinal` and
 -- `pending` are the recorder's.
 --
@@ -69,7 +71,7 @@ import pkg/sunholo/motoko_ext_abi/types (ExtRuntime)
 import src/core/ports (
   Ports, WorldState, ProviderExchange, ToolInvocation, ToolExecution, ToolOutcome,
   ToolCompleted, ToolFailed, ToolCorrelationMismatch, ToolDeadlineExceeded,
-  ScriptedStep, ScriptedTool, empty_world_state, record_interaction,
+  ScriptedStep, ScriptedTool, empty_world_state, record_interaction, ToolOffer, AgentTools, NoTools, tool_offer_projection,
   encode_exhausted_provider_outcome, encode_tool_outcome
 )
 import src/core/dst_interaction (
@@ -81,6 +83,7 @@ import src/core/dst_interaction (
 )
 import src/core/dst_fault_catalogue (fault_class_tool_failed, fault_class_tool_correlation_mismatch)
 import src/core/test/stub_step (StepProvider, PortedWorld, recording_ports, empty_rt)
+import src/core/dst_replay (strict_replay_ok, regression_replay_findings, regression_difference_count)
 import src/eval/journal/digests (eval_payload_digest, eval_system_prefix_digest, eval_raw_frame_digest, eval_arguments_digest_json)
 
 -- ============================================================================
@@ -149,12 +152,12 @@ pure func sm_provider_records(log: [Interaction]) -> int {
   List.foldl(\acc i. match i.identity.body { ProviderIdentity(_, _, _) => acc + 1, _ => acc }, 0, log)
 }
 
-export pure func provider_projection(model: string, msgs: [Message]) -> string {
-  "model_step model=${model} msg_count=${show(List.length(msgs))} payload=${eval_payload_digest(msgs)} system=${eval_system_prefix_digest(msgs)} raw=${eval_raw_frame_digest(msgs)}"
+export pure func provider_projection(model: string, msgs: [Message], offer: ToolOffer) -> string {
+  "model_step model=${model} msg_count=${show(List.length(msgs))} payload=${eval_payload_digest(msgs)} system=${eval_system_prefix_digest(msgs)} raw=${eval_raw_frame_digest(msgs)}${tool_offer_projection(offer)}"
 }
 
-export pure func provider_exhausted_projection(model: string, msgs: [Message]) -> string {
-  "model_step model=${model} msg_count=${show(List.length(msgs))} replay=exhausted"
+export pure func provider_exhausted_projection(model: string, msgs: [Message], offer: ToolOffer) -> string {
+  "model_step model=${model} msg_count=${show(List.length(msgs))}${tool_offer_projection(offer)} replay=exhausted"
 }
 
 export pure func tool_projection(inv: ToolInvocation) -> string {
@@ -179,8 +182,8 @@ export pure func replay_unrecorded_code() -> string { "replay_unrecorded_invocat
 -- The seams.
 -- ============================================================================
 
-export func eval_model_step(base: Ports) -> ((WorldState, string, [Message], (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace}) ! {AI, IO, Trace} {
-  func(state: WorldState, model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO})
+export func eval_model_step(base: Ports) -> ((WorldState, string, [Message], ToolOffer, (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace}) ! {AI, IO, Trace} {
+  func(state: WorldState, model: string, msgs: [Message], offer: ToolOffer, on_chunk: (StreamChunk) -> () ! {IO})
   -> ProviderExchange ! {AI, IO, Trace} {
     match state.script {
       [] => {
@@ -195,14 +198,14 @@ export func eval_model_step(base: Ports) -> ((WorldState, string, [Message], (St
           next_state: record_interaction(
             state,
             ProviderIdentity("loop_v2", k, model),
-            provider_exhausted_projection(model, msgs),
+            provider_exhausted_projection(model, msgs, offer),
             -1,
             { advance_ms: 0, chunks: [], payload: encode_exhausted_provider_outcome(),
               status: OutcomeOk, fault_class_id: "" })
         }
       },
       _ => {
-        let ex = base.model_step(state, model, msgs, on_chunk);
+        let ex = base.model_step(state, model, msgs, offer, on_chunk);
         match one_appended(state.log, ex.next_state.log) {
           None => {
             emissions: ex.emissions,
@@ -216,7 +219,7 @@ export func eval_model_step(base: Ports) -> ((WorldState, string, [Message], (St
           Some(i) => {
             emissions: ex.emissions,
             result: ex.result,
-            next_state: { ex.next_state | log: sm_replace_last(state.log, i, provider_projection(model, msgs)) }
+            next_state: { ex.next_state | log: sm_replace_last(state.log, i, provider_projection(model, msgs, offer)) }
           }
         }
       }
@@ -352,8 +355,8 @@ func test_m8_provider_empty_script() -> bool ! {AI, Clock, Env, FS, IO, Process,
   {
     let base = sm_base();
     let w = sm_world([], []);
-    let ex = eval_ports(base).model_step(w, "fx-api", sm_msgs(), sm_noop_chunk);
-    let harness = base.model_step(w, "fx-api", sm_msgs(), sm_noop_chunk);
+    let ex = eval_ports(base).model_step(w, "fx-api", sm_msgs(), AgentTools, sm_noop_chunk);
+    let harness = base.model_step(w, "fx-api", sm_msgs(), AgentTools, sm_noop_chunk);
     let err_ok = match ex.result {
       Ok(_) => false,
       Err(e) => e.code == "replay_exhausted" && e.retryable == false
@@ -387,8 +390,8 @@ func test_m8_provider_one_append() -> bool ! {AI, Clock, Env, FS, IO, Process, T
   {
     let base = sm_base();
     let w = sm_world([sm_step("fx prose", ["c1"], ""), sm_step("later", [], "")], []);
-    let ex = eval_ports(base).model_step(w, "fx-api", sm_msgs(), sm_noop_chunk);
-    let rec = base.model_step(w, "fx-api", sm_msgs(), sm_noop_chunk);
+    let ex = eval_ports(base).model_step(w, "fx-api", sm_msgs(), AgentTools, sm_noop_chunk);
+    let rec = base.model_step(w, "fx-api", sm_msgs(), AgentTools, sm_noop_chunk);
     let served = match ex.result { Ok(r) => r.message.content == "fx prose" && List.length(r.tool_calls) == 1, Err(_) => false };
     match one_appended(w.log, ex.next_state.log) {
       None => false,
@@ -396,7 +399,7 @@ func test_m8_provider_one_append() -> bool ! {AI, Clock, Env, FS, IO, Process, T
         None => false,
         Some(r) =>
           served
-            && i.request_projection == provider_projection("fx-api", sm_msgs())
+            && i.request_projection == provider_projection("fx-api", sm_msgs(), AgentTools)
             && contains(i.request_projection, "payload=sha256:")
             && contains(i.request_projection, " system=sha256:")
             && contains(i.request_projection, " raw=sha256:")
@@ -416,11 +419,11 @@ func test_m8_provider_fault_one_append() -> bool ! {AI, Clock, Env, FS, IO, Proc
   tests [((), true)]
   {
     let w = sm_world([sm_step("", [], "rate_limited")], []);
-    let ex = eval_ports(sm_base()).model_step(w, "fx-api", sm_msgs(), sm_noop_chunk);
+    let ex = eval_ports(sm_base()).model_step(w, "fx-api", sm_msgs(), AgentTools, sm_noop_chunk);
     let is_err = match ex.result { Ok(_) => false, Err(e) => e.code == "rate_limited" };
     match one_appended(w.log, ex.next_state.log) {
       None => false,
-      Some(i) => is_err && i.request_projection == provider_projection("fx-api", sm_msgs())
+      Some(i) => is_err && i.request_projection == provider_projection("fx-api", sm_msgs(), AgentTools)
                    && sm_status_eq(i.outcome.status, OutcomeFault)
     }
   }
@@ -491,8 +494,8 @@ pure func sm_rewrite_head(state: WorldState) -> WorldState {
 }
 
 func sm_bad_ports(base: Ports, mode: string) -> Ports ! {AI, FS, IO, Process, Trace} {
-  let ms = func(state: WorldState, model: string, msgs: [Message], on_chunk: (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace} {
-    let ex = base.model_step(state, model, msgs, on_chunk);
+  let ms = func(state: WorldState, model: string, msgs: [Message], offer: ToolOffer, on_chunk: (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace} {
+    let ex = base.model_step(state, model, msgs, offer, on_chunk);
     if mode == "zero" then { ex | next_state: { ex.next_state | log: state.log } }
     else if mode == "two" then { ex | next_state: sm_extra(ex.next_state) }
     else { ex | next_state: sm_rewrite_head(ex.next_state) }
@@ -509,7 +512,7 @@ func sm_bad_ports(base: Ports, mode: string) -> Ports ! {AI, FS, IO, Process, Tr
 func sm_guard_holds(mode: string) -> bool ! {AI, Clock, Env, FS, IO, Process, Trace} {
   let bad = sm_bad_ports(sm_base(), mode);
   let w = sm_world([sm_step("fx", [], "")], [sm_tool("c1", "fx", 0)]);
-  let p = eval_ports(bad).model_step(w, "fx-api", sm_msgs(), sm_noop_chunk);
+  let p = eval_ports(bad).model_step(w, "fx-api", sm_msgs(), AgentTools, sm_noop_chunk);
   let t = eval_ports(bad).tool_exec(w, sm_inv("c1", "true"));
   let p_ok = match p.result { Ok(_) => false, Err(e) => e.code == "eval_seam_cardinality" && e.retryable == false };
   let t_ok = match t.outcome { ToolFailed(f) => f.code == "eval_seam_cardinality" && f.tool_call_id == "c1", _ => false };
@@ -523,4 +526,30 @@ func test_m8_exactly_one_append_guard() -> bool ! {AI, Clock, Env, FS, IO, Proce
   tests [((), true)]
   {
     sm_guard_holds("zero") && sm_guard_holds("two") && sm_guard_holds("rewrite")
+  }
+
+-- #263: the `ToolOffer` is part of the request. Two calls from one world that
+-- differ only in the offer must record different interactions, on the
+-- delegating arm and on the exhausted arm, so that strict replay rejects the
+-- swap and regression replay reports it as a difference rather than a fatal.
+-- The same offer twice is the control: a comparator that rejected everything
+-- would pass the first half and fail this one.
+func sm_offer_log(w: WorldState, offer: ToolOffer) -> [Interaction] ! {AI, Clock, Env, FS, IO, Process, Trace} {
+  eval_ports(sm_base()).model_step(w, "fx-api", sm_msgs(), offer, sm_noop_chunk).next_state.log
+}
+
+func sm_offer_swap_detected(w: WorldState) -> bool ! {AI, Clock, Env, FS, IO, Process, Trace} {
+  let agent = sm_offer_log(w, AgentTools);
+  let none = sm_offer_log(w, NoTools);
+  let regression = regression_replay_findings(agent, none);
+  not strict_replay_ok(agent, none)
+    && List.length(regression.fatal) == 0 && regression_difference_count(regression) == 1
+    && strict_replay_ok(agent, sm_offer_log(w, AgentTools))
+    && strict_replay_ok(none, sm_offer_log(w, NoTools))
+}
+
+func test_263_offer_only_change_is_a_replay_difference() -> bool ! {AI, Clock, Env, FS, IO, Process, Trace}
+  tests [((), true)]
+  {
+    sm_offer_swap_detected(sm_world([sm_step("fx", [], "")], [])) && sm_offer_swap_detected(sm_world([], []))
   }

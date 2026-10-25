@@ -193,7 +193,7 @@ import src/core/model_phase (phase_from_result)
 import src/core/hook_phase (stage_record)
 import src/core/recovery (should_retry_stream_error)
 import src/core/tool_phase (resolve_approval, execute_allowed_tool_call, dispatch_tool_entries_with_builtin, ToolDispatchDone, ToolDispatchPending)
-import src/core/ports (ParkRequest, WakeInput, WakeOutcome, wake_outcome_id, wake_outcome_detail, wake_outcome_of, Settled, Lost, OperatorInput, TimedOut, HostError, Aborted, ScriptedStep, ApprovalAllowed, ApprovalDenied, Ports, PortedProvider, WorldState, empty_world_state, context_reader_of, PathKind, PathMissing, PathFile, PathDir, EnvRead, ClockRead, ToolExec, RequestWitness, ToolFailed) import src/core/world_ordinal (advance, request_class_id) -- PLAN-001 P2 Part 1: the request classes and their one writer, joined onto this line so the five clock anchors do not move. WI-D18: PathKind crosses the ABI boundary in `ext_ports_of` and the translation is an exhaustive match, not a string. 031 P1.1: `ToolFailed` imported BY NAME -- ABI 8.0's `ObservedToolOutcome` declares a `ToolFailed` too, and on v0.33.0 an unimported constructor resolves to the EARLIEST import's (the ABI's, line 48); a named import binds ports' (evidence/P1.1/ctor_collision/)
+import src/core/ports (ParkRequest, WakeInput, WakeOutcome, wake_outcome_id, wake_outcome_detail, wake_outcome_of, Settled, Lost, OperatorInput, TimedOut, HostError, Aborted, ScriptedStep, ApprovalAllowed, ApprovalDenied, Ports, PortedProvider, WorldState, empty_world_state, context_reader_of, PathKind, PathMissing, PathFile, PathDir, EnvRead, ClockRead, ToolExec, RequestWitness, ToolFailed, NoTools) import src/core/world_ordinal (advance, request_class_id) -- PLAN-001 P2 Part 1: the request classes and their one writer, joined onto this line so the five clock anchors do not move. WI-D18: PathKind crosses the ABI boundary in `ext_ports_of` and the translation is an exhaustive match, not a string. 031 P1.1: `ToolFailed` imported BY NAME -- ABI 8.0's `ObservedToolOutcome` declares a `ToolFailed` too, and on v0.33.0 an unimported constructor resolves to the EARLIEST import's (the ABI's, line 48); a named import binds ports' (evidence/P1.1/ctor_collision/)
 
 type SessionPolicy = {
   step: StepPolicy,
@@ -1091,7 +1091,7 @@ func ext_ai_step(p: Ports, world: WorldState, model: string, base_url: string, m
   -- the "openrouter/" routing prefix; sent raw the provider rejects it with 400
   -- "not a valid model ID", surfacing as compaction_ai.summarizer_failed /
   -- provider_error. Strip it here.
-  let exchange = p.model_step(world, provider_api_model(model, base_url), msgs_to_messages(msgs), on_chunk);
+  let exchange = p.model_step(world, provider_api_model(model, base_url), msgs_to_messages(msgs), NoTools, on_chunk); -- #263: NO TOOLS, on this line so the bridge span and the clock anchors do not move. `ExtAiStepResult` carries the reply text only, so a tool call in the answer is thrown away; offered the agent's catalogue, the compaction summariser sometimes answered with one, returned no text, and fell into `summarize_attempt`'s retry
   {
     result: match exchange.result {
       Ok(result) => Ok(result.message.content),

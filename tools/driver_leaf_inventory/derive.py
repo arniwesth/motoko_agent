@@ -19,7 +19,7 @@ Helped leaf kinds and their RequestClass (frozen here, consumed by P2 Part 1):
                approval_read  (WorldState, ApprovalRequest) -> ApprovalInput
                               (maps to ToolExec: the approval gate classes the
                               tool dispatch it guards; not a variant of its own)
-  ModelStep  <- model_step     (WorldState, string, [Message], cb) -> ProviderExchange
+  ModelStep  <- model_step     (WorldState, string, [Message], ToolOffer, cb) -> ProviderExchange
   WakeRead   <- wake_read      (WorldState, ParkRequest) -> WakeInput
                               (the SIXTH class, PLAN-002 W3 under ADR-002 D2: a
                               wake is an operator/host observation that is not
