@@ -21,9 +21,12 @@ both deliberate:
   MODE=success        deltas, then a finish chunk and [DONE]
   MODE=partial_error  deltas, then an abrupt mid-chunked-body close
 
-  REQUEST_LOG=<path>  also append one line per request: `tools=<n>` for the
-                      length of the body's `tools` array, or `tools=absent`
-                      when the body has none. Issue #263's live rows read it.
+  REQUEST_LOG=<path>  also append one line per request about the body's
+                      `tools` key: `tools=absent` when the key is missing,
+                      `tools=<n>` for an array of n, and `tools=<json>` for
+                      anything else (`tools=null`). Issue #263's live rows read
+                      it, and their negative controls post `null` and `[]` to
+                      show the three answers stay distinct.
 """
 import json
 import os
@@ -58,9 +61,15 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0"))
         raw = self.rfile.read(length)
         if REQUEST_LOG:
-            tools = json.loads(raw or b"{}").get("tools")
+            body = json.loads(raw or b"{}")
+            if "tools" not in body:
+                entry = "tools=absent"
+            elif isinstance(body["tools"], list):
+                entry = f"tools={len(body['tools'])}"
+            else:
+                entry = f"tools={json.dumps(body['tools'])}"
             with open(REQUEST_LOG, "a") as log:
-                log.write("tools=absent\n" if tools is None else f"tools={len(tools)}\n")
+                log.write(entry + "\n")
 
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")

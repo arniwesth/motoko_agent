@@ -206,8 +206,23 @@ run_subject main_adoption  adoption  partial_error "err ConnectionFailed"
 # `main_tool_offer` makes the agent's call and then an extension's; the server
 # logs each body's `tools` field. The agent's must carry the catalogue size the
 # probe prints, and the extension's must have no `tools` field at all.
+#
+# The two controls are posted to the same server after the probe, and they are
+# what make `tools=absent` mean absent: a body with `"tools": null` and one with
+# `"tools": []` must each log something else. A logger that read a missing key
+# and a null alike (`body.get("tools") is None`) passes the NoTools row and
+# fails the null control.
+post_tools_control() { # post_tools_control <json body>
+  python3 -I - "http://127.0.0.1:$PORT/v1/chat/completions" "$1" <<'PY'
+import sys, urllib.request
+req = urllib.request.Request(sys.argv[1], data=sys.argv[2].encode(),
+                             headers={"Content-Type": "application/json"})
+urllib.request.urlopen(req, timeout=10).read()
+PY
+}
+
 tool_offer_rows() {
-  local out log agent first second
+  local out log agent first second null_ctl empty_ctl
   log="$(mktemp)"
   MODE=success PORT="$PORT" REQUEST_LOG="$log" python3 "$SERVER" >/dev/null 2>&1 &
   srv_pid=$!
@@ -215,13 +230,19 @@ tool_offer_rows() {
   out="$(cd "$ROOT" && \
     OPENAI_BASE_URL="http://127.0.0.1:$PORT" OPENAI_API_KEY=probe \
     ailang run --caps AI,IO,Clock,Env,Trace --ai gpt5-mini --entry main_tool_offer "$PROBE" 2>&1)"
+  post_tools_control '{"tools":null}' || echo "  (null control request failed)"
+  post_tools_control '{"tools":[]}'   || echo "  (empty-array control request failed)"
   kill "$srv_pid" 2>/dev/null; srv_pid=""
 
   echo "subject=tool_offer mode=success"
   agent="$(sed -n 's/^OFFER agent=\([0-9]*\)$/\1/p' <<<"$out")"
   first="$(sed -n 1p "$log")"
   second="$(sed -n 2p "$log")"
+  null_ctl="$(sed -n 3p "$log")"
+  empty_ctl="$(sed -n 4p "$log")"
   rm -f "$log"
+  check "T tool_offer_null_control"  "posted {\"tools\":null}" "$null_ctl"  "tools=null"
+  check "T tool_offer_empty_control" "posted {\"tools\":[]}"   "$empty_ctl" "tools=0"
   if [ -z "$agent" ] || [ "$agent" -eq 0 ]; then
     echo "  FAIL  probe printed no catalogue size, or 0 — the agent row below would be vacuous"
     echo "$out" | sed 's/^/      | /'

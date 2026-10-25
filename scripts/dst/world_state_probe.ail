@@ -78,7 +78,8 @@ import src/core/phase_vocab (
 )
 import src/core/test/stub_step (Scripted, ScriptedWorld, tool_step, prose_step, scripted_ports,
   -- #263's tool-offer rows — see `assert_tool_offer_class`.
-  dispatch_step, offered_tools, empty_rt, scripted_to_step_result)
+  dispatch_step, offered_tools, empty_rt, scripted_to_step_result, recording_ports, scripted_world_state)
+import src/core/dst_replay (strict_replay_ok, regression_replay_findings, regression_difference_count)
 import src/core/tool_catalog (tools_with_extensions)
 import src/core/ports (ScriptedStep, WorldState, empty_world_state,
   -- WI-D17's write class, exercised at the ADAPTER rather than through the
@@ -842,6 +843,11 @@ func assert_ordinal_class() -> bool ! {Env, FS, IO, Trace} {
 --              that strips the agent's tools as well.
 --   catalogue  RED when `offered_tools` returns the catalogue for `NoTools`,
 --              or nothing for `AgentTools`.
+--   recorded   RED when the recorder's projections drop the offer
+--              (`tool_offer_projection` returning "" for both, or the
+--              `${tool_offer_projection(offer)}` removed from either arm in
+--              `recording_model_step`): an offer-only change then records the
+--              same interaction and strict replay accepts it.
 -- None of the three sees `live_ports` ignore `offered_tools`. That binding is
 -- `make recorded_stream`'s `T tool_offer_*` rows, on a real request body.
 func offer_echo_step(state: WorldState, _model: string, _msgs: [Message], offer: ToolOffer, _on_chunk: (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace} {
@@ -872,7 +878,29 @@ func assert_tool_offer_class() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, 
   let ok_cat = check("tool offer: offered_tools gives the catalogue for AgentTools and nothing for NoTools",
                      catalogue > 0 && offered_agent == catalogue && offered_none == 0,
                      "agent=${show(offered_agent)} none=${show(offered_none)} catalogue=${show(catalogue)}");
-  ok_ext && ok_drv && ok_cat
+  let ok_rec = check("tool offer: the recorder records it — an offer-only change fails strict replay and is one regression difference, on the script arm and the exhausted arm",
+                     offer_swap_detected(scripted_world_state([prose_step("same reply")])) && offer_swap_detected(empty_world_state()),
+                     "the AgentTools and NoTools requests recorded the same interaction, or the same offer twice did not replay — see `offer_swap_detected`");
+  ok_ext && ok_drv && ok_cat && ok_rec
+}
+
+-- The `recorded` row's subject: two requests from one world through the
+-- recording adapter, differing only in the offer. The same offer twice must
+-- replay strictly, so a comparator that rejected everything cannot pass.
+func recorded_offer_log(w: WorldState, offer: ToolOffer) -> [Interaction] ! {AI, Clock, Env, FS, IO, Process, Trace} {
+  let quiet = func(_c: StreamChunk) -> () ! {IO} { () };
+  let turn: Message = { role: "user", content: "do the task", tool_calls: [], tool_call_id: "", images: [] };
+  recording_ports(empty_rt()).model_step(w, "offer-probe-model", [turn], offer, quiet).next_state.log
+}
+
+func offer_swap_detected(w: WorldState) -> bool ! {AI, Clock, Env, FS, IO, Process, Trace} {
+  let agent = recorded_offer_log(w, AgentTools);
+  let none = recorded_offer_log(w, NoTools);
+  let regression = regression_replay_findings(agent, none);
+  not strict_replay_ok(agent, none)
+    && List.length(regression.fatal) == 0 && regression_difference_count(regression) == 1
+    && strict_replay_ok(agent, recorded_offer_log(w, AgentTools))
+    && strict_replay_ok(none, recorded_offer_log(w, NoTools))
 }
 
 export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {

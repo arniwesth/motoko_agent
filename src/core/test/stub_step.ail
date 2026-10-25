@@ -27,7 +27,7 @@ import src/core/tool_contract (ToolCallEnvelope)
 import src/core/config (VerificationConfig)
 import src/core/ports (
   Ports, ProviderExchange, WorldState, ClockReading, ApprovalInput, EnvRead,
-  ScriptedStep, empty_world_state, ports_shape_probe, virtual_clock, ToolOffer, AgentTools, NoTools, -- #263, on this line for the same S18 reason as the line below
+  ScriptedStep, empty_world_state, ports_shape_probe, virtual_clock, ToolOffer, AgentTools, NoTools, tool_offer_projection, -- #263, on this line for the same S18 reason as the line below
   ambient_env, ambient_file, ambient_file_write, ambient_file_remove, ambient_path_stat, ambient_dir_list, ambient_dir_make, -- WI-D18's directory trio, widened onto THIS line rather than a new one: stub_step.ail:203 is an A5 attribution anchor (S18)
   record_interaction, recording_clock, recording_approval, recording_env, recording_tool, recording_ext_effect, recording_file_write, recording_file_remove, recording_dir_make, encode_provider_outcome, encode_exhausted_provider_outcome, generated_provider_entry, generating_tool, generating_approval, scripted_step_ai_error, scripted_step_faults, provider_outcome_record
 )
@@ -489,13 +489,18 @@ export func bounded_scripted_ports(capacity: ScriptedProviderCapacity) -> Ports 
 --    1's inline test already assumed, so that a future second producer is a
 --    NEW origin rather than a redefinition of this one.
 func recording_model_step(rt: ExtRuntime) -> ((WorldState, string, [Message], ToolOffer, (StreamChunk) -> () ! {IO}) -> ProviderExchange ! {AI, IO, Trace}) ! {IO, Trace} {
-  func(state: WorldState, model: string, msgs: [Message], _offer: ToolOffer, on_chunk: (StreamChunk) -> () ! {IO})
+  func(state: WorldState, model: string, msgs: [Message], offer: ToolOffer, on_chunk: (StreamChunk) -> () ! {IO})
   -> ProviderExchange ! {AI, IO, Trace} {
     -- NOT named `step`: this module imports `std/ai (step, ...)`, and a local
     -- binding of that name does not shadow the import on this pin — the
     -- reference resolves to the imported FUNCTION and fails unification against
     -- the identity's int field. A loud failure, and worth naming here so the
     -- next reader does not rediscover it.
+    --
+    -- The script ignores `offer`, since an entry is the response whatever was
+    -- offered. The record does not: both projections below carry
+    -- `tool_offer_projection(offer)`, so an offer-only change is a different
+    -- interaction to strict replay (#263).
     let provider_step = provider_calls_in(state.log, 0);
     match state.script {
       [] => {
@@ -504,7 +509,7 @@ func recording_model_step(rt: ExtRuntime) -> ((WorldState, string, [Message], To
         next_state: record_interaction(
           state,
           ProviderIdentity("loop_v2", provider_step, model),
-          "model_step model=${model} msg_count=${show(List.length(msgs))} script=exhausted",
+          "model_step model=${model} msg_count=${show(List.length(msgs))}${tool_offer_projection(offer)} script=exhausted",
           -1,
           -- WI-A13 stage 3. The payload is a structured projection rather than
           -- the prose, so that `dst_replay.world_state_of` can reconstitute the
@@ -532,7 +537,7 @@ func recording_model_step(rt: ExtRuntime) -> ((WorldState, string, [Message], To
           next_state: record_interaction(
             { state | script: rest },
             ProviderIdentity("loop_v2", provider_step, model),
-            "model_step model=${model} msg_count=${show(List.length(msgs))}",
+            "model_step model=${model} msg_count=${show(List.length(msgs))}${tool_offer_projection(offer)}",
             -1,
             -- The whole step, not `s.prose`. D2 says a provider timed outcome
             -- carries "a final StepResult or AIError", and the prose alone
