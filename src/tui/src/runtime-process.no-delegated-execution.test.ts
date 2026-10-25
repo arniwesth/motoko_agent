@@ -23,33 +23,56 @@ describe("legacy delegated events have no execution path", () => {
     expect(source).toContain("cleanup is separate");
   });
 
-  it("forwards a legacy event but never spawns its command or answers tool_results", async () => {
+  it("forwards a legacy event but never spawns, emits tool_results, or replies", async () => {
     const workdir = fs.mkdtempSync(path.join(os.tmpdir(), "no-delegated-exec-"));
     const savedBin = process.env.AILANG_BIN;
     const marker = path.join(workdir, "must-not-exist");
+    const stdinLog = path.join(workdir, "stdin.jsonl");
     const bin = path.join(workdir, "fake-ailang.sh");
     const event = JSON.stringify({
       type: "tool_calls", request_id: "legacy-1",
       tool_calls: [{ id: "x", tool: "BashExec", exec: { cmd: `touch '${marker}'` } }],
     });
-    const script = `#!/bin/sh\nprintf '%s\\n' '${event}'\nexit 0\n`;
+    // Keep the runtime alive across the deferred setImmediate turn. Its own
+    // stdout stays open while stdin is logged without a blocking read.
+    const script = `#!/bin/sh\nprintf '%s\\n' '${event}'\nsleep 0.25\ncat > '${stdinLog}'\n`;
     fs.writeFileSync(bin, script, { mode: 0o755 });
     process.env.AILANG_BIN = bin;
     try {
       const events: AgentEvent[] = [];
       await new Promise<void>((resolve) => {
-        new RuntimeProcess(
+        const rp = new RuntimeProcess(
           "task", "local", "test-model", workdir, "default", 1, "", "", "",
           (event) => events.push(event), () => resolve(),
         );
+        rp.send({ type: "probe", request_id: "legacy-1" });
+        (rp as any).proc.stdin.end();
       });
       expect(events.filter((event) => event.type === "tool_calls")).toHaveLength(1);
+      expect(events.filter((event) => event.type === "tool_results")).toHaveLength(0);
       expect(fs.existsSync(marker)).toBe(false);
-      // The fake child exits after emitting the legacy event. No delegated
-      // process is available to create the marker or consume a reply.
+      // Check after both the deferred turn and a realistic delayed `touch`,
+      // while the fake runtime and its stdin are still available.
+      expect(fs.readFileSync(stdinLog, "utf8")).not.toContain("tool_results");
     } finally {
       if (savedBin === undefined) delete process.env.AILANG_BIN;
       else process.env.AILANG_BIN = savedBin;
+      fs.rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+
+  it("mutation control: an asynchronous delegated spawn would be observed", async () => {
+    // This is the timing the old implementation used: handle on the next turn,
+    // while the runtime is still alive. The production assertion above would
+    // see this marker and reject it, rather than racing an already-dead runtime.
+    const workdir = fs.mkdtempSync(path.join(os.tmpdir(), "delegated-control-"));
+    const marker = path.join(workdir, "spawned");
+    try {
+      const { spawn } = await import("child_process");
+      const child = spawn("bash", ["-lc", `touch '${marker}'`]);
+      await new Promise<void>((resolve) => child.on("close", () => resolve()));
+      expect(fs.existsSync(marker)).toBe(true);
+    } finally {
       fs.rmSync(workdir, { recursive: true, force: true });
     }
   });

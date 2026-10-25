@@ -28,7 +28,14 @@ architecture and scope are recorded in
 [project 041 ADR-001](../projects/041_process_execution_timeouts/ADR-001-delegated-process-timeouts.md).
 The live schema no longer advertises `timeout_secs`; consistent per-call semantics remain follow-up work.
 
-## Description
+## Original report (2026-09-26, historical)
+
+The body below records the original observations and proposals. The **Status** section above takes
+precedence for the current architecture. In particular, `timeout_secs` is no longer advertised,
+profile forwarding now reaches the native process wall, and native timeout results carry a
+structured deadline fault with `effects: unknown`. The original proposal to give
+`delegated_timeout_ms` a new process-wall role is not adopted.
+
 
 A BashExec that runs longer than about 35 s comes back to the model as
 

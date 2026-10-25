@@ -1,7 +1,7 @@
 # ADR-001: Retire dormant delegated execution; ground timeout work on the native path
 
 Date: 2026-10-24
-Status: **Proposed, third revision incorporating the second independent review**
+Status: **Proposed, fourth revision incorporating the final Codex Sol review**
 Grounded at: `origin/main` `28451207`; removal candidate on `fix/delegated-process-timeout`
 (draft PR #284). AILANG v0.52.5.
 
@@ -292,7 +292,8 @@ Expected consequences:
 The removal candidate is checked with:
 
 - `bun run build` in `src/tui` — TypeScript compilation passes;
-- the focused no-execution regression suite — **2 tests passed**;
+- the focused no-execution regression suite — **4 tests passed**, including an asynchronous-spawn
+  mutation control and assertions for no generated `tool_results` and no stdin reply;
 - `make check_core` and the existing TUI/runtime tests before publication;
 - the tool-catalog regression asserting that ignored `timeout_secs` is not advertised;
 - source inventory confirming no remaining references to the deleted executor or ohMyPi adapter.
@@ -300,12 +301,21 @@ The removal candidate is checked with:
 The previous **34 delegated timing tests are not retained as validation evidence**. They tested
 an unreachable path and are not carried forward.
 
-Second-review full-suite comparison (Jest, branch versus an archived base): **44 of 49 suites load,
-with 467/467 executed tests passing on the branch and 468/468 on base**. The expected delta is
-−3 removed helper tests +2 initial guard tests. Five suites fail to load on both trees (four
-`depd` loader errors and the bare `test/path-guard.test.ts` script); this is not a clean full-suite
-claim. That orphaned inline path test is removed with its only implementation. `make check_core`,
-`make tool_catalog_registry`, `tsc`, and the catalog tests passed independently.
+Historical full-suite comparison at `5125a649` (Jest, branch versus an archived base): **44 of 49
+suites loaded, with 467/467 executed tests passing on the branch and 468/468 on base**. The
+expected delta was −3 removed helper tests +2 initial guard tests. Five suites failed to load on
+both trees (four `depd` loader errors and the bare `test/path-guard.test.ts` script). That
+comparison is historical evidence for that commit, not for the amended head.
+
+At `e0eedc8a`, the final Codex Sol reviewer measured **48/48 suites and 494/494 tests passing under
+Node/Jest**, and **44/48 suites loading under Bun/Jest with 468/468 executed tests passing and four
+`depd` loader failures**. The fifth former failure is gone because this revision removed the
+orphaned bare path-guard script. At this amendment head, the focused runtime/rendering selection
+passes 20 suites/249 tests after adding the mutation control. A full Bun/Jest invocation loads 44
+of 48 suites with 469/469 executed tests passing and the same four `depd` loader failures. A direct
+Node invocation without the repository's Bun-backed loader is not counted as validation because it
+fails on ESM loading; the reviewer's Node/Jest result above remains attributed to the reviewer.
+`make check_core`, `make tool_catalog_registry`, `tsc`, and the catalog tests passed independently.
 
 Acceptance of this ADR should explicitly rule on:
 
@@ -344,3 +354,18 @@ expansion:
 - The orphaned inline `src/tui/test/path-guard.test.ts` is removed with its deleted dispatcher;
   live native path coverage remains in `check_core`.
 - Dead `resolveCwd`/`truncate` helpers left by executor deletion are removed.
+
+
+## 10. Final review amendments applied
+
+The Codex Sol review accepted the architecture with amendments and found no production blockers.
+Its remaining findings are addressed here:
+
+- The behavioral guard now keeps the fake runtime alive through the deferred handler turn,
+  captures stdin, checks for generated `tool_results` events, and uses a mutation control to show
+  that asynchronous execution would be observed. Restoring an asynchronous spawn in a scratch
+  mutation makes the suite fail; the clean source passes.
+- Validation counts identify historical evidence by commit and separate the amended head's
+  focused and full-suite results. The focused count is 4 after adding the mutation control.
+- The issue body is explicitly marked as the original 2026-09-26 report, with current status taking
+  precedence over stale schema, profile, and fault-shape claims.
