@@ -1,7 +1,7 @@
 # ADR-001: Retire dormant delegated execution; ground timeout work on the native path
 
 Date: 2026-10-24
-Status: **Proposed, fourth revision incorporating the final Codex Sol review**
+Status: **Proposed, fifth revision making the AILANG v0.54.14 pin in scope**
 Grounded at: `origin/main` `28451207`; removal candidate on `fix/delegated-process-timeout`
 (draft PR #284). AILANG v0.52.5.
 
@@ -28,7 +28,7 @@ execution path implicitly; a future M6.5 protocol must be designed explicitly. (
 **Adopt the native fix through the upstream pin, not new fork work.** The observed
 timeout-and-surviving-descendant failure is in native AILANG `std/process.exec`, not in the deleted
 TUI executor. Upstream v0.54.14 already implements process-group cancellation with `WaitDelay`.
-Project 034's accepted ADR assigns the pin move to `>=0.54.14` to project 012. (D4, D7)
+Project 034's accepted ADR assigns the pin move to `>=0.54.14` to project 012. This PR now includes that pin and its native verification rather than leaving them as follow-up. (D4, D7)
 
 **Do not compound the existing knob problem.** This patch does not add a second duration parser
 or new constructor-time validation. It also does not pretend `timeout_secs` works: the cheap
@@ -152,7 +152,7 @@ The first is only a structural tripwire, not a proof of runtime behavior. The se
 the relevant no-spawn property through the actual child-event path. Any future protocol
 restoration must change the guard deliberately and supply a real end-to-end round trip.
 
-### D4. Adopt the already-existing native fix through project 012's pin move
+### D4. Adopt the already-existing native fix through project 012's pin move, included here
 
 Upstream AILANG v0.54.14 already implements the relevant native behavior:
 `proctree.ConfigureContained(cmd)` puts the command in its own process group, a timeout kills that
@@ -161,17 +161,26 @@ from the shared checkout's older `ailang/` fork.
 
 The accepted project 034 ADR (D7 and rulings 4 and 6) already assigns Motoko's adoption to the
 `>=0.54.14` pin move in project 012. This ADR must not schedule redundant fork development or
-contradict that ruling. Current `ailang.toml` / `ailang.lock` remain at v0.52.5 in this PR; moving
-the pin is deliberately outside the removal patch.
+contradict that ruling. The `ailang.toml` / `ailang.lock` and installer pin now move to v0.54.14 as part of this PR;
+it is not deferred to a separate removal-only patch.
 
-Project 012's adoption must include a Motoko-side probe through `run_process_result` showing:
+The pin is now part of this PR: `ailang.toml` and `ailang.lock` move to v0.54.14, and
+`scripts/install-prerequisites.sh` uses the same tag/minimum. Project 012 retains continuous
+adoption ownership; this change does not reassign that role or create a second AILANG fork.
 
-- the delayed descendant write does not land;
+This PR adds `scripts/verify_native_process_tree.ail` and `make verify_native_process_tree` to
+`check_core`, using the exported native batch path to exercise the real dispatcher. The probe uses
+a one-second wall, an independently delayed descendant write, and checks:
+
 - `Timeout` returns near the wall rather than the wall plus the five-second `WaitDelay`;
-- `setsid` escape remains disclosed as an exception, as project 034's evidence records;
-- native `fault.kind: deadline` and `effects: unknown` remain unchanged.
+- the late write does not land;
+- native `fault.kind: deadline` and `effects: unknown` remain unchanged;
+- `setsid` escape remains a documented exception, not silently claimed to be contained.
 
-Until that pin move and probe land, **PR #284 must not claim the reported native defect is fixed.**
+Observed with the downloaded v0.54.14 binary: about 1003ms, no late marker, deadline/unknown
+preserved. The v0.52.5 binary is the negative control: about 6006ms and failure of the wall-latency
+assertion. The old binary did not leave its late marker in that particular run, so the old behavior
+is not misreported as a guaranteed marker write.
 
 
 ### D5. Do not add the first proposal's parser or constructor validation
@@ -274,9 +283,12 @@ This removal change:
 
 - deletes the unreachable TypeScript process executor and ohMyPi-only dispatch helpers;
 - does not carry forward the first proposal's delegated timeout parser or tests;
+- moves `ailang.toml`, `ailang.lock`, and the installer to v0.54.14 and adds a native process-tree
+  verification to `check_core`;
 - retains shared rendering types and legacy presentation behavior;
 - adds a no-execution regression guard;
-- records the actual native defect as open and does not claim to fix it.
+- records the actual native defect on the old pin and includes the upstream pin and probe that
+  address it, without claiming every containment case.
 
 Expected consequences:
 
@@ -322,7 +334,7 @@ Acceptance of this ADR should explicitly rule on:
 1. deleting the execution machinery rather than merely marking it dormant (D1);
 2. retaining shared types and legacy presentation in this patch (D2);
 3. the structural plus behavioral no-execution guard (D3);
-4. adopting native process-group cancellation through project 012's pin move (D4);
+4. including the upstream `>=0.54.14` pin and its native process-tree probe in this PR (D4);
 5. removing/rejecting `timeout_secs` as the interim, rather than leaving it silently accepted
    (D6).
 
@@ -330,8 +342,9 @@ Acceptance of this ADR should explicitly rule on:
 
 1. Land the removal with a draft-then-reviewed PR; make no native-fix claim.
 2. Correct the timeout issue text wherever it implied the delegated patch fixed live behavior.
-3. In project 012, move the AILANG pin to `>=0.54.14` and run the Motoko-side native probe from
-   D4. Do not reimplement the upstream group kill in a local fork; disclose `setsid` escape.
+3. This PR moves the AILANG pin to `>=0.54.14` and runs the native process-tree probe from D4.
+   Do not reimplement the upstream group kill in a local fork; disclose `setsid` escape. Project
+   012 owns subsequent continuous adoption.
 4. Keep `timeout_secs` out of the advertised schema until a consistent per-call design exists;
    consider rejecting it explicitly for legacy callers.
 5. If M6.5 is later funded, design its protocol and result-wait/process-wall relationship from
@@ -369,3 +382,16 @@ Its remaining findings are addressed here:
   focused and full-suite results. The focused count is 4 after adding the mutation control.
 - The issue body is explicitly marked as the original 2026-09-26 report, with current status taking
   precedence over stale schema, profile, and fault-shape claims.
+
+
+## 11. Pin and native verification included
+
+The operator subsequently ruled that the v0.54.14 pin belongs in this ADR rather than as deferred
+work. The branch now carries the manifest/lock/installer pin and the native probe. The decision is
+not merely documentary: the probe is part of `check_core`, has a below-30s budget so it cannot
+pass by waiting out the harness wall, and has an old-binary negative control for the latency arm.
+
+The remaining limitation is that the probe is Unix-specific in practice. Upstream documents that a
+policy-owned run remains in its owner's group and that Windows lacks equivalent descendant
+cleanup. This PR does not claim those cases are fixed. The existing `effects: unknown` disclosure
+continues to describe the timeout outcome, not prove rollback or total containment.

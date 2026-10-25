@@ -23,8 +23,8 @@ replaced by dormant-path removal. It did not fix the native defect.
 The live native issue on the pinned v0.52.5 remains: AILANG `exec.CommandContext` kills the
 immediate process, and a descendant can survive and write after the timeout while `WaitDelay`
 bounds pipe waiting. Upstream v0.54.14 already implements process-group cancellation with
-`WaitDelay`; project 034 assigned Motoko's adoption to the pin move in project 012. The revised
-architecture and scope are recorded in
+`WaitDelay`; this PR includes that pin and the native process-tree probe, while project 012 keeps
+continuous adoption ownership. The revised architecture and scope are recorded in
 [project 041 ADR-001](../projects/041_process_execution_timeouts/ADR-001-delegated-process-timeouts.md).
 The live schema no longer advertises `timeout_secs`; consistent per-call semantics remain follow-up work.
 
