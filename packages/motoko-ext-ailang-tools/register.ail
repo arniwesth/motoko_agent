@@ -58,14 +58,38 @@ pure func resolve(workdir: string, path: string) -> string {
   if startsWith(path, "/") || workdir == "" || workdir == "." then path else if endsWith(workdir, "/") then "${workdir}${path}" else "${workdir}/${path}"
 }
 
+-- The path guard: one script, run as
+--   bash -c <path_guard_script()> <name> <workdir> <path>
+-- <path> may be relative to <workdir> or absolute. Exit codes:
+--   0  inside the workdir (or the workdir itself)
+--   43 resolves outside the workdir
+--   44 cannot be resolved, e.g. a dangling symlink on the way (refused: a
+--      write through one creates the file at the link's target)
+--   45 the workdir itself cannot be resolved
+-- Callers treat every non-zero exit as a refusal (fail closed).
+--
+-- Portable: only plain `realpath`. The deepest EXISTING ancestor is resolved
+-- and the missing tail re-appended; the tail has no `..` (callers reject that
+-- lexically first), so re-appending it is exact. The walk stops at a symlink
+-- (`-L`), dangling or not, so a link is always resolved rather than walked
+-- past. The walk uses parameter expansion, not `basename`/`dirname`: a command
+-- substitution drops trailing newlines, so a link named "nl\n" was looked up
+-- as "nl", not found, and walked past.
+--
+-- Two copies, kept equal by scripts/verify_native_path_guard.ail: this one and
+-- src/core/tool_runtime path_guard_script. One shared export would be a new
+-- function in motoko_ext_abi, which is frozen at 8.0 (031 ADR-001).
+export pure func path_guard_script() -> string {
+  "wd=$(realpath \"$1\") || exit 45\ncase \"$2\" in /*) p=\"$2\" ;; *) p=\"$wd/$2\" ;; esac\ntail=\"\"\nwhile [ ! -e \"$p\" ] && [ ! -L \"$p\" ]; do\n  tail=\"/\${p##*/}$tail\"; p=\"\${p%/*}\"; [ -n \"$p\" ] || p=/\ndone\nbase=$(realpath \"$p\" 2>/dev/null) || exit 44\ntarget=\"\${base%/}$tail\"\ncase \"$target\" in \"$wd\"|\"$wd\"/*) ;; *) exit 43 ;; esac\n"
+}
+
 -- Lexically clean (no `..` segment) and, with symlinks resolved, inside the
 -- workdir -- the same test as the native tools' path guard. Fails closed.
 func inside_workdir(workdir: string, path: string) -> bool ! {Process} {
   if any(\seg. seg == "..", split(path, "/")) then false
   else {
     let dir = if workdir == "" then "." else workdir;
-    let guard = "set -eu\nwd=$(realpath \"$1\")\ncase \"$2\" in /*) joined=\"$2\" ;; *) joined=\"$wd/$2\" ;; esac\ntarget=$(realpath -m \"$joined\")\ncase \"$target\" in \"$wd\"/*) ;; *) exit 43 ;; esac\n";
-    match exec("bash", ["-c", guard, "ailang_tools_path_guard", dir, path]) {
+    match exec("bash", ["-c", path_guard_script(), "ailang_tools_path_guard", dir, path]) {
       Err(_) => false,
       Ok(out) => out.exitCode == 0
     }
