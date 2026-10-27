@@ -9,7 +9,6 @@ import std/fs      (readFile, writeFile, fileExists, mkdirAll, isDir, readFileRe
 import std/process (exec, ProcessError, ProcessOutput)
 import std/bytes   (toString)
 import std/crypto  (sha256Hex)
-import pkg/sunholo/motoko_ext_abi/path_guard (path_guard_script)
 import src/core/types   (ToolBackend, ProcessExecReq, ToolResultItem, ToolResultMeta, SearchMatch, TestFailure, EditOp, EffectsNone, EffectsUnknown)
 import src/core/tool_contract (ToolCallEnvelope)
 import src/core/tool_fault (refused_fault, io_error_fault, process_fault, process_error_fault_kind)
@@ -462,6 +461,31 @@ pure func strip_under_workdir() -> bool
       && strip_workdir_prefix("/tmp/foo", "src/main.ail")       == "src/main.ail"
   }
 
+-- The path guard: one script, run as
+--   bash -c <path_guard_script()> <name> <workdir> <path>
+-- <path> may be relative to <workdir> or absolute. Exit codes:
+--   0  inside the workdir (or the workdir itself)
+--   43 resolves outside the workdir
+--   44 cannot be resolved, e.g. a dangling symlink on the way (refused: a
+--      write through one creates the file at the link's target)
+--   45 the workdir itself cannot be resolved
+-- Callers treat every non-zero exit as a refusal (fail closed).
+--
+-- Portable: only plain `realpath`. The deepest EXISTING ancestor is resolved
+-- and the missing tail re-appended; the tail has no `..` (callers reject that
+-- lexically first), so re-appending it is exact. The walk stops at a symlink
+-- (`-L`), dangling or not, so a link is always resolved rather than walked
+-- past. The walk uses parameter expansion, not `basename`/`dirname`: a command
+-- substitution drops trailing newlines, so a link named "nl\n" was looked up
+-- as "nl", not found, and walked past.
+--
+-- Two copies, kept equal by scripts/verify_native_path_guard.ail: this one and
+-- motoko_ext_ailang_tools/register path_guard_script. One shared export would be a new
+-- function in motoko_ext_abi, which is frozen at 8.0 (031 ADR-001).
+export pure func path_guard_script() -> string {
+  "wd=$(realpath \"$1\") || exit 45\ncase \"$2\" in /*) p=\"$2\" ;; *) p=\"$wd/$2\" ;; esac\ntail=\"\"\nwhile [ ! -e \"$p\" ] && [ ! -L \"$p\" ]; do\n  tail=\"/\${p##*/}$tail\"; p=\"\${p%/*}\"; [ -n \"$p\" ] || p=/\ndone\nbase=$(realpath \"$p\" 2>/dev/null) || exit 44\ntarget=\"\${base%/}$tail\"\ncase \"$target\" in \"$wd\"|\"$wd\"/*) ;; *) exit 43 ;; esac\n"
+}
+
 func validate_path_common(tool: string, id: string, path: string, workdir: string) -> Result[(), ToolResultItem] ! {Process} {
   if path == "" then Err(path_error(id, tool, "missing path"))
   else {
@@ -487,11 +511,14 @@ func validate_path_common(tool: string, id: string, path: string, workdir: strin
       else if starts_with_root_dir(stripped) then
         Err(path_error(id, tool, "path appears absolute (missing leading slash): ${path}"))
       else {
-        -- The shared guard (motoko_ext_abi/path_guard). FAIL CLOSED: any
+        -- The path guard (path_guard_script above). FAIL CLOSED: any
         -- non-zero exit refuses. Before, only 43/44 refused and every other
         -- failure was let through, because `realpath -m` is GNU-only; on
         -- macOS that let reads and writes follow a symlink out (#209).
-        match exec("bash", ["-c", path_guard_script(), "motoko-path-guard", workdir, stripped]) {
+        -- An empty workdir means ".", as everywhere else in this module; the
+        -- guard would refuse "" (exit 45) and with it every file tool call.
+        let guard_wd = if workdir == "" then "." else workdir;
+        match exec("bash", ["-c", path_guard_script(), "motoko-path-guard", guard_wd, stripped]) {
           Ok(out) =>
             if out.exitCode == 0 then Ok(())
             else if out.exitCode == 43 || out.exitCode == 44 then Err(path_error(id, tool, "path escapes workspace: ${path}"))
