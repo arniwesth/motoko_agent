@@ -9,8 +9,10 @@ import { buildChildEnv } from "./runtime-process.js";
 // silently. AILANG_OLLAMA_V1_STREAM was not on it: every local ollama turn took
 // the buffered path, where the whole generation arrives as one response and the
 // session log gains nothing while the model works. A host watching the log for
-// progress then cannot tell a long turn from a hung one — measured 2026-10-16,
-// 9 of 39 qwen3.8 runs killed mid-generation by a 10-minute idle watchdog.
+// progress then cannot tell a long turn from a hung one: on runs 2026-10-13..15
+// (analysed 2026-10-16), 9 of 39 qwen3.8 runs were killed mid-generation by a
+// 10-minute idle watchdog. Deltas reach the log during the call on AILANG
+// >= v0.54.13, where the ollama client implements StreamingProvider.
 
 let workdir: string;
 const KEYS = [
@@ -52,6 +54,6 @@ describe("buildChildEnv forwards the AILANG ollama client settings", () => {
   it("leaves them empty when unset, so the runtime keeps its defaults", () => {
     for (const k of KEYS) delete process.env[k];
     const env = buildChildEnv(workdir, "default", "", "");
-    for (const k of KEYS) expect(env[k] ?? "").toBe("");
+    for (const k of KEYS) expect(env[k]).toBe("");
   });
 });
