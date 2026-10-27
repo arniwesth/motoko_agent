@@ -609,6 +609,21 @@ export function buildChildEnv(
     MOTOKO_EXIT_MANIFEST: exitManifestPathFor(workdir),
     AILANG_OLLAMA_MAX_TOKENS: process.env.AILANG_OLLAMA_MAX_TOKENS ?? "",
     AILANG_OLLAMA_HTTP_TIMEOUT_SEC: process.env.AILANG_OLLAMA_HTTP_TIMEOUT_SEC ?? "",
+    // Streaming ollama /v1 and its two silence windows. Without the flag the runtime takes the
+    // buffered path: a whole generation arrives as one response, the session log gains nothing
+    // while it runs, and a host that watches the log for progress cannot tell a long turn from a
+    // hung one. On the AILANG eval rig (runs 2026-10-13..15, analysed 2026-10-16), 9 of 39
+    // qwen3.8 runs were killed by the host's 10-minute idle watchdog mid-generation (ollama
+    // answered 200, the call ran 618 s).
+    // Deltas reach the session log during the call only on AILANG >= v0.54.13, where the ollama
+    // client implements StreamingProvider; before it the flag streamed the HTTP call but the
+    // runtime still delivered one chunk at the end. Streaming applies to requests that carry
+    // tools and do not use native tool calling; others stay buffered.
+    // With the flag on, AILANG_OLLAMA_HTTP_TIMEOUT_SEC must be positive or unset: the streaming
+    // path rejects 0 (which means "no timeout" when buffered) before sending the request.
+    AILANG_OLLAMA_V1_STREAM: process.env.AILANG_OLLAMA_V1_STREAM ?? "",
+    AILANG_OLLAMA_IDLE_TIMEOUT_SEC: process.env.AILANG_OLLAMA_IDLE_TIMEOUT_SEC ?? "",
+    AILANG_OLLAMA_TTFT_TIMEOUT_SEC: process.env.AILANG_OLLAMA_TTFT_TIMEOUT_SEC ?? "",
     MOTOKO_COST_INPUT_PER_1M_MILLICENTS:
       process.env.MOTOKO_COST_INPUT_PER_1M_MILLICENTS ?? "",
     MOTOKO_COST_OUTPUT_PER_1M_MILLICENTS:
