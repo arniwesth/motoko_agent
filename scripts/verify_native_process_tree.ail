@@ -1,0 +1,51 @@
+-- Verify the native process wall reaches descendants on the pinned AILANG.
+module scripts/verify_native_process_tree
+
+import std/io (println, exit)
+import std/clock (now, sleep)
+import std/process (exec)
+import std/fs (fileExists)
+import std/string (contains, trim)
+import std/bytes (toString)
+import std/result (Ok, Err)
+import std/json (jo, kv, js)
+import src/core/tool_runtime (run_native_batch)
+import src/core/tool_contract (ToolCallEnvelope)
+import src/core/types (ToolResultItem, BashExecResult, FaultDeadline, EffectsUnknown)
+
+func report(label: string, ok: bool, detail: string) -> bool ! {IO} {
+  if ok then { println("OK: ${label}"); true }
+  else { println("FAIL: ${label} — ${detail}"); false }
+}
+
+func deadline_and_unknown(item: ToolResultItem) -> bool {
+  match item {
+    BashExecResult(r) =>
+      match r.fault {
+        Some(f) => match f.kind { FaultDeadline(_) => f.effects == EffectsUnknown, _ => false },
+        None => false
+      },
+    _ => false
+  }
+}
+
+export func main() -> () ! {IO, FS, Process, Clock} {
+  let root = match exec("mktemp", ["-d"]) { Ok(out) => trim(toString(out.stdout)), Err(_) => "" };
+  if root == "" then { println("FAIL: mktemp"); exit(1) } else {
+    let marker = "${root}/late";
+    let call: ToolCallEnvelope = { id: "tree", tool: "BashExec", arguments: jo([kv("cmd", js("(sleep 2; printf late > '${marker}') & sleep 30"))]) };
+    let start = now();
+    let results = run_native_batch([call], ".");
+    let result = match results { [r] => r, _ => BashExecResult({ id: "tree", fault: None, cmd: "", stdout: "", stderr: "", exit_code: 1, meta: { truncated: false, stdout_bytes: 0, stdout_total_bytes: 0, stderr_bytes: 0, stderr_total_bytes: 0, stdout_sha256: "", stderr_sha256: "" } }) };
+    let elapsed = now() - start;
+    let _ = sleep(2500);
+    let late = fileExists(marker);
+    let clean = deadline_and_unknown(result);
+    let _ = println("elapsed_ms=${show(elapsed)} late_marker=${show(late)}");
+    let ok1 = report("deadline returns near the wall, not wall + WaitDelay", elapsed < 4000, "elapsed=${show(elapsed)}ms");
+    let ok2 = report("descendant does not write after timeout", not late, "marker=${marker}");
+    let ok3 = report("deadline and unknown effects preserved", clean, "fault not deadline/unknown");
+    let _ = exec("rm", ["-rf", root]);
+    if ok1 && ok2 && ok3 then () else exit(1)
+  }
+}

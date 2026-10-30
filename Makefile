@@ -2660,13 +2660,24 @@ conformance:
 	ailang run --caps IO,Env,FS --entry main scripts/dst/conformance_selftest.ail
 	ailang run --caps IO,Env,FS --entry main scripts/dst/conformance_registry_probe.ail
 
-# Type-check every AILANG core runtime module in src/core/, then
+.PHONY: verify_native_process_tree
+# Native process-wall containment. With AILANG >=0.54.14 the timeout kills the
+# command's process group and WaitDelay does not add five seconds to the result.
+# The probe is deliberately below 30s, so it cannot pass because a wall expired.
+verify_native_process_tree:
+	@printf '%s\n' '  native process-tree timeout containment'
+	@AILANG_BIN="$${AILANG_BIN:-ailang}"; \
+	version=$$("$$AILANG_BIN" --version 2>/dev/null | head -1); \
+	case "$$version" in *v0.54.14*|*v0.54.15*|*v0.54.16*|*v0.54.17*|*v0.54.18*|*v0.54.19*|*v0.55.*|*v0.56.*|*v0.57.*|*v0.58.*|*v0.59.*) ;; \
+	*) echo "FAIL: native process-tree probe requires AILANG >=0.54.14, got $$version"; exit 1;; esac; \
+	"$$AILANG_BIN" run --caps IO,FS,Process,Clock --process-timeout 1s --entry main scripts/verify_native_process_tree.ail
+
 # runtime-boot-probe every extension in the active profile's registry
 # so DP7 can catch the class of bugs that pass type-check but crash
 # at runtime (e.g. matching Result constructors against an Option
 # value — see scripts/verify_extension_boot.ail header for full
 # rationale + history).
-check_core: verify_extensions verify_repetition_guard verify_herdr_gate verify_herdr_check_answer verify_herdr_delegate_wait verify_wait_descriptor_fixtures verify_herdr_owner_tag verify_herdr_dagr_pane verify_herdr_orchestrator verify_delegate_kind verify_dagr_producer verify_exit_intent verify_native_path_guard verify_strict_extensions verify_strict_context_limit
+check_core: verify_native_process_tree verify_extensions verify_repetition_guard verify_herdr_gate verify_herdr_check_answer verify_herdr_delegate_wait verify_wait_descriptor_fixtures verify_herdr_owner_tag verify_herdr_dagr_pane verify_herdr_orchestrator verify_delegate_kind verify_dagr_producer verify_exit_intent verify_native_path_guard verify_strict_extensions verify_strict_context_limit
 	@ok=0; fail=0; \
 	for f in src/core/*.ail; do \
 		if ailang check "$$f" >/dev/null 2>&1; then \

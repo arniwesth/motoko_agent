@@ -30,7 +30,7 @@ module sunholo/motoko_ext_skills/register
 import std/env (getEnvOr)
 import std/fs (isDir, isFile, listDir, readFileResult)
 import std/json (Json, JString, JBool, JArray, jo, kv, js, jb, ja, get, encode)
-import std/list (map, flatMap, foldl)
+import std/list (map, foldl)
 import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
 import std/string (concat, join, contains, startsWith, repeat)
@@ -176,7 +176,7 @@ pure func config_skill(entry: Json) -> [Skill] {
 
 pure func config_skills(cfg: Json) -> [Skill] {
   match get(cfg, "skills") {
-    Some(JArray(entries)) => flatMap(config_skill, entries),
+    Some(JArray(entries)) => foldl(\acc e. acc ++ config_skill(e), [], entries),
     _ => []
   }
 }

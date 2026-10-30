@@ -523,7 +523,7 @@ func segment_excludes_system_prefix_scenario() -> Scenario {
   { id: "phase_c.l1.segment_excludes_system_prefix", seed: "fixed", run: scenario_segment_excludes_system_prefix }
 }
 
-export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let scenarios = [
     harness_self_test_scenario(),
     segment_excludes_system_prefix_scenario(),

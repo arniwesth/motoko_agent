@@ -1575,7 +1575,7 @@ func s12_successor_scenario() -> Scenario {
   { id: "compaction.compaction_ai_successor_is_not_dropped", seed: "fixed", run: scenario_s12_successor_is_not_dropped }
 }
 
-export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace} {
+export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let scenarios = [
     multiple_compactions_scenario(),
     replay_deterministic_scenario(),

@@ -8,11 +8,34 @@ Interim relief landed in `242eeb4d` (`MOTOKO_PROCESS_TIMEOUT` → `--process-tim
 per-session global and not a fix for either knob. **The per-session half was then closed the same
 day:** a profile's `tools.process_timeout` is forwarded to `--process-timeout` (`index.ts`,
 `resolveProfileAgentConfig` → `applyToolProfileConfig`, with the shell env var taking precedence),
-so a profile now states a budget that is applied. Still open: `timeout_secs` is advertised and
-unparsed, and `tools.delegated_timeout_ms` is still loaded, copied and read by nothing — it should
-be deleted so no profile states a budget nobody applies.
+so a profile now states a budget that is applied. The live BashExec schema no longer advertises
+`timeout_secs`; it was never parsed. `tools.delegated_timeout_ms` is still loaded, copied and read
+by nothing after M10b removed its delegated-result consumer — it should be deleted so no profile
+states a budget nobody applies.
 
-## Description
+**2026-10-24 update, corrected after independent review:** the additional TUI
+`RuntimeProcess.runDelegatedCall` timer was unreachable in current sessions. M10b deleted its
+AILANG producer and result consumer, and `tool_phase.ail` routes live calls to native execution.
+The reported long-demo timeout and the surviving-descendant reproduction are therefore native
+AILANG behavior, not delegated TUI behavior. The delegated timeout patch was rejected and is being
+replaced by dormant-path removal. It did not fix the native defect.
+
+The live native issue on the pinned v0.52.5 remains: AILANG `exec.CommandContext` kills the
+immediate process, and a descendant can survive and write after the timeout while `WaitDelay`
+bounds pipe waiting. Upstream v0.54.14 already implements process-group cancellation with
+`WaitDelay`; this PR includes that pin and the native process-tree probe, while project 012 keeps
+continuous adoption ownership. The revised architecture and scope are recorded in
+[project 041 ADR-001](../projects/041_process_execution_timeouts/ADR-001-delegated-process-timeouts.md).
+The live schema no longer advertises `timeout_secs`; consistent per-call semantics remain follow-up work.
+
+## Original report (2026-09-26, historical)
+
+The body below records the original observations and proposals. The **Status** section above takes
+precedence for the current architecture. In particular, `timeout_secs` is no longer advertised,
+profile forwarding now reaches the native process wall, and native timeout results carry a
+structured deadline fault with `effects: unknown`. The original proposal to give
+`delegated_timeout_ms` a new process-wall role is not adopted.
+
 
 A BashExec that runs longer than about 35 s comes back to the model as
 

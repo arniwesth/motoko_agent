@@ -21,7 +21,7 @@
 module sunholo/motoko_ext_skills/skills
 
 import std/json (Json, JNull, JBool, JNumber, JString, JArray, JObject, jo, kv, js, jint, get, encode)
-import std/list (foldl, map, filter, flatMap, sortBy, range)
+import std/list (foldl, map, filter, range)
 import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
 import std/string (length, substring, startsWith, endsWith, contains, find, split, join, concat, words, trim, chars, charCode, compare, intToStr, repeat)
@@ -379,8 +379,23 @@ pure func compare_skill_names(a: Skill, b: Skill) -> int {
 -- Name order, by `std/string.compare`. `listDir` already returns names in this
 -- order (`in_name_order` is the assertion), so on a real listing the sort
 -- changes nothing; the index is in name order whatever it is handed.
+--
+-- Not `std/list.flatMap` or `sortBy`, here or below: from AILANG v0.54 their
+-- interface carries an open effect row, which `tools/ext_ambient_inventory`
+-- rejects as proving nothing. `foldl`'s row is closed.
 export pure func sort_by_name(skills: [Skill]) -> [Skill] {
-  sortBy(compare_skill_names, skills)
+  foldl(insert_by_name, [], skills)
+}
+
+-- Stable: an equal name goes after the ones already placed.
+pure func insert_by_name(sorted: [Skill], s: Skill) -> [Skill] {
+  match sorted {
+    [] => [s],
+    head :: rest =>
+      if compare_skill_names(head, s) <= 0
+      then head :: insert_by_name(rest, s)
+      else s :: sorted
+  }
 }
 
 type OrderWalk = { ok: bool, first: bool, last: string }
@@ -501,8 +516,8 @@ export pure func scan(listing: RootListing) -> ScanResult {
     RootIsNeither => Refused([violation(R1, skills_root(), "is neither a directory nor a regular file: a symlink that leaves the workdir, or has an absolute target, reads this way under the sandbox")]),
     RootEntries(entries) => {
       let outcomes = map(entry_outcome, entries);
-      let skills = sort_by_name(flatMap(outcome_skills, outcomes));
-      let found = flatMap(outcome_violations, outcomes) ++ index_violations(skills);
+      let skills = sort_by_name(foldl(\acc o. acc ++ outcome_skills(o), [], outcomes));
+      let found = foldl(\acc o. acc ++ outcome_violations(o), [], outcomes) ++ index_violations(skills);
       match found {
         [] => Accepted(skills),
         _ => Refused(found)

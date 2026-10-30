@@ -2,8 +2,6 @@ import { spawn, ChildProcess } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 import * as readline from "readline";
-import { createOhMyPiSession } from "./ohMyPi/session-adapter.js";
-import { dispatchOhMyPiTool } from "./ohMyPi/dispatcher.js";
 import { sessionStartMs, sessionIdentity, sessionResumeCount } from "./session-identity.js";
 import { exitManifestPath, rememberExitManifestPath } from "./exit-actions.js";
 import { ContextLimitSource, UnknownLimitWatch } from "./context-limit.js";
@@ -266,19 +264,10 @@ export function normalizeRuntimeWarning(line: string): string | null {
   return message.length > 0 ? message : null;
 }
 
-export function runDelegatedCallsSequential(
-  calls: DelegatedCall[],
-  runner: (call: DelegatedCall) => DelegatedResult,
-  onProgress?: (result: DelegatedResult) => void,
-): DelegatedResult[] {
-  const results: DelegatedResult[] = [];
-  for (const call of calls) {
-    const result = runner(call);
-    results.push(result);
-    onProgress?.(result);
-  }
-  return results;
-}
+// The AILANG producer for the legacy delegated tool_calls event was removed
+// at M10b. RuntimeProcess must not execute that event. The wire variants and
+// presentation arms are retained only to scope this deletion; their protocol
+// cleanup is separate. A future delegated protocol must be designed explicitly.
 
 function asRecord(v: unknown): Record<string, unknown> | null {
   return v && typeof v === "object" ? (v as Record<string, unknown>) : null;
@@ -308,25 +297,6 @@ export function resolveDelegatedExec(call: DelegatedCall): DelegatedExecReq | nu
     needs_stderr_live: asBool(src.needs_stderr_live),
     needs_hard_cancel: asBool(src.needs_hard_cancel),
   };
-}
-
-function needsShellForCmd(cmd: string): boolean {
-  const t = cmd.trim();
-  if (!t) return false;
-  return /\s/.test(t) || /[|&;<>()$`]/.test(t);
-}
-
-function shellQuote(arg: string): string {
-  return `'${arg.replace(/'/g, `'\"'\"'`)}'`;
-}
-
-export function resolveDelegatedSpawn(exec: DelegatedExecReq): { cmd: string; args: string[] } {
-  if (needsShellForCmd(exec.cmd)) {
-    const suffix = (exec.args ?? []).map(shellQuote).join(" ");
-    const script = suffix.length > 0 ? `${exec.cmd} ${suffix}` : exec.cmd;
-    return { cmd: "bash", args: ["-lc", script] };
-  }
-  return { cmd: exec.cmd, args: exec.args ?? [] };
 }
 
 export function supervisorWorkdirArg(workdir: string): string {
@@ -1018,7 +988,7 @@ export class RuntimeProcess {
     // in ailang/internal/effects/process.go -- reported to the model as
     // `timeout after 35005ms` with exit 1 and EMPTY stdout. Nothing in a
     // profile reaches that flag by itself, and the tool schema's
-    // `timeout_secs` is not read by the dispatcher, so MOTOKO_PROCESS_TIMEOUT
+    // `timeout_secs` is no longer advertised, so MOTOKO_PROCESS_TIMEOUT
     // (a Go duration such as "300s") is the one knob: index.ts publishes the
     // profile's `tools.process_timeout` under that name unless the shell set
     // it. The binary rejects a malformed value at startup rather than running
@@ -1085,11 +1055,6 @@ export class RuntimeProcess {
       const limitWarning = this.unknownLimit.observe(event);
       if (limitWarning !== null) this.onEvent({ type: "warning", message: limitWarning });
       if (resolved) this.flushDeferredModel();
-      if (event.type === "tool_calls") {
-        setImmediate(() => {
-          void this.handleToolCalls(event);
-        });
-      }
     });
 
     const stderrRl = readline.createInterface({
@@ -1135,125 +1100,6 @@ export class RuntimeProcess {
     });
   }
 
-  private resolveCwd(cwd?: string): string {
-    if (!cwd || cwd.trim() === "") return this.workdir;
-    return path.isAbsolute(cwd) ? cwd : path.resolve(this.workdir, cwd);
-  }
-
-  private truncate(s: string, max: number): { text: string; truncated: boolean } {
-    if (s.length <= max) return { text: s, truncated: false };
-    return { text: s.slice(0, max), truncated: true };
-  }
-
-  private runDelegatedCall(call: DelegatedCall): Promise<DelegatedResult> {
-    const id = call.id ?? "";
-    const exec = resolveDelegatedExec(call);
-    if (!exec || !exec.cmd) {
-      return Promise.resolve({
-        tool_call_id: id,
-        stdout: "",
-        stderr: "missing exec.cmd",
-        exit_code: 1,
-        truncated: false,
-      });
-    }
-
-    return new Promise((resolve) => {
-      const spawnSpec = resolveDelegatedSpawn(exec);
-      const child = spawn(spawnSpec.cmd, spawnSpec.args, {
-        cwd: this.resolveCwd(exec.cwd),
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-
-      let stdoutRaw = "";
-      let stderrRaw = "";
-      let settled = false;
-      let timedOut = false;
-      const timeoutMs = 30_000;
-      const maxBytes = 8 * 1024 * 1024;
-
-      const finalize = (exitCode: number): void => {
-        if (settled) return;
-        settled = true;
-        const stdout = this.truncate(stdoutRaw, 8000);
-        const stderr = this.truncate(stderrRaw, 2000);
-        resolve({
-          tool_call_id: id,
-          stdout: stdout.text,
-          stderr: stderr.text,
-          exit_code: exitCode,
-          truncated: stdout.truncated || stderr.truncated,
-        });
-      };
-
-      const timer = setTimeout(() => {
-        timedOut = true;
-        child.kill("SIGKILL");
-      }, timeoutMs);
-
-      child.stdout?.on("data", (chunk: Buffer | string) => {
-        if (Buffer.byteLength(stdoutRaw, "utf8") >= maxBytes) return;
-        const next = typeof chunk === "string" ? chunk : chunk.toString("utf8");
-        stdoutRaw += next;
-      });
-
-      child.stderr?.on("data", (chunk: Buffer | string) => {
-        if (Buffer.byteLength(stderrRaw, "utf8") >= maxBytes) return;
-        const next = typeof chunk === "string" ? chunk : chunk.toString("utf8");
-        stderrRaw += next;
-      });
-
-      child.on("error", (err) => {
-        clearTimeout(timer);
-        stderrRaw = stderrRaw ? `${stderrRaw}\n${String(err.message ?? err)}` : String(err.message ?? err);
-        finalize(1);
-      });
-
-      child.on("close", (code) => {
-        clearTimeout(timer);
-        if (timedOut) {
-          const msg = `timed out after ${timeoutMs}ms`;
-          stderrRaw = stderrRaw ? `${stderrRaw}\n${msg}` : msg;
-          finalize(1);
-          return;
-        }
-        finalize(typeof code === "number" ? code : 1);
-      });
-    });
-  }
-
-  private async handleToolCalls(event: Extract<AgentEvent, { type: "tool_calls" }>): Promise<void> {
-    const calls = event.tool_calls ?? [];
-    this.onEvent({
-      type: "tool_results",
-      request_id: event.request_id,
-      phase: "running",
-      results: [],
-    });
-    const results: DelegatedResult[] = [];
-    const session = createOhMyPiSession(this.workdir);
-    for (const call of calls) {
-      const isFileTool =
-        call.tool === "ReadFile" || call.tool === "WriteFile" || call.tool === "EditFile" || call.tool === "Search";
-      const result = isFileTool
-        ? await dispatchOhMyPiTool(session, call)
-        : await this.runDelegatedCall(call);
-      results.push(result);
-      this.onEvent({
-        type: "tool_results",
-        request_id: event.request_id,
-        phase: "progress",
-        results: [result],
-      });
-    }
-    this.send({ type: "tool_results", request_id: event.request_id, results });
-    this.onEvent({
-      type: "tool_results",
-      request_id: event.request_id,
-      phase: "done",
-      results,
-    });
-  }
 
   send(cmd: object): void {
     if (this.dead) return;
