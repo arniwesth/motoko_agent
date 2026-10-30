@@ -42,7 +42,7 @@ import src/core/tool_contract (call_to_json)
 import src/core/tool_dispatch_adapter (tool_call_to_envelope, fault_to_json)
 import src/core/types (Msg) import src/core/tool_fault (fault_key, denied_fault) -- 034 W1.4: `policy_denied_message`'s `fault`, joined onto this line so the five clock anchors do not move
 import src/core/config (CostRates)
-import src/core/cost_phase (step_cost_with_cache, cache_inclusive_route)
+import src/core/cost_phase (step_cost_with_cache, cache_inclusive_route, rates_metered)
 import std/option (Option, Some, None)
 import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtCtx, ExtRuntime, ExtPorts, TokenTelemetry, ResponseInterceptDecision, FinalizeDecision, ExtWorld, NotReached, AiStepOutcome, ExtClockReading, ExtProcOutcome, ExtFileRead, ExtFileMutation, ExtPathStat, ExtDirListing, ExtPathKind, ExtPathMissing, ExtPathFile, ExtPathDir) -- WI-B2b; ExtClockReading WI-C5; ExtProcOutcome/ExtFileRead WI-D16; ExtFileMutation WI-D17; ExtPathStat/ExtDirListing WI-D18: ExtWorld/AiStepOutcome, on this line to limit A5 anchor drift
 import src/core/ext_world (world_to_token, token_to_world, clear_holder, adopt_world) -- WI-B2b: the ONLY place the opaque token is opened; see that module's header
@@ -2074,14 +2074,6 @@ func policy_denied_message(call: ToolCall, reason: string) -> Message {
   }
 }
 
--- Compute per-step cost in millicents from token counts and provider rates.
--- Integer division truncates toward zero (conservative — never over-counts).
--- Returns 0 when rates are zero (unmetered/unknown provider).
-pure func step_cost_millicents(input_tokens: int, output_tokens: int, rates: CostRates) -> int {
-  (input_tokens * rates.input_per_1m_millicents +
-   output_tokens * rates.output_per_1m_millicents) / 1000000
-}
-
 -- The v2 loop. Iterates until the model returns finish_reason != "tool_calls"
 -- (and any solver-candidate hooks accept the result) or step_budget hits zero.
 -- Returns the final messages list.
@@ -2143,7 +2135,7 @@ func session_policy_init(ports: Ports, world: WorldState, model: string, step_bu
       step: {
         step_budget: budget_steps,
         max_cost_millicents: max_cost_millicents,
-        cost_metered: cost_rates.input_per_1m_millicents > 0,
+        cost_metered: rates_metered(cost_rates),
         retry_stream_errors: retry_stream_errors,
         require_system_prompt: not headless,
         model: model,
