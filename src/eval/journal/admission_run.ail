@@ -62,7 +62,11 @@ export pure func admission_rt() -> ExtRuntime {
 
 export pure func admission_rates(jw: JournalWorld) -> CostRates {
   { input_per_1m_millicents: jw.config.boot.cost_rates.input_per_1m_millicents,
-    output_per_1m_millicents: jw.config.boot.cost_rates.output_per_1m_millicents }
+    output_per_1m_millicents: jw.config.boot.cost_rates.output_per_1m_millicents,
+    -- Forwarded, not defaulted: a replay that re-priced cache tokens at the
+    -- input rate would diverge from the cap the live run enforced.
+    cache_read_per_1m_millicents: jw.config.boot.cost_rates.cache_read_per_1m_millicents,
+    cache_write_per_1m_millicents: jw.config.boot.cost_rates.cache_write_per_1m_millicents }
 }
 
 export func admission_run(jw: JournalWorld, w0: WorldState, workdir: string) -> TracedSessionResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
