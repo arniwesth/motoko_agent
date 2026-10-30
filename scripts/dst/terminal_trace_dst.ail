@@ -55,11 +55,11 @@ import src/core/test/stub_step (Scripted, empty_rt, deny_all_rt, prose_step, con
 import src/core/ports (ScriptedStep)
 
 func glm5_rates() -> CostRates {
-  { input_per_1m_millicents: 60000, output_per_1m_millicents: 208000 }
+  { input_per_1m_millicents: 60000, output_per_1m_millicents: 208000, cache_read_per_1m_millicents: -1, cache_write_per_1m_millicents: -1 }
 }
 
 func zero_rates() -> CostRates {
-  { input_per_1m_millicents: 0, output_per_1m_millicents: 0 }
+  { input_per_1m_millicents: 0, output_per_1m_millicents: 0, cache_read_per_1m_millicents: -1, cache_write_per_1m_millicents: -1 }
 }
 
 func mk_budget() -> BudgetPlan {

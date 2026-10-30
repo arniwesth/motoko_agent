@@ -128,7 +128,7 @@ func m8_tool_empty_queue_no_live_effect() -> bool ! {AI, Clock, Env, FS, IO, Pro
 }
 
 pure func lt_budget() -> BudgetPlan { { total: 12, solver: 12, verifier: 0 } }
-pure func lt_rates() -> CostRates { { input_per_1m_millicents: 0, output_per_1m_millicents: 0 } }
+pure func lt_rates() -> CostRates { { input_per_1m_millicents: 0, output_per_1m_millicents: 0, cache_read_per_1m_millicents: -1, cache_write_per_1m_millicents: -1 } }
 
 pure func lt_is_provider(i: Interaction) -> bool { match i.identity.body { ProviderIdentity(_, _, _) => true, _ => false } }
 pure func lt_is_tool(i: Interaction) -> bool { match i.identity.body { ToolIdentity(_, _, _) => true, _ => false } }

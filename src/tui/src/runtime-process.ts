@@ -613,6 +613,12 @@ export function buildChildEnv(
       process.env.MOTOKO_COST_INPUT_PER_1M_MILLICENTS ?? "",
     MOTOKO_COST_OUTPUT_PER_1M_MILLICENTS:
       process.env.MOTOKO_COST_OUTPUT_PER_1M_MILLICENTS ?? "",
+    // Prompt-cache rates for the cache-aware cost cap (cost_phase.step_cost_with_cache).
+    // Without them the cap prices cached tokens at the input rate.
+    MOTOKO_COST_CACHE_READ_PER_1M_MILLICENTS:
+      process.env.MOTOKO_COST_CACHE_READ_PER_1M_MILLICENTS ?? "",
+    MOTOKO_COST_CACHE_WRITE_PER_1M_MILLICENTS:
+      process.env.MOTOKO_COST_CACHE_WRITE_PER_1M_MILLICENTS ?? "",
   };
   // Egress proxy environment, forwarded only when actually present.
   //

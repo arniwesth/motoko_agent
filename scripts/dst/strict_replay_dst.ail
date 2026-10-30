@@ -241,7 +241,7 @@ func msg(role: string, content: string) -> Message {
 
 func history() -> [Message] { [msg("system", "s"), msg("user", "u")] }
 func budget() -> BudgetPlan { { total: 10, solver: 6, verifier: 4 } }
-func zero_rates() -> CostRates { { input_per_1m_millicents: 0, output_per_1m_millicents: 0 } }
+func zero_rates() -> CostRates { { input_per_1m_millicents: 0, output_per_1m_millicents: 0, cache_read_per_1m_millicents: -1, cache_write_per_1m_millicents: -1 } }
 
 func tc(id: string) -> ToolCall { { id: id, name: "T", arguments: "{}" } }
 

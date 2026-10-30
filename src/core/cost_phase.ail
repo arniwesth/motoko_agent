@@ -6,14 +6,60 @@
 module src/core/cost_phase
 
 import src/core/config (CostRates)
+import std/string (startsWith)
 
 export pure func step_cost_millicents(input_tokens: int, output_tokens: int, rates: CostRates) -> int {
   (input_tokens * rates.input_per_1m_millicents +
    output_tokens * rates.output_per_1m_millicents) / 1000000
 }
 
+-- Per-step cost in millicents. Prompt-cache tokens are priced at their own
+-- rates (-1 = unset = the input rate). Providers disagree on what input_tokens
+-- means: direct Anthropic reports cache reads SEPARATELY, while OpenAI-shaped
+-- wires (OpenRouter, OpenAI, Gemini, ollama) count them INSIDE input_tokens.
+-- On an inclusive route the cached part is moved out of input before pricing.
+-- Measured 2026-10-12: pricing every input token at the input rate stopped
+-- GLM-5.3-Flash runs at a self-reported $2.00 that OpenRouter billed at ~$0.45
+-- (97% of input was cache reads); ignoring cache tokens under-counted Haiku 5.5
+-- on direct Anthropic 4x.
+export pure func cache_inclusive_route(model: string) -> bool
+  ensures { not ((startsWith(model, "anthropic/") || startsWith(model, "claude")) && result) }
+{
+  not (startsWith(model, "anthropic/") || startsWith(model, "claude"))
+}
+
+pure func rate_or_input(r: int, rates: CostRates) -> int
+  requires { rates.input_per_1m_millicents >= 0 }
+  ensures  { result >= 0 }
+{
+  if r < 0 then rates.input_per_1m_millicents else r
+}
+
+export pure func step_cost_with_cache(input_tokens: int, output_tokens: int, cache_read: int, cache_write: int, inclusive: bool, rates: CostRates) -> int
+  requires { input_tokens >= 0 && output_tokens >= 0 && cache_read >= 0 && cache_write >= 0 && rates.input_per_1m_millicents >= 0 && rates.output_per_1m_millicents >= 0 }
+  ensures  { result >= 0 }
+{
+  let fresh = if inclusive && cache_read <= input_tokens then input_tokens - cache_read else input_tokens;
+  (fresh * rates.input_per_1m_millicents +
+   output_tokens * rates.output_per_1m_millicents +
+   cache_read * rate_or_input(rates.cache_read_per_1m_millicents, rates) +
+   cache_write * rate_or_input(rates.cache_write_per_1m_millicents, rates)) / 1000000
+}
+
+-- Metered = ANY rate priced, not the input rate alone: a profile on a heavily
+-- cached route can price cache reads and leave input at 0, and a step that
+-- accrues cost there has to be capped and warned about like any other. The
+-- contract is the one-way half -- a priced rate is never read as unmetered --
+-- because that is the direction a cap failure hides in.
+export pure func rates_metered(rates: CostRates) -> bool
+  ensures { not ((rates.input_per_1m_millicents > 0 || rates.output_per_1m_millicents > 0 || rates.cache_read_per_1m_millicents > 0 || rates.cache_write_per_1m_millicents > 0) && not result) }
+{
+  rates.input_per_1m_millicents > 0 || rates.output_per_1m_millicents > 0
+    || rates.cache_read_per_1m_millicents > 0 || rates.cache_write_per_1m_millicents > 0
+}
+
 export pure func cost_cap_exceeded(total_cost_millicents: int, max_cost_millicents: int, rates: CostRates) -> bool {
-  max_cost_millicents > 0 && rates.input_per_1m_millicents > 0 && total_cost_millicents >= max_cost_millicents
+  max_cost_millicents > 0 && rates_metered(rates) && total_cost_millicents >= max_cost_millicents
 }
 
 export pure func next_warning_threshold(total_cost_millicents: int, max_cost_millicents: int, already_warned_pct: int) -> int {
@@ -28,11 +74,11 @@ export pure func next_warning_threshold(total_cost_millicents: int, max_cost_mil
 }
 
 pure func no_rates() -> CostRates {
-  { input_per_1m_millicents: 0, output_per_1m_millicents: 0 }
+  { input_per_1m_millicents: 0, output_per_1m_millicents: 0, cache_read_per_1m_millicents: -1, cache_write_per_1m_millicents: -1 }
 }
 
 pure func priced_rates() -> CostRates {
-  { input_per_1m_millicents: 1000000, output_per_1m_millicents: 2000000 }
+  { input_per_1m_millicents: 1000000, output_per_1m_millicents: 2000000, cache_read_per_1m_millicents: -1, cache_write_per_1m_millicents: -1 }
 }
 
 pure func test_step_cost_millicents_zero_rates() -> bool
@@ -47,10 +93,49 @@ pure func test_step_cost_millicents_counts_input_and_output() -> bool
     step_cost_millicents(3, 4, priced_rates()) == 11
   }
 
+-- GLM-5.3-Flash on OpenRouter ($0.15/M in, $0.50/M out, $0.03/M cache read =
+-- 15000 / 50000 / 3000 millicents per 1M). One step of the measured run: 100,000
+-- prompt tokens of which 97,000 cached, 200 out.
+--   fresh 3,000 x 15000 + 200 x 50000 + 97,000 x 3000 = 45e6 + 10e6 + 291e6
+--   = 346e6 / 1e6 = 346 millicents (the old meter: 100,000 x 15000 + 10e6 = 1510).
+pure func glm_rates() -> CostRates {
+  { input_per_1m_millicents: 15000, output_per_1m_millicents: 50000, cache_read_per_1m_millicents: 3000, cache_write_per_1m_millicents: -1 }
+}
+
+-- Haiku 5.5 direct ($0.10 in, $0.50 out, $0.01 read, $0.125 write per M).
+-- Disjoint: input 54, out 1000, read 40,000, write 2,000
+--   54x10000 + 1000x50000 + 40000x1000 + 2000x12500 = 0.54e6+50e6+40e6+25e6
+--   = 115.54e6 / 1e6 = 115 millicents.
+pure func haiku_rates() -> CostRates {
+  { input_per_1m_millicents: 10000, output_per_1m_millicents: 50000, cache_read_per_1m_millicents: 1000, cache_write_per_1m_millicents: 12500 }
+}
+
+pure func test_step_cost_with_cache() -> bool
+  tests [((), true)]
+  {
+    step_cost_with_cache(100000, 200, 97000, 0, true, glm_rates()) == 346
+      && step_cost_with_cache(54, 1000, 40000, 2000, false, haiku_rates()) == 115
+      -- unset cache rates on an inclusive route cost exactly what the old meter did
+      && step_cost_with_cache(100000, 200, 97000, 0, true, priced_rates()) == step_cost_millicents(100000, 200, priced_rates())
+      -- an impossible split (cache > input on an inclusive route) is priced as disjoint, never negative
+      && step_cost_with_cache(1000, 0, 5000000, 0, true, glm_rates()) == (1000 * 15000 + 5000000 * 3000) / 1000000
+      && cache_inclusive_route("openrouter/z-ai/glm-5.3-flash")
+      && not cache_inclusive_route("anthropic/claude-haiku-5-5")
+  }
+
+-- Input unpriced, cache reads priced: what a profile on a route that bills
+-- almost nothing but cache looks like.
+pure func cache_only_rates() -> CostRates {
+  { input_per_1m_millicents: 0, output_per_1m_millicents: 0, cache_read_per_1m_millicents: 3000, cache_write_per_1m_millicents: -1 }
+}
+
 pure func test_cost_cap_exceeded() -> bool
   tests [((), true)]
   {
     cost_cap_exceeded(100, 100, priced_rates())
+      && cost_cap_exceeded(100, 100, cache_only_rates())
+      -- the flag session.ail hands step_machine, which is where the live cap reads it
+      && rates_metered(cache_only_rates()) && not rates_metered(no_rates())
       && not cost_cap_exceeded(99, 100, priced_rates())
       && not cost_cap_exceeded(100, 0, priced_rates())
       && not cost_cap_exceeded(100, 100, no_rates())

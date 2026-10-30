@@ -297,13 +297,13 @@ pure func system_msg() -> Message {
 }
 
 pure func zero_rates() -> CostRates {
-  { input_per_1m_millicents: 0, output_per_1m_millicents: 0 }
+  { input_per_1m_millicents: 0, output_per_1m_millicents: 0, cache_read_per_1m_millicents: -1, cache_write_per_1m_millicents: -1 }
 }
 
 -- Non-zero rates make `cost_metered` true, which is the precondition for
 -- `decide` to ever return BudgetExceeded (src/core/step_machine.ail:104).
 pure func metered_rates() -> CostRates {
-  { input_per_1m_millicents: 1000000, output_per_1m_millicents: 1000000 }
+  { input_per_1m_millicents: 1000000, output_per_1m_millicents: 1000000, cache_read_per_1m_millicents: -1, cache_write_per_1m_millicents: -1 }
 }
 
 pure func mk_budget() -> BudgetPlan {
