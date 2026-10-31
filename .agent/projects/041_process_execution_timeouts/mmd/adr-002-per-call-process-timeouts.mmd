@@ -8,7 +8,7 @@ flowchart TB
   %% "R6" and the like are rulings in the ADR's §7. Dashed edges are not the normal path.
   %% Layout note: the renderer lays same-rank nodes in a row, so each stage is a subgraph, and the
   %% edges between stages are the order of one call, not a dependency between decisions.
-  %% Grounded 2026-10-31: ADR-002 sixth revision with rulings R1-R8, on origin/main a393314b,
+  %% Grounded 2026-10-31: ADR-002 seventh revision with rulings R1-R8, on origin/main a393314b,
   %% AILANG v0.54.14. The ADR is PROPOSED and its last review verdict is rework. NOTHING in the
   %% green or purple nodes exists at HEAD.
 
@@ -23,9 +23,9 @@ flowchart TB
 
   subgraph ORIGIN["Who is calling — D1, D7's entry points"]
     direction TB
-    main["<b>BashExec, RunTests via main dispatch</b><br/>optional timeout_secs in the schema (D1)"]:::now
-    loop["<b>scratchpad loopback</b> · R7<br/>can shorten, never extend"]:::now
-    ext["<b>extension effects</b> · R8<br/>session default, timeout_secs not read"]:::now
+    main["<b>BashExec, RunTests via main dispatch</b><br/>optional timeout_secs in the schema (D1)"]:::later
+    loop["<b>scratchpad loopback</b> · R7<br/>can shorten, never extend"]:::later
+    ext["<b>extension effects</b> · R8<br/>session default, timeout_secs not read"]:::later
     other["<b>every other native tool</b><br/>ReadFile, Search, WriteFile, EditFile"]:::cap
     helpers["<b>internal helpers</b><br/>path guard, rg, mv, chmod"]:::cap
   end
@@ -34,7 +34,7 @@ flowchart TB
     direction TB
     res{"<b>resolve_process_limit</b><br/>in tool_phase, before the port<br/>above the ceiling: clamped (R3)"}:::decision
     adapter{"<b>resolve_process_limit</b><br/>in loopback's adapter<br/>ceiling = the default"}:::decision
-    invalid["<b>argument error</b><br/>zero, negative, fractional, not a number, over one year<br/>no exec attempt · effects: none"]:::now
+    invalid["<b>argument error</b><br/>zero, negative, fractional, not a number, over one year<br/>no exec attempt · effects: none"]:::later
     carrier["<b>ToolInvocation.process</b><br/>SessionDefault or ExplicitMs(int)<br/>requested_ms, clamped, effective ceiling"]:::now
     today["<b>no carrier: today's behaviour, unchanged</b><br/>scripted: today's timeout_ms deadline · live: plain exec<br/>Legacy also ignores any request and renders no limit metadata"]:::cap
   end
@@ -53,7 +53,7 @@ flowchart TB
     direction TB
     port{"<b>ports.tool_exec, ext_effect_exec</b><br/>the world split"}:::cap
     scripted["<b>scripted expiry</b><br/>NoDeadline: never · Finite(n &lt;= 0): always<br/>otherwise the scripted duration against the limit"]:::now
-    batch["<b>run_native_batch</b><br/>takes the resolved value for each call, never clamps again"]:::now
+    batch["<b>run_native_batch</b><br/>takes the resolved value for each call, never clamps again"]:::later
     budget{"<b>the budget</b>"}:::decision
     plain["<b>plain exec</b><br/>the native session limit, exactly as today<br/>1500us, 0 and -1s included (I4)"]:::cap
     perCall["<b>execWith, a per-call timeout</b> · R1<br/>asked of upstream in sunholo-data/ailang#2035, does not exist yet<br/>same group kill and WaitDelay"]:::later
@@ -71,7 +71,7 @@ flowchart TB
 
   subgraph RESULT["What the model reads — D4"]
     direction TB
-    render["<b>one rendering helper</b><br/>an exec attempt: timeout_ms, requested_timeout_ms, max_timeout_ms<br/>no attempt: max_timeout_ms, and requested_timeout_ms if in range<br/>null = no deadline · 0 = immediate<br/>ahead of cmd and output, so truncation cannot remove them"]:::now
+    render["<b>one rendering helper</b><br/>a scripted completion is served as written<br/>an exec attempt: timeout_ms, requested_timeout_ms, max_timeout_ms<br/>no attempt: max_timeout_ms, and requested_timeout_ms if in range<br/>null = no deadline · 0 = immediate<br/>ahead of cmd and output, so truncation cannot remove them"]:::later
     timeout["<b>a timeout also says effects: unknown</b> · I2<br/>check state before retrying<br/>partial output once ailang#1878 is on a pin"]:::now
     model["<b>the tool result</b>"]:::unlocked
   end

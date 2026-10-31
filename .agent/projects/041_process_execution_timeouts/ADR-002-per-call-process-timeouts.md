@@ -1,7 +1,7 @@
 # ADR-002: Per-call process timeouts and what a timeout tells the model
 
 Date: 2026-10-30
-Status: **Proposed, sixth revision. Rulings R1-R8 are recorded in §7; the ADR as a whole is not marked accepted.**
+Status: **Proposed, seventh revision. Rulings R1-R8 are recorded in §7; the ADR as a whole is not marked accepted.**
 Grounded at: `origin/main` `a393314b` (#284 merged). AILANG v0.54.14, with the upstream API also
 read at v0.55.0.
 
@@ -11,8 +11,9 @@ of the fourth revision also returned rework, chiefly because that revision's D7 
 the scripted path. A third review, of the fifth revision, found seven of those eight findings resolved
 and again returned rework, chiefly over how live runs capture limits and how legacy programs survive
 re-encoding. This revision addresses all seven of its findings, the first by narrowing the replay goal
-(R6 in §7). It has not been re-reviewed, and the D7 design is unimplemented, so that verdict has not
-been replaced.
+(R6 in §7). A fourth review, of the sixth revision by Claude Fable, returned accept with amendments,
+and this revision applies its nine. Those amendments have not been reviewed, and the D7 design is
+unimplemented.
 
 Requested by the operator after #284 merged and tool calls were still seen to stop at 30 s.
 
@@ -102,16 +103,18 @@ Three gaps remain after #284:
   at `src/core/tool_runtime.ail:632-638`.
 - **I3.** Live and scripted runs get their limit from the same resolver and report it in the same
   fields, so DST exercises what production does. Their configuration may differ.
-- **I4.** A profile that sets nothing new keeps today's limits and enforcement. The added result
-  metadata (D4) is the one deliberate change to what such a session sees.
+- **I4.** A profile that sets nothing new cannot extend today's limit, and a call that does not ask
+  is enforced as it is today. Three things do change for such a session, all deliberately: the result
+  metadata (D4), a shorter request is honoured, and an invalid `timeout_secs` is rejected where it is
+  ignored today (D2).
 - **I5.** Internal helpers do not inherit a long budget because a model asked for one.
 
 ## 4. Decisions
 
 ### D1. The argument
 
-`BashExec` and `RunTests` regain an optional integer `timeout_secs`, this time parsed into
-`ProcessExecReq` and described in the schema, including the ceiling that applies. The name is the
+`BashExec` and `RunTests` regain an optional integer `timeout_secs`, this time read by the resolver
+(D7) and described in the schema, including the ceiling that applies. The name is the
 one models already sent. Other tools and internal helpers do not get it (I5).
 
 The catalog test that forbids `timeout_secs` today
@@ -135,7 +138,7 @@ effective ceiling, and extension effects do not read the argument at all (D7).
 
 | Request | Result |
 |---|---|
-| No argument | The default |
+| No argument, or `null` | The default |
 | Positive, at or under the ceiling | The request |
 | Above the ceiling | **The ceiling, and the result says so** |
 | Zero, negative, with a fractional part, not a number, or above 31,536,000 (one year) | Argument error before launch, `effects: none` |
@@ -150,8 +153,8 @@ The upper bound exists so that a request converts to milliseconds without overfl
 treated as a malformed argument and not clamped.
 
 `tools.process_timeout_max` is a new setting, so unlike `process_timeout` it may be strict: it must
-be positive and a whole number of milliseconds. A ceiling below the default is a configuration error,
-raised at startup. `process_timeout` keeps its native domain unchanged (I4), including sub-millisecond
+be positive and a whole number of milliseconds. A ceiling below a finite live default is a configuration
+error, raised at startup, and the program decoder refuses a `CeilingMs` below a finite default. `process_timeout` keeps its native domain unchanged (I4), including sub-millisecond
 values and non-positive values that time out immediately.
 
 ### D3. The primitive comes from AILANG
@@ -195,8 +198,15 @@ scripted `NoDeadline` default can produce, for `timeout_ms` under `SessionDefaul
 `max_timeout_ms` under `SameAsDefault`. `0` means an immediate deadline, the display of any non-positive
 native default, and never means no deadline. The fields are bounded and go before
 `cmd` and the output fields, so truncating a message cannot remove them, even for an oversized `cmd`.
-An ordinary completed command still carries no `fault` (034). One rendering helper produces them, used
-by the live path, the scripted path (which bypasses native result construction) and loopback.
+An ordinary completed command still carries no `fault` (034). One rendering helper produces them, used by
+the live path, by loopback, and for the scripted outcomes `tool_phase` builds.
+
+**Scripted results.** A scripted completion is an opaque string, served as written
+(`src/core/tool_phase.ail:291`), and gets no metadata. Injecting it would make the recorded payload
+and the message the model reads differ, and has no meaning for content that is not JSON. A scripted
+`ToolFailed` or `ToolDeadlineExceeded` and an invalid request are built by `tool_phase`, so they carry
+it, and `tool_outcome_message` takes the carrier to do so. A scripted program that needs a completion
+with metadata states it in the authored content.
 
 **A timeout** of either tool also keeps `effects: unknown` (I2), and adds:
 
@@ -209,7 +219,7 @@ Today a live timeout arrives as `Err(Timeout)` and carries only the elapsed time
 path has `ToolDeadlineExceeded` with a `timeout_ms`. Both must report the same fields (I3).
 
 **Migration.** These fields change the bytes of results in a live run with limits and in any program
-whose mode is `Limits` (D7). A `Legacy` program renders as it does today, so existing corpora need no
+whose mode is `Limits` (D7), within D4's rule for scripted results. A `Legacy` program renders as it does today, so existing corpora need no
 result change. Live-binding fixtures and recorded streams are re-baselined in the same change, with the
 diff limited to these fields. Historical tool messages are never rewritten.
 
@@ -316,8 +326,9 @@ table.
 `BashExec` and `RunTests` in `Limits` mode, and `None` for every other tool and for everything in
 `Legacy` mode, so those keep today's deadline contract exactly. The live path passes the budget to the
 primitive, and rendering takes the other fields from the same value.
-`run_native_batch` takes the resolved value for each call, so a caller cannot omit it, and it consumes
-that value without clamping again.
+Only the resolver reads the raw `timeout_secs`. `ProcessExecReq` does not carry it, and
+`run_native_batch` and `dispatch_one_typed` take only the resolved value for each call, so a caller
+cannot omit it, the executor cannot hold two versions of the request, and nothing clamps again.
 
 **Scripted expiry.** The existing predicate cannot serve here, because it reads 0 as no deadline. For
 a scripted duration `t` in milliseconds, the order of `scripted_tool_outcome`'s checks is unchanged and
@@ -345,7 +356,7 @@ either `legacy` or the default and ceiling with durations as integer nanoseconds
 
 | Program mode | Limits come from | Request | Metadata |
 |---|---|---|---|
-| `Limits` | `InitialWorld.process_limits` | Resolved | Rendered |
+| `Limits` | `InitialWorld.process_limits` | Resolved | Rendered, except on a scripted completion (D4) |
 | `Legacy` | `MOTOKO_TOOL_TIMEOUT_MS`, as today | **Ignored, as today** | None |
 
 The mode is the field, never inferred from the version. Decoding v1-v5 yields `Legacy`, as the absence
@@ -389,6 +400,11 @@ lack the input.
   checks workdir, lease, profile and digests, not `timeout_ms`. Full post-change compatibility can only
   be shown once this is built.
 - Rendered results: see D4.
+- Mechanical fan-out at step 3: `ToolInvocation` is built in `tool_phase`, `session`, `ports`,
+  `src/eval/journal/seams.ail` and its live test, and `scripts/dst/world_state_probe.ail`,
+  `strict_replay_dst.ail` and `long_qwen_compaction_dst.ail`. `scripts/verify_native_process_tree.ail:38`
+  calls `run_native_batch`, and `src/eval/journal/admission_live_test.ail:127` pins
+  `execution-program/5`.
 
 **Entry points:**
 
@@ -396,7 +412,7 @@ lack the input.
 |---|---|
 | `BashExec`, `RunTests` via main dispatch | Resolved in `tool_phase`, as above |
 | Scratchpad loopback (ruling R7) | Resolved in `tool_envelope_dispatch`, the adapter, with the run's limits but `ceiling` forced to `SameAsDefault`. It can shorten but never extend. An invalid request is rejected, a request above the default is reported as clamped, and `max_timeout_ms` reports the default and not the run's ceiling. With default 30 s and ceiling 300 s, a 60 s request runs at 30 s and says so |
-| Extension effects, `world_ext_effect` (ruling R8) | These reach the same live executor, and herdr invokes `BashExec` this way (`packages/motoko-ext-herdr/herdr.ail:447`). In `Limits` mode, process tools carry `SessionDefault` with `SameAsDefault`, and no request. `timeout_secs` in their arguments is not read, so it is not validated either. `timeout_ms: 0` on that envelope stays |
+| Extension effects, `world_ext_effect` (ruling R8) | These reach the same live executor, and herdr invokes `BashExec` this way (`packages/motoko-ext-herdr/herdr.ail:447`). In `Limits` mode, process tools carry `SessionDefault` with `SameAsDefault`, and no request. `timeout_secs` in their arguments is not read, so it is not validated either. `timeout_ms: 0` on that envelope stays, but the carrier now decides expiry, so a scripted extension `BashExec` in a `Limits` program can expire against the default where today it never does |
 | Internal helpers | Plain `exec` at the session default (I5) |
 | TUI launch | `MOTOKO_PROCESS_TIMEOUT` and `MOTOKO_PROCESS_TIMEOUT_MAX`, resolved with the profile and passed to the runtime |
 | Direct CLI launch | The default comes from the #2036 query, so the reported value is what was set on the command line |
@@ -444,14 +460,15 @@ Accepted when:
 - A request above the ceiling stops at the ceiling. A clamped command that succeeds immediately
   still reports the clamp, and so does a clamped command that exits non-zero.
 - A shorter request stops at the shorter limit.
-- Zero, negative, fractional, string, null and out-of-range requests, including 10^16, are rejected
-  by D2's table, with independent evidence that they never launched. They report no applied limit.
+- `null` behaves as no argument. Zero, negative, fractional, string and out-of-range requests, including
+  10^16, are rejected by D2's table, with independent evidence that they never launched. They report no applied limit.
 - Internal helpers and default calls in the same runtime run at the default after an extended call,
   which catches leaked global state (I5). Batches run one call at a time
   (`src/core/tool_runtime.ail:224`), so helpers running during a long call are not a reachable case.
-- A DST scenario and a live probe under the same finite limits agree on actual enforcement and on the
-  model-visible fields, not only on a number in two records (I3). This covers extension, omission,
-  shortening and clamping.
+- A DST scenario and a live probe under the same finite limits agree on actual enforcement, and on
+  the model-visible fields of a deadline and an invalid request (I3). This covers extension, omission,
+  shortening and clamping. A live completion's fields are checked against a scripted program whose
+  authored content states them, and a scripted completion is served byte for byte.
 - Scripted-only tests cover a `NoDeadline` default, with and without a ceiling, including its `null`
   fields. It has no live counterpart, because a native 0 is an immediate deadline.
 - Every `SameAsDefault` row is tested with a 30 s default, a request of 60 s must not extend it, and
@@ -465,14 +482,18 @@ Accepted when:
 - An old recording replays unchanged, including one whose calls carry `timeout_secs`. A transcode test
   decodes, encodes and decodes a legacy program containing `timeout_secs: 0`, and it stays `Legacy` and
   ignores the request.
-- A scripted `Limits` program round-trips with a clamped request. A post-change journal containing a
+- A scripted `Limits` program round-trips with a clamped request, and an invalid request in one records
+  no tool interaction and leaves the scripted queue balanced. A scripted extension `BashExec` expires
+  against the program default. A post-change journal containing a
   clamped and an invalid request admits as `Legacy` and replays strictly, serving the recorded content.
-- The schema's stated ceiling matches the configured one, and a ceiling below the default fails at
-  startup.
+- The schema's stated ceiling matches the configured one, a ceiling below a finite default fails at
+  startup, and the decoder refuses one in a program.
 - Every entry point in D7's table has a test, including loopback, a direct CLI launch and a restart.
   The same argument is sent through main dispatch, loopback and an extension effect, and each behaves
   and reports as its row says.
-- Limit fields survive truncation of a result with very large output and with an oversized `cmd`.
+- Limit fields survive truncation of a result with an oversized `cmd`, and with very large output in a
+  test that raises `max_output_chars`, because its 6000 and 8000 defaults (`src/core/config.ail:427`,
+  `:449`) sit far below the message cap and could not trigger it.
 - Generated programs keep their draws, salts and interactions for existing seeds, and differ from the
   pre-v6 artifact only in the version line, digest and `process_limits` line. Journals recorded before
   the change still fold and plan resume.
