@@ -1,7 +1,7 @@
 # ADR-002: Per-call process timeouts and what a timeout tells the model
 
 Date: 2026-10-30
-Status: **Proposed, sixth revision. Rulings R1-R6 are recorded in §7, with two proposals not yet ruled; the ADR as a whole is not marked accepted.**
+Status: **Proposed, sixth revision. Rulings R1-R8 are recorded in §7; the ADR as a whole is not marked accepted.**
 Grounded at: `origin/main` `a393314b` (#284 merged). AILANG v0.54.14, with the upstream API also
 read at v0.55.0.
 
@@ -395,8 +395,8 @@ lack the input.
 | Path | Rule |
 |---|---|
 | `BashExec`, `RunTests` via main dispatch | Resolved in `tool_phase`, as above |
-| Scratchpad loopback (proposal P1) | Resolved in `tool_envelope_dispatch`, the adapter, with the run's limits but `ceiling` forced to `SameAsDefault`. It can shorten but never extend. An invalid request is rejected, a request above the default is reported as clamped, and `max_timeout_ms` reports the default and not the run's ceiling. With default 30 s and ceiling 300 s, a 60 s request runs at 30 s and says so |
-| Extension effects, `world_ext_effect` (proposal P2) | These reach the same live executor, and herdr invokes `BashExec` this way (`packages/motoko-ext-herdr/herdr.ail:447`). In `Limits` mode, process tools carry `SessionDefault` with `SameAsDefault`, and no request. `timeout_secs` in their arguments is not read, so it is not validated either. `timeout_ms: 0` on that envelope stays |
+| Scratchpad loopback (ruling R7) | Resolved in `tool_envelope_dispatch`, the adapter, with the run's limits but `ceiling` forced to `SameAsDefault`. It can shorten but never extend. An invalid request is rejected, a request above the default is reported as clamped, and `max_timeout_ms` reports the default and not the run's ceiling. With default 30 s and ceiling 300 s, a 60 s request runs at 30 s and says so |
+| Extension effects, `world_ext_effect` (ruling R8) | These reach the same live executor, and herdr invokes `BashExec` this way (`packages/motoko-ext-herdr/herdr.ail:447`). In `Limits` mode, process tools carry `SessionDefault` with `SameAsDefault`, and no request. `timeout_secs` in their arguments is not read, so it is not validated either. `timeout_ms: 0` on that envelope stays |
 | Internal helpers | Plain `exec` at the session default (I5) |
 | TUI launch | `MOTOKO_PROCESS_TIMEOUT` and `MOTOKO_PROCESS_TIMEOUT_MAX`, resolved with the profile and passed to the runtime |
 | Direct CLI launch | The default comes from the #2036 query, so the reported value is what was set on the command line |
@@ -498,13 +498,8 @@ Accepted when:
 | R4 | If upstream declines or is slow, what then? | Keep the session setting as the only relief and revisit. Do not fork or build a second executor without a new ruling |
 | R5 | Fix the D6 cancellation defect, or accept it? Where? | Fix it, separately and first, because it affects every session today. Ask upstream whether AILANG should end its process groups when the runtime is terminated, and only then consider the TUI. Filed as sunholo-data/ailang#2034 |
 | R6 | Must replay cover a production live run's limits? | No. Existing recordings and generated programs must still replay unchanged, including after re-encoding, and journal admission writes `Legacy`. Production has no recorder for these limits, and live probes and scripted programs test resolution directly. This holds only if §6's admission test passes: if a post-change journal does not replay cleanly as `Legacy`, the ruling is reopened. Revisit it if journal replay is to serve as evidence of how limits were enforced |
-
-**Proposed and not ruled:**
-
-| # | Proposal | Reason |
-|---|---|---|
-| P1 | Scratchpad loopback can shorten a limit but not extend it | Loopback is a second route to a tool. Extending there would be a decision of its own |
-| P2 | Extension effects stay on the session default and do not read `timeout_secs` | The argument is the model's, and an extension's process call is not a model request |
+| R7 | May scratchpad loopback extend a limit? | No. It can shorten but not extend, because one scratchpad call can make many tool calls and so block for many multiples of the ceiling. Loosening this later breaks nothing. Revisit it if long-running commands inside scratchpad code become a normal workflow |
+| R8 | Do extension effects honour `timeout_secs`? | No. They stay on the session default and do not read the argument, because the ceiling bounds what a model can ask for, and herdr's check wait is sized from the default. If an extension needs a longer limit, it gets its own explicit setting and does not reuse the model's argument |
 
 ## 8. Consequences
 
