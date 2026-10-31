@@ -13,7 +13,7 @@ point; green is new design; purple is new design that waits on an upstream pin; 
 model reads; red is the D6 defect; amber-dashed is its upstream fix; gray-dashed is out of scope.
 
 This diagram is **dated evidence**. The ADR is **Proposed**, and nothing in the green or purple nodes
-exists at HEAD. It draws the seventh revision with rulings R1-R8, against `origin/main` `a393314b`.
+exists at HEAD. It draws the eighth revision with rulings R1-R11, against `origin/main` `a393314b`.
 
 ## Re-render
 
