@@ -1,0 +1,65 @@
+%% ADR-002 D1-D7 as designed. Proposed and not built; shipping waits on the upstream asks in §6.
+flowchart TD
+  config["Startup limits<br/>tools.process_timeout, tools.process_timeout_max<br/>env overrides, #2036 query on direct CLI launch"]
+  program["Program process_limits<br/>execution-program/6<br/>v1-v5 decode as Legacy, journal admission writes Legacy (R6)"]
+  mode{"LimitMode"}
+
+  main["BashExec, RunTests<br/>main dispatch with timeout_secs"]
+  loopback["Scratchpad loopback<br/>with timeout_secs (R7)"]
+  ext["Extension effects<br/>timeout_secs not read (R8)"]
+  other["Other native tools"]
+  helpers["Internal helpers<br/>path guard, rg, mv, chmod"]
+
+  resolver{"resolve_process_limit<br/>in tool_phase, ahead of the port"}
+  adapter{"resolve_process_limit<br/>in the loopback adapter<br/>ceiling forced to SameAsDefault"}
+  invalid["Argument error<br/>no exec attempt, effects: none"]
+  carrier["ToolInvocation.process<br/>budget, requested_ms, clamped, effective ceiling"]
+  today["No carrier: today's behaviour<br/>timeout_ms deadline when scripted, plain exec when live<br/>requests ignored, no limit metadata"]
+  helperExec["Plain exec at the session default<br/>never inherits a requested budget (I5)"]
+
+  port{"ports.tool_exec or ext_effect_exec<br/>world split"}
+  scripted["Scripted expiry<br/>NoDeadline never, Finite(n <= 0) always<br/>otherwise duration against limit"]
+  batch["run_native_batch<br/>consumes the resolved value, never clamps again"]
+  live{"Budget"}
+  plain["Plain exec<br/>native session limit, unchanged"]
+  perCall["execWith per-call timeout<br/>upstream #2035"]
+  killed["Runtime killed: no deadline survives<br/>D6 blocker, fixed first, upstream #2034"]
+
+  render["One rendering helper<br/>timeout_ms, requested_timeout_ms, max_timeout_ms<br/>null = no deadline, 0 = immediate"]
+  timeout["A timeout adds effects: unknown<br/>partial output after upstream #1878"]
+  model["Tool result to the model"]
+
+  config --> mode
+  program --> mode
+  mode -->|"Limits"| resolver
+  mode -->|"Limits"| adapter
+  mode -->|"Legacy"| today
+
+  main --> resolver
+  loopback --> adapter
+  ext -->|"Limits: SessionDefault"| carrier
+  other --> today
+  helpers --> helperExec
+
+  resolver -->|"invalid"| invalid
+  adapter -->|"invalid"| invalid
+  resolver -->|"default, request or clamp"| carrier
+  carrier --> port
+  adapter -->|"shorten or clamp to default"| batch
+
+  port -->|"scripted"| scripted
+  port -->|"live"| batch
+  batch --> live
+  live -->|"SessionDefault"| plain
+  live -->|"ExplicitMs"| perCall
+  plain -.-> killed
+  perCall -.-> killed
+
+  scripted --> render
+  plain --> render
+  perCall --> render
+  render --> timeout
+  render --> model
+  timeout --> model
+  invalid --> model
+  today --> model
