@@ -8,8 +8,8 @@ flowchart TB
   %% "R6" and the like are rulings in the ADR's §7. Dashed edges are not the normal path.
   %% Layout note: the renderer lays same-rank nodes in a row, so each stage is a subgraph, and the
   %% edges between stages are the order of one call, not a dependency between decisions.
-  %% Grounded 2026-10-31: ADR-002 seventh revision with rulings R1-R8, on origin/main a393314b,
-  %% AILANG v0.54.14. The ADR is PROPOSED and its last review verdict is rework. NOTHING in the
+  %% Grounded 2026-10-31: ADR-002 ninth revision with rulings R1-R11, on origin/main a393314b,
+  %% AILANG v0.54.14. The ADR is ACCEPTED under R9 and not implemented. NOTHING in the
   %% green or purple nodes exists at HEAD.
 
   subgraph LIMITS["Where a call's limits come from — D2, D7"]
@@ -25,7 +25,7 @@ flowchart TB
     direction TB
     main["<b>BashExec, RunTests via main dispatch</b><br/>optional timeout_secs in the schema (D1)"]:::later
     loop["<b>scratchpad loopback</b> · R7<br/>can shorten, never extend"]:::later
-    ext["<b>extension effects</b> · R8<br/>session default, timeout_secs not read"]:::later
+    ext["<b>extension effects</b> · R8<br/>session default, timeout_secs not read"]:::now
     other["<b>every other native tool</b><br/>ReadFile, Search, WriteFile, EditFile"]:::cap
     helpers["<b>internal helpers</b><br/>path guard, rg, mv, chmod"]:::cap
   end
@@ -85,7 +85,7 @@ flowchart TB
   today --> model
 
   killed["<b>D6: the runtime is killed, and no deadline survives</b><br/>the deadline lives inside the runtime, so the command runs on<br/>measured on main at any limit · blocks D1 until fixed"]:::fault
-  fix["<b>the fix comes first</b> · R5<br/>ask upstream to end the process groups: ailang#2034<br/>the TUI only if that stalls"]:::blocked
+  fix["<b>the fix comes first</b> · R5, R10<br/>ask upstream to end the process groups: ailang#2034<br/>the TUI only if that stalls"]:::blocked
   plain -.->|"ESC"| killed
   perCall -.->|"ESC"| killed
   killed -.-> fix
