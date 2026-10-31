@@ -1,7 +1,7 @@
 # ADR-002: Per-call process timeouts and what a timeout tells the model
 
 Date: 2026-10-30
-Status: **Proposed, eighth revision. Rulings R1-R11 are recorded in §7; the ADR is not accepted, and R9 states what acceptance needs.**
+Status: **Accepted 2026-10-31 under R9, ninth revision. Not implemented. Rulings R1-R11 are in §7.**
 Grounded at: `origin/main` `a393314b` (#284 merged). AILANG v0.54.14, with the upstream API also
 read at v0.55.0.
 
@@ -15,7 +15,10 @@ re-encoding. This revision addresses all seven of its findings, the first by nar
 and the seventh revision applied its nine. A fifth review of those amendments again returned accept with
 amendments, and writing PLAN-001 raised ten more questions, two of which changed the design: the carrier
 lacked a value its readers need, and the extension token dropped the run's limits. This revision applies
-all of them. Those changes have not been reviewed, and the D7 design is unimplemented.
+all of them. The check R9 requires found that both design changes hold, with amendments. This revision
+applies those, plus six gaps PLAN-001 found. These last changes have not been reviewed, by the operator's
+choice: what remains is left to the plan's tests. The route for startup limits is the one new piece of
+design here, and W11 confirms it.
 
 Requested by the operator after #284 merged and tool calls were still seen to stop at 30 s.
 
@@ -35,7 +38,7 @@ command does not get the long budget because one other command needed it. (D1, D
 
 **The primitive has to come from AILANG.** `std/process.exec` has no per-call timeout, and the
 existing workarounds are withdrawn or lack what a tool result needs. This ADR asks upstream for one and
-ships nothing until a pin carries it. (D3)
+activates nothing until a pin carries it. (D3)
 
 **Nothing changes by default.** With no new setting, the ceiling equals the default, so a model
 cannot extend anything until the operator opts in. (D2)
@@ -180,7 +183,7 @@ too late to compare a request with the default, to validate a ceiling at startup
 limit on a command that succeeded. Motoko cannot otherwise know the limit of a run launched directly
 with `--process-timeout`, as `Makefile:2673` does.
 
-No part of D1, D2 or D4's limit metadata ships before a pin carries both #2035 and #2036. A schema that
+No part of D1, D2 or D4's limit metadata activates on a live run before a pin carries both #2035 and #2036. A schema that
 advertises an argument nothing enforces is the defect #284 removed, and a reported limit that may
 be wrong repeats it. D5's probe can ship earlier.
 
@@ -201,7 +204,8 @@ that stays where it is today, in `effects: unknown`.
 none. That means an invalid request, and the existing refusal inside `run_process_result`
 (`src/core/tool_runtime.ail:1030`). It carries `max_timeout_ms` alone, plus `requested_timeout_ms` for a
 positive whole-millisecond request within D2's bound. Any other rejected value is stated in the error's
-message. Denials, undecodable arguments, deferred calls and a hook's `Handled` result are built before the
+message. A value that does not decode, such as `1e400`, gets the existing undecodable-arguments message and
+never launches. Denials, undecodable arguments, deferred calls and a hook's `Handled` result are built before the
 resolver runs, hold no resolved value, and stay as they are.
 
 These are display values, in whole milliseconds and rounded up. They never feed enforcement, so a
@@ -212,7 +216,8 @@ native default, and never means no deadline. The fields are bounded and go befor
 `cmd` and the output fields, so truncating a message cannot remove them, even for an oversized `cmd`.
 An ordinary completed command still carries no `fault` (034). One function produces them, used by
 the live path, by loopback, by the messages `tool_phase` builds for scripted outcomes, and by
-`session.tool_outcome_text` (`src/core/session.ail:1150`), which renders an extension effect's deadline.
+`session.tool_outcome_text` (`src/core/session.ail:1150`), which renders an extension effect's faults and
+takes the carrier to do so. Its deadline's existing top-level `timeout_ms` is replaced, not written twice.
 
 **Scripted results.** A scripted completion is an opaque string, served as written
 (`src/core/tool_phase.ail:291`), and gets no metadata. Injecting it would make the recorded payload
@@ -247,6 +252,8 @@ the pipes close first: with a 1 s limit and a descendant exiting at 3 s, it retu
   only today.
 - Upstream was asked, in sunholo-data/ailang#2037, for a stronger containment primitive such as Linux
   cgroups or a subreaper. This ADR does not depend on it.
+- SIGKILL gets the same treatment under R10: the runtime cannot clean up after it, so the command survives.
+  A row in the same probe pins today's behaviour, and the operator documentation states it.
 - State the limit in the tool documentation for operators. It does not go in the model-facing
   result, where `effects: unknown` already covers it.
 
@@ -315,7 +322,9 @@ ProcessBudget = SessionDefault | ExplicitMs(int)
 ResolvedProcess = { budget: ProcessBudget, requested_ms: Option[int], clamped: bool,
                     session_default: SessionLimit,
                     effective_ceiling: ProcessLimits.ceiling }
-resolve_process_limit(limits, request) -> ResolvedProcess | invalid
+InvalidRequest  = { requested_ms: Option[int], session_default: SessionLimit,
+                    effective_ceiling: ProcessLimits.ceiling }
+resolve_process_limit(limits, request) -> ResolvedProcess | InvalidRequest
 ```
 
 **The rule**, with `r` as a valid request in milliseconds and `r_ns = r * 1_000_000`, which D2's upper
@@ -344,7 +353,10 @@ table.
 `Legacy` mode, so those keep today's deadline contract exactly. The live path passes the budget to the
 primitive, and rendering takes the other fields from the same value. `session_default` is there because
 `SessionDefault` and `SameAsDefault` hold no number, while `scripted_tool_outcome` and `tool_outcome_message`
-are pure and hold no world.
+are pure and hold no world. `resolve_process_limit` is the only constructor of both results, so the copy cannot
+disagree with `process_limits`: loopback and extension effects call it with `SameAsDefault`, and extension
+effects pass no request. The field function takes whether an attempt was made, so an `InvalidRequest` and
+the refusal inside `run_process_result` report no `timeout_ms`.
 Only the resolver reads the raw `timeout_secs`. `ProcessExecReq` does not carry it, and
 `run_native_batch` and `dispatch_one_typed` take only the resolved value for each call, so a caller
 cannot omit it, the executor cannot hold two versions of the request, and nothing clamps again.
@@ -391,14 +403,21 @@ it no longer governs process tools, so a scripted world can represent default 10
 request 2000, and it still governs the other tools. In `Legacy` its 0 still means no deadline.
 
 **Live runs.** The limits resolved at startup (D7's entry points) are held in the live `WorldState`
-as `Limits(...)`, at `src/core/session.ail:1527`. This is runtime state and is not written to a program.
+as `Limits(...)`, set in `ported_provider`'s `LiveAI` arm (`src/core/session.ail:1527`), which already holds
+the `Env` and `Process` effects: the default from the #2036 query and the ceiling from
+`MOTOKO_PROCESS_TIMEOUT_MAX`, which the TUI sets from the profile. `ExtRuntime` holds no limit, and widening it
+would be an ABI change. This is runtime state and is not written to a program. This route is read from the
+code and not built, and W11 confirms it.
 
 **The extension token.** `world_json` and `world_of_json` list fields one at a time
 (`src/core/ext_world.ail:600`, `:642`), and `adopt_world` (`:705`) replaces the tool phase's world after every
 hook. Unless `process_limits` crosses, loopback and extensions run as `Legacy`, and the run itself drops to
 `Legacy` after its first native dispatch, all of which type-checks. So it crosses in the token, a token
-without it decodes as `Legacy`, and `adopt_world` re-seats it from `pre`, so a hook cannot change it. Loopback
-reads it from `ctx.world`, with no ABI change.
+without it decodes as `Legacy`, and `adopt_world` re-seats it from `pre`, so a hook cannot change the driver's value. Loopback
+reads it from `ctx.world`, with no ABI change. An extension that passes a token without the field runs its own
+effect as `Legacy`, as with every token field, which is accepted: live enforcement does not change, because
+`SessionDefault` is a plain `exec`. Loopback has no `emit`, so it writes no `ToolArgumentsInvalid`. An invalid
+request there is tested through its result, and is a known limit of what the invariants can see.
 
 **What replay does not cover (ruling R6).** Production has no recorder for these limits. A live
 run becomes a program only through journal admission, and journal configuration does not hold them.
@@ -415,8 +434,8 @@ lack the input.
 - Program schema: `execution-program/6`, with `execution-program/5` written out in
   `decodable_schema_versions()` by name, and a new frozen v6 specimen. Every writer, including
   generators and admission, stamps v6 with `legacy` until it is migrated. That is a schema-only artifact
-  refresh at step 3: the version line, digest and that one header line change, while draws and
-  interactions do not. Frozen v1-v5 specimens are untouched.
+  refresh at step 3, of the one tracked v5 artifact and of what generators write from then on: the version
+  line, digest and that one header line change, while draws and interactions do not. Frozen v1-v5 specimens are untouched.
 - Generator: stays `Legacy` until it is taught to emit limits and `timeout_secs`. That is a new draw, so
   it needs its own version bump and corpus refresh, in its own change. The 20-90 ms draw, its salts
   and the 2,000 ms corpus bound are not touched.
@@ -429,11 +448,14 @@ lack the input.
 - Mechanical fan-out, step 3: `ToolInvocation` literals at `tool_phase.ail:504`, `session.ail:1372`,
   `ports.ail:2953` and `:3016`, `seams.ail:343`, `seams_live_test.ail:99`, `strict_replay_dst.ail:1417` and
   `world_state_probe.ail:1222`; the token at `ext_world.ail:600`, `:642` and `:705`; `tool_outcome_message`'s
-  callers; and the literal `execution-program/5` pins in `dst_program.ail`, `dst_persistence.ail`, `scan.ail`,
+  callers; the world constructors `empty_world_state` (`ports.ail:890`), `dst_replay.world_state_of` (`:918`), a
+  record update the compiler will not flag, so a `Limits` program that forgets the field silently replays as
+  `Legacy`, and `journal_world_state` (`world.ail:105`), whose `Legacy` default is correct; and the literal `execution-program/5` pins in `dst_program.ail`, `dst_persistence.ail`, `scan.ail`,
   `admission.ail`, `admission_live_test.ail:127` and `program_persistence_dst.ail`.
 - Mechanical fan-out, step 4: `run_native_batch` at `tool_envelope_dispatch.ail:47` and
-  `scripts/verify_native_process_tree.ail:38`, `dispatch_one_typed`'s callers at `tool_dispatch_adapter.ail:312`
-  and `world_state_probe.ail:1254`, and `tools_for_mode` at the offer.
+  `scripts/verify_native_process_tree.ail:38`, `live_tool_outcome` at `ports.ail:1866`, `dispatch_one_typed`'s callers at
+  `tool_dispatch_adapter.ail:312` and `world_state_probe.ail:1254` and `:1402`, with `dispatch_one` keeping its
+  signature, and `tools_for_mode` at the offer.
 
 **Entry points:**
 
@@ -441,7 +463,7 @@ lack the input.
 |---|---|
 | `BashExec`, `RunTests` via main dispatch | Resolved in `tool_phase`, as above |
 | Scratchpad loopback (ruling R7) | Resolved in `tool_envelope_dispatch`, the adapter, with the run's limits but `ceiling` forced to `SameAsDefault`. It can shorten but never extend. An invalid request is rejected, a request above the default is reported as clamped, and `max_timeout_ms` reports the default and not the run's ceiling. With default 30 s and ceiling 300 s, a 60 s request runs at 30 s and says so |
-| Extension effects, `world_ext_effect` (ruling R8) | These reach the same live executor, and herdr invokes `BashExec` this way (`packages/motoko-ext-herdr/herdr.ail:447`). In `Limits` mode, process tools carry `SessionDefault` with `SameAsDefault`, and no request. `timeout_secs` in their arguments is not read, so it is not validated either. `timeout_ms: 0` on that envelope stays, and a scripted deadline reports through `tool_outcome_text`, but the carrier now decides expiry, so a scripted extension `BashExec` in a `Limits` program can expire against the default where today it never does |
+| Extension effects, `world_ext_effect` (ruling R8) | These reach the same live executor, and herdr invokes `BashExec` this way (`packages/motoko-ext-herdr/herdr.ail:447`). In `Limits` mode, process tools carry `SessionDefault` with `SameAsDefault`, and no request. `timeout_secs` in their arguments is not read, so it is not validated either. `timeout_ms: 0` on that envelope stays, and a scripted fault reports through `tool_outcome_text`, but the carrier now decides expiry, so a scripted extension `BashExec` in a `Limits` program can expire against the default where today it never does |
 | Internal helpers | Plain `exec` at the session default (I5) |
 | TUI launch | `MOTOKO_PROCESS_TIMEOUT` and `MOTOKO_PROCESS_TIMEOUT_MAX`, resolved with the profile and passed to the runtime |
 | Direct CLI launch | The default comes from the #2036 query, so the reported value is what was set on the command line |
@@ -525,9 +547,10 @@ Accepted when:
   and reports as its row says.
 - Limit fields survive `cap_tool_message_content`'s 65,536-character cut
   (`src/core/phase_vocab.ail:1546`), on a result whose output exceeds it and on one with an oversized `cmd`.
-- `process_limits` survives the token and `adopt_world`: a native dispatch and a hook leave a `Limits` run in
-  `Limits`, loopback and extension effects see it, and a hook cannot change it. A token without it decodes as
-  `Legacy`.
+- `process_limits` survives the token. The direct guard is the `ext_world` round trip with a `Limits` value
+  distinct from the default (`src/core/ext_world.ail:915`), because `adopt_world` alone would hide a dropped
+  encoder key. Loopback and extension-effect checks go through a real token and assert `Limits` behaviour, and a
+  hook cannot change the driver's value. A token without it decodes as `Legacy`.
 - Generated programs keep their draws, salts and interactions for existing seeds, and differ from the
   pre-v6 artifact only in the version line, digest and `process_limits` line. Journals recorded before
   the change still fold and plan resume.
@@ -557,7 +580,7 @@ Accepted when:
 | R8 | Do extension effects honour `timeout_secs`? | No. They stay on the session default and do not read the argument, because the ceiling bounds what a model can ask for, and herdr's check wait is sized from the default. If an extension needs a longer limit, it gets its own explicit setting and does not reuse the model's argument |
 | R9 | When is this ADR accepted? | After this revision, once a narrow independent check confirms the resolutions of the carrier's `session_default` and the extension token. Those two change the design and have had no independent review. PLAN-001's W1-W3 may start before that, and W4-W7 wait |
 | R10 | What satisfies D6, and when has upstream stalled? | Ending process groups on SIGTERM and SIGINT satisfies D6, and SIGKILL stays disclosed. If #2034 has no maintainer direction or date by 2026-11-14, two weeks after filing, or upstream declines sooner, the TUI fix goes to the operator for a ruling. It is not built automatically |
-| R11 | Who regenerates `manifest-A`? | The operator directs one evaluator change after the last item that moves protected symbols, as 034 proposed. Work items leave it alone and record the rows they leave red. If that wait passes a few weeks, regenerate once after the scripted work and again after the live wiring |
+| R11 | Who regenerates `manifest-A`? | The operator directs one evaluator change after the last item that moves protected symbols, as 034 proposed. Work items leave it alone and record the rows they leave red. If that wait passes four weeks, regenerate once after the scripted work and again after the live wiring |
 
 ## 8. Consequences
 
@@ -571,5 +594,5 @@ Accepted when:
   measured.
 - Raising `tools.process_timeout` today does not change the D6 defect, which is already unbounded.
 - A replayed journal cannot show that a past clamp was correct, only what the model saw (R6).
-- `execution-program/6` refreshes every generated artifact once, for a field that stays `legacy` until
+- `execution-program/6` refreshes the tracked artifact and what generators write once, for a field that stays `legacy` until
   something uses it.
