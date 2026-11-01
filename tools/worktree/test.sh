@@ -48,12 +48,15 @@ echo one > "$repo/file.txt"
 git -C "$repo" add file.txt && git -C "$repo" commit -q -m init && git -C "$repo" push -q -u origin main
 
 echo "new.sh"
+new_config_before="$(cksum < "$repo/.git/config")"
 expect 0 "creates a sibling worktree on a new branch" \
 	bash -c "cd '$repo' && '$here/new.sh' task-a feat/task-a"
 [ -d "$tmp/repo-task-a" ] && ok "the worktree is beside the shared checkout" || bad "the worktree is beside the shared checkout"
 [ "$(git -C "$tmp/repo-task-a" branch --show-current)" = "feat/task-a" ] && ok "it is on the new branch" || bad "it is on the new branch"
 [ "$(git -C "$tmp/repo-task-a" rev-parse HEAD)" = "$(git -C "$repo" rev-parse origin/main)" ] && ok "it starts at origin/main" || bad "it starts at origin/main"
 [ "$(git -C "$repo" branch --show-current)" = "main" ] && ok "the shared checkout stays on main" || bad "the shared checkout stays on main"
+[ "$(cksum < "$repo/.git/config")" = "$new_config_before" ] && ok "it does not write the shared checkout's config" || bad "it does not write the shared checkout's config"
+! git -C "$tmp/repo-task-a" rev-parse --verify --quiet '@{upstream}' >/dev/null && ok "and the branch has no upstream" || bad "and the branch has no upstream"
 expect 1 "refuses a name whose directory exists" \
 	bash -c "cd '$repo' && '$here/new.sh' task-a feat/other"
 expect 1 "refuses a branch that already exists" \

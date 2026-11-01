@@ -22,6 +22,24 @@ tools/worktree/new.sh retry-backoff fix/stream-retry-backoff  # then work in ../
 so it can gate something. `--no-prs` skips the pull request lookup, which needs `gh` and the
 network and makes one request per open pull request.
 
+## Pushing
+
+`new.sh` creates the branch with `--no-track`, so it has no upstream. Push with an explicit refspec:
+
+```bash
+git push origin HEAD:refs/heads/<branch>
+```
+
+The shared checkout's `.git/config` is a read-only mount in the devcontainer, so git cannot record an
+upstream there and prints `could not write config file` when it tries. The same push works on a
+writable checkout.
+
+What this changes on a writable checkout: `git status` shows no ahead or behind, and a bare `git pull`
+or `git rebase` has no default. All three used to read `origin/main`, the upstream `-b` recorded. To
+see the same count, run `git rev-list --left-right --count origin/main...HEAD`. A bare `git push`
+fails as it did before: git's default `push.default` refuses an upstream whose name differs from the
+branch's.
+
 ## Turning the hook on
 
 ```bash

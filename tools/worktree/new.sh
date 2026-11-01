@@ -60,7 +60,13 @@ if git -C "$primary" show-ref --verify --quiet "refs/remotes/$remote/$branch"; t
 fi
 git -C "$primary" rev-parse --verify --quiet "$base^{commit}" >/dev/null || die "base $base not found"
 
-git -C "$primary" worktree add --quiet -b "$branch" "$dest" "$base"
+# --no-track: without it, -b from a remote-tracking base writes the branch's
+# upstream into .git/config. That write is all the flag removes, and the shared
+# checkout's config can be read-only (a bind mount in the devcontainer), where
+# git prints "could not write config file" although the worktree is fine. The
+# upstream it would record is $base, not this branch, so a bare `git push` is
+# refused with or without it. Push with an explicit refspec; see README.md.
+git -C "$primary" worktree add --quiet --no-track -b "$branch" "$dest" "$base"
 
 got="$(git -C "$dest" branch --show-current)"
 [ "$got" = "$branch" ] || die "$dest is on '$got', expected '$branch'"
