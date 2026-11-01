@@ -7,7 +7,7 @@
 # Each row names what must notice, written before the run:
 #   <fn>_test_<n>     that inline row fails on its assertion
 #   verify:<fn>       `ailang verify` answers VIOLATION for that function
-#   check             check_single_construction.py exits 1
+#   check             scripts/verify_single_construction.py exits 1
 #   check-clean       the same check exits 0 (the survival rows: legal code must pass)
 # A mutant is killed only when everything it names happens. A compile error, or a test failing
 # with an evaluation error or a panic, is recorded as what it is and is not a kill. Any other
@@ -15,8 +15,7 @@
 set -u
 OUT=${1:?log directory}
 M=src/core/process_limits.ail
-HERE=$(cd "$(dirname "$0")" && pwd)
-CHECK="$HERE/check_single_construction.py"
+CHECK=scripts/verify_single_construction.py
 clean() { [ -z "$(git status --porcelain -- src packages scripts)" ]; }
 clean || { echo "src, packages or scripts dirty"; exit 2; }
 COMMIT=$(git rev-parse HEAD)

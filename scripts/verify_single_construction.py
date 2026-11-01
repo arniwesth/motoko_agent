@@ -22,8 +22,12 @@ never a pass. Reading a field (`r.session_default`) and matching (`ProcessResolv
 allowed, because that is how every caller uses the value.
 
 Limits. It is a scan and not a type check: a future function parameter named `session_default`
-is a false alarm, and should be renamed. It does not stop a `.ail` file git ignores. It runs from
-evidence/W4/mutate.sh and by hand. W4 may not change the Makefile, so no gate runs it yet.
+is a false alarm, and should be renamed. It does not stop a `.ail` file git ignores.
+
+`make verify_single_construction` runs it, and `check_core` depends on that target, so a breach
+or a could-not-check fails `check_core`. evidence/W4/mutate.sh also runs it, and the proof that
+it is a real gate is in evidence/gate-single-construction/, both under
+.agent/projects/041_process_execution_timeouts/.
 """
 import re
 import subprocess
