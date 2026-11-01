@@ -1,0 +1,103 @@
+flowchart TB
+  %% 041 ADR-002 — PER-CALL PROCESS TIMEOUTS: the path of one tool call under the design, from the
+  %% limits and the entry points to the result the model reads.
+  %% Colour = role: blue what holds at HEAD and stays · amber the ADR's one decision point, the
+  %% resolver and its mode · green new design · purple new design that waits on an upstream pin ·
+  %% teal what the model reads · red the D6 defect, live on main today · amber-dashed the D6
+  %% blocker's upstream fix · gray-dashed what R6 leaves out.
+  %% "R6" and the like are rulings in the ADR's §7. Dashed edges are not the normal path.
+  %% Layout note: the renderer lays same-rank nodes in a row, so each stage is a subgraph, and the
+  %% edges between stages are the order of one call, not a dependency between decisions.
+  %% Grounded 2026-10-31: ADR-002 ninth revision with rulings R1-R11, on origin/main a393314b,
+  %% AILANG v0.54.14. The ADR is ACCEPTED under R9 and not implemented. NOTHING in the
+  %% green or purple nodes exists at HEAD.
+
+  subgraph LIMITS["Where a call's limits come from — D2, D7"]
+    direction TB
+    cfg["<b>a live run: resolved once at startup</b><br/>tools.process_timeout, tools.process_timeout_max (new, D2)<br/>MOTOKO_PROCESS_TIMEOUT, MOTOKO_PROCESS_TIMEOUT_MAX beat the profile<br/>direct CLI launch: the default comes from the #2036 query"]:::later
+    prog["<b>a program: InitialWorld.process_limits</b><br/>a required line from execution-program/6<br/>v1-v5 decode as Legacy, and Legacy survives re-encoding<br/>journal admission writes Legacy (R6)"]:::now
+    mode{"<b>LimitMode</b><br/>Limits(default, ceiling) or Legacy"}:::decision
+  end
+  cfg --> mode
+  prog --> mode
+
+  subgraph ORIGIN["Who is calling — D1, D7's entry points"]
+    direction TB
+    main["<b>BashExec, RunTests via main dispatch</b><br/>optional timeout_secs in the schema (D1)"]:::later
+    loop["<b>scratchpad loopback</b> · R7<br/>can shorten, never extend"]:::later
+    ext["<b>extension effects</b> · R8<br/>session default, timeout_secs not read"]:::now
+    other["<b>every other native tool</b><br/>ReadFile, Search, WriteFile, EditFile"]:::cap
+    helpers["<b>internal helpers</b><br/>path guard, rg, mv, chmod"]:::cap
+  end
+
+  subgraph RESOLVE["One resolver, ahead of the world split — D7"]
+    direction TB
+    res{"<b>resolve_process_limit</b><br/>in tool_phase, before the port<br/>above the ceiling: clamped (R3)"}:::decision
+    adapter{"<b>resolve_process_limit</b><br/>in loopback's adapter<br/>ceiling = the default"}:::decision
+    invalid["<b>argument error</b><br/>zero, negative, fractional, not a number, over one year<br/>no exec attempt · effects: none"]:::later
+    carrier["<b>ToolInvocation.process</b><br/>SessionDefault or ExplicitMs(int)<br/>requested_ms, clamped, effective ceiling"]:::now
+    today["<b>no carrier: today's behaviour, unchanged</b><br/>scripted: today's timeout_ms deadline · live: plain exec<br/>Legacy also ignores any request and renders no limit metadata"]:::cap
+  end
+  mode -->|"Limits"| res
+  mode -->|"Limits"| adapter
+  mode -->|"Legacy"| today
+  main --> res
+  loop --> adapter
+  ext -->|"Limits: SessionDefault"| carrier
+  other --> today
+  res -->|"invalid"| invalid
+  adapter -->|"invalid"| invalid
+  res -->|"default, request or clamp"| carrier
+
+  subgraph ENFORCE["Enforcement — both worlds read the same carrier"]
+    direction TB
+    port{"<b>ports.tool_exec, ext_effect_exec</b><br/>the world split"}:::cap
+    scripted["<b>scripted expiry</b><br/>NoDeadline: never · Finite(n &lt;= 0): always<br/>otherwise the scripted duration against the limit"]:::now
+    batch["<b>run_native_batch</b><br/>takes the resolved value for each call, never clamps again"]:::later
+    budget{"<b>the budget</b>"}:::decision
+    plain["<b>plain exec</b><br/>the native session limit, exactly as today<br/>1500us, 0 and -1s included (I4)"]:::cap
+    perCall["<b>execWith, a per-call timeout</b> · R1<br/>asked of upstream in sunholo-data/ailang#2035, does not exist yet<br/>same group kill and WaitDelay"]:::later
+  end
+  carrier --> port
+  port -->|"scripted"| scripted
+  port -->|"live"| batch
+  adapter -->|"shorten or clamp to the default"| batch
+  batch --> budget
+  budget -->|"SessionDefault"| plain
+  budget -->|"ExplicitMs"| perCall
+
+  helperExec["<b>helpers stay on plain exec</b> · I5<br/>at the session default, whatever a model asked for"]:::cap
+  helpers --> helperExec
+
+  subgraph RESULT["What the model reads — D4"]
+    direction TB
+    render["<b>one rendering helper</b><br/>a scripted completion is served as written<br/>an exec attempt: timeout_ms, requested_timeout_ms, max_timeout_ms<br/>no attempt: max_timeout_ms, and requested_timeout_ms if in range<br/>null = no deadline · 0 = immediate<br/>ahead of cmd and output, so truncation cannot remove them"]:::later
+    timeout["<b>a timeout also says effects: unknown</b> · I2<br/>check state before retrying<br/>partial output once ailang#1878 is on a pin"]:::now
+    model["<b>the tool result</b>"]:::unlocked
+  end
+  scripted --> render
+  plain --> render
+  perCall --> render
+  render --> timeout
+  render --> model
+  timeout --> model
+  invalid --> render
+  today --> model
+
+  killed["<b>D6: the runtime is killed, and no deadline survives</b><br/>the deadline lives inside the runtime, so the command runs on<br/>measured on main at any limit · blocks D1 until fixed"]:::fault
+  fix["<b>the fix comes first</b> · R5, R10<br/>ask upstream to end the process groups: ailang#2034<br/>the TUI only if that stalls"]:::blocked
+  plain -.->|"ESC"| killed
+  perCall -.->|"ESC"| killed
+  killed -.-> fix
+
+  out["<b>out of scope</b><br/>strict replay of a live run's limits: no recorder exists (R6)<br/>setsid and daemonized descendants: disclosed, probed (D5)<br/>a background-job tool"]:::capped
+  mode -.->|"what the ADR leaves out"| out
+
+  classDef cap fill:#16294d,stroke:#7aa2f7,color:#cdd9f5,stroke-width:2px;
+  classDef decision fill:#3a2f12,stroke:#e0af68,color:#f2e2c2,stroke-width:2.5px;
+  classDef now fill:#16351f,stroke:#3fb950,color:#c6f0cf;
+  classDef later fill:#2f2145,stroke:#bb9af7,color:#e5d5fb;
+  classDef unlocked fill:#123038,stroke:#2ac3de,color:#bdeef5,stroke-width:2px;
+  classDef fault fill:#3a1620,stroke:#f7768e,color:#f7c6cf;
+  classDef blocked fill:#3a3018,stroke:#d29922,color:#f2e0b8,stroke-dasharray:6 4;
+  classDef capped fill:#24262f,stroke:#6e7681,color:#9aa4b2,stroke-dasharray:5 5;
