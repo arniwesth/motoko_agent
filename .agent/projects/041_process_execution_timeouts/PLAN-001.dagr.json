@@ -4,14 +4,19 @@
     "id": "041-PLAN-001",
     "title": "041 · per-call process timeouts"
   },
-  "generated_at": "2026-11-01T07:44:44Z",
+  "generated_at": "2026-11-01T11:35:29Z",
   "plan": {
     "project": "041_process_execution_timeouts",
     "address": "041/PLAN-001",
     "markdown": "PLAN-001-implement-adr-002.md",
     "implements": "ADR-002-per-call-process-timeouts.md, accepted 2026-10-31 under R9, ninth revision (rulings R1-R11)",
     "grounded_at": "e3293ede",
-    "governed_by": "008 ADR-001 D2: structure only; no attempts, events or pane ids"
+    "governed_by": "008 ADR-001 D2: structure only; no attempts, events or pane ids",
+    "delegates": {
+      "kind": "claude",
+      "model": "claude-opus-5-5",
+      "note": "Every task except the four upstream ones is done by a Claude delegate on Claude Opus 5.5. The task's owner is that model id, and it is the value an orchestrator passes as the delegation's model. Tasks owned by upstream are waits, and nobody delegates them."
+    }
   },
   "projects": [
     {
@@ -96,6 +101,7 @@
       "id": "W1",
       "title": "test: the R6 admission test",
       "kind": "test",
+      "owner": "claude-opus-5-5",
       "project": "NOW",
       "state": "queued",
       "deps": [],
@@ -109,6 +115,7 @@
       "id": "W2",
       "title": "test: D5's setsid and SIGKILL probe, and the operator note",
       "kind": "test",
+      "owner": "claude-opus-5-5",
       "project": "NOW",
       "state": "queued",
       "deps": [],
@@ -122,6 +129,7 @@
       "id": "W3",
       "title": "test: the cancellation witness, expected to fail",
       "kind": "test",
+      "owner": "claude-opus-5-5",
       "project": "NOW",
       "state": "queued",
       "deps": [],
@@ -135,6 +143,7 @@
       "id": "W4",
       "title": "impl: the resolver module, process_limits.ail",
       "kind": "impl",
+      "owner": "claude-opus-5-5",
       "project": "DARK",
       "state": "queued",
       "deps": [],
@@ -147,6 +156,7 @@
       "id": "W5",
       "title": "impl: execution-program/6, every writer legacy",
       "kind": "impl",
+      "owner": "claude-opus-5-5",
       "project": "DARK",
       "state": "queued",
       "deps": [
@@ -163,6 +173,7 @@
       "id": "W6",
       "title": "impl: scripted carrier, expiry and projection",
       "kind": "impl",
+      "owner": "claude-opus-5-5",
       "project": "DARK",
       "state": "queued",
       "deps": [
@@ -178,6 +189,7 @@
       "id": "W7",
       "title": "impl: argument errors and scripted metadata, dark",
       "kind": "impl",
+      "owner": "claude-opus-5-5",
       "project": "DARK",
       "state": "queued",
       "deps": [
@@ -193,6 +205,7 @@
       "id": "W8",
       "title": "impl: the pin and the adapters",
       "kind": "impl",
+      "owner": "claude-opus-5-5",
       "project": "LIVE",
       "state": "queued",
       "deps": [
@@ -209,6 +222,7 @@
       "id": "W9",
       "title": "impl: adopt the D6 fix and flip W3",
       "kind": "impl",
+      "owner": "claude-opus-5-5",
       "project": "LIVE",
       "state": "queued",
       "deps": [
@@ -225,6 +239,7 @@
       "id": "W10",
       "title": "impl: live executor and loopback, dark",
       "kind": "impl",
+      "owner": "claude-opus-5-5",
       "project": "LIVE",
       "state": "queued",
       "deps": [
@@ -241,6 +256,7 @@
       "id": "W11",
       "title": "impl: startup limits and TUI settings, dark",
       "kind": "impl",
+      "owner": "claude-opus-5-5",
       "project": "LIVE",
       "state": "queued",
       "deps": [
@@ -257,6 +273,7 @@
       "id": "W12",
       "title": "impl: activation, live Limits and the D1 schema",
       "kind": "impl",
+      "owner": "claude-opus-5-5",
       "project": "ACT",
       "state": "queued",
       "deps": [
@@ -275,6 +292,7 @@
       "id": "R11.regen",
       "title": "docs: regenerate manifest-A under R11",
       "kind": "docs",
+      "owner": "claude-opus-5-5",
       "project": "ACT",
       "state": "queued",
       "deps": [
@@ -290,6 +308,7 @@
       "id": "W13",
       "title": "test: parity and the entry-point matrix",
       "kind": "test",
+      "owner": "claude-opus-5-5",
       "project": "ACT",
       "state": "queued",
       "deps": [
@@ -305,6 +324,7 @@
       "id": "W14",
       "title": "impl: partial output",
       "kind": "impl",
+      "owner": "claude-opus-5-5",
       "project": "ACT",
       "state": "queued",
       "deps": [

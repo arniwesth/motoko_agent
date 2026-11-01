@@ -11,6 +11,9 @@ Pinned toolchain: AILANG **v0.54.14** (`ailang.lock:2`, `ailang.toml:6`,
 `scripts/install-prerequisites.sh:40-41`). Upstream state read with `gh` on 2026-10-31.
 Structure: [`PLAN-001.dagr.json`](PLAN-001.dagr.json) holds the tasks and their dependencies, and is the only
 place they are stated (008 ADR-001 D2 and D3). A task's address is `041/PLAN-001/<task id>`.
+Who does the work: Claude delegates on Claude Opus 5.5, the `owner` of every task except the four upstream waits. To
+run W1-W4 with Motoko as orchestrator, see [`PROMPT-motoko-plan-001-start.md`](PROMPT-motoko-plan-001-start.md) and
+[`start-orchestrator.sh`](start-orchestrator.sh).
 Naming: W1-W14 are work items, A1-A25 are the ADR's §6 criteria
 (*Coverage*), Q1-Q10 and G1-G6 are resolved points the ADR now settles, H1 is the one point it leaves open, and C1-C5 are this plan's own choices.
 
