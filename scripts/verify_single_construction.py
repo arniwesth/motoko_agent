@@ -106,7 +106,9 @@ def main():
         print("cannot list files: " + ls.stderr.strip())
         return 2
     files = sorted(set(ls.stdout.split()))
-    if MODULE not in files:
+    # `ls-files -c` still lists a tracked file that is gone from disk, so the listing alone
+    # would skip the module and exit 0.
+    if MODULE not in files or not (root / MODULE).is_file():
         print(f"cannot check: {MODULE} is not there")
         return 2
 
