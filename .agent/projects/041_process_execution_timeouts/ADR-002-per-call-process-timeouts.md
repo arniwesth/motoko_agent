@@ -252,8 +252,10 @@ the pipes close first: with a 1 s limit and a descendant exiting at 3 s, it retu
   only today.
 - Upstream was asked, in sunholo-data/ailang#2037, for a stronger containment primitive such as Linux
   cgroups or a subreaper. This ADR does not depend on it.
-- SIGKILL gets the same treatment under R10: the runtime cannot clean up after it, so the command survives.
-  A row in the same probe pins today's behaviour, and the operator documentation states it.
+- SIGKILL gets the same treatment under R10: the runtime cannot clean up after it, so the command keeps
+  running and its side effects still happen. Its stdout and stderr pipes died with the runtime, so its next
+  write to them normally ends it with SIGPIPE. A row in the same probe pins the surviving case, and the
+  operator documentation states it.
 - State the limit in the tool documentation for operators. It does not go in the model-facing
   result, where `effects: unknown` already covers it.
 
