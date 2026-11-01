@@ -1,0 +1,321 @@
+{
+  "dagr": 3,
+  "run": {
+    "id": "041-PLAN-001",
+    "title": "041 · per-call process timeouts"
+  },
+  "generated_at": "2026-11-01T07:44:44Z",
+  "plan": {
+    "project": "041_process_execution_timeouts",
+    "address": "041/PLAN-001",
+    "markdown": "PLAN-001-implement-adr-002.md",
+    "implements": "ADR-002-per-call-process-timeouts.md, accepted 2026-10-31 under R9, ninth revision (rulings R1-R11)",
+    "grounded_at": "e3293ede",
+    "governed_by": "008 ADR-001 D2: structure only; no attempts, events or pane ids"
+  },
+  "projects": [
+    {
+      "id": "UP",
+      "title": "Upstream · sunholo-data/ailang"
+    },
+    {
+      "id": "NOW",
+      "title": "Evidence · can land now"
+    },
+    {
+      "id": "DARK",
+      "title": "Dark · scripted, can land now"
+    },
+    {
+      "id": "LIVE",
+      "title": "Live wiring · waits on upstream"
+    },
+    {
+      "id": "ACT",
+      "title": "Activation and sign-off"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "U2035",
+      "title": "upstream: per-call process timeout (ailang#2035)",
+      "kind": "upstream",
+      "owner": "upstream",
+      "project": "UP",
+      "state": "queued",
+      "deps": [],
+      "criteria": "A released AILANG tag carries a per-call timeout on std/process.",
+      "note": "Open with no comments on 2026-10-31. If it stalls or is declined, R4 applies: the session setting stays the only relief. No fork, no second executor, no wrapper.",
+      "refs": [
+        "PLAN-001-implement-adr-002.md § Upstream, and what happens at each wait"
+      ]
+    },
+    {
+      "id": "U2036",
+      "title": "upstream: read the configured limit (ailang#2036)",
+      "kind": "upstream",
+      "owner": "upstream",
+      "project": "UP",
+      "state": "queued",
+      "deps": [],
+      "criteria": "A released AILANG tag carries a query for the configured process limit.",
+      "note": "A pin with only one of #2035 and #2036 does not unblock W10-W12 (D3). If it stalls or is declined, R4 applies.",
+      "refs": [
+        "PLAN-001-implement-adr-002.md § Upstream, and what happens at each wait"
+      ]
+    },
+    {
+      "id": "U2034",
+      "title": "upstream: a killed runtime ends its process groups (ailang#2034)",
+      "kind": "upstream",
+      "owner": "upstream",
+      "project": "UP",
+      "state": "queued",
+      "deps": [],
+      "criteria": "A released AILANG tag ends the command and its ordinary descendants on SIGTERM and SIGINT of the runtime.",
+      "note": "R10: if this has no maintainer direction or date by 2026-11-14, or upstream declines sooner, the TUI fix goes to the operator for a ruling and is not built automatically. Until then no longer limit activates.",
+      "refs": [
+        "PLAN-001-implement-adr-002.md § Upstream, and what happens at each wait"
+      ]
+    },
+    {
+      "id": "U1878",
+      "title": "upstream: output kept on timeout (ailang#1878)",
+      "kind": "upstream",
+      "owner": "upstream",
+      "project": "UP",
+      "state": "queued",
+      "deps": [],
+      "criteria": "A released AILANG tag keeps partial output on a process timeout.",
+      "note": "Needed by W14 only. If it stalls, W14 stays unscheduled and W12's explicit absence stands.",
+      "refs": [
+        "PLAN-001-implement-adr-002.md § Upstream, and what happens at each wait"
+      ]
+    },
+    {
+      "id": "W1",
+      "title": "test: the R6 admission test",
+      "kind": "test",
+      "project": "NOW",
+      "state": "queued",
+      "deps": [],
+      "criteria": "A14d, first half: fixture fxw_r6_post_change_limits, built through the generator, holds a clamped, an invalid and a non-numeric call. It admits, replays from world_state_of(program) with report_ok and zero strict_replay_findings, serves recorded tool content unchanged, and a control with altered content is seen. Mutants t1 and t2 are killed. G-base, the check itself, and make eval_matrix compared with the base.",
+      "note": "Run first. If it fails: stop, record the evidence and return R6 to the operator; W5-W13 do not start. MATRIX.expected.tsv is not edited.",
+      "refs": [
+        "PLAN-001-implement-adr-002.md § W1"
+      ]
+    },
+    {
+      "id": "W2",
+      "title": "test: D5's setsid and SIGKILL probe, and the operator note",
+      "kind": "test",
+      "project": "NOW",
+      "state": "queued",
+      "deps": [],
+      "criteria": "D5's probe and A20's setsid rows: with pipes held and with pipes closed, Err(Timeout) and the marker written, deadline and return latency asserted separately. A SIGKILL row in the verify_native_process_tree recipe pins that the command survives. Where setsid is missing the row prints NOT EVALUATED; acceptance reads a Linux log with no such line. docs/configuration.md states both limits for operators only. Mutant d1 reads red. G-base.",
+      "note": "Check overlap with #234, #209, #266 and #287 first. If #2037 lands, or #2034 also covers SIGKILL, the matching row goes red by design.",
+      "refs": [
+        "PLAN-001-implement-adr-002.md § W2"
+      ]
+    },
+    {
+      "id": "W3",
+      "title": "test: the cancellation witness, expected to fail",
+      "kind": "test",
+      "project": "NOW",
+      "state": "queued",
+      "deps": [],
+      "criteria": "A real RuntimeProcess test in src/tui/src/runtime-process.cancel.test.ts, marked as an expected failure naming #2034, so the suite turns red when behaviour changes. The SIGTERM and SIGINT runtime twin is in scripts/verify_runtime_cancel_process_tree.sh, not wired into check_core until W9. Mutant c1 ends the expected failure. G-base, as a non-root user.",
+      "note": "Satisfies no criterion yet: A22 says a recorded failure alone does not. W9 satisfies it.",
+      "refs": [
+        "PLAN-001-implement-adr-002.md § W3"
+      ]
+    },
+    {
+      "id": "W4",
+      "title": "impl: the resolver module, process_limits.ail",
+      "kind": "impl",
+      "project": "DARK",
+      "state": "queued",
+      "deps": [],
+      "criteria": "A leaf module with D7's types and InvalidRequest; resolve_process_limit is the only constructor of both results. Table rows for A5's parsing half, A8's fields, A9, A10's predicate half and the large-t comparison. clamp_ms has a contract for I1. One mutant per table row, with r1-r9 named. G-core, and make verify_mutations if it adds a guard contract.",
+      "refs": [
+        "PLAN-001-implement-adr-002.md § W4"
+      ]
+    },
+    {
+      "id": "W5",
+      "title": "impl: execution-program/6, every writer legacy",
+      "kind": "impl",
+      "project": "DARK",
+      "state": "queued",
+      "deps": [
+        "W1",
+        "W4"
+      ],
+      "criteria": "A13, A15's decoder half, A18, A14d with the Legacy assertion, and A25's ext_world round trip with a Limits value distinct from the default. world_state_of copies the mode, asserted by the Limits specimen because the compiler will not flag it. Frozen v1-v5 stay untouched. The C2 guard test is added. Mutants p1-p8 are killed. G-heavy, with matrix rows predicted in the pull request before the run.",
+      "note": "R11: leaves manifest-A alone and records the rows it leaves red. Generator draws, salts and bounds are not touched.",
+      "refs": [
+        "PLAN-001-implement-adr-002.md § W5"
+      ]
+    },
+    {
+      "id": "W6",
+      "title": "impl: scripted carrier, expiry and projection",
+      "kind": "impl",
+      "project": "DARK",
+      "state": "queued",
+      "deps": [
+        "W5"
+      ],
+      "criteria": "A8, A9's scripted half, A10, A14a, A14c, A16's scripted half, and A25 through a real token. Until W10, live_tool_outcome given ExplicitMs returns ToolFailed before dispatch and runs nothing. Mutants s1-s5 are killed. G-heavy; make anchors must not move (C3).",
+      "note": "R11: records the rows it leaves red.",
+      "refs": [
+        "PLAN-001-implement-adr-002.md § W6"
+      ]
+    },
+    {
+      "id": "W7",
+      "title": "impl: argument errors and scripted metadata, dark",
+      "kind": "impl",
+      "project": "DARK",
+      "state": "queued",
+      "deps": [
+        "W6"
+      ],
+      "criteria": "A5's scripted half, A14b, A11's refused half, A21's scripted half, A17 for the messages it builds, A7's scripted half, and A16 for extension faults through tool_outcome_text. An invalid request emits ToolArgumentsInvalid and neither Start nor Complete. tool_catalog.ail is not touched. Mutants e1-e8 are killed. G-heavy.",
+      "note": "H1 stays open: attempted follows after_dispatch for ToolFailed. May force a profile version bump (C3). R11's four weeks count from this item's merge.",
+      "refs": [
+        "PLAN-001-implement-adr-002.md § W7"
+      ]
+    },
+    {
+      "id": "W8",
+      "title": "impl: the pin and the adapters",
+      "kind": "impl",
+      "project": "LIVE",
+      "state": "queued",
+      "deps": [
+        "U2035",
+        "U2036"
+      ],
+      "criteria": "Pin moved in ailang.toml, ailang.lock, install-prerequisites.sh, the Makefile and CI. process_limits_native.ail holds exec_with_limit and native_session_limit, with no caller yet. Under --process-timeout 1s, exec_with_limit at 3s outlives 1s, a following plain exec stops at 1s, and the query returns 1500us, 0 and -1s faithfully. Mutant n1 is killed. G-heavy, FAILED names equal to the base's or explained.",
+      "note": "Re-ground against the real API at start. If it fails D3's conditions, stop and comment upstream through ailang-feedback.",
+      "refs": [
+        "PLAN-001-implement-adr-002.md § W8"
+      ]
+    },
+    {
+      "id": "W9",
+      "title": "impl: adopt the D6 fix and flip W3",
+      "kind": "impl",
+      "project": "LIVE",
+      "state": "queued",
+      "deps": [
+        "W3",
+        "U2034"
+      ],
+      "criteria": "A22 by the passing test: cancelling with SIGTERM or SIGINT stops the command and its ordinary descendants with no late effect. W3's expected-failure mark is gone and the runtime twin is wired into check_core. Mutant c2 fails on the previous pin. G-base, then make dst if the pin moved.",
+      "note": "May share W8's pin. Under R10 a stall re-plans this item around whatever the operator rules; W12 keeps waiting either way.",
+      "refs": [
+        "PLAN-001-implement-adr-002.md § W9"
+      ]
+    },
+    {
+      "id": "W10",
+      "title": "impl: live executor and loopback, dark",
+      "kind": "impl",
+      "project": "LIVE",
+      "state": "queued",
+      "deps": [
+        "W7",
+        "W8"
+      ],
+      "criteria": "By direct calls: A3's executor half, A4, A6, A11, A12, A16's loopback row, A25 through a real token, A17 through the 65,536-character cut, A7's first half, A20 and A21. Helpers stay on plain exec (I5). W6's fail-closed arm goes. Mutants l1-l6 are killed. G-heavy.",
+      "note": "Check overlap with #234 and #209 first. R11: records the rows it leaves red.",
+      "refs": [
+        "PLAN-001-implement-adr-002.md § W10"
+      ]
+    },
+    {
+      "id": "W11",
+      "title": "impl: startup limits and TUI settings, dark",
+      "kind": "impl",
+      "project": "LIVE",
+      "state": "queued",
+      "deps": [
+        "W8",
+        "W10"
+      ],
+      "criteria": "A15's parse half, A16's restart rows, A23 and A24. The startup route is confirmed on throwaway wiring and recorded in the pull request: query effects fit ported_provider, the live launcher reaches LiveAI, each call site that does gets the same value, and rpc.run_with_config can call startup_limit_mode first. Mutants u1-u3 are killed. G-core, and bun run test in src/tui.",
+      "note": "If the route check fails, stop and return it to the operator with the evidence; W12 does not start. Check overlap with #266 and #287 first.",
+      "refs": [
+        "PLAN-001-implement-adr-002.md § W11"
+      ]
+    },
+    {
+      "id": "W12",
+      "title": "impl: activation, live Limits and the D1 schema",
+      "kind": "impl",
+      "project": "ACT",
+      "state": "queued",
+      "deps": [
+        "W8",
+        "W9",
+        "W10",
+        "W11"
+      ],
+      "criteria": "A1, A2, A3, A5's live half, A15, A16's direct launch and resume, and A18's last clause. The live world takes process_limits from startup_limit_mode; a low ceiling refuses to start; tools_for_mode replaces the catalog test; the C2 guard test is removed. Mutants a1-a3 are killed. G-heavy, then make compose_live_exec and make verify_native_path_guard.",
+      "note": "The only item that turns a limit on. Last item to move protected symbols, so R11's regeneration follows it. Check overlap with #287 first.",
+      "refs": [
+        "PLAN-001-implement-adr-002.md § W12"
+      ]
+    },
+    {
+      "id": "R11.regen",
+      "title": "docs: regenerate manifest-A under R11",
+      "kind": "docs",
+      "project": "ACT",
+      "state": "queued",
+      "deps": [
+        "W12"
+      ],
+      "criteria": "In its own worktree and pull request: move A in test_candidate.py, protected.py gen, review the closure against 119 spans, then protected.py pins, selftest.py and make eval_matrix.",
+      "note": "The operator directs it. Fallback: if W7's merge to W12 passes four weeks, one regeneration follows W7 as well, added here when that happens.",
+      "refs": [
+        "PLAN-001-implement-adr-002.md § Rulings R9-R11"
+      ]
+    },
+    {
+      "id": "W13",
+      "title": "test: parity and the entry-point matrix",
+      "kind": "test",
+      "project": "ACT",
+      "state": "queued",
+      "deps": [
+        "W12"
+      ],
+      "criteria": "A7, A14d's final form on a journal from a real post-change session (--ai-stub), A16 in full, and A17, A20 and A21 across both worlds, through make verify_process_limits_live, a paired scripted program and the entry-point matrix. Mutant m1 is killed. G-heavy. The result is the ADR's §6 sign-off, recorded against each criterion.",
+      "note": "A failure on A14d reopens R6.",
+      "refs": [
+        "PLAN-001-implement-adr-002.md § W13"
+      ]
+    },
+    {
+      "id": "W14",
+      "title": "impl: partial output",
+      "kind": "impl",
+      "project": "ACT",
+      "state": "queued",
+      "deps": [
+        "W12",
+        "U1878"
+      ],
+      "criteria": "A19: partial output preserved on a timeout, on BashExec and RunTests, with fields keeping D4's order, and W12's absence marker removed. Mutant o1 is killed. G-heavy.",
+      "note": "Re-ground at start: a changed ProcessError is a compile error in tool_fault.ail, tool_runtime.ail and the copies the 034 follow-ups list.",
+      "refs": [
+        "PLAN-001-implement-adr-002.md § W14"
+      ]
+    }
+  ]
+}
