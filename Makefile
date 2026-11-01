@@ -2677,7 +2677,7 @@ verify_native_process_tree:
 # at runtime (e.g. matching Result constructors against an Option
 # value — see scripts/verify_extension_boot.ail header for full
 # rationale + history).
-check_core: verify_native_process_tree verify_extensions verify_repetition_guard verify_herdr_gate verify_herdr_check_answer verify_herdr_delegate_wait verify_wait_descriptor_fixtures verify_herdr_owner_tag verify_herdr_dagr_pane verify_herdr_orchestrator verify_delegate_kind verify_dagr_producer verify_exit_intent verify_native_path_guard verify_strict_extensions verify_strict_context_limit
+check_core: verify_native_process_tree verify_extensions verify_repetition_guard verify_herdr_gate verify_herdr_check_answer verify_herdr_delegate_wait verify_wait_descriptor_fixtures verify_herdr_owner_tag verify_herdr_dagr_pane verify_herdr_orchestrator verify_delegate_kind verify_dagr_producer verify_exit_intent verify_native_path_guard verify_strict_extensions verify_strict_context_limit verify_single_construction
 	@ok=0; fail=0; \
 	for f in src/core/*.ail; do \
 		if ailang check "$$f" >/dev/null 2>&1; then \
@@ -2691,6 +2691,15 @@ check_core: verify_native_process_tree verify_extensions verify_repetition_guard
 	done; \
 	echo "src/core/ type-check: $$ok passed, $$fail failed"; \
 	[ "$$fail" -eq 0 ] || exit 1
+
+# 041 ADR-002 D7: `resolve_process_limit` is the only constructor of both of its
+# results. Records are structural, so the compiler cannot hold this; the scan does.
+# The script exits 1 on a breach and 2 when it could not check, and exit 2 is not a
+# pass. Either way make reports its own exit status 2, and names the script's as
+# `Error 1` or `Error 2`.
+.PHONY: verify_single_construction
+verify_single_construction:
+	@python3 scripts/verify_single_construction.py
 
 # Boot each extension in the active profile's [extensions.order] in an
 # ISOLATED ailang process and assert it returns from register_with_config
