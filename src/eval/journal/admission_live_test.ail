@@ -42,7 +42,10 @@
 --   r6_post_change_admits
 --     041 W1, ADR-002 ruling R6 (A14d, first half): r6_post_change_limits, m2's
 --     journal with a clamped call, an invalid `0` and a non-numeric "soon", goes
---     through `admit`: `report_ok`, `EndSuspended(3)`.
+--     through `admit`: `report_ok`, `EndSuspended(3)`, and all four results in the
+--     program recorded as completions. `report_ok` alone does not say the last: a
+--     world that refuses `timeout_secs: 0` also admits (mutant t2), so D7's reading,
+--     that admission serves a result without resolving its request, is asserted here.
 --   r6_post_change_replays_strict
 --     a second run from `world_state_of(program)`: no refusal, and zero
 --     `strict_replay_findings` against the program's interactions.
@@ -309,6 +312,15 @@ pure func r6_alter_at[t](xs: [t], at: int, f: (t) -> t) -> [t] {
   }
 }
 
+pure func r6_tool_payloads(log: [Interaction]) -> [string] {
+  List.map(\i. i.outcome.payload, List.filter(\i. match i.identity.body { ToolIdentity(_, _, _) => true, _ => false }, log))
+}
+
+pure func r6_all_completed(p: ExecutionProgram) -> bool {
+  let ps = r6_tool_payloads(p.interactions);
+  List.length(ps) == 4 && List.foldl(\acc t. acc && contains(t, "\"result\":\"completed\""), true, ps)
+}
+
 pure func r6_all_in(text: string, needles: [string]) -> bool {
   List.foldl(\acc n. acc && contains(text, n), true, needles)
 }
@@ -333,7 +345,8 @@ func r6_post_change(f: WorldFixture) -> bool ! {AI, Clock, Env, FS, IO, Net, Pro
     Ok(jw) => {
       let r = admit("r6_post_change_admits", SyntheticEntry, lt_ids(jw, "a0a0a0-dev"), lt_cmp(f.name), jw, lt_epoch(), ".motoko/eval-admission-workdir");
       let _ = lt_print_report(r);
-      let a = lt_report("r6_post_change_admits", report_ok(r) && r.observed_end == "EndSuspended(3)" && r.expected_end == "EndSuspended(3)");
+      let a = lt_report("r6_post_change_admits", report_ok(r) && r.observed_end == "EndSuspended(3)" && r.expected_end == "EndSuspended(3)"
+        && (match r.program { Some(p) => r6_all_completed(p), None => false }));
       match r.program {
         None => { let _ = lt_report("r6_post_change_replays_strict (no program)", false); false },
         Some(p) => match world_state_of(p, required_class_ids()) {
