@@ -1,0 +1,22 @@
+diff --git a/src/eval/journal/world.ail b/src/eval/journal/world.ail
+index 6ddaee3e..20fabe91 100644
+--- a/src/eval/journal/world.ail
++++ b/src/eval/journal/world.ail
+@@ -43,7 +43,7 @@ import std/json (Json)
+ import std/list as List (length, map, foldl)
+ import std/option (Option, Some, None)
+ import std/result (Result, Ok, Err)
+-import std/string (join)
++import std/string (join, replace)
+ import src/core/ports (WorldState, ScriptedStep, ScriptedTool, empty_world_state)
+ import src/core/fs_node (FsNode, FsFile, FsDir)
+ import src/eval/journal/reader (RunSelector, parse_lines, EndAt, CutoffBefore)
+@@ -86,7 +86,7 @@ export pure func journal_results(jw: JournalWorld) -> [WorldTool] {
+ }
+ 
+ export pure func journal_tool(t: WorldTool) -> ScriptedTool {
+-  { tool_call_id: t.call_id, duration_ms: 0, code: "", message: "", content: t.content, exit_code: -1, after_dispatch: true, applied: false }
++  { tool_call_id: t.call_id, duration_ms: 0, code: "", message: "", content: replace(replace(replace(t.content, "\"timeout_ms\":120000,", ""), "\"requested_timeout_ms\":600000,", ""), "\"max_timeout_ms\":120000,", ""), exit_code: -1, after_dispatch: true, applied: false }
+ }
+ 
+ export pure func journal_tools(jw: JournalWorld) -> [ScriptedTool] {
