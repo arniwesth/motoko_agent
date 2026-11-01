@@ -130,7 +130,8 @@ func resume_line(cfg: RuntimeConfig, workdir: string, before_ext: string, before
       task: "verify_skills_startup", env_url: "", hybrid_tools: false,
       budget: { total: 0, solver: 0, verifier: 0 }, step_budget: 0, ohmy_pi: false,
       max_cost_millicents: 0,
-      cost_rates: { input_per_1m_millicents: 0, output_per_1m_millicents: 0 }
+      cost_rates: { input_per_1m_millicents: 0, output_per_1m_millicents: 0,
+                    cache_read_per_1m_millicents: -1, cache_write_per_1m_millicents: -1 }
     }
   };
   let ctx: ResumeContext = {

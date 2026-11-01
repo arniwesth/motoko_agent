@@ -107,10 +107,12 @@ import src/eval/journal/testdata/journal_fixtures (JournalFixture, fxj_all, fxj_
 -- Copies: Shared types.
 -- ============================================================================
 
--- SOURCE src/core/config.ail L30-33 B723-815 sha256:3a3a00a8408f012d897a2c5dd197d88c153dbe3be72e62005323f6ea9eb5f912 symbol=CostRates
+-- SOURCE src/core/config.ail L33-38 B942-1109 sha256:d8f8c6416c59040e49c10c5e6337523cb1ca859a66178d71f74cd7b6cabd38ae symbol=CostRates
 export type EvCostRates = {
   input_per_1m_millicents: int,
-  output_per_1m_millicents: int
+  output_per_1m_millicents: int,
+  cache_read_per_1m_millicents: int,
+  cache_write_per_1m_millicents: int
 }
 
 -- SOURCE src/core/phase_vocab.ail L142-148 B5625-5813 sha256:84728c0702c1cdd6927a33c9589f794bfd3228d1fd570d9023e9a27c9720dcd9 symbol=RuntimeStatusCounts
@@ -607,7 +609,7 @@ export type EvHeaderEntry = {
   boot: EvBootInputs
 }
 
--- SOURCE src/core/journal.ail L748-807 B32828-35845 sha256:16c9a877b02dfc1cad717145f18f95b6532fa5ccd8ca5f885a4c5b569f49e437 symbol=boot_of_json
+-- SOURCE src/core/journal.ail L746-814 B32760-36588 sha256:9429a15ccbfaf1faf2bd00a369c395ea3ad1eb96b01567a891ffa8a1e1fd1d83 symbol=boot_of_json
 pure func ev_boot_of_json(j: Json, seq: int) -> Result[EvBootInputs, EvRefusal] {
   match ev_at_object(j, "boot", seq) {
     Err(e) => Err(e),
@@ -637,7 +639,11 @@ pure func ev_boot_of_json(j: Json, seq: int) -> Result[EvBootInputs, EvRefusal] 
                             Err(_) => Err(EvEntry(seq, "boot.cost_rates.input_per_1m_millicents")),
                             Ok(in_rate) => match ev_at_int(cr, "output_per_1m_millicents", seq) {
                               Err(_) => Err(EvEntry(seq, "boot.cost_rates.output_per_1m_millicents")),
-                              Ok(out_rate) => {
+                              Ok(out_rate) => match ev_opt_int(cr, "cache_read_per_1m_millicents", seq) {
+                               Err(_) => Err(EvEntry(seq, "boot.cost_rates.cache_read_per_1m_millicents")),
+                               Ok(cr_rate) => match ev_opt_int(cr, "cache_write_per_1m_millicents", seq) {
+                                Err(_) => Err(EvEntry(seq, "boot.cost_rates.cache_write_per_1m_millicents")),
+                                Ok(cw_rate) => {
                                 let boot: EvBootInputs = {
                                   task: task,
                                   env_url: env_url,
@@ -648,10 +654,15 @@ pure func ev_boot_of_json(j: Json, seq: int) -> Result[EvBootInputs, EvRefusal] 
                                   max_cost_millicents: max_cost,
                                   cost_rates: {
                                     input_per_1m_millicents: in_rate,
-                                    output_per_1m_millicents: out_rate
+                                    output_per_1m_millicents: out_rate,
+                                    -- Absent in journals written before cache-aware pricing: unset.
+                                    cache_read_per_1m_millicents: match cr_rate { Some(n) => n, None => -1 },
+                                    cache_write_per_1m_millicents: match cw_rate { Some(n) => n, None => -1 }
                                   }
                                 };
                                 Ok(boot)
+                                }
+                               }
                               }
                             }
                           }

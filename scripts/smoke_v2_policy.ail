@@ -46,7 +46,9 @@ export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Str
   -- no_rates helper); max_cost_millicents 0 therefore never trips.
   let rates: CostRates = {
     input_per_1m_millicents: 0,
-    output_per_1m_millicents: 0
+    output_per_1m_millicents: 0,
+    cache_read_per_1m_millicents: -1,
+    cache_write_per_1m_millicents: -1
   };
 
   -- Prompt likely to make a model try a tool. With empty extension

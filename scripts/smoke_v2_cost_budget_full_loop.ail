@@ -31,7 +31,7 @@ import src/core/ports (ScriptedStep)
 
 -- GLM-5-shaped rates: $0.60/M input, $2.08/M output (in millicents).
 func glm5_rates() -> CostRates {
-  { input_per_1m_millicents: 60000, output_per_1m_millicents: 208000 }
+  { input_per_1m_millicents: 60000, output_per_1m_millicents: 208000, cache_read_per_1m_millicents: -1, cache_write_per_1m_millicents: -1 }
 }
 
 func parity_system_message() -> Message {
@@ -163,7 +163,7 @@ func test_zero_rates_fail_open() -> bool ! {AI, Clock, Env, FS, IO, Net, Process
     continuing_token_step(100000, 50000, "tc5"),
     prose_step("done")
   ];
-  let zero_rates: CostRates = { input_per_1m_millicents: 0, output_per_1m_millicents: 0 };
+  let zero_rates: CostRates = { input_per_1m_millicents: 0, output_per_1m_millicents: 0, cache_read_per_1m_millicents: -1, cache_write_per_1m_millicents: -1 };
   let result = run_v2_with_scripted_ports(
     deny_all_rt(),
     "stub-test",

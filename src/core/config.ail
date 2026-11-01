@@ -27,9 +27,14 @@ export type AgentConfig = {
   max_cost_millicents: int
 }
 
+-- cache_read / cache_write: prompt-cache token rates. -1 = not configured, which
+-- prices those tokens at the input rate -- what the cap charged before it knew
+-- about caching, and the conservative choice for a cap.
 export type CostRates = {
   input_per_1m_millicents: int,
-  output_per_1m_millicents: int
+  output_per_1m_millicents: int,
+  cache_read_per_1m_millicents: int,
+  cache_write_per_1m_millicents: int
 }
 
 export type BackendConfig = {
@@ -473,13 +478,20 @@ func load_compaction_ai(root: Json) -> CoreCompactionAiConfig {
 -- threshold warnings + cost_exhausted gate fire and run_summary reports
 -- non-zero cost_usd — without each motoko profile needing its own
 -- per-model pricing block (the duplication burden of gap #9).
-func env_int(name: string, fallback: int) -> int ! {Env} {
+-- `floor` is the lowest value taken from the environment; under it the
+-- variable reads as unset and the fallback stands. Input and output take 1,
+-- where 0 means "unmetered" and is the profile's word to say. The cache rates
+-- take 0: a route whose cache reads are free, or round to under a millicent
+-- per 1M, has to be able to say so, because the fallback for an unset cache
+-- rate is the input rate -- which on the measured 97%-cached step prices the
+-- step at 1510 millicents instead of 346, and caps the run ~4x early.
+func env_int(name: string, fallback: int, floor: int) -> int ! {Env} {
   match getEnv(name) {
     Ok(raw) => {
       let trimmed = trim(raw);
       if trimmed == "" then fallback
       else match _stringToInt(trimmed) {
-        Some(n) => if n > 0 then n else fallback,
+        Some(n) => if n >= floor then n else fallback,
         None => fallback
       }
     },
@@ -492,11 +504,16 @@ func load_cost_rates(core: Json) -> CostRates ! {Env} {
   let c = object_at(p, "cost");
   let profile_input  = json_int(c, "input_per_1m_millicents", 0);
   let profile_output = json_int(c, "output_per_1m_millicents", 0);
-  -- Env vars override profile values when set (and >0). Lets the AILANG
-  -- eval harness inject pricing per-task without mutating profile config.
+  let profile_cache_read  = json_int(c, "cache_read_per_1m_millicents", -1);
+  let profile_cache_write = json_int(c, "cache_write_per_1m_millicents", -1);
+  -- Env vars override profile values when set at or above each rate's floor.
+  -- Lets the AILANG eval harness inject pricing per-task without mutating
+  -- profile config.
   {
-    input_per_1m_millicents:  env_int("MOTOKO_COST_INPUT_PER_1M_MILLICENTS",  profile_input),
-    output_per_1m_millicents: env_int("MOTOKO_COST_OUTPUT_PER_1M_MILLICENTS", profile_output)
+    input_per_1m_millicents:  env_int("MOTOKO_COST_INPUT_PER_1M_MILLICENTS",  profile_input,  1),
+    output_per_1m_millicents: env_int("MOTOKO_COST_OUTPUT_PER_1M_MILLICENTS", profile_output, 1),
+    cache_read_per_1m_millicents:  env_int("MOTOKO_COST_CACHE_READ_PER_1M_MILLICENTS",  profile_cache_read,  0),
+    cache_write_per_1m_millicents: env_int("MOTOKO_COST_CACHE_WRITE_PER_1M_MILLICENTS", profile_cache_write, 0)
   }
 }
 

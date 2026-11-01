@@ -33,7 +33,7 @@ import src/core/test/stub_step (LiveAI)
 export func main() -> () ! {AI, FS, Process, IO, Env, Net, SharedMem, Clock, Stream, Trace, Rand} {
   let rt = init_runtime();
   let budget: BudgetPlan = { total: 4, solver: 4, verifier: 0 };
-  let rates: CostRates = { input_per_1m_millicents: 0, output_per_1m_millicents: 0 };
+  let rates: CostRates = { input_per_1m_millicents: 0, output_per_1m_millicents: 0, cache_read_per_1m_millicents: -1, cache_write_per_1m_millicents: -1 };
 
   let _ = println("--- M8 conversation smoke START ---");
   let _ = println("Calling conversation_loop_v2 with empty history; expects clean exit on abort/exit/EOF.");
