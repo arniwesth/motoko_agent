@@ -17,7 +17,7 @@ including that session's lesson: wait by ending the turn, not by polling.
 
 Four steps.
 
-1. **Merge #289, then #290, and pull the shared checkout.** The start script reads the graph from
+1. **Pull the shared checkout.** It needs `main` with the plan, its graph and this file. The start script reads the graph from
    the shared checkout, and worktrees are cut from `origin/main`. The script refuses to start
    without the graph.
 2. **Give delegates a permission mode.** The extension starts a Claude delegate with no flags, so

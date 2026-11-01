@@ -45,7 +45,7 @@ if [ "$(pwd -P)" != "$(cd "$root" && pwd -P)" ]; then
   exit 1
 fi
 if [ ! -f "$root/$graph" ]; then
-  echo "start-orchestrator: $graph is not in this checkout. Merge #289 and #290, then pull main." >&2
+  echo "start-orchestrator: $graph is not in this checkout. Merge the plan's pull request, then pull main." >&2
   exit 1
 fi
 command -v dagr >/dev/null || { echo "start-orchestrator: dagr is not on PATH." >&2; exit 1; }
