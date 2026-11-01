@@ -39,6 +39,21 @@
 --   m9_preflight_refuses_real_entry_without_running
 --     a real entry before P1G (no E record, `-dev` generator): refused in
 --     preflight, nothing run.
+--   r6_post_change_admits
+--     041 W1, ADR-002 ruling R6 (A14d, first half): r6_post_change_limits, m2's
+--     journal with a clamped call, an invalid `0` and a non-numeric "soon", goes
+--     through `admit`: `report_ok`, `EndSuspended(3)`.
+--   r6_post_change_replays_strict
+--     a second run from `world_state_of(program)`: no refusal, and zero
+--     `strict_replay_findings` against the program's interactions.
+--   r6_post_change_content_served
+--     the tool content the program holds and the content the second run served,
+--     each equal to the generator's `tool_queue`, independent of `src/core`. The
+--     requests and the limit fields are in the program's outcomes.
+--   r6_post_change_altered_content_seen
+--     the control, once per changed result: that queue position's content altered
+--     in the rebuilt world. Strict replay reports `replay-outcome-differs`, and the
+--     content comparison above differs.
 --
 -- Synthetic fixtures only (§0.6).
 
@@ -48,21 +63,24 @@ import std/io (println, exit)
 import std/list as List (length, map, foldl, filter)
 import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
-import std/string (join)
-import src/core/dst_interaction (Interaction, ProviderIdentity)
+import std/string (join, contains)
+import src/core/dst_interaction (Interaction, ProviderIdentity, ToolIdentity)
 import src/core/ports (EnvRead)
 import src/core/phase_vocab (LedgerTrace, LedgerRecord, WireRecord, WorldRequest)
 import src/core/dst_driver_only (driver_only_manifest)
 import src/core/session (TracedSessionResult)
+import src/core/dst_fault_catalogue (required_class_ids)
+import src/core/dst_program (ExecutionProgram)
+import src/core/dst_replay (strict_replay_findings, replay_rule, world_state_of)
 import src/eval/journal/stopping (JournalWorld, EndSuspended, EndFinalize)
-import src/eval/journal/world (journal_world_state, fixture_journal_world)
+import src/eval/journal/world (journal_world_state, fixture_journal_world, tool_label)
 import src/eval/journal/admission (
   AdmissionFinding, AdmissionReport, Identities, Comparators, EntryKind, SyntheticEntry, RealEntry,
   check_a5, check_a6, check_a9, first_label, finding_label, report_ok, admission_program, manifest_of,
   normalized_configuration, profile_scan_roots
 )
 import src/eval/journal/admission_run (admission_run, admit, frame_observation, end_observation)
-import src/eval/journal/testdata/world_fixtures (WorldFixture, fxw_m3_selector_end, fxw_m4_stop_call_last)
+import src/eval/journal/testdata/world_fixtures (WorldFixture, fxw_m3_selector_end, fxw_m4_stop_call_last, fxw_r6_post_change_limits)
 import src/eval/journal/testdata/admission_fixtures (fxa_all)
 
 func lt_report(name: string, ok: bool) -> bool ! {IO} {
@@ -258,6 +276,92 @@ func m9_preflight_real(f: WorldFixture) -> bool ! {AI, Clock, Env, FS, IO, Net, 
   }
 }
 
+-- 041 W1: the content of the tool records in a list of interactions, read the
+-- way replay reads it, as the generator's `<call_id>|<sha(content)>`. A rebuilt
+-- `ScriptedTool` has no call id, because replay's queue is positional, so the id
+-- comes from the record's identity.
+pure func r6_call_ids(log: [Interaction]) -> [string] {
+  List.foldl(\acc i. match i.identity.body { ToolIdentity(_, id, _) => acc ++ [id], _ => acc }, [], log)
+}
+
+pure func r6_zip_labels(ids: [string], labels: [string]) -> [string] {
+  match ids {
+    [] => [],
+    i :: is => match labels { [] => [], l :: ls => "${i}${l}" :: r6_zip_labels(is, ls) }
+  }
+}
+
+pure func r6_tool_labels(p: ExecutionProgram, log: [Interaction]) -> [string] {
+  match world_state_of({ p | interactions: log }, required_class_ids()) {
+    Err(_) => [],
+    Ok(w) => r6_zip_labels(r6_call_ids(log), List.map(tool_label, w.tools))
+  }
+}
+
+pure func r6_payloads(log: [Interaction]) -> string {
+  join("\n", List.map(\i. i.outcome.payload, log))
+}
+
+pure func r6_alter_at[t](xs: [t], at: int, f: (t) -> t) -> [t] {
+  match xs {
+    [] => [],
+    x :: rest => if at == 0 then f(x) :: rest else x :: r6_alter_at(rest, at - 1, f)
+  }
+}
+
+pure func r6_all_in(text: string, needles: [string]) -> bool {
+  List.foldl(\acc n. acc && contains(text, n), true, needles)
+}
+
+func r6_control(f: WorldFixture, jw: JournalWorld, p: ExecutionProgram, at: int) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  match world_state_of(p, required_class_ids()) {
+    Err(_) => false,
+    Ok(w1) => {
+      let altered = { w1 | tools: r6_alter_at(w1.tools, at, \t. { t | content: "${t.content} altered" }) };
+      let run = admission_run(jw, altered, ".motoko/eval-admission-workdir");
+      let rules = List.map(replay_rule, strict_replay_findings(p.interactions, run.world.log));
+      let labels = r6_tool_labels(p, run.world.log);
+      let _ = println("r6_control queue[${show(at)}]: findings=${show(List.length(rules))} rules=[${join(",", rules)}]");
+      List.length(List.filter(\r. r == "replay-outcome-differs", rules)) > 0 && not lt_strs_eq(labels, f.tool_queue)
+    }
+  }
+}
+
+func r6_post_change(f: WorldFixture) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  match fixture_journal_world(f) {
+    Err(_) => lt_report("r6_post_change_admits (fixture)", false),
+    Ok(jw) => {
+      let r = admit("r6_post_change_admits", SyntheticEntry, lt_ids(jw, "a0a0a0-dev"), lt_cmp(f.name), jw, lt_epoch(), ".motoko/eval-admission-workdir");
+      let _ = lt_print_report(r);
+      let a = lt_report("r6_post_change_admits", report_ok(r) && r.observed_end == "EndSuspended(3)" && r.expected_end == "EndSuspended(3)");
+      match r.program {
+        None => { let _ = lt_report("r6_post_change_replays_strict (no program)", false); false },
+        Some(p) => match world_state_of(p, required_class_ids()) {
+          Err(_) => { let _ = lt_report("r6_post_change_replays_strict (world_state_of refused)", false); false },
+          Ok(w1) => {
+            let run = admission_run(jw, w1, ".motoko/eval-admission-workdir");
+            let ms = strict_replay_findings(p.interactions, run.world.log);
+            let _ = println("r6_replay: interactions=${show(List.length(run.world.log))} findings=[${join(",", List.map(replay_rule, ms))}]");
+            let b = lt_report("r6_post_change_replays_strict", List.length(ms) == 0 && List.length(run.world.log) == r.interactions);
+            let payloads = r6_payloads(p.interactions);
+            let c = lt_report("r6_post_change_content_served",
+              lt_strs_eq(r6_tool_labels(p, p.interactions), f.tool_queue)
+                && lt_strs_eq(r6_tool_labels(p, run.world.log), f.tool_queue)
+                && List.length(f.tool_queue) == 4
+                && r6_all_in(join("\n", f.journal), ["timeout_secs\\\":600", "timeout_secs\\\":0", "timeout_secs\\\":\\\"soon"])
+                && r6_all_in(payloads, ["timeout_secs", "soon", "requested_timeout_ms", "max_timeout_ms", "invalid_timeout"]));
+            let d1 = r6_control(f, jw, p, 0);
+            let d2 = r6_control(f, jw, p, 1);
+            let d3 = r6_control(f, jw, p, 2);
+            let d = lt_report("r6_post_change_altered_content_seen", d1 && d2 && d3);
+            a && b && c && d
+          }
+        }
+      }
+    }
+  }
+}
+
 export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let a = p16_end_case("p16_three_continuations_end_suspended", fxw_m3_selector_end(), "EndSuspended(3)");
   let b = p16_end_case("p16_stop_call_end_finalize", fxw_m4_stop_call_last(), "EndFinalize(model_stop)");
@@ -273,6 +377,7 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   };
   let m = m9_exhausted_marker(fxw_m3_selector_end());
   let p = m9_preflight_real(fxw_m3_selector_end());
-  if a && b && rest && m && p then println("admission_live_test: all checks passed")
+  let r6 = r6_post_change(fxw_r6_post_change_limits());
+  if a && b && rest && m && p && r6 then println("admission_live_test: all checks passed")
   else { let _ = println("admission_live_test: FAILED"); exit(1) }
 }

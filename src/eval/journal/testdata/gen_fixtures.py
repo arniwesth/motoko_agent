@@ -1279,6 +1279,31 @@ def m2_bodies():
     ]
 
 
+def r6_post_change_bodies():
+    """041 W1, ADR-002 ruling R6: m2's journal as a post-change session writes it.
+    Three calls carry `timeout_secs` and three results carry D4's limit fields: a
+    clamped call (the limit fields go before `cmd`), an invalid `0` and a
+    non-numeric `"soon"` (no attempt: `fault` and `max_timeout_ms` alone). The
+    last call is an ordinary one. Changed before chaining, so the digests are real."""
+    def bash(i, timeout):
+        args = {"command": "ls " + i, "timeout_secs": timeout}
+        return call(i, "BashExec", json.dumps(args, separators=(",", ":")))
+
+    def invalid(i, message):
+        return json.dumps({"error": True, "tool": "BashExec", "max_timeout_ms": 120000,
+                           "fault": {"kind": "invalid_timeout", "effects": "none"}, "message": message},
+                          separators=(",", ":"))
+
+    clamped = json.dumps({"timeout_ms": 120000, "requested_timeout_ms": 600000, "max_timeout_ms": 120000,
+                          "cmd": "ls c2a", "stdout": "2 a.txt", "stderr": "", "exit_code": 0},
+                         separators=(",", ":"))
+    b = with_message(m2_bodies(), 13, tool_calls=[bash("c2a", 600), bash("c2b", 0)])
+    b = with_message(b, 17, tool_calls=[bash("c3", "soon")])
+    b = with_content(b, 14, clamped)
+    b = with_content(b, 15, invalid("c2b", "timeout_secs must be a positive number, got 0"))
+    return with_content(b, 18, invalid("c3", "timeout_secs must be a number"))
+
+
 def resumed_body():
     return {"type": "resumed", "resume_count": 1, "from_id": "e8", "from_ordinal": 3,
             "profile_from": "fx-profile", "profile_to": "fx-profile",
@@ -2069,6 +2094,9 @@ def world_fixtures():
     add("m5_config_missed_no_event", cfg, lx_drop(cfg_log, li), M2_SEL, None)
     add("m5_model_mismatch", cfg, lx_set(cfg_log, 21, model="openai/fx-model"), M2_SEL,
         ("Association", "event:21", "provider_call_prepared.model"))
+    # 041 W1 — ruling R6's admission test
+    r6 = chain(r6_post_change_bodies())
+    add("r6_post_change_limits", r6, build_log(r6, "e24"), M2_SEL, None)
     return out
 
 

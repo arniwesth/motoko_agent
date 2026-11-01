@@ -1285,7 +1285,7 @@ pure func ad_nc_agrees(a: AdmissionFixture) -> bool {
 pure func test_m9_normalized_configuration_equals_generator() -> bool
   tests [((), true)]
   {
-    List.length(fxa_all()) == 31
+    List.length(fxa_all()) == 32
       && List.foldl(\acc a. acc && ad_nc_agrees(a), true, fxa_all())
   }
 
