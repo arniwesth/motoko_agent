@@ -1,4 +1,7 @@
--- Verify the native process wall reaches descendants on the pinned AILANG.
+-- Verify the native process wall reaches descendants on the pinned AILANG, and
+-- pin what it does not reach: a `setsid` descendant survives the kill (ADR-002 D5).
+-- The SIGKILL row is in the Makefile recipe, because this program cannot kill its
+-- own runtime and report.
 module scripts/verify_native_process_tree
 
 import std/io (println, exit)
@@ -11,7 +14,7 @@ import std/result (Ok, Err)
 import std/json (jo, kv, js)
 import src/core/tool_runtime (run_native_batch)
 import src/core/tool_contract (ToolCallEnvelope)
-import src/core/types (ToolResultItem, BashExecResult, FaultDeadline, EffectsUnknown)
+import src/core/types (ToolResultItem, BashExecResult, ToolErrorResult, FaultDeadline, EffectsUnknown, EffectsNone)
 
 func report(label: string, ok: bool, detail: string) -> bool ! {IO} {
   if ok then { println("OK: ${label}"); true }
@@ -29,6 +32,66 @@ func deadline_and_unknown(item: ToolResultItem) -> bool {
   }
 }
 
+func deadline_elapsed(item: ToolResultItem) -> int {
+  match item {
+    BashExecResult(r) =>
+      match r.fault {
+        Some(f) => match f.kind { FaultDeadline(ms) => ms, _ => -1 },
+        None => -1
+      },
+    _ => -1
+  }
+}
+
+func setsid_present() -> bool ! {Process} {
+  match exec("sh", ["-c", "command -v setsid"]) {
+    Ok(out) => out.exitCode == 0,
+    Err(_) => false
+  }
+}
+
+-- The subshell stays in the command's process group, so `_group_late` is absent
+-- only if the deadline killed that group before 2 s, whenever the call returned.
+-- That reading is the enforced deadline; `elapsed` is the return latency.
+func detached_cmd(path: string, redirect: string) -> string {
+  "(printf up > '${path}_group_up'; sleep 2; printf late > '${path}_group_late') & setsid sh -c 'sleep 3; printf done > \"${path}_marker\"' ${redirect} & sleep 30"
+}
+
+func run_detached(id: string, path: string, redirect: string) -> { item: ToolResultItem, elapsed: int, at_return: bool } ! {FS, Process, Clock} {
+  let call: ToolCallEnvelope = { id: id, tool: "BashExec", arguments: jo([kv("cmd", js(detached_cmd(path, redirect)))]) };
+  let start = now();
+  let results = run_native_batch([call], ".");
+  let elapsed = now() - start;
+  let at_return = fileExists("${path}_marker");
+  let item = match results { [r] => r, _ => ToolErrorResult({ id: id, tool: "BashExec", fault: { kind: FaultDeadline(-1), effects: EffectsNone }, message: "no result" }) };
+  { item: item, elapsed: elapsed, at_return: at_return }
+}
+
+func detached_common(label: string, path: string, c: { item: ToolResultItem, elapsed: int, at_return: bool }) -> bool ! {IO, FS} {
+  let up = fileExists("${path}_group_up");
+  let group_late = fileExists("${path}_group_late");
+  let after = fileExists("${path}_marker");
+  let _ = println("${label}: return_ms=${show(c.elapsed)} timeout_ms=${show(deadline_elapsed(c.item))} group_up=${show(up)} group_late=${show(group_late)} marker_at_return=${show(c.at_return)} marker_after=${show(after)}");
+  let outcome = report("${label}: Err(Timeout) with unknown effects", deadline_and_unknown(c.item), "fault not deadline/unknown");
+  let deadline = report("${label}: deadline enforced, the group was killed before 2000ms", up && not group_late, "group_up=${show(up)} group_late=${show(group_late)}");
+  outcome && deadline
+}
+
+-- Limit 1000 ms plus `WaitDelay` 5000 ms. The descendant cannot exit before 3000 ms.
+func held_rows(path: string, c: { item: ToolResultItem, elapsed: int, at_return: bool }) -> bool ! {IO, FS} {
+  let common = detached_common("setsid pipes held", path, c);
+  let latency = report("setsid pipes held: return latency no earlier than the descendant's exit, no later than limit + WaitDelay", c.elapsed >= 3000 && c.elapsed <= 6000 && c.at_return, "elapsed=${show(c.elapsed)}ms marker_at_return=${show(c.at_return)}");
+  let written = report("setsid pipes held: marker written", fileExists("${path}_marker"), "marker=${path}_marker");
+  common && latency && written
+}
+
+func closed_rows(path: string, c: { item: ToolResultItem, elapsed: int, at_return: bool }) -> bool ! {IO, FS} {
+  let common = detached_common("setsid pipes closed", path, c);
+  let latency = report("setsid pipes closed: return latency near the limit", c.elapsed >= 999 && c.elapsed < 2500, "elapsed=${show(c.elapsed)}ms");
+  let written = report("setsid pipes closed: marker written after the return", not c.at_return && fileExists("${path}_marker"), "marker_at_return=${show(c.at_return)} marker=${path}_marker");
+  common && latency && written
+}
+
 export func main() -> () ! {IO, FS, Process, Clock} {
   let root = match exec("mktemp", ["-d"]) { Ok(out) => trim(toString(out.stdout)), Err(_) => "" };
   if root == "" then { println("FAIL: mktemp"); exit(1) } else {
@@ -38,14 +101,27 @@ export func main() -> () ! {IO, FS, Process, Clock} {
     let results = run_native_batch([call], ".");
     let result = match results { [r] => r, _ => BashExecResult({ id: "tree", fault: None, cmd: "", stdout: "", stderr: "", exit_code: 1, meta: { truncated: false, stdout_bytes: 0, stdout_total_bytes: 0, stderr_bytes: 0, stderr_total_bytes: 0, stdout_sha256: "", stderr_sha256: "" } }) };
     let elapsed = now() - start;
-    let _ = sleep(2500);
+    let present = setsid_present();
+    let held = if present then Some(run_detached("held", "${root}/held", "")) else None;
+    let closed = if present then Some(run_detached("closed", "${root}/closed", "</dev/null >/dev/null 2>&1")) else None;
+    -- Covers the closed case's marker, 3 s after its start and 2 s after its return.
+    -- `elapsed` above is already taken, so this window cannot reach its row.
+    let _ = sleep(3500);
     let late = fileExists(marker);
     let clean = deadline_and_unknown(result);
     let _ = println("elapsed_ms=${show(elapsed)} late_marker=${show(late)}");
     let ok1 = report("deadline returns near the wall, not wall + WaitDelay", elapsed < 4000, "elapsed=${show(elapsed)}ms");
     let ok2 = report("descendant does not write after timeout", not late, "marker=${marker}");
     let ok3 = report("deadline and unknown effects preserved", clean, "fault not deadline/unknown");
+    let ok4 = match held {
+      Some(c) => held_rows("${root}/held", c),
+      None => { println("NOT EVALUATED: setsid pipes held — command -v setsid failed"); true }
+    };
+    let ok5 = match closed {
+      Some(c) => closed_rows("${root}/closed", c),
+      None => { println("NOT EVALUATED: setsid pipes closed — command -v setsid failed"); true }
+    };
     let _ = exec("rm", ["-rf", root]);
-    if ok1 && ok2 && ok3 then () else exit(1)
+    if ok1 && ok2 && ok3 && ok4 && ok5 then () else exit(1)
   }
 }
