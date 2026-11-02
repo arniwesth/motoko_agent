@@ -50,6 +50,7 @@ import src/core/tool_dispatch_adapter (dispatch_one_typed)
 -- `src/core/fs_node`'s header for the decision and for the two codecs that now
 -- share its kind vocabulary.
 import src/core/fs_node (FsNode, FsFile, FsDir)
+import src/core/process_limits (LimitMode, Legacy) -- 041 C1: the mode's types are in a leaf, so naming them here pins no new span
 -- WI-A13 stage 2. The interaction log rides in `WorldState`, so this module has
 -- to name D2's `Interaction`. `src/core/dst_interaction` was split out of
 -- `src/core/dst_program` for exactly this: it imports nothing but std, so the
@@ -490,6 +491,11 @@ export type WorldState = {
   -- (`dst_replay.applied_faults_of_world`), and replay rebuilds it by running.
   effect_log: [{ ordinal: int, call_id: string, effect_key: string }],
 
+  -- 041 ADR-002 D7. The run's process-limit mode, from the program's initial world.
+  -- `Legacy` in every live world until W12 (C2). A token carries it and `adopt_world`
+  -- re-seats it from the pre-hook world, so a hook cannot change the driver's value.
+  process_limits: LimitMode,
+
   -- WI-A13 stage 4: D2's seeded generator, as EXPLICIT STATE.
   --
   -- D2 makes every discovery choice "a deterministic function of generator
@@ -889,8 +895,8 @@ export type PortedProvider = {
 -- non-scripted arm of `ported_provider`.
 export pure func empty_world_state() -> WorldState {
   { script: [], clock_ms: 0, approvals: [], wakes: [], env: [], files: [], tools: [],
-    ext_effects: [], holder_ext_id: "", log: [], effect_log: [], gen: no_generator(),
-    ordinal: 0, pending: [] }
+    ext_effects: [], holder_ext_id: "", log: [], effect_log: [], process_limits: Legacy,
+    gen: no_generator(), ordinal: 0, pending: [] }
 }
 
 -- One provider exchange: the typed step outcome, plus the ordered log of the

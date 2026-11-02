@@ -49,6 +49,8 @@ import src/core/world_ordinal (advance, request_class_id, request_class_of_id)
 -- answers on an entry they cannot read — and they now share exactly the two
 -- functions that decide what "file" and "dir" are called on a wire.
 import src/core/fs_node (FsNode, FsFile, FsDir, fs_kind_id, fs_content_of, fs_node_of_kind)
+import std/string (stringToInt)
+import src/core/process_limits (LimitMode, Legacy, Limits, SessionLimit, Finite, NoDeadline, Ceiling, CeilingMs, SameAsDefault)
 import src/core/dst_interaction (
   Interaction, CausalIdentity, IdentityBody, TimedOutcome, StreamChunkRecord,
   OutcomeStatus, OutcomeOk, OutcomeFault, OutcomeMissing,
@@ -593,6 +595,49 @@ pure func generator_of(j: Json) -> GeneratorState {
     failures: bound_failures_of(json_array(j, "failures")) }
 }
 
+-- 041 W5, ADR-002 D7, "The extension token". The value crosses as text: `std/json` holds
+-- a number as a float, which cannot hold every nanosecond count exactly, and the field's
+-- whole job is to arrive unchanged. An absent key is `Legacy`, as is any value this codec
+-- did not write, because a token is untrusted and `Legacy` is what today's runs are. A
+-- ceiling here is not validated: a program's is refused at decode, and `adopt_world`
+-- discards whatever a hook sent.
+-- contracts: BLOCKED — returns a recursive `Json`, which the Z3 fragment does not encode.
+pure func limit_mode_json(mode: LimitMode) -> Json {
+  match mode {
+    Legacy => jo([kv("mode", js("legacy"))]),
+    Limits(l) => jo([
+      kv("mode", js("limits")),
+      kv("default_ns", js(match l.default { NoDeadline => "none", Finite(ns) => "${ns}" })),
+      kv("ceiling_ms", js(match l.ceiling { SameAsDefault => "same", CeilingMs(ms) => "${ms}" }))
+    ])
+  }
+}
+
+-- contracts: BLOCKED — takes a recursive `Json`, which the Z3 fragment does not encode.
+pure func limit_mode_of(j: Json) -> LimitMode {
+  match get(j, "process_limits") {
+    None => Legacy,
+    Some(v) =>
+      if str_field(v, "mode", "") != "limits" then Legacy
+      else match (session_limit_of(str_field(v, "default_ns", "")), ceiling_of(str_field(v, "ceiling_ms", ""))) {
+        (Some(d), Some(c)) => Limits({ default: d, ceiling: c }),
+        _ => Legacy
+      }
+  }
+}
+
+-- contracts: SKIPPED — unencodable builtin: std/string.stringToInt, whose result is an Option.
+pure func session_limit_of(s: string) -> Option[SessionLimit] {
+  if s == "none" then Some(NoDeadline)
+  else match stringToInt(s) { Some(ns) => Some(Finite(ns)), None => None }
+}
+
+-- contracts: SKIPPED — unencodable builtin: std/string.stringToInt, whose result is an Option.
+pure func ceiling_of(s: string) -> Option[Ceiling] {
+  if s == "same" then Some(SameAsDefault)
+  else match stringToInt(s) { Some(ms) => Some(CeilingMs(ms)), None => None }
+}
+
 -- ---------------------------------------------------------------------------
 -- The seam itself
 -- ---------------------------------------------------------------------------
@@ -629,6 +674,10 @@ export pure func world_json(w: WorldState) -> Json {
     -- tool's `applied` (`scripted_tool_json`). Both are world truth, and the
     -- token is handed to every extension hook (034 ADR-001 D4). The world they
     -- belong to stays in the driver's hands, and `adopt_world` re-seats them.
+    -- 041 W5. Unlike those two this is not world truth: loopback reads it from
+    -- `ctx.world`, and without this key the run itself drops to `Legacy` at its first
+    -- native dispatch, all of which type-checks (D7).
+    kv("process_limits", limit_mode_json(w.process_limits)),
     kv("gen", generator_json(w.gen)),
     -- PLAN-001 P2 Part 1. Both cross, for the reason `ext_effects` does: every
     -- bridge closure in `session.ext_ports_of` decodes the driver's world from
@@ -656,6 +705,7 @@ export pure func world_of_json(j: Json) -> WorldState {
     -- 034 W1.3. Never in the token (see `world_json`): a decoded world has no
     -- effect log, and `adopt_world` re-seats the pre-hook world's.
     effect_log: [],
+    process_limits: limit_mode_of(j),
     gen: generator_of(obj_field(j, "gen")),
     ordinal: int_field(j, "ordinal", 0),
     pending: pending_of(json_array(j, "pending")) }
@@ -698,13 +748,16 @@ export pure func token_to_world(t: ExtWorld) -> WorldState {
 -- equal and every flag survives; the rules above say what happens if one ever
 -- does, and they never invent an applied effect.
 --
+--   process_limits  `pre`'s (041 ADR-002 D7). It does cross in the token, because a
+--               hook needs to read it, and a hook cannot change the driver's value.
+--
 -- Without this, every native dispatch resets `applied` and drops the effect log,
 -- because every one round-trips the world through the token around the hook
 -- (034 PLAN-001 review 2, finding 1).
 -- contracts: SKIPPED — calls `token_to_world`, which decodes an opaque Json token; Json is unencodable.
 export pure func adopt_world(t: ExtWorld, pre: WorldState) -> WorldState {
   let adopted = token_to_world(t);
-  { adopted | tools: reseat_applied(adopted.tools, pre.tools), effect_log: pre.effect_log }
+  { adopted | tools: reseat_applied(adopted.tools, pre.tools), effect_log: pre.effect_log, process_limits: pre.process_limits }
 }
 
 -- contracts: BLOCKED — calls `reseat_aligned`, RECURSIVE over the tool queues.
@@ -880,6 +933,9 @@ pure func codec_fixture_world() -> WorldState {
     -- 034 W1.3. EMPTY HERE, and the world-truth rows below seed their own: the
     -- token never carries it, so this round-trip fixture has nothing to check.
     effect_log: [],
+    -- 041 W5, A25. A `Limits` value DISTINCT FROM THE DEFAULT: a `Legacy` here would
+    -- round-trip through a token that dropped the key on either side.
+    process_limits: Limits({ default: Finite(241000000), ceiling: CeilingMs(251) }),
     log: [
       { identity: { ordinal: 5, body: ProviderIdentity("origin-a", 7, "model-z") },
         request_projection: "proj-1",
@@ -1190,6 +1246,82 @@ pure func test_adoption_re_seats_applied_from_the_pre_hook_world() -> bool
       && adopted.clock_ms == w.clock_ms + 307
       && List.length(adopted.ext_effects) == List.length(w.ext_effects) - 1
       && eq_bools(applied_flags(token_to_world(hooked).tools), [false, false, false])
+  }
+
+-- 041 W5. D7's four facts about the token, in the order D7 states them. A mode is
+-- compared through its JSON, which holds every field of every shape.
+pure func eq_modes(a: LimitMode, b: LimitMode) -> bool {
+  encode(limit_mode_json(a)) == encode(limit_mode_json(b))
+}
+
+-- A25, the direct guard, on `token_to_world` and NOT `adopt_world`: adoption re-seats
+-- from `pre`, so it would hide a key dropped on either side of the codec. The value is
+-- distinct from `Legacy`, and every field differs from the one a fallback would give.
+pure func test_a_limits_value_round_trips_through_the_token() -> bool
+  tests [((), true)]
+  {
+    let w = codec_fixture_world();
+    match token_to_world(world_to_token(w)).process_limits {
+      Limits(l) =>
+        (match l.default { Finite(ns) => ns == 241000000, NoDeadline => false })
+          && (match l.ceiling { CeilingMs(ms) => ms == 251, SameAsDefault => false }),
+      Legacy => false
+    }
+  }
+
+-- Every shape, and a nanosecond count a float could not hold exactly: `2^53 + 1`.
+pure func test_every_limit_shape_round_trips_through_the_token() -> bool
+  tests [((), true)]
+  {
+    let w = empty_world_state();
+    let across = \m. eq_modes(token_to_world(world_to_token({ w | process_limits: m })).process_limits, m);
+    across(Legacy)
+      && across(Limits({ default: NoDeadline, ceiling: SameAsDefault }))
+      && across(Limits({ default: NoDeadline, ceiling: CeilingMs(251) }))
+      && across(Limits({ default: Finite(241000000), ceiling: SameAsDefault }))
+      && across(Limits({ default: Finite(9007199254740993), ceiling: CeilingMs(251) }))
+      && across(Limits({ default: Finite(-1), ceiling: SameAsDefault }))
+      && not eq_modes(Legacy, Limits({ default: NoDeadline, ceiling: SameAsDefault }))
+      && not eq_modes(Limits({ default: NoDeadline, ceiling: CeilingMs(251) }),
+                      Limits({ default: NoDeadline, ceiling: CeilingMs(257) }))
+  }
+
+-- A hook cannot change the driver's value, in either direction: one that hands back a
+-- different `Limits`, one that hands back `Legacy`, and one that promotes a `Legacy`
+-- run to `Limits`. The token it returned really did hold the other value, or the row
+-- would pass with the re-seat removed.
+pure func test_adoption_re_seats_the_mode_from_the_pre_hook_world() -> bool
+  tests [((), true)]
+  {
+    let driver = Limits({ default: Finite(241000000), ceiling: CeilingMs(251) });
+    let other = Limits({ default: Finite(1000000), ceiling: CeilingMs(257) });
+    let w = { empty_world_state() | process_limits: driver };
+    let legacy_run = empty_world_state();
+    let changed = world_to_token({ w | process_limits: other });
+    let dropped = world_to_token({ w | process_limits: Legacy });
+    let promoted = world_to_token({ legacy_run | process_limits: other });
+    eq_modes(token_to_world(changed).process_limits, other)
+      && eq_modes(adopt_world(changed, w).process_limits, driver)
+      && eq_modes(adopt_world(dropped, w).process_limits, driver)
+      && eq_modes(token_to_world(promoted).process_limits, other)
+      && eq_modes(adopt_world(promoted, legacy_run).process_limits, Legacy)
+  }
+
+-- A token without the key is `Legacy` (D7), and so is any value this codec did not
+-- write: a token is what an extension handed back, and the mode must not be invented.
+pure func test_a_token_without_the_mode_decodes_as_legacy() -> bool
+  tests [((), true)]
+  {
+    let is_legacy = \j. eq_modes(world_of_json(j).process_limits, Legacy);
+    is_legacy(jo([kv("ordinal", jnum(3.0))]))
+      && is_legacy(jo([]))
+      && is_legacy(jo([kv("process_limits", js("limits"))]))
+      && is_legacy(jo([kv("process_limits", jo([kv("mode", js("limits"))]))]))
+      && is_legacy(jo([kv("process_limits", jo([kv("mode", js("limits")), kv("default_ns", js("x")), kv("ceiling_ms", js("same"))]))]))
+      && is_legacy(jo([kv("process_limits", jo([kv("mode", js("telepathy"))]))]))
+      -- And the same key with a value this codec did write is not, so the rows above
+      -- are not green because the decoder always answers `Legacy`.
+      && not is_legacy(jo([kv("process_limits", jo([kv("mode", js("limits")), kv("default_ns", js("none")), kv("ceiling_ms", js("same"))]))]))
   }
 
 pure func test_adoption_re_seats_the_effect_log_from_the_pre_hook_world() -> bool
