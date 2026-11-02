@@ -119,6 +119,18 @@ That is the open question in
 UI. The driver's template is the source of truth — `gh pr create` applies a web template only
 interactively, and a web template cannot be machine-filled. Change one, change both.
 
+### Correcting a published PR
+
+`gh pr edit` fails with `MOTOKO_BOT_GH_TOKEN`: its GraphQL query reads organisation data, which needs
+`read:org`, and the bot token does not hold that scope. The REST endpoint works with the same token:
+
+```sh
+GH_TOKEN="$MOTOKO_BOT_GH_TOKEN" gh api -X PATCH repos/<owner>/<repo>/pulls/<n> -F body=@<file>
+```
+
+`<file>` holds the body alone. The record at `.agent/github/prs/<remote>-<n>/body.md` starts with
+frontmatter, so strip that first, and correct the record too: it is the source of truth.
+
 ## Creating an issue
 
 ```sh
