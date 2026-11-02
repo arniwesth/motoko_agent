@@ -500,39 +500,51 @@ export func execute_allowed_tool_call(
             let budget = ports.env_get(advance(started.next_state, ClockRead), "MOTOKO_TOOL_TIMEOUT_MS", "0");
             -- 041 D7: `Limits` mode resolves a process tool here, ahead of the port, so
             -- scripted and live see one answer. The env read above stays in both modes
-            -- because the discovery recorders count it. An invalid request never reaches
-            -- the port; W7 gives this path its event and its fields.
+            -- because the discovery recorders count it.
             let envelope = tool_call_to_envelope(call);
-            let legacy_timeout_ms = parse_timeout_ms(budget.value);
-            let after_env = advance(budget.next_state, EnvRead);
-            let execution = match dispatch_resolution(after_env.process_limits, call.name, envelope.arguments) {
-              Some(ProcessInvalid(_)) =>
-                { outcome: invalid_request_outcome(call), next_state: after_env },
-              Some(ProcessResolved(resolved)) => ports.tool_exec(after_env, {
-                call: envelope, workdir: workdir, started_at_ms: started.now_ms,
-                timeout_ms: projected_timeout_ms(Some(resolved), legacy_timeout_ms),
-                process: Some(resolved)
-              }),
-              None => ports.tool_exec(after_env, {
-                call: envelope, workdir: workdir, started_at_ms: started.now_ms,
-                timeout_ms: legacy_timeout_ms,
-                process: None
-              })
-            };
-            let complete_event = V2ToolDispatchComplete({
-              step: step_idx,
-              stream_id: stream_id,
-              id: call.id
-            });
-            let _ = emit(complete_event);
-            {
-              msg: tool_outcome_message(call, execution.outcome),
-              next_state: advance(execution.next_state, ToolExec),
-              -- START then COMPLETE, which is the order they happened in. The
-              -- driver appends this log positionally, so a reversal here is a
-              -- reversal in the returned trace.
-              emitted: [start_event, complete_event],
-              open_waits: open_waits
+            let resolution = dispatch_resolution(handle_world.process_limits, call.name, envelope.arguments);
+            let carrier = match resolution { Some(ProcessResolved(r)) => Some(r), _ => None };
+            let invalid = match resolution { Some(ProcessInvalid(_)) => true, _ => false };
+            -- An invalid request never reaches the port, so nothing is served and no
+            -- `ToolExec` is counted. W7 gives this arm its event and its fields, and
+            -- moves it ahead of Start.
+            if invalid then {
+              let refused_event = V2ToolDispatchComplete({
+                step: step_idx,
+                stream_id: stream_id,
+                id: call.id
+              });
+              let _ = emit(refused_event);
+              {
+                msg: tool_outcome_message(call, invalid_request_outcome(call)),
+                next_state: advance(budget.next_state, EnvRead),
+                emitted: [start_event, refused_event],
+                open_waits: open_waits
+              }
+            } else {
+              let invocation: ToolInvocation = {
+                call: envelope,
+                workdir: workdir,
+                timeout_ms: projected_timeout_ms(carrier, parse_timeout_ms(budget.value)),
+                started_at_ms: started.now_ms,
+                process: carrier
+              };
+              let execution = ports.tool_exec(advance(budget.next_state, EnvRead), invocation);
+              let complete_event = V2ToolDispatchComplete({
+                step: step_idx,
+                stream_id: stream_id,
+                id: call.id
+              });
+              let _ = emit(complete_event);
+              {
+                msg: tool_outcome_message(call, execution.outcome),
+                next_state: advance(execution.next_state, ToolExec),
+                -- START then COMPLETE, which is the order they happened in. The
+                -- driver appends this log positionally, so a reversal here is a
+                -- reversal in the returned trace.
+                emitted: [start_event, complete_event],
+                open_waits: open_waits
+              }
             }
           }
         }

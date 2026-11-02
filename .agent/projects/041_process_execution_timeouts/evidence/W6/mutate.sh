@@ -152,11 +152,11 @@ mutant d1 "D7: ToolDeadlineExceeded.timeout_ms carries the display value" \
 mutant p1 "D7: ExplicitMs records its value in timeout_ms" \
   "tool_phase records the env's value for a carried call" \
   "dst:A9 1000/3000/2000: a request stops at itself" "$T" \
-  'timeout_ms: projected_timeout_ms(Some(resolved), legacy_timeout_ms),' \
-  'timeout_ms: legacy_timeout_ms,'
+  'timeout_ms: projected_timeout_ms(carrier, parse_timeout_ms(budget.value)),' \
+  'timeout_ms: parse_timeout_ms(budget.value),'
 
 mutant i1 "D7: an invalid request never reaches the port" \
   "tool_phase sends an invalid request to the port with no carrier" \
   "dst:invalid: the queue is untouched" "$T" \
-  '{ outcome: invalid_request_outcome(call), next_state: after_env },' \
-  'ports.tool_exec(after_env, { call: envelope, workdir: workdir, started_at_ms: started.now_ms, timeout_ms: legacy_timeout_ms, process: None }),'
+  'if invalid then {' \
+  'if false && invalid then {'
