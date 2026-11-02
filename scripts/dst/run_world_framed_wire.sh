@@ -9,7 +9,7 @@
 #
 # `session.witness` puts one `world_request` line on the wire for every helped
 # leaf request, carrying the ordinal `world_ordinal.advance` gave it. A DST
-# script runs many traced invocations in one process, and all eight subjects of
+# script runs many traced invocations in one process, and all nine subjects of
 # `ledger_parity_dst.ail` share `session_0` and restart at ordinal 1 — so the
 # wire alone cannot say where one run ends, and a run that dropped its LAST
 # request looks exactly like a shorter run (cF1). The script therefore prints
@@ -51,10 +51,10 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 
-# The eight subjects of ledger_parity_dst.ail, the same pin as its LEDGER_SUBJECTS
+# The nine subjects of ledger_parity_dst.ail, the same pin as its LEDGER_SUBJECTS
 # (PLAN-002 W4 added `parked`, whose frame carries the `wake_read` witness; 005
 # WI-7 removed `dp7`).
-EXPECT_FRAMES=8
+EXPECT_FRAMES=9
 
 # check_wire FILE EXPECTED — prints rows, returns 0 on green.
 check_wire() {

@@ -95,8 +95,8 @@ vcheck "the run published a required set" \
       "no LEDGER_REQUIRE rows: the vocabulary-minus-register set could not be read, and every row below would iterate over nothing"
 
 vcheck "every subject reported a trace side" \
-      "$([ "$subjects" -eq 8 ] && echo 1 || echo 0)" \
-      "expected LEDGER_SUBJECTS 8, got ${subjects}"
+      "$([ "$subjects" -eq 9 ] && echo 1 || echo 0)" \
+      "expected LEDGER_SUBJECTS 9, got ${subjects}"
 
 trace_lines="$(grep -c '^LEDGER_TRACE ' "$out" || true)"
 vcheck "the subject count matches the number of trace lines" \
