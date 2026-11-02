@@ -375,23 +375,21 @@ pure func fraction_ns(digits: string, unit: int) -> int {
   if unit >= 1000000000 then nine * (unit / 1000000000) else nine * unit / 1000000000
 }
 
--- Any digit but 0 from `i` on.
--- contracts: BLOCKED — RECURSIVE over a string.
-pure func nonzero_digit_from(digits: string, i: int) -> bool {
-  if i >= length(digits) then false
-  else if substring(digits, i, i + 1) != "0" then true
-  else nonzero_digit_from(digits, i + 1)
-}
-
 -- D2: a whole number of milliseconds. A whole millisecond of `m` needs at most five
 -- fraction digits and of `h` at most seven, so a non-zero digit past the ninth under
 -- either is never one. Go keeps such a digit when it is worth a nanosecond
 -- (`1.0000000001h` is 3600000000360 ns) and drops it when it is worth less
 -- (`1.00000000001m` is 60000000000 ns), and this refuses both: the second is not the
 -- whole number of milliseconds it would read as.
--- contracts: BLOCKED — calls a recursive string function, outside the Z3 fragment.
+-- `decimal_value` is `Some(0)` for all zeros or no digits, and `None` only for a run
+-- too long to hold, which has a non-zero digit.
+-- contracts: BLOCKED — calls `decimal_value`, which returns `Option[int]`, which the Z3 fragment does not encode.
 pure func fraction_below_whole_ms(digits: string, unit: int) -> bool {
-  unit >= 60000000000 && nonzero_digit_from(digits, 9)
+  if unit < 60000000000 then false
+  else match decimal_value(digits, 9, length(digits), 0) {
+    Some(0) => false,
+    _ => true
+  }
 }
 
 -- `<decimal><unit>` terms from `i`, summed in nanoseconds: no terms is `Some(0)`, and
@@ -584,7 +582,8 @@ func row_ceiling(text: string) -> string
     ("1.0000000001m", "none"),
     ("1.000000000001h", "none"),
     ("1.5000000000h", "5400000"),
-    ("1.5000000000m", "90000")
+    ("1.5000000000m", "90000"),
+    ("1.00000000099999999999999999999h", "none")
   ]
 {
   show_requested(parse_ceiling_ms(text))
