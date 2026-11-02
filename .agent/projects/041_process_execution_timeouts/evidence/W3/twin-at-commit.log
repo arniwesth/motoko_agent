@@ -1,0 +1,13 @@
+control (no signal): runtime_status=0 command_started=yes command_marker=no descendant_marker=no
+OK: control: the deadline stopped the command and its descendant when no signal was sent
+SIGTERM: runtime_status=143 command_started=yes marker_at_signal=no command_marker=yes descendant_marker=yes looked_for_ms~1900
+OK: SIGTERM: the runtime died of the signal
+OK: SIGTERM: the signal was sent before any marker existed
+FAIL: SIGTERM: the command wrote a marker after the signal, past the limit (#2034)
+FAIL: SIGTERM: the descendant wrote a marker after the signal, past the limit (#2034)
+SIGINT: runtime_status=130 command_started=yes marker_at_signal=no command_marker=yes descendant_marker=yes looked_for_ms~1800
+OK: SIGINT: the runtime died of the signal
+OK: SIGINT: the signal was sent before any marker existed
+FAIL: SIGINT: the command wrote a marker after the signal, past the limit (#2034)
+FAIL: SIGINT: the descendant wrote a marker after the signal, past the limit (#2034)
+REPRODUCED: sunholo-data/ailang#2034 on AILANG v0.54.14

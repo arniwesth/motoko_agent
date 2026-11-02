@@ -1,0 +1,10 @@
+id	rule	edit	expected	commit	observed	verdict
+c1	the witness observes the markers (plan: mutant c1)	the command and descendant skip writing their markers; the started file stays	rc=1 run=passed,command=stopped-failing,descendant=stopped-failing	1669bf4d	rc=1 run=passed,command=stopped-failing,descendant=stopped-failing	killed
+c1.command	the command row reads the command marker	the command skips its marker	rc=1 run=passed,command=stopped-failing,descendant=passed	1669bf4d	rc=1 run=passed,command=stopped-failing,descendant=passed	killed
+c1.descendant	the descendant row reads the descendant marker	the descendant skips its marker	rc=1 run=passed,command=passed,descendant=stopped-failing	1669bf4d	rc=1 run=passed,command=passed,descendant=stopped-failing	killed
+f1	the suite turns red when the tree is stopped (simulated in the test)	kill the command group from the test, then call the helper	rc=1 run=passed,command=stopped-failing,descendant=stopped-failing	1669bf4d	rc=1 run=passed,command=stopped-failing,descendant=stopped-failing	killed
+h1	the signal is really sent	no signal; the deadline ends the command and the run finishes	rc=1 run=failed,command=stopped-failing,descendant=stopped-failing	1669bf4d	rc=1 run=failed,command=stopped-failing,descendant=stopped-failing	killed
+h2	an experiment that did not run is not an expected failure	the experiment never runs	rc=1 run=failed,command=stopped-failing,descendant=stopped-failing	1669bf4d	rc=1 run=failed,command=stopped-failing,descendant=stopped-failing	killed
+h3	a runtime that cannot start is not an expected failure	the wrapper execs a missing binary	rc=1 run=failed,command=stopped-failing,descendant=stopped-failing	1669bf4d	rc=1 run=failed,command=stopped-failing,descendant=stopped-failing	killed
+t1	the twin observes the markers	the command and descendant skip writing their markers	rc=0	1669bf4d	rc=0	killed
+t2	the twin really sends the signal	kill -0 in place of the signal	rc=2	1669bf4d	rc=2	killed
