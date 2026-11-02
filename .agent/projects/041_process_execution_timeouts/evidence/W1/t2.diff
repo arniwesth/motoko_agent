@@ -1,0 +1,30 @@
+diff --git a/src/eval/journal/world.ail b/src/eval/journal/world.ail
+index 6ddaee3e..39d36c3d 100644
+--- a/src/eval/journal/world.ail
++++ b/src/eval/journal/world.ail
+@@ -39,11 +39,11 @@ module src/eval/journal/world
+ 
+ import std/ai (Message, ToolCall)
+ import std/crypto (sha256Hex)
+-import std/json (Json)
++import std/json (Json, encode)
+ import std/list as List (length, map, foldl)
+ import std/option (Option, Some, None)
+ import std/result (Result, Ok, Err)
+-import std/string (join)
++import std/string (join, contains)
+ import src/core/ports (WorldState, ScriptedStep, ScriptedTool, empty_world_state)
+ import src/core/fs_node (FsNode, FsFile, FsDir)
+ import src/eval/journal/reader (RunSelector, parse_lines, EndAt, CutoffBefore)
+@@ -86,7 +86,10 @@ export pure func journal_results(jw: JournalWorld) -> [WorldTool] {
+ }
+ 
+ export pure func journal_tool(t: WorldTool) -> ScriptedTool {
+-  { tool_call_id: t.call_id, duration_ms: 0, code: "", message: "", content: t.content, exit_code: -1, after_dispatch: true, applied: false }
++  if contains(encode(t.arguments), "\"timeout_secs\":0") then
++    { tool_call_id: t.call_id, duration_ms: 0, code: "InvalidTimeout", message: "timeout_secs refused", content: "", exit_code: -1, after_dispatch: false, applied: false }
++  else
++    { tool_call_id: t.call_id, duration_ms: 0, code: "", message: "", content: t.content, exit_code: -1, after_dispatch: true, applied: false }
+ }
+ 
+ export pure func journal_tools(jw: JournalWorld) -> [ScriptedTool] {
