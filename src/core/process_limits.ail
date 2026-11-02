@@ -364,12 +364,32 @@ pure func duration_unit(s: string, i: int) -> (int, int) {
   else (0, 0)
 }
 
--- A fraction's digits as nanoseconds of `unit`. Past nine digits they are dropped,
--- as Go drops precision below a nanosecond.
+-- A fraction's digits as nanoseconds of `unit`, read to nine digits. For `s` and below
+-- that is all Go keeps too, since a tenth digit is below a nanosecond. For `m` and `h`
+-- it is not: `duration_terms_ns` refuses those before this runs.
 -- contracts: BLOCKED — calls `substring` and `stringToInt`, outside the Z3 fragment.
 pure func fraction_ns(digits: string, unit: int) -> int {
   let nine = match stringToInt(substring("${digits}000000000", 0, 9)) { Some(v) => v, None => 0 };
   if unit >= 1000000000 then nine * (unit / 1000000000) else nine * unit / 1000000000
+}
+
+-- Any digit but 0 from `i` on.
+-- contracts: BLOCKED — RECURSIVE over a string.
+pure func nonzero_digit_from(digits: string, i: int) -> bool {
+  if i >= length(digits) then false
+  else if substring(digits, i, i + 1) != "0" then true
+  else nonzero_digit_from(digits, i + 1)
+}
+
+-- D2: a whole number of milliseconds. A whole millisecond of `m` needs at most five
+-- fraction digits and of `h` at most seven, so a non-zero digit past the ninth under
+-- either is never one. Go keeps such a digit when it is worth a nanosecond
+-- (`1.0000000001h` is 3600000000360 ns) and drops it when it is worth less
+-- (`1.00000000001m` is 60000000000 ns), and this refuses both: the second is not the
+-- whole number of milliseconds it would read as.
+-- contracts: BLOCKED — calls a recursive string function, outside the Z3 fragment.
+pure func fraction_below_whole_ms(digits: string, unit: int) -> bool {
+  unit >= 60000000000 && nonzero_digit_from(digits, 9)
 }
 
 -- `<decimal><unit>` terms from `i`, summed in nanoseconds: no terms is `Some(0)`, and
@@ -387,7 +407,7 @@ pure func duration_terms_ns(s: string, i: int, acc: int) -> Option[int] {
     if j == i && fraction == "" then None
     else match duration_unit(s, k) {
       (0, _) => None,
-      (unit, n) => {
+      (unit, n) => if fraction_below_whole_ms(fraction, unit) then None else {
         let whole = match decimal_value(s, i, j, 0) {
           Some(v) => if v > max_duration_ns() / unit then None else Some(v * unit),
           None => None
@@ -510,8 +530,11 @@ func row_whole_ms(x: float) -> string
 }
 
 -- The strict ceiling domain: accepted values, then every way of not being one. The
--- first three of the last four rows each wrap to exactly 1 ms in 64 bits if the guard
+-- `288230376151711745ms`, `...1000002ns` and `18446744073710551616ns` rows each wrap to exactly 1 ms in 64 bits if the guard
 -- they test is missing. A value that wraps negative would be refused anyway and test nothing.
+-- `1.0000000001s` is accepted because that tenth digit is below a nanosecond, which is
+-- true only for `s` and below: the rows after `1s5` pin `m` and `h`, whose tenth digit
+-- is whole nanoseconds. A non-zero digit is refused there, and trailing zeros are not.
 func row_ceiling(text: string) -> string
   tests [
     ("300s", "300000"),
@@ -554,7 +577,12 @@ func row_ceiling(text: string) -> string
     ("288230376151711745ms", "none"),
     ("9223372036854775807ns9223372036854775807ns1000002ns", "none"),
     ("18446744073710551616ns", "none"),
-    ("1s5", "none")
+    ("1s5", "none"),
+    ("1.0000000001h", "none"),
+    ("1.0000000001m", "none"),
+    ("1.000000000001h", "none"),
+    ("1.5000000000h", "5400000"),
+    ("1.5000000000m", "90000")
   ]
 {
   show_requested(parse_ceiling_ms(text))
