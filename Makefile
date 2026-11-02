@@ -2664,13 +2664,32 @@ conformance:
 # Native process-wall containment. With AILANG >=0.54.14 the timeout kills the
 # command's process group and WaitDelay does not add five seconds to the result.
 # The probe is deliberately below 30s, so it cannot pass because a wall expired.
+# It also pins what the wall does not reach (ADR-002 D5): a setsid descendant, and
+# a command whose runtime took a SIGKILL. An upstream change turns those rows red.
+# AILANG_FS_SANDBOX is cleared because those rows read markers in a mktemp directory.
 verify_native_process_tree:
 	@printf '%s\n' '  native process-tree timeout containment'
 	@AILANG_BIN="$${AILANG_BIN:-ailang}"; \
 	version=$$("$$AILANG_BIN" --version 2>/dev/null | head -1); \
 	case "$$version" in *v0.54.14*|*v0.54.15*|*v0.54.16*|*v0.54.17*|*v0.54.18*|*v0.54.19*|*v0.55.*|*v0.56.*|*v0.57.*|*v0.58.*|*v0.59.*) ;; \
 	*) echo "FAIL: native process-tree probe requires AILANG >=0.54.14, got $$version"; exit 1;; esac; \
-	"$$AILANG_BIN" run --caps IO,FS,Process,Clock --process-timeout 1s --entry main scripts/verify_native_process_tree.ail
+	env -u AILANG_FS_SANDBOX "$$AILANG_BIN" run --caps IO,FS,Process,Clock --process-timeout 1s --entry main scripts/verify_native_process_tree.ail; rc=$$?; \
+	dir=$$(mktemp -d); \
+	PROBE_SIGKILL_DIR="$$dir" "$$AILANG_BIN" run --caps IO,Process --process-timeout 30s --entry main scripts/verify_native_process_sigkill.ail >"$$dir/log" 2>&1 & pid=$$!; \
+	i=0; while [ ! -e "$$dir/up" ] && [ $$i -lt 300 ] && kill -0 "$$pid" 2>/dev/null; do sleep 0.1; i=$$((i + 1)); done; \
+	up=no; [ -e "$$dir/up" ] && up=yes; \
+	at_kill=no; [ -e "$$dir/marker" ] && at_kill=yes; \
+	kill -9 "$$pid" 2>/dev/null; wait "$$pid" 2>/dev/null; status=$$?; \
+	i=0; while [ ! -e "$$dir/marker" ] && [ $$i -lt 50 ]; do sleep 0.1; i=$$((i + 1)); done; \
+	after=no; [ -e "$$dir/marker" ] && after=yes; \
+	echo "SIGKILL: runtime_status=$$status command_started=$$up marker_at_kill=$$at_kill marker_after=$$after marker_ms_after_kill~$$((i * 100))"; \
+	row() { if [ "$$2" = "$$3" ]; then echo "OK: SIGKILL: $$1"; else echo "FAIL: SIGKILL: $$1 — got $$2"; rc=1; fi; }; \
+	row "the runtime died of the signal" "$$status" 137; \
+	row "the command had started and not finished when the signal was sent" "$$up$$at_kill" yesno; \
+	row "the command survived and wrote its marker" "$$after" yes; \
+	[ "$$rc" -eq 0 ] || cat "$$dir/log"; \
+	rm -rf "$$dir"; \
+	exit "$$rc"
 
 # runtime-boot-probe every extension in the active profile's registry
 # so DP7 can catch the class of bugs that pass type-check but crash

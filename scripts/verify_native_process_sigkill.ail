@@ -1,0 +1,11 @@
+-- The entry the verify_native_process_tree recipe kills with SIGKILL: it runs one
+-- command that outlives the kill (ADR-002 D5, R10). The recipe sets the directory.
+module scripts/verify_native_process_sigkill
+
+import std/io (println)
+import std/process (exec)
+
+export func main() -> () ! {IO, Process} {
+  let _ = exec("sh", ["-c", "printf up > \"$PROBE_SIGKILL_DIR/up\"; sleep 2; printf survived > \"$PROBE_SIGKILL_DIR/marker\""]);
+  println("returned without being killed")
+}

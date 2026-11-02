@@ -61,6 +61,23 @@ a warning.
 `--process-timeout`, the wall for `BashExec`/`RunTests` (30 s if unset); the
 `MOTOKO_PROCESS_TIMEOUT` env var overrides it for one run.
 
+The wall does not contain everything a command starts:
+
+- **Detached descendants.** On timeout the runtime kills the command's process
+  group. A `setsid` or daemonized descendant is outside that group and keeps
+  running. If it holds the stdout or stderr pipes, the call returns when they
+  close and no later than the wall plus a 5 s `WaitDelay`. With a 1 s wall and a
+  descendant exiting at 3 s, the call times out at about 3 s.
+- **SIGKILL of the runtime.** The runtime cannot clean up after a SIGKILL, so a
+  command it was running keeps running and its side effects still happen. Its
+  stdout and stderr pipes died with the runtime, so its next write to them
+  normally ends it with SIGPIPE.
+
+`make verify_native_process_tree` pins the survival in both cases. Motoko does
+not build process containment. These limits are for operators: the tool result
+does not state them, and reports only that the effects of a timed-out command are
+unknown.
+
 Top-level `theme` picks the TUI colour scheme: `"tokyo-night"`, or unset for
 the default PI colours (which follow your terminal's palette). The
 `MOTOKO_THEME` env var overrides it for one run.
