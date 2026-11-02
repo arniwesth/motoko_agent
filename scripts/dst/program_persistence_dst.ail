@@ -40,6 +40,7 @@ import std/string as Str (contains, toUpper, replace, substring, length, split, 
 import std/fs as FS (readFileResult, fileExists, removeFile)
 import std/result (Result, Ok, Err)
 
+import src/core/process_limits (LimitMode, Legacy, Limits, ProcessLimits, Finite, CeilingMs)
 import src/core/dst_secrets (
   SecretFinding,
   SecretSite,
@@ -73,6 +74,7 @@ import src/core/dst_secrets (
 )
 import src/core/dst_discovery (driver_env_keys)
 import src/core/dst_persistence (
+  process_limits_field,
   DecodeRefusal,
   ProgramDecode, ProgramDecoded, ProgramDecodeRefused,
   EncodeOutcome, Encoded, EncodeRefused,
@@ -111,8 +113,9 @@ import src/core/dst_profile (ExecutionManifest, PackageVersion)
 import src/core/dst_fault_catalogue (required_class_ids)
 -- 034 W1.2: the specimen's two tool-fault payloads are written BY the codec, so
 -- the frozen v5 bytes hold the stage exactly as this build serves it.
-import src/core/ports (ToolOutcome, ToolFailed, encode_tool_outcome)
+import src/core/ports (ToolOutcome, ToolFailed, ToolCompleted, encode_tool_outcome, encode_provider_outcome)
 import src/core/dst_replay (
+  world_state_of,
   RegressionReplay,
   regression_replay_findings,
   regression_difference_count,
@@ -659,7 +662,7 @@ pure func frozen_v1_world() -> InitialWorld {
       { key: "PATH_WITH_BACKSLASH", value: "C:\\tmp\\dir" }],
     files: [],
     clock_epoch: 17,
-    extension_profile: "profile.specimen" }
+    extension_profile: "profile.specimen", process_limits: Legacy }
 }
 
 -- WI-D22's seeded file table, and it is built to freeze the CODEC rather than to
@@ -1005,6 +1008,10 @@ pure func encoded_frozen_v2() -> string {
 -- that reads them asserts they equal `encoded_specimen()` — so the file is checked
 -- against the encoder rather than trusted. That is the same discipline WI-D22 used
 -- for these bytes and stage 5 uses for its canary pins.
+pure func v6_fixture_path() -> string { "scripts/dst/fixtures/execution-program-v6.artifact" }
+
+pure func v6_limits_fixture_path() -> string { "scripts/dst/fixtures/execution-program-v6-limits.artifact" }
+
 pure func v5_fixture_path() -> string { "scripts/dst/fixtures/execution-program-v5.artifact" }
 
 pure func v4_fixture_path() -> string { "scripts/dst/fixtures/execution-program-v4.artifact" }
@@ -1072,6 +1079,9 @@ pure func program_diff(a: ExecutionProgram, b: ExecutionProgram) -> [string] {
     -- read a legacy artifact as "every fault applied" (034 W1.7 mutant v01)
     -- differs here and nowhere else.
     ++ list_diff("applied_faults", ints_labels(a.applied_faults), ints_labels(b.applied_faults))
+    -- 041 W5. Every field of the mode, through the codec's own text, so the frozen
+    -- rows above and below all see a decoder that gets it wrong.
+    ++ d("world.process_limits", process_limits_field(aw.process_limits), process_limits_field(bw.process_limits))
 }
 
 pure func ints_labels(xs: [int]) -> [string] {
@@ -1649,37 +1659,31 @@ func scenario_the_frozen_v4_specimen_still_decodes() -> bool ! {IO, FS} {
   }
 }
 
--- 034 W1.2'S FROZEN v5 BYTES, AND WHY THEY ARE NOT A CONVENIENCE.
+-- 034 W1.2'S FROZEN v5 BYTES, NOW A PREDECESSOR.
 --
--- This carries the assertion the v4 row can no longer make: that the encoder in
--- this tree produces these exact bytes. Both readings of a mismatch here are
--- defects — an encoding change that did not move `program_schema_version()`, or a
--- regenerated fixture — so it is a `✗` and not an `ⓘ`, as the v4 row was before
--- this bump moved it.
---
--- The bytes hold ONE APPLIED AND ONE NON-APPLIED FAULT (034 PLAN-001 W1.2): the
--- `applied_faults` line reads `[12]`, #12 is a fault after dispatch, and #13 is a
--- fault before dispatch that the list does not name. The row checks that against
--- the DECODED program, not against the specimen it is compared with, so a
--- fixture and specimen that drifted together still fail it.
---
--- The v5 bytes were produced once, by a throwaway outside the tree, and the row
--- that reads them asserts they equal `encoded_specimen()` — so the file is checked
--- against the encoder rather than trusted, WI-D22's discipline for these bytes.
+-- This row carried the strict byte-identity assertion until 041 W5's bump moved it to
+-- v6, as the v4 row's moved here. What it keeps is that the bytes decode to the program
+-- they hold, `Legacy` included (D7: that is what a v5 program means), and the world-truth
+-- pair checked against the DECODED program: the `applied_faults` line reads `[12]`, #12
+-- is a fault after dispatch, and #13 is a fault before dispatch that the list does not
+-- name. These bytes are never regenerated.
+pure func frozen_v5_program() -> ExecutionProgram {
+  { specimen_program() | schema_version: "execution-program/5" }
+}
+
 func scenario_the_frozen_v5_specimen_still_decodes() -> bool ! {IO, FS} {
   match FS.readFileResult(v5_fixture_path()) {
-    Err(e) => { let _ = println("  ✗ the frozen v5 specimen could not be read (${e}); nothing then asserts that this build's encoder produces the bytes it claims to"); false },
+    Err(e) => { let _ = println("  ✗ the frozen v5 specimen could not be read (${e}); nothing then asserts that this build still reads the bytes the previous encoder wrote"); false },
     Ok(bytes) => {
-      let matches_encoder = bytes == encoded_specimen();
       match decode_artifact(bytes) {
         ProgramDecodeRefused(rs) => {
           let _ = println("  ✗ THE FROZEN v5 SPECIMEN NO LONGER DECODES: ${first_decode_message(rs)}");
-          let _ = println("      This build changed the encoding without moving program_schema_version().");
-          let _ = println("      Add a decode path and bump to execution-program/6. Do NOT regenerate this file.");
+          let _ = println("      This build changed the encoding without keeping the v5 decode path.");
+          let _ = println("      Restore it, or bump to execution-program/7. Do NOT regenerate this file.");
           false
         },
         ProgramDecoded(back) => {
-          let diff = program_diff(specimen_program(), back);
+          let diff = program_diff(frozen_v5_program(), back);
           let ok = List.length(diff) == 0;
           let unfrozen = kinds_absent(all_interaction_kinds(), back.interactions);
           let none_unfrozen = List.length(unfrozen) == 0;
@@ -1688,18 +1692,248 @@ func scenario_the_frozen_v5_specimen_still_decodes() -> bool ! {IO, FS} {
                               && fault_at(back.interactions, 12) && fault_at(back.interactions, 13)
                               && payload_has(back.interactions, 12, "\"stage\":\"after_dispatch\"")
                               && payload_has(back.interactions, 13, "\"stage\":\"before_dispatch\"");
-          let _ = if ok then println("  ✓ the frozen v5 specimen decodes to the specimen, field by field (${show(Str.length(bytes))} bytes read from the tree)")
+          let _ = if ok then println("  ✓ the frozen v5 specimen decodes to the program its own bytes hold, field by field, as Legacy (${show(Str.length(bytes))} bytes read from the tree)")
                   else println("  ✗ the frozen v5 specimen decodes to a DIFFERENT program: ${join_keys(diff)}");
-          let _ = if matches_encoder then println("    ✓ the current encoder still produces those exact bytes")
-                  else println("    ✗ the current encoder no longer produces the frozen v5 bytes; these were frozen BY this encoder, so this is an encoding change that did not move the schema version — bump to execution-program/6 rather than regenerating the file");
           let _ = if world_truth then println("    ✓ the bytes hold one applied fault (#12, after dispatch, listed) and one non-applied fault (#13, before dispatch, unlisted)")
                   else println("    ✗ the v5 bytes do not hold the world-truth pair: applied_faults=[${Str.join(",", ints_labels(back.applied_faults))}]");
-          let _ = if none_unfrozen then println("    ✓ 0 identity class(es) round-tripped-but-not-frozen (all ${show(List.length(all_interaction_kinds()))} classes are in frozen bytes at the version this build writes)")
-                  else println("    ✗ ${show(List.length(unfrozen))} identity class(es) are frozen by nothing: ${join_keys(unfrozen)} — the fix is a further schema version, not an edit to these bytes");
-          ok && matches_encoder && world_truth && none_unfrozen
+          let _ = if none_unfrozen then println("    ✓ 0 identity class(es) round-tripped-but-not-frozen in the v5 bytes")
+                  else println("    ✗ ${show(List.length(unfrozen))} identity class(es) are absent from the v5 bytes: ${join_keys(unfrozen)}");
+          ok && world_truth && none_unfrozen
         }
       }
     }
+  }
+}
+
+-- 041 W5'S FROZEN v6 BYTES: `legacy`, EVERY IDENTITY CLASS.
+--
+-- This carries the assertion the v5 row can no longer make: that the encoder in this
+-- tree produces these exact bytes. Both readings of a mismatch are defects, an encoding
+-- change that did not move `program_schema_version()` or a regenerated fixture, so it
+-- is a `✗`. The bytes were produced once, by a throwaway outside the tree.
+func scenario_the_frozen_v6_specimen_still_decodes() -> bool ! {IO, FS} {
+  match FS.readFileResult(v6_fixture_path()) {
+    Err(e) => { let _ = println("  ✗ the frozen v6 specimen could not be read (${e}); nothing then asserts that this build's encoder produces the bytes it claims to"); false },
+    Ok(bytes) => {
+      let matches_encoder = bytes == encoded_specimen();
+      match decode_artifact(bytes) {
+        ProgramDecodeRefused(rs) => {
+          let _ = println("  ✗ THE FROZEN v6 SPECIMEN NO LONGER DECODES: ${first_decode_message(rs)}");
+          let _ = println("      Add a decode path and bump to execution-program/7. Do NOT regenerate this file.");
+          false
+        },
+        ProgramDecoded(back) => {
+          let diff = program_diff(specimen_program(), back);
+          let ok = List.length(diff) == 0;
+          let unfrozen = kinds_absent(all_interaction_kinds(), back.interactions);
+          let none_unfrozen = List.length(unfrozen) == 0;
+          let is_legacy = back.schema_version == "execution-program/6"
+                            && Str.contains(bytes, "\nprocess_limits\tlegacy\n")
+                            && mode_is_legacy(back.initial_world.process_limits);
+          let _ = if ok then println("  ✓ the frozen v6 specimen decodes to the specimen, field by field (${show(Str.length(bytes))} bytes read from the tree)")
+                  else println("  ✗ the frozen v6 specimen decodes to a DIFFERENT program: ${join_keys(diff)}");
+          let _ = if matches_encoder then println("    ✓ the current encoder still produces those exact bytes")
+                  else println("    ✗ the current encoder no longer produces the frozen v6 bytes; these were frozen BY this encoder, so this is an encoding change that did not move the schema version — bump to execution-program/7 rather than regenerating the file");
+          let _ = if is_legacy then println("    ✓ the bytes declare `legacy`, by the line and not by the version")
+                  else println("    ✗ the v6 bytes do not hold the legacy line");
+          let _ = if none_unfrozen then println("    ✓ 0 identity class(es) round-tripped-but-not-frozen (all ${show(List.length(all_interaction_kinds()))} classes are in frozen bytes at the version this build writes)")
+                  else println("    ✗ ${show(List.length(unfrozen))} identity class(es) are frozen by nothing: ${join_keys(unfrozen)} — the fix is a further schema version, not an edit to these bytes");
+          ok && matches_encoder && is_legacy && none_unfrozen
+        }
+      }
+    }
+  }
+}
+
+pure func mode_is_legacy(m: LimitMode) -> bool {
+  match m { Legacy => true, _ => false }
+}
+
+-- 041 W5'S `Limits` SPECIMEN, AND ITS JOB IS A LINE THE COMPILER CANNOT SEE.
+--
+-- `world_state_of` builds its world with a record update, so forgetting to copy the mode
+-- type-checks and silently replays a `Limits` program as `Legacy` (mutant p4). This is a
+-- DECODED PROGRAM and not a live world: nothing here reaches `empty_world_state` or a
+-- real session (standing rule 6).
+--
+-- A SEPARATE, SMALLER PROGRAM FROM THE LEGACY SPECIMEN, because `world_state_of` decodes
+-- each interaction's payload and refuses a program it cannot read, and the legacy
+-- specimen's payloads are placeholders. These two are written by the codec, so this
+-- program really reconstitutes. Every value is distinct from `Legacy` and from the
+-- other's units: a 30 s default and a 120 s ceiling, as 30000000000 and 120000000000 on
+-- the line.
+pure func specimen_limits() -> LimitMode {
+  Limits({ default: Finite(30000000000), ceiling: CeilingMs(120000) })
+}
+
+pure func specimen_limits_interactions() -> [Interaction] {
+  [inter(0, ProviderIdentity("loop_v2", 0, "model.limits"), "rq.provider.limits", -1,
+         { advance_ms: 0, chunks: [],
+           payload: encode_provider_outcome({ prose: "limits", tool_calls: [], input_tokens: 1, output_tokens: 2,
+                                              finish_reason: "stop", chunks: [], error_code: "", error_message: "", advance_ms: 0 }),
+           status: OutcomeOk, fault_class_id: "" }),
+   inter(1, ToolIdentity("loop_v2", "call.limits", "BashExec"), "tool call.limits BashExec {\"cmd\":\"true\",\"timeout_secs\":60}", 3,
+         { advance_ms: 3, chunks: [],
+           payload: encode_tool_outcome(ToolCompleted({ tool_call_id: "call.limits", content: "OUT", exit_code: 0 })),
+           status: OutcomeOk, fault_class_id: "" })]
+}
+
+pure func specimen_limits_program() -> ExecutionProgram {
+  { specimen_program() |
+    initial_world: { specimen_world() | process_limits: specimen_limits() },
+    interactions: specimen_limits_interactions(),
+    applied_faults: [] }
+}
+
+pure func encoded_limits_specimen() -> string {
+  match encode_artifact(specimen_limits_program()) { Encoded(s) => s, EncodeRefused(_) => "" }
+}
+
+func scenario_the_limits_specimen_reaches_the_world() -> bool ! {IO, FS} {
+  match FS.readFileResult(v6_limits_fixture_path()) {
+    Err(e) => { let _ = println("  ✗ the frozen Limits specimen could not be read (${e}), so nothing holds world_state_of's copy of the mode"); false },
+    Ok(bytes) => {
+      let matches_encoder = bytes == encoded_limits_specimen();
+      let on_the_line = Str.contains(bytes, "\nprocess_limits\tlimits\t30000000000\t120000000000\n");
+      match decode_artifact(bytes) {
+        ProgramDecodeRefused(rs) => {
+          let _ = println("  ✗ THE FROZEN Limits SPECIMEN NO LONGER DECODES: ${first_decode_message(rs)}");
+          false
+        },
+        ProgramDecoded(back) => {
+          let diff = program_diff(specimen_limits_program(), back);
+          let ok = List.length(diff) == 0;
+          let want = process_limits_field(specimen_limits());
+          let in_program = process_limits_field(back.initial_world.process_limits) == want;
+          let rejections = validate_program(back, required_class_ids());
+          let _ = if ok then println("  ✓ the frozen Limits specimen decodes to the specimen, field by field (${show(Str.length(bytes))} bytes read from the tree)")
+                  else println("  ✗ the frozen Limits specimen decodes to a DIFFERENT program: ${join_keys(diff)}");
+          let _ = if matches_encoder && on_the_line then println("    ✓ the current encoder still produces those exact bytes, in nanoseconds on the line")
+                  else println("    ✗ the current encoder does not produce the frozen Limits bytes, or they do not hold the expected line");
+          let _ = if in_program then println("    ✓ the decoded program's initial world holds Limits(30 s, 120 s)")
+                  else println("    ✗ the decoded program's initial world holds ${process_limits_field(back.initial_world.process_limits)}");
+          let reached = match world_state_of(back, required_class_ids()) {
+            Err(_) => { let _ = println("    ✗ world_state_of refused the Limits specimen, so nothing holds its copy of the mode"); false },
+            Ok(w) => {
+              let copied = process_limits_field(w.process_limits) == want;
+              let _ = if copied then println("    ✓ world_state_of copies the mode: the reconstituted world holds Limits(30 s, 120 s)")
+                      else println("    ✗ world_state_of DROPPED THE MODE: a Limits program would replay as ${process_limits_field(w.process_limits)}, and the compiler does not flag this record update");
+              copied
+            }
+          };
+          ok && matches_encoder && on_the_line && in_program && reached && List.length(rejections) == 0
+        }
+      }
+    }
+  }
+}
+
+-- 041 W5, A15's DECODER HALF, on real bytes: D7's four refusals, each by its own rule,
+-- and the valid neighbour of each, because a row that only rejects cannot see a decoder
+-- that rejects everything (the mutation discipline's rule 5).
+func scenario_the_ceiling_refusals() -> bool ! {IO} {
+  let good = encoded_limits_specimen();
+  let line = "process_limits\tlimits\t30000000000\t120000000000";
+  let with_line = \l. retag(good, line, l);
+  let refused = rows([
+    { rule: "artifact-ceiling-not-positive", label: "a ceiling of zero", bytes: with_line("process_limits\tlimits\tnone\t0") },
+    { rule: "artifact-ceiling-not-positive", label: "a negative ceiling", bytes: with_line("process_limits\tlimits\tnone\t-1000000") },
+    { rule: "artifact-ceiling-not-whole-ms", label: "a ceiling that is not a whole millisecond", bytes: with_line("process_limits\tlimits\tnone\t1500000") },
+    { rule: "artifact-ceiling-too-large", label: "a ceiling too large for an int", bytes: with_line("process_limits\tlimits\tnone\t9223372036854775808") },
+    { rule: "artifact-ceiling-below-default", label: "a ceiling below a finite default", bytes: with_line("process_limits\tlimits\t30000000000\t29000000000") }]);
+  let accepted = decodes_to(with_line("process_limits\tlimits\t30000000000\t30000000000"), "limits\t30000000000\t30000000000")
+    && decodes_to(with_line("process_limits\tlimits\tnone\t1000000"), "limits\tnone\t1000000")
+    && decodes_to(with_line("process_limits\tlimits\t1500000\tsame"), "limits\t1500000\tsame")
+    && decodes_to(with_line("process_limits\tlimits\t-1000000000\tsame"), "limits\t-1000000000\tsame")
+    && decodes_to(with_line("process_limits\tlegacy"), "legacy");
+  let _ = if accepted then println("  ✓ each refusal has a valid neighbour that decodes: a ceiling equal to the default, no default, and a sub-millisecond or non-positive default (D2's native domain)")
+          else println("  ✗ a valid process_limits line was refused or read as something else");
+  refused && accepted
+}
+
+pure func decodes_to(bytes: string, want: string) -> bool {
+  match decode_artifact(bytes) {
+    ProgramDecoded(p) => process_limits_field(p.initial_world.process_limits) == want,
+    ProgramDecodeRefused(_) => false
+  }
+}
+
+-- 041 W5, A13. THE TRANSCODE. A legacy program whose tool call carries `timeout_secs: 0`
+-- is written as real v5 bytes, decoded, encoded and decoded. Every encoder stamps the
+-- current version, so the program ends at v6, and it must still be `Legacy`: a decoder
+-- that read the mode off the version (mutant p1) makes it `Limits` right here.
+pure func legacy_timeout_program() -> ExecutionProgram {
+  { specimen_program() |
+    interactions: [inter(0, ProviderIdentity("loop_v2", 0, "model.limits"), "rq.provider.limits", -1,
+                         { advance_ms: 0, chunks: [],
+                           payload: encode_provider_outcome({ prose: "old", tool_calls: [], input_tokens: 1, output_tokens: 2,
+                                                              finish_reason: "stop", chunks: [], error_code: "", error_message: "", advance_ms: 0 }),
+                           status: OutcomeOk, fault_class_id: "" }),
+                   inter(1, ToolIdentity("loop_v2", "call.old", "BashExec"), legacy_timeout_request(), 3,
+                         { advance_ms: 3, chunks: [],
+                           payload: encode_tool_outcome(ToolCompleted({ tool_call_id: "call.old", content: "OLD", exit_code: 0 })),
+                           status: OutcomeOk, fault_class_id: "" })],
+    applied_faults: [] }
+}
+
+pure func legacy_timeout_request() -> string { "tool call.old BashExec {\"cmd\":\"true\",\"timeout_secs\":0}" }
+
+func scenario_a_legacy_program_with_timeout_secs_transcodes_as_legacy() -> bool ! {IO} {
+  let current = match encode_artifact(legacy_timeout_program()) { Encoded(s) => s, EncodeRefused(_) => "" };
+  -- The v5 bytes: the one line gone and the version line back, which is exactly what
+  -- the v5 encoder wrote (A18 measures that against the real one).
+  let v5_body = Str.join("\n", drop_lines_with(Str.split(body_of_artifact(current), "\n"), "process_limits\t"));
+  let v5_bytes = rebuild_at("execution-program/5", v5_body);
+  match decode_artifact(v5_bytes) {
+    ProgramDecodeRefused(rs) => { let _ = println("  ✗ the v5 bytes did not decode: ${first_decode_message(rs)}"); false },
+    ProgramDecoded(old) => {
+      let old_ok = old.schema_version == "execution-program/5" && mode_is_legacy(old.initial_world.process_limits);
+      let again = match encode_artifact(old) { Encoded(s) => s, EncodeRefused(_) => "" };
+      match decode_artifact(again) {
+        ProgramDecodeRefused(rs) => { let _ = println("  ✗ the transcoded bytes did not decode: ${first_decode_message(rs)}"); false },
+        ProgramDecoded(back) => {
+          let new_ok = back.schema_version == program_schema_version() && mode_is_legacy(back.initial_world.process_limits)
+                         && Str.contains(again, "\nprocess_limits\tlegacy\n");
+          let unchanged = List.length(interactions_diff(old.interactions, back.interactions)) == 0
+                            && any_projection_with(back.interactions, "\"timeout_secs\":0");
+          let world_ok = match world_state_of(back, required_class_ids()) {
+            Ok(w) => mode_is_legacy(w.process_limits),
+            Err(_) => false
+          };
+          let _ = if old_ok then println("  ✓ a v5 program holding timeout_secs: 0 decodes as Legacy") else println("  ✗ the v5 program did not decode as a v5 Legacy program");
+          let _ = if new_ok then println("    ✓ decode, encode, decode ends at ${back.schema_version} and STAYS Legacy: the mode is the field, not the version")
+                  else println("    ✗ THE TRANSCODE CHANGED THE MODE: ${back.schema_version} reads as ${process_limits_field(back.initial_world.process_limits)}");
+          let _ = if unchanged then println("    ✓ the recorded request, timeout_secs: 0 included, is carried and not interpreted")
+                  else println("    ✗ the transcode changed the interactions");
+          let _ = if world_ok then println("    ✓ and the reconstituted world is Legacy") else println("    ✗ the reconstituted world is not Legacy, or world_state_of refused it");
+          old_ok && new_ok && unchanged && world_ok
+        }
+      }
+    }
+  }
+}
+
+-- 041 W5, D7. No version before v6 can mean anything but `Legacy`.
+func scenario_every_pre_v6_specimen_decodes_as_legacy() -> bool ! {IO, FS} {
+  let r1 = decodes_as_legacy(v1_fixture_path());
+  let r2 = decodes_as_legacy(v2_fixture_path());
+  let r3 = decodes_as_legacy(v3_fixture_path());
+  let r4 = decodes_as_legacy(v4_fixture_path());
+  let r5 = decodes_as_legacy(v5_fixture_path());
+  let ok = r1 && r2 && r3 && r4 && r5;
+  let _ = if ok then println("  ✓ the v1, v2, v3, v4 and v5 specimens all decode as Legacy, because that is what those versions meant")
+          else println("  ✗ a pre-v6 specimen decodes as something other than Legacy (v1=${show(r1)}, v2=${show(r2)}, v3=${show(r3)}, v4=${show(r4)}, v5=${show(r5)})");
+  ok
+}
+
+func decodes_as_legacy(path: string) -> bool ! {FS} {
+  match FS.readFileResult(path) {
+    Err(_) => false,
+    Ok(bytes) =>
+      match decode_artifact(bytes) {
+        ProgramDecodeRefused(_) => false,
+        ProgramDecoded(p) => mode_is_legacy(p.initial_world.process_limits) && p.schema_version != program_schema_version()
+      }
   }
 }
 
@@ -1852,7 +2086,35 @@ func scenario_decode_mutants() -> bool ! {IO} {
         -- read, because v4's tag table has no such tag.
         { rule: "artifact-unknown-tag",
           label: "an execution-program/4 artifact carrying the world-truth line",
-          bytes: rebuild_at("execution-program/4", body_of_artifact(good)) }])
+          bytes: rebuild_at("execution-program/4", body_of_artifact(good)) },
+        -- 041 W5, C5 and D7. THE LINE IS REQUIRED AT v6: deleting it is
+        -- `MissingSection` (mutant p3), the difference between "an old program is
+        -- Legacy" and "a new program that lost its line is silently Legacy".
+        { rule: "artifact-missing-section",
+          label: "the execution-program/6 mode line (process_limits) deleted",
+          bytes: without_line(good, "process_limits\t") },
+        { rule: "artifact-repeated-section",
+          label: "the mode line written twice",
+          bytes: duplicate_line(good, "process_limits\t") },
+        -- And it is v6's only: a v5 artifact carrying it is refused, not read.
+        { rule: "artifact-unknown-tag",
+          label: "an execution-program/5 artifact carrying the mode line",
+          bytes: rebuild_at("execution-program/5", body_of_artifact(good)) },
+        { rule: "artifact-malformed-process-limits",
+          label: "a mode this schema does not define",
+          bytes: retag(good, "process_limits\tlegacy", "process_limits\tunlimited") },
+        { rule: "artifact-wrong-arity",
+          label: "`legacy` carrying a field",
+          bytes: retag(good, "process_limits\tlegacy", "process_limits\tlegacy\t1") },
+        { rule: "artifact-wrong-arity",
+          label: "`limits` missing its ceiling",
+          bytes: retag(good, "process_limits\tlegacy", "process_limits\tlimits\t1000000") },
+        { rule: "artifact-not-an-integer",
+          label: "a default that is neither `none` nor an integer",
+          bytes: retag(good, "process_limits\tlegacy", "process_limits\tlimits\tsoon\tsame") },
+        { rule: "artifact-not-an-integer",
+          label: "a ceiling that is neither `same` nor an integer",
+          bytes: retag(good, "process_limits\tlegacy", "process_limits\tlimits\tnone\tsoon") }])
 }
 
 pure func rebuild_at(version: string, body: string) -> string {
@@ -2094,6 +2356,13 @@ export func main() -> () ! {IO, FS} {
   let l3 = scenario_the_frozen_v3_specimen_still_decodes();
   let l4 = scenario_the_frozen_v4_specimen_still_decodes();
   let l5 = scenario_the_frozen_v5_specimen_still_decodes();
+  let _ = println("");
+  let _ = println("041 W5: the frozen v6 specimens and the mode line");
+  let v6 = scenario_the_frozen_v6_specimen_still_decodes();
+  let v6l = scenario_the_limits_specimen_reaches_the_world();
+  let v6c = scenario_the_ceiling_refusals();
+  let v6t = scenario_a_legacy_program_with_timeout_secs_transcodes_as_legacy();
+  let v6p = scenario_every_pre_v6_specimen_decodes_as_legacy();
   let l6 = scenario_every_legacy_specimen_decodes_with_no_world_truth();
   let m = scenario_an_unknown_schema_fails_closed();
   let _ = println("  decode mutation rows — one corruption at a time");
@@ -2104,7 +2373,7 @@ export func main() -> () ! {IO, FS} {
   let q = scenario_the_store_round_trips_and_refuses_a_collision();
   let _ = println("  regression replay over the frozen program");
   let r = scenario_regression_replay_consumes_the_frozen_program();
-  if a && b && c && d && e && f && g && h && i && j && k && l && l2 && l3 && l4 && m && n && o && q && r && l5 && l6
+  if a && b && c && d && e && f && g && h && i && j && k && l && l2 && l3 && l4 && m && n && o && q && r && l5 && l6 && v6 && v6l && v6c && v6t && v6p
   then println("program_persistence_dst PASS")
   else {
     let _ = println("program_persistence_dst FAIL");
