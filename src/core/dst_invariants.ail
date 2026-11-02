@@ -145,7 +145,7 @@ import src/core/phase_vocab (
   ProviderCallPrepared,
   -- 034 ADR-001 §2: the harness's own refusal records, read by P1's presence
   -- half as "this call was answered without a dispatch".
-  NativeToolDenied, ToolArgumentsUndecodable, DelegatedToolDeferred,
+  NativeToolDenied, ToolArgumentsUndecodable, ToolArgumentsInvalid, DelegatedToolDeferred,
   -- ADR-003 D1's journal class, read by the payload-equality rows below.
   HistorySeeded, HistoryAppended, HistoryReplaced, StateDelta, ParkEntered, WakeReceived, ParkEnteredInfo, OperatorWait, wait_id,
   CheckpointInfo,
@@ -1643,7 +1643,8 @@ pure func effect_applied_at(es: [{ ordinal: int, call_id: string, effect_key: st
 -- The call ids the harness's own refusal records name: a policy or operator
 -- denial (`NativeToolDenied`, both `tool_phase.denial_message` and
 -- `session.policy_denied_message`), arguments that were not JSON
--- (`ToolArgumentsUndecodable`), and a delegated call the driver deferred
+-- (`ToolArgumentsUndecodable`), a request the resolver refused
+-- (`ToolArgumentsInvalid`, 041 D7), and a delegated call the driver deferred
 -- (`DelegatedToolDeferred`). Each is a call answered WITHOUT a dispatch.
 -- contracts: BLOCKED — RECURSIVE over the trace records.
 pure func refused_call_ids(rs: [LedgerRecord]) -> [string] {
@@ -1653,6 +1654,7 @@ pure func refused_call_ids(rs: [LedgerRecord]) -> [string] {
       match r {
         WireRecord(NativeToolDenied(i)) => i.id :: refused_call_ids(rest),
         WireRecord(ToolArgumentsUndecodable(i)) => i.id :: refused_call_ids(rest),
+        WireRecord(ToolArgumentsInvalid(i)) => i.id :: refused_call_ids(rest),
         WireRecord(DelegatedToolDeferred(i)) => i.id :: refused_call_ids(rest),
         _ => refused_call_ids(rest)
       }
@@ -1671,12 +1673,12 @@ pure func refused_call_ids(rs: [LedgerRecord]) -> [string] {
 -- tool's bytes — a journal's recorded result, served verbatim.
 --
 -- PRESENCE. The message must carry `effects` of `none` or `unknown` when it is
--- a harness-reported fault message, and the plan names exactly seven builders
--- (PLAN-001 W2.1); each is recognised here from the run's record and not from
+-- a harness-reported fault message, and the plan names exactly eight builders
+-- (PLAN-001 W2.1, and 041 W7's); each is recognised here from the run's record and not from
 -- the builder:
 --   * `tool_fault_message`: `d` is recorded `OutcomeFault`;
 --   * `denial_message`, `policy_denied_message`, `undecodable_arguments_message`,
---     `delegated_deferred_message`: the id is in `refused_call_ids` and the
+--     `invalid_request_message`, `delegated_deferred_message`: the id is in `refused_call_ids` and the
 --     world never dispatched it. An id both refused and dispatched (a provider
 --     reusing it) is not read, which under-reports in the safe direction;
 --   * `tool_result_item_to_json`'s faulted arms and `dispatch_one_typed`'s

@@ -6,28 +6,28 @@
 -- its wire projection as a maintained compatibility surface, and this artifact
 -- carries that obligation.
 --
--- One artifact binds, for every one of the 42 `LedgerEvent` variants:
+-- One artifact binds, for every one of the 43 `LedgerEvent` variants:
 --
 --   the variant itself; its wire name; its payload schema; and its
 --   classification as LOGICAL or DISPLAY-ONLY.
 --
 -- This is new construction. `phase_vocab.ledger_record_name` is not a seed and
--- is not grown here: it names three of the 42 and collapses the rest to the
+-- is not grown here: it names three of the 43 and collapses the rest to the
 -- literal "wire", which is a different thing that happens to share a subject.
 --
 -- ============================================================================
 -- The schema is `wire name = f(variant, payload)`, and that is settled
 -- ============================================================================
 --
--- One variant of the 36 is payload-dependent: `StreamDelta` projects to
+-- One variant of the 37 is payload-dependent: `StreamDelta` projects to
 -- `reasoning_delta` or `thinking_delta` selected from `i.kind`. A
 -- one-name-per-variant artifact cannot represent that, so the shape is:
 --
 --   `event_wire_name`   a TOTAL projection over the value. Adding a variant is
---                       a compile error here, so drift in the 42 single-name
+--                       a compile error here, so drift in the 43 single-name
 --                       cases stays a compile error, which D6 names as the
 --                       preferred form.
---   `wire_names`        an ALLOWED-NAME SET per row — one entry for 42 rows,
+--   `wire_names`        an ALLOWED-NAME SET per row — one entry for 43 rows,
 --                       two for StreamDelta.
 --
 -- Both, not either. The total function makes the projection derivable; the
@@ -51,7 +51,7 @@
 --                than an outcome.
 --
 -- THE CLASSIFICATION IS SEMANTIC, NOT A SURVEY OF WHAT IS APPENDED TODAY, and
--- that is deliberate. Of the 36 Logical rows, **34 reach the returned trace now
+-- that is deliberate. Of the 37 Logical rows, **35 reach the returned trace now
 -- and 2 do not**; the two are `d64_gap_register`'s entries, both of long
 -- standing. ADR-003 D1's `SessionResumed` was the third until PLAN-003 P3 Part 5,
 -- whose resumed traced entry appends it as the first record of the frame. The other four journal-class variants were
@@ -105,7 +105,7 @@ import src/core/phase_vocab (
   CostExhausted, CompactionApplied, CompactionExhausted,
   ExtCompactionRejected, ExtensionDiagnostic, ThinkingStreamStart, ThinkingStreamEnd,
   StreamErrorRetry, ProviderResult, CostWarning, ExtInterceptHandled,
-  ToolArgumentsUndecodable,
+  ToolArgumentsUndecodable, ToolArgumentsInvalid,
   DoneEvent, EmptyStopFinalize, ExtSolverFeedback, NativeToolCalls,
   NativeToolResults, SessionSuspend, RunSuspended, ParkEntered, WakeReceived,
   HistorySeeded, HistoryAppended, HistoryReplaced, StateDelta, SessionResumed,
@@ -195,6 +195,7 @@ export pure func event_variant_id(e: LedgerEvent) -> string {
     CostWarning(_) => "CostWarning",
     ExtInterceptHandled(_) => "ExtInterceptHandled",
     ToolArgumentsUndecodable(_) => "ToolArgumentsUndecodable",
+    ToolArgumentsInvalid(_) => "ToolArgumentsInvalid",
     DoneEvent(_) => "DoneEvent",
     EmptyStopFinalize(_) => "EmptyStopFinalize",
     ExtSolverFeedback(_) => "ExtSolverFeedback",
@@ -252,6 +253,7 @@ export pure func event_wire_name(e: LedgerEvent) -> string {
     CostWarning(_) => "cost_warning",
     ExtInterceptHandled(_) => "ext_intercept_handled",
     ToolArgumentsUndecodable(_) => "tool_arguments_undecodable",
+    ToolArgumentsInvalid(_) => "tool_arguments_invalid",
     DoneEvent(_) => "done",
     EmptyStopFinalize(_) => "empty_stop_finalize",
     ExtSolverFeedback(_) => "ext_solver_feedback",
@@ -404,6 +406,15 @@ export pure func event_vocabulary() -> [EventRow] {
       -- and this arm emits neither. Recorded as the schema rather than
       -- corrected, because correcting it would change the wire.
       payload: [req("step"), req("tool"), req("exit_code")],
+      classification: Logical, reaches_trace_today: true },
+
+    { variant: "ToolArgumentsInvalid", wire_names: ["tool_arguments_invalid"],
+      payload: [req("step"), req("stream_id"), req("tool"), req("id")],
+      -- LOGICAL, for `ToolArgumentsUndecodable`'s reason (041 D7): a call the model made,
+      -- refused by the resolver before the port, with neither Start nor Complete. It is
+      -- how the invariants see that refusal (`refused_call_ids`). Nothing but a `Limits`
+      -- program emits it before W12. Adding a row is not a version change here, as adding
+      -- `ToolArgumentsUndecodable` was not: old traces read as they did.
       classification: Logical, reaches_trace_today: true },
 
     { variant: "ToolArgumentsUndecodable", wire_names: ["tool_arguments_undecodable"],
@@ -844,7 +855,7 @@ export pure func is_logical(rows: [EventRow], variant: string) -> bool {
 }
 
 -- ============================================================================
--- Inline tests. The 36-variant round trip lives in the DST script, because it
+-- Inline tests. The 37-variant round trip lives in the DST script, because it
 -- needs one sample value per constructor.
 -- ============================================================================
 
@@ -864,7 +875,7 @@ pure func has_rule(rs: [VocabularyRejection], rule: string) -> bool {
 pure func test_vocabulary_has_thirty_five_distinct_rows() -> bool
   tests [((), true)]
   {
-    List.length(event_vocabulary()) == 42
+    List.length(event_vocabulary()) == 43
       && no_dups(row_variants(event_vocabulary()), [])
   }
 
@@ -930,7 +941,7 @@ pure func test_classification_partitions_the_vocabulary() -> bool
   tests [((), true)]
   {
     let rows = event_vocabulary();
-    List.length(logical_variants(rows)) + List.length(display_only_variants(rows)) == 42
+    List.length(logical_variants(rows)) + List.length(display_only_variants(rows)) == 43
       && List.length(display_only_variants(rows)) == 6
   }
 

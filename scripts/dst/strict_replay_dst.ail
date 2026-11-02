@@ -124,13 +124,13 @@
 
 module scripts/dst/strict_replay_dst
 
-import std/json (Json, jo, decode, JObject)
+import std/json (Json, jo, decode, encode, get, JObject)
 import std/process (exec)
 import std/bytes (toString)
 import std/fs as FS (readFileResult, fileExists)
 import std/io (println, exit)
 import std/list as List (length)
-import std/string (contains, trim)
+import std/string (contains, trim, repeat, length, replace)
 import std/ai (Message, ToolCall)
 import std/option (Option, None, Some)
 import std/result (Result, Ok, Err)
@@ -139,6 +139,8 @@ import src/core/config (CostRates, VerificationConfig)
 import src/core/session as Session
 import src/core/session (TracedSessionResult)
 import src/core/phase_vocab (LedgerRecord, WireRecord, ProviderCallPrepared)
+import src/core/dst_invariants (record_variant)
+import src/core/tool_fault (effects_note_none, effects_note_unknown)
 import src/core/test/stub_step (RecordingWorld)
 import src/core/ports (ScriptedStep, WorldState, ScriptedTool, empty_world_state,
   -- 034 W1.3: the frozen v5 fixture's tool seam is replayed through the recorder.
@@ -222,7 +224,7 @@ import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, Resp
   ExtRuntime,
   FinalizeDecision,
   NoDecision,
-  NoIntercept,
+  NoIntercept, InterceptHandled,
   PassThrough,
   Pending,
   DenyAfterTimeout,
@@ -1702,26 +1704,233 @@ pure func any_message_contains(ms: [Message], text: string) -> bool {
   match ms { [] => false, m :: rest => contains(m.content, text) || any_message_contains(rest, text) }
 }
 
--- W6's stand-in for W7. D7 says an invalid request never reaches the port, so the queue stays
--- whole and no tool interaction is recorded, and `Legacy` ignores the same request. W7 adds
--- the event and the fields, and replaces this scenario's message row.
+-- ---------------------------------------------------------------------------
+-- 041 W7: the invalid request (D7), and what a scripted result says (D4)
+-- ---------------------------------------------------------------------------
+
+pure func records_named(rs: [LedgerRecord], name: string) -> int {
+  List.length(List.filter(\r. record_variant(r) == name, rs))
+}
+
+pure func content_for(ms: [Message], id: string) -> string {
+  match ms {
+    [] => "",
+    m :: rest => if m.role == "tool" && m.tool_call_id == id then m.content else content_for(rest, id)
+  }
+}
+
+pure func messages_of(run: TracedSessionResult) -> [Message] {
+  match run.result { Ok(ms) => ms, Err(_) => [] }
+}
+
+-- A top-level field as the model reads it, or `-` when it is absent, so a row can tell a
+-- `null` from no field.
+pure func field_in(content: string, key: string) -> string {
+  match decode(content) {
+    Err(_) => "<undecodable>",
+    Ok(j) => match get(j, key) { Some(v) => encode(v), None => "-" }
+  }
+}
+
+pure func fault_says(content: string) -> string {
+  match decode(content) {
+    Err(_) => "<undecodable>",
+    Ok(j) => match get(j, "fault") {
+      None => "-",
+      Some(f) => match (get(f, "kind"), get(f, "effects")) {
+        (Some(k), Some(e)) => "${encode(k)} ${encode(e)}",
+        _ => "-"
+      }
+    }
+  }
+}
+
+func invalid_world(args: string) -> WorldState {
+  let row = bash_row(args, 1, 5000, done_with("LM-one"));
+  { base_world(script_of([row]), approvals(1), rows_to_tools([row])) | process_limits: lm_mode() }
+}
+
+-- A5, scripted half: D2's invalid forms, one dispatch each, through the real driver. The
+-- field columns say what each must report: no applied limit, and `requested_timeout_ms`
+-- only for a positive whole-millisecond request.
+type InvalidForm = { args: string, requested: string }
+
+func invalid_forms() -> [InvalidForm] {
+  [{ args: "{\"cmd\":\"true\",\"timeout_secs\":0}", requested: "-" },
+   { args: "{\"cmd\":\"true\",\"timeout_secs\":-1}", requested: "-" },
+   { args: "{\"cmd\":\"true\",\"timeout_secs\":1.5}", requested: "1500" },
+   { args: "{\"cmd\":\"true\",\"timeout_secs\":0.0000001}", requested: "-" },
+   { args: "{\"cmd\":\"true\",\"timeout_secs\":\"60\"}", requested: "-" },
+   { args: "{\"cmd\":\"true\",\"timeout_secs\":true}", requested: "-" },
+   { args: "{\"cmd\":\"true\",\"timeout_secs\":[60]}", requested: "-" },
+   { args: "{\"cmd\":\"true\",\"timeout_secs\":{\"s\":60}}", requested: "-" },
+   { args: "{\"cmd\":\"true\",\"timeout_secs\":31536001}", requested: "-" },
+   { args: "{\"cmd\":\"true\",\"timeout_secs\":10000000000000000}", requested: "-" }]
+}
+
+func check_invalid_forms(forms: [InvalidForm]) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  match forms {
+    [] => true,
+    f :: rest => {
+      let run = run_recording("srlm_bad", invalid_world(f.args), 12);
+      let c = content_for(messages_of(run), "one");
+      let ok = check("A5: ${f.args} is refused, never launched, and reports no applied limit",
+                     field_in(c, "timeout_ms") == "-" && field_in(c, "requested_timeout_ms") == f.requested
+                       && field_in(c, "max_timeout_ms") == "3000"
+                       && List.length(run.world.tools) == 1
+                       && count_kind(run.world.log, identity_kind(ToolIdentity("", "", ""))) == 0,
+                     "queue ${show(List.length(run.world.tools))}, message ${c}");
+      let others = check_invalid_forms(rest);
+      ok && others
+    }
+  }
+}
+
 func invalid_request_scenario() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("");
-  let _ = println("invalid request (041 W6, until W7): it never reaches the port");
-  let row = bash_row("{\"cmd\":\"true\",\"timeout_secs\":0}", 1, 5000, done_with("LM-one"));
-  let w = base_world(script_of([row]), approvals(1), rows_to_tools([row]));
-  let limits_run = run_recording("srlm_bad", { w | process_limits: lm_mode() }, 12);
-  let msgs = match limits_run.result { Ok(ms) => ms, Err(_) => [] };
+  let _ = println("invalid request (041 W7): its own event, no Start or Complete, and it never reaches the port");
+  let args = "{\"cmd\":\"true\",\"timeout_secs\":0}";
+  let initial = invalid_world(args);
+  let limits_run = run_recording("srlm_bad", initial, 12);
+  let c = content_for(messages_of(limits_run), "one");
+  let rs = limits_run.trace.records;
   let ok_stopped = check("invalid: the queue is untouched and no tool interaction is recorded",
                          List.length(limits_run.world.tools) == 1
                            && count_kind(limits_run.world.log, identity_kind(ToolIdentity("", "", ""))) == 0,
-                         "queue ${show(List.length(limits_run.world.tools))}, log ${row_seen(limits_run.world.log, row)}");
+                         "queue ${show(List.length(limits_run.world.tools))}, log ${show(List.length(limits_run.world.log))} interaction(s)");
+  let ok_events = check("invalid: one ToolArgumentsInvalid, and neither Start nor Complete",
+                        records_named(rs, "ToolArgumentsInvalid") == 1
+                          && records_named(rs, "V2ToolDispatchStart") == 0
+                          && records_named(rs, "V2ToolDispatchComplete") == 0,
+                        "invalid ${show(records_named(rs, "ToolArgumentsInvalid"))}, start ${show(records_named(rs, "V2ToolDispatchStart"))}, complete ${show(records_named(rs, "V2ToolDispatchComplete"))}");
   let ok_told = check("invalid: the model is told, with the stated code",
-                      any_message_contains(msgs, "process_request_invalid"), "no message names it");
-  let legacy_run = run_recording("srlm_bad", w, 12);
+                      field_in(c, "code") == "\"process_request_invalid\"", c);
+  let ok_disclosed = check("invalid disclosure: the fault is refused, effects none",
+                           fault_says(c) == "\"refused\" \"none\"", fault_says(c));
+  let ok_forms = check_invalid_forms(invalid_forms());
+  -- A14b: the same run through the artifact codec. Nothing was served, so the replay has
+  -- no tool to serve and must make the same interactions.
+  let ok_replay = match persist_round_trip(program_of(limits_run.world, initial)) {
+    Err(why) => check("A14b: the program holding an invalid request round-trips", false, why),
+    Ok(back) => match world_state_of(back, required_class_ids()) {
+      Err(r) => check("A14b: the program holding an invalid request reconstitutes a world", false, refusal_rule(r)),
+      Ok(rw) => {
+        let replay = run_recording("srlm_bad", rw, 12);
+        let ms = strict_replay_findings(back.interactions, replay.world.log);
+        let _ = if List.length(ms) > 0 then report_replay(ms) else ();
+        check("A14b: a Limits program holding an invalid request replays strictly, and refuses it again",
+              List.length(ms) == 0 && records_named(replay.trace.records, "ToolArgumentsInvalid") == 1,
+              "${show(List.length(ms))} mismatch(es) above")
+      }
+    }
+  };
+  -- `null` is no argument (D2), so it is a served call and not a refusal.
+  let null_run = run_recording("srlm_bad", invalid_world("{\"cmd\":\"true\",\"timeout_secs\":null}"), 12);
+  let ok_null = check("A5: a null timeout_secs behaves as no argument: served, with no ToolArgumentsInvalid",
+                      content_for(messages_of(null_run), "one") == "LM-one"
+                        && records_named(null_run.trace.records, "ToolArgumentsInvalid") == 0
+                        && List.length(null_run.world.tools) == 0,
+                      content_for(messages_of(null_run), "one"));
+  -- A17: bounded, so it stays whole JSON, under the cap, with its fields.
+  let long_run = run_recording("srlm_bad", invalid_world("{\"cmd\":\"true\",\"timeout_secs\":\"${repeat("y", 70000)}\"}"), 12);
+  let long_c = content_for(messages_of(long_run), "one");
+  let ok_long = check("A17: a 70,000-character timeout_secs is echoed bounded, and its fields survive",
+                      field_in(long_c, "max_timeout_ms") == "3000" && length(long_c) < 1024,
+                      "${show(length(long_c))} characters");
+  let legacy_row = bash_row(args, 1, 5000, done_with("LM-one"));
+  let legacy_run = run_recording("srlm_bad", { initial | process_limits: Legacy }, 12);
   let ok_legacy = check("invalid: the same request in Legacy is ignored and the call is served",
-                        row_holds(legacy_run.world.log, row), row_seen(legacy_run.world.log, row));
-  ok_stopped && ok_told && ok_legacy
+                        row_holds(legacy_run.world.log, legacy_row)
+                          && records_named(legacy_run.trace.records, "ToolArgumentsInvalid") == 0,
+                        row_seen(legacy_run.world.log, legacy_row));
+  ok_stopped && ok_events && ok_told && ok_disclosed && ok_forms && ok_replay && ok_null && ok_long && ok_legacy
+}
+
+-- A scripted fault, in the shape `scripted_tool_outcome` serves.
+pure func fault_tool(duration: int, after_dispatch: bool) -> ScriptedTool {
+  { lm_tool(duration, "") | code: "E_W7", message: "boom", after_dispatch: after_dispatch }
+}
+
+type ScriptedResultRow = { rule: string, id: string, tool: string, args: string, served: ScriptedTool, timeout_ms: string, requested: string, max: string, fault: string }
+
+-- D4 on a scripted fault, through the real driver under 1000/3000. The extension's half is
+-- `extension_report_scenario` below. `Search` has no carrier, so no fields, and its scripted
+-- disclosure is today's (A10): `none` for `Search` is the live arm's, and W10 owns it.
+func scripted_result_rows() -> [ScriptedResultRow] {
+  [{ rule: "A11: a fault after dispatch reports the limit it was given", id: "fa", tool: "BashExec", args: two_secs(), served: fault_tool(1, true), timeout_ms: "2000", requested: "-", max: "3000", fault: "\"failed\" \"unknown\"" },
+   { rule: "H1: a fault before dispatch reports no applied limit", id: "fb", tool: "BashExec", args: two_secs(), served: fault_tool(1, false), timeout_ms: "-", requested: "2000", max: "3000", fault: "\"failed\" \"none\"" },
+   { rule: "A21: a BashExec deadline is unknown and reports the limit", id: "lb", tool: "BashExec", args: two_secs(), served: lm_tool(2500, "x"), timeout_ms: "2000", requested: "-", max: "3000", fault: "\"deadline\" \"unknown\"" },
+   { rule: "A21: a RunTests deadline is unknown and reports the clamp", id: "lr", tool: "RunTests", args: five_secs(), served: lm_tool(3100, "x"), timeout_ms: "3000", requested: "5000", max: "3000", fault: "\"deadline\" \"unknown\"" },
+   { rule: "A21 and A10: a scripted Search deadline has no carrier and no fields", id: "ls", tool: "Search", args: "{\"pattern\":\"x\"}", served: lm_tool(5001, "x"), timeout_ms: "-", requested: "-", max: "-", fault: "\"deadline\" \"unknown\"" }]
+}
+
+func check_scripted_results(rows: [ScriptedResultRow]) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  match rows {
+    [] => true,
+    r :: rest => {
+      let script = [multi_step("sr", [lm_call(r.id, r.tool, r.args)], []), multi_step("sr done", [], [])];
+      let run = run_recording("srlm_res", { base_world(script, approvals(1), [r.served]) | process_limits: lm_mode() }, 12);
+      let c = content_for(messages_of(run), r.id);
+      let ok = check(r.rule,
+                     field_in(c, "timeout_ms") == r.timeout_ms && field_in(c, "requested_timeout_ms") == r.requested
+                       && field_in(c, "max_timeout_ms") == r.max && fault_says(c) == r.fault,
+                     c);
+      let others = check_scripted_results(rest);
+      ok && others
+    }
+  }
+}
+
+func scripted_results_scenario() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("");
+  let _ = println("scripted results (041 W7): D4's fields on a fault, and none on a completion");
+  let ok_rows = check_scripted_results(scripted_result_rows());
+  -- A7, scripted half: the authored bytes, under the cap, with a carrier.
+  let authored = "{\"authored\":  true, \"timeout_ms\": 7}";
+  let row = bash_row(two_secs(), 1, 2000, "");
+  let completed = run_recording("srlm_res", { base_world(script_of([row]), approvals(1), [lm_tool(1, authored)]) | process_limits: lm_mode() }, 12);
+  let ok_authored = check("A7: an authored completion is served byte for byte under a carrier",
+                          content_for(messages_of(completed), "one") == authored,
+                          content_for(messages_of(completed), "one"));
+  -- A11, the refused half that is not an invalid request: an empty queue reaches the live
+  -- arm, which refuses `ExplicitMs` before dispatch until W10 (H1).
+  let refused_run = run_recording("srlm_res", { base_world(script_of([row]), approvals(1), []) | process_limits: lm_mode() }, 12);
+  let refused = content_for(messages_of(refused_run), "one");
+  let ok_refused = check("A11: the live arm's refusal before dispatch reports no applied limit",
+                         field_in(refused, "timeout_ms") == "-" && field_in(refused, "requested_timeout_ms") == "2000"
+                           && field_in(refused, "max_timeout_ms") == "3000" && fault_says(refused) == "\"failed\" \"none\"",
+                         refused);
+  ok_rows && ok_authored && ok_refused
+}
+
+-- D4, AND THE ROW MUTANT e4 FAILS. A replay compared with its own recording cannot see a
+-- rendering, because both sides render alike. So the frozen v5 specimen's tool queue and mode,
+-- which D7 says decode to `Legacy`, go through the real driver, and the messages must be the
+-- bytes a v5 run renders. The two faults are written out: they are what `Legacy` means.
+func v5_legacy_bytes_scenario() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("");
+  let _ = println("v5 replay (041 W7): the frozen specimen is Legacy, and renders no limit fields");
+  match FS.readFileResult(v5_fixture_path()) {
+    Err(e) => check("v5 replay: the frozen v5 specimen is read", false, e),
+    Ok(bytes) => match decode_artifact(bytes) {
+      ProgramDecodeRefused(rs) => check("v5 replay: the frozen v5 specimen decodes", false, first_decode_message(rs)),
+      ProgramDecoded(frozen) => match world_state_of({ frozen | interactions: replayable(frozen.interactions) }, [fault_class_tool_failed()]) {
+        Err(r) => check("v5 replay: the specimen reconstitutes a world", false, refusal_rule(r)),
+        Ok(rw) => {
+          let calls = [lm_call("call.gamma", "BashExec", two_secs()), lm_call("call.delta", "BashExec", two_secs())];
+          let script = [multi_step("v5", calls, []), multi_step("v5 done", [], [])];
+          let faults = List.filter(\t. t.code != "", rw.tools);
+          let run = run_recording("srv5", { base_world(script, approvals(2), faults) | process_limits: rw.process_limits, env: no_env() }, 12);
+          let applied = content_for(messages_of(run), "call.gamma");
+          let refused = content_for(messages_of(run), "call.delta");
+          check("v5 replay: Legacy faults render today's bytes, with no limit fields",
+                applied == "{\"error\":true,\"tool\":\"BashExec\",\"fault\":{\"kind\":\"failed\",\"effects\":\"unknown\",\"note\":\"${effects_note_unknown()}\"},\"fault_class\":\"ToolFailed\",\"detail\":\"{\\\"code\\\":\\\"E_APPLIED\\\",\\\"message\\\":\\\"failed after dispatch, effect applied\\\",\\\"tool_call_id\\\":\\\"call.gamma\\\"}\"}"
+                  && refused == "{\"error\":true,\"tool\":\"BashExec\",\"fault\":{\"kind\":\"failed\",\"effects\":\"none\",\"note\":\"${effects_note_none()}\"},\"fault_class\":\"ToolFailed\",\"detail\":\"{\\\"code\\\":\\\"E_REFUSED\\\",\\\"message\\\":\\\"refused before dispatch\\\",\\\"tool_call_id\\\":\\\"call.delta\\\"}\"}",
+                "${applied} / ${refused}")
+        }
+      }
+    }
+  }
 }
 
 -- ---------------------------------------------------------------------------
@@ -1905,6 +2114,48 @@ func touching(path: string, secs: string) -> Json {
   match decode("{\"cmd\":\"touch ${path}\"${secs}}") { Ok(j) => j, Err(_) => jo([]) }
 }
 
+-- A16, THROUGH THE REAL BRIDGE. The hook hands back what `tool_handle` returned as its own
+-- output, so the message holds exactly the text `tool_outcome_text` rendered: this is what
+-- fails if the caller at `session.ail:1382` stops passing the carrier.
+func ext_intercept_report(ctx: InterceptCtx, _text: string)
+  -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
+  let p = ctx.ports;
+  let out = p.tool_handle(ctx.world, "BashExec", two_secs());
+  { decision: InterceptHandled({ tool_call_id: "ext", tool: "BashExec", exit_code: 0, stdout: out.output, stderr: "", metadata: jo([]) }),
+    next_state: out.next_state }
+}
+
+func extension_report_row(rule: string, effect: ScriptedTool, wanted: string)
+  -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let w = { base_world([multi_step("e0", [], []), multi_step("e1", [], [])], approvals(0), []) |
+            process_limits: lm_mode(), ext_effects: effect :: spare_effects(14) };
+  let run = run_ext(ext_rt("ext_report", ext_intercept_report), w);
+  -- The handled output is a turn's tool message, so it is in the final history whatever the
+  -- run then does with its two-step script.
+  let shown = join_strs(List.map(\m. m.content, run.final.history));
+  check(rule, contains(shown, wanted) || contains(shown, escaped(wanted)), shown)
+}
+
+-- `effect_tools`'s reason: an empty `ext_effects` queue runs a real subprocess, and this hook
+-- calls the port on every turn the budget allows.
+pure func spare_effects(n: int) -> [ScriptedTool] {
+  if n <= 0 then [] else lm_tool(11, "EXT-SPARE") :: spare_effects(n - 1)
+}
+
+pure func escaped(s: string) -> string { replace(s, "\"", "\\\"") }
+
+func extension_report_scenario() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("");
+  let _ = println("extension report (041 W7): an effect's faults report the limit through tool_outcome_text");
+  let ok_failed = extension_report_row("A16: an extension ToolFailed reports the default as its ceiling, and its timeout_secs is not read",
+                                       fault_tool(1, true),
+                                       "{\"error\":true,\"code\":\"E_W7\",\"timeout_ms\":1000,\"max_timeout_ms\":1000,\"message\":\"boom\"");
+  let ok_deadline = extension_report_row("A16: an extension deadline reports timeout_ms once",
+                                         lm_tool(1500, "x"),
+                                         "{\"error\":true,\"code\":\"ToolDeadlineExceeded\",\"timeout_ms\":1000,\"max_timeout_ms\":1000,\"tool_call_id\":\"\",\"elapsed_ms\":1500}");
+  ok_failed && ok_deadline
+}
+
 -- EVIDENCE THAT NOTHING RAN IS A FILE THAT IS NOT THERE, and the file is only evidence if the
 -- same call without the limit does create it, so each refusal has a twin that runs. Every
 -- row goes through `world_tool` or `world_ext_effect` with an empty queue, and through the
@@ -1969,13 +2220,16 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   let ok_limit_table = limit_table_scenario();
   let ok_no_request = no_request_twin_scenario();
   let ok_invalid = invalid_request_scenario();
+  let ok_results = scripted_results_scenario();
+  let ok_v5_bytes = v5_legacy_bytes_scenario();
+  let ok_ext_report = extension_report_scenario();
   let ok_ext = limits_extension_scenario();
   let ok_token = extension_token_scenario();
   let ok_live = live_arm_scenario();
 
   let _ = println("");
   if ok_rich && ok_fail && ok_world_truth && ok_v5_fixture && ok_limits && ok_limit_table
-     && ok_no_request && ok_invalid && ok_ext && ok_token && ok_live then
+     && ok_no_request && ok_invalid && ok_results && ok_v5_bytes && ok_ext_report && ok_ext && ok_token && ok_live then
     println("strict_replay_dst PASS")
   else {
     let _ = println("strict_replay_dst FAIL");

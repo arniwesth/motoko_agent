@@ -333,14 +333,49 @@ export pure func process_limit_fields(result: ProcessResolution, attempted: bool
   match result {
     ProcessInvalid(invalid) =>
       requested_field(invalid.requested_ms) ++ [max_field(invalid.session_default, invalid.effective_ceiling)],
-    ProcessResolved(resolved) =>
-      if attempted then
-        [{key: "timeout_ms", value: optional_ms_json(display_timeout_ms(resolved))}]
-          ++ (if resolved.clamped then requested_field(resolved.requested_ms) else [])
-          ++ [max_field(resolved.session_default, resolved.effective_ceiling)]
-      else
-        requested_field(resolved.requested_ms) ++ [max_field(resolved.session_default, resolved.effective_ceiling)]
+    ProcessResolved(resolved) => resolved_limit_fields(resolved, attempted)
   }
+}
+
+-- contracts: BLOCKED — its result holds `Json`, which the Z3 fragment does not encode.
+pure func resolved_limit_fields(resolved: ResolvedProcess, attempted: bool) -> [{key: string, value: Json}] {
+  if attempted then
+    [{key: "timeout_ms", value: optional_ms_json(display_timeout_ms(resolved))}]
+      ++ (if resolved.clamped then requested_field(resolved.requested_ms) else [])
+      ++ [max_field(resolved.session_default, resolved.effective_ceiling)]
+  else
+    requested_field(resolved.requested_ms) ++ [max_field(resolved.session_default, resolved.effective_ceiling)]
+}
+
+-- The same fields for what `ToolInvocation.process` holds, which is what `tool_phase`
+-- and `session.tool_outcome_text` have (W7). No carrier has no fields: `Legacy`, and
+-- every tool that is not a process tool, renders as it does today (D4, D7).
+-- contracts: BLOCKED — takes `Option[ResolvedProcess]` and its result holds `Json`, which the Z3 fragment does not encode.
+export pure func carrier_limit_fields(carrier: Option[ResolvedProcess], attempted: bool) -> [{key: string, value: Json}] {
+  match carrier {
+    None => [],
+    Some(resolved) => resolved_limit_fields(resolved, attempted)
+  }
+}
+
+-- How much of a rejected `timeout_secs` a message repeats (A17): enough to recognise it.
+pure func rejected_echo_limit() -> int
+  ensures { result > 0 }
+{ 120 }
+
+-- D4: a rejected value with no `requested_timeout_ms` "is stated in the error's message",
+-- and any value at all is stated here, bounded, so a 70,000-character string cannot push
+-- the message past the cap on its own account. It reads the raw argument, so it belongs
+-- beside the resolver (D7: nothing else reads `timeout_secs`).
+-- contracts: BLOCKED — takes a recursive `Json`, which the Z3 fragment does not encode.
+export pure func rejected_request_text(args: Json) -> string {
+  let shown = match get(args, "timeout_secs") {
+    Some(v) => encode(v),
+    None => "nothing"
+  };
+  let echo = if length(shown) <= rejected_echo_limit() then shown
+             else "${substring(shown, 0, rejected_echo_limit())}... (${show(length(shown))} characters)";
+  "timeout_secs must be a positive whole number of seconds, at most ${show(max_request_secs())}, and it was ${echo}. The command was NOT run: nothing was executed."
 }
 
 -- D7's `t * 1_000_000 > n`, for `n > 0`. A program's `t` has no D2 bound, so the

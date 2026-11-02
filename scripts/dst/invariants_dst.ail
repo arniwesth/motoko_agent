@@ -72,7 +72,7 @@ import src/core/phase_vocab (
   ProviderCallPrepared, RunSummary, CostExhausted, CompactionExhausted,
   DoneEvent, CheckpointTaken, TotalsUpdated, StreamDelta, StreamErrorRetry,
   InMemoryStageOutcome, TraceStageApplied,
-  HistorySeeded, HistoryAppended, NativeToolDenied, ToolArgumentsUndecodable, DelegatedToolDeferred,
+  HistorySeeded, HistoryAppended, NativeToolDenied, ToolArgumentsUndecodable, ToolArgumentsInvalid, DelegatedToolDeferred,
   CheckpointInfo,
   zero_runtime_status_counts
 )
@@ -111,11 +111,12 @@ import src/core/journal (empty_final_state, FinalState,
   -- chains it.
   chain_digest_over, chain_digest_after, chain_digests_over, chain_digests_json, chain_empty_base,
   messages_json, message_json)
-import std/json (encode, jo, kv, js, jb)
+import std/json (encode, jo, kv, js, jb, jnum)
+import src/core/process_limits (Limits, Finite, CeilingMs, dispatch_resolution, rejected_request_text)
 import std/string as Str (contains)
 -- 034 ADR-001 §2: the REAL builders, whose bytes the survival rows hand the two
 -- rules. The rules themselves import none of these.
-import src/core/tool_phase (tool_outcome_message, denial_message, undecodable_arguments_message)
+import src/core/tool_phase (tool_outcome_message, denial_message, undecodable_arguments_message, invalid_request_message)
 import src/core/tool_dispatch_adapter (tool_result_item_to_json)
 import src/core/types (ToolErrorResult)
 import src/core/tool_fault (refused_fault)
@@ -1034,16 +1035,16 @@ pure func p_c(k: int) -> ToolCall { p_nth_call(p_calls(), k - 1) }
 
 -- The six answers as the driver renders them, call-1 to call-6 in order.
 pure func p_answers() -> [Message] {
-  [tool_outcome_message(p_c(1), ToolCompleted({ tool_call_id: "call-1", content: "OUT", exit_code: -1 })),
+  [tool_outcome_message(p_c(1), None, ToolCompleted({ tool_call_id: "call-1", content: "OUT", exit_code: -1 })),
    p_failed_message(true),
-   tool_outcome_message(p_c(3), ToolCorrelationMismatch({ expected_id: "call-3", got_id: "call-X" })),
-   tool_outcome_message(p_c(4), ToolDeadlineExceeded({ tool_call_id: "call-4", elapsed_ms: 3000, timeout_ms: 1000 })),
+   tool_outcome_message(p_c(3), None, ToolCorrelationMismatch({ expected_id: "call-3", got_id: "call-X" })),
+   tool_outcome_message(p_c(4), None, ToolDeadlineExceeded({ tool_call_id: "call-4", elapsed_ms: 3000, timeout_ms: 1000 })),
    denial_message(p_c(5), "no"),
    undecodable_arguments_message(p_c(6), 10)]
 }
 
 pure func p_failed_message(after: bool) -> Message {
-  tool_outcome_message(p_c(2), ToolFailed({ tool_call_id: "call-2", code: "E42", message: "boom", after_dispatch: after }))
+  tool_outcome_message(p_c(2), None, ToolFailed({ tool_call_id: "call-2", code: "E42", message: "boom", after_dispatch: after }))
 }
 
 -- Replace call k's answer (1-based), so a row changes ONE message.
@@ -1237,6 +1238,21 @@ func scenario_mutants_effect_disclosure_and_redispatch() -> bool ! {IO} {
     a ++ [p_tool_msg("call-7", "{\"error\":true,\"delegated_backend_not_wired\":true,\"tool\":\"BashExec\"}")],
     p_refusals() ++ [WireRecord(DelegatedToolDeferred({ step: 1, stream_id: "step-1", tool: "BashExec", id: "call-7" }))]);
   let m7 = mutant_at("a delegated deferral without fault", deferred, "effect-disclosure-unsound", -1, "call-7");
+  -- 041 W7: an invalid request, the eighth builder. Its own record and its message without
+  -- fault must be a finding, and the same record with the real builder's bytes must not.
+  let invalid_record = WireRecord(ToolArgumentsInvalid({ step: 1, stream_id: "step-1", tool: "BashExec", id: "call-7" }));
+  let invalid_without = p_execution(fixture_log(), p_effects(), [p_assistant(p_calls() ++ [p_call("call-7", "BashExec", "{}")])],
+    a ++ [p_tool_msg("call-7", "{\"error\":true,\"tool\":\"BashExec\",\"code\":\"process_request_invalid\"}")],
+    p_refusals() ++ [invalid_record]);
+  let m7b = mutant_at("an invalid request without fault", invalid_without, "effect-disclosure-unsound", -1, "call-7");
+  let bad_args = jo([kv("timeout_secs", jnum(0.0))]);
+  let invalid_msg = match dispatch_resolution(Limits({ default: Finite(1000000000), ceiling: CeilingMs(3000) }), "BashExec", bad_args) {
+    Some(r) => invalid_request_message(p_call("call-7", "BashExec", "{}"), r, rejected_request_text(bad_args)),
+    None => p_tool_msg("call-7", "")
+  };
+  let invalid_real = p_execution(fixture_log(), p_effects(), [p_assistant(p_calls() ++ [p_call("call-7", "BashExec", "{}")])],
+    a ++ [invalid_msg], p_refusals() ++ [invalid_record]);
+  let m7c = absent("an invalid request with the real builder's bytes", invalid_real, "effect-disclosure-unsound");
   -- The live arm: call-1's completion has no effect-log entry, and its bytes
   -- are the live renderer's refusal with `effects` dropped.
   let live_no_effects = p_tool_msg("call-1", "{\"tool\":\"BashExec\",\"fault\":{\"kind\":\"refused\",\"note\":\"n\"},\"error\":true,\"message\":\"m\",\"exit_code\":1}");
@@ -1271,7 +1287,7 @@ func scenario_mutants_effect_disclosure_and_redispatch() -> bool ! {IO} {
   let m14 = absent("the applied fault answered 'none'",
                    p_conversation(p_with_answer(a, 2, p_failed_message(false)), p_effects()),
                    "tool-call-redispatched");
-  m1 && m2 && m3 && m4 && m5 && m6 && m7 && m8 && m9 && m10 && m11 && m12 && m13 && m14
+  m1 && m2 && m3 && m4 && m5 && m6 && m7 && m7b && m7c && m8 && m9 && m10 && m11 && m12 && m13 && m14
 }
 
 -- ---------------------------------------------------------------------------

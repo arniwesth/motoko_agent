@@ -69,7 +69,7 @@ pure func mk_call() -> ToolCall {
 -- Pull the `fault_class` field back out of the tool-role message the driver
 -- would hand the model. This is the observation, not an inspection of source.
 pure func emitted_fault_class(o: ToolOutcome) -> string {
-  let m = tool_outcome_message(mk_call(), o);
+  let m = tool_outcome_message(mk_call(), None, o);
   match decode(m.content) {
     Err(_) => "<undecodable>",
     Ok(j) => match get(j, "fault_class") {
