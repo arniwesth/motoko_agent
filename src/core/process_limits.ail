@@ -1,0 +1,823 @@
+-- The per-call process limit: its types, its one resolver, and the pure
+-- functions that display and project what the resolver decided.
+--
+-- ADR-002 D2, D4 and D7; PLAN-001 W4 and C1. Nothing calls this module yet. W5
+-- onward wires it in, and until W12 no live world is in `Limits` mode.
+--
+-- A LEAF, ON PURPOSE (C1). It imports only from `std`. `dst_program` stays free of
+-- port imports and needs `LimitMode` for `InitialWorld`, while `ports`,
+-- `tool_runtime` and `tool_dispatch_adapter` all need the types. `fs_node` is the
+-- precedent, and its header gives the argument. `src/core` cannot import from
+-- `packages/`, so `parse_ceiling_ms` is new rather than shared with
+-- `motoko-ext-herdr`'s `process_wall_ms`.
+--
+-- ONE CONSTRUCTOR (D7). `resolve_process_limit` is the only place either result is
+-- built, so the copied `session_default` cannot disagree with the limits it came
+-- from. A record is structural here, and the type system cannot enforce that:
+-- anything may write the literal. So the rule is checked from outside, by
+-- `.agent/projects/041_process_execution_timeouts/evidence/W4/check_single_construction.py`.
+-- The test rows below follow the rule too: each result they read came from the
+-- resolver.
+--
+-- UNITS. `ns` and `ms` are different units, converted only where D7 says so. A
+-- `SessionLimit` is in nanoseconds because its native domain includes
+-- sub-millisecond and non-positive values. Everything else here is milliseconds.
+
+module src/core/process_limits
+
+import std/option (Option, Some, None)
+import std/json (Json, JNull, JNumber, JObject, get, jint, encode, decode)
+import std/math (floor, round, floatToInt, intToFloat)
+import std/result (Result, Ok, Err)
+import std/string (length, substring, startsWith, trim, stringToInt)
+
+-- D7's types.
+export type SessionLimit = Finite(int) | NoDeadline  -- NoDeadline exists only in scripted worlds
+
+export type Ceiling = CeilingMs(int) | SameAsDefault
+
+export type ProcessLimits = { default: SessionLimit, ceiling: Ceiling }
+
+export type LimitMode = Legacy | Limits(ProcessLimits)
+
+export type ProcessBudget = SessionDefault | ExplicitMs(int)
+
+export type ResolvedProcess = {
+  budget: ProcessBudget,
+  requested_ms: Option[int],
+  clamped: bool,
+  session_default: SessionLimit,
+  effective_ceiling: Ceiling
+}
+
+export type InvalidRequest = {
+  requested_ms: Option[int],
+  session_default: SessionLimit,
+  effective_ceiling: Ceiling
+}
+
+-- D7 writes the resolver's result as `ResolvedProcess | InvalidRequest`. AILANG has
+-- no anonymous union, so this is that union with a name.
+export type ProcessResolution = ProcessResolved(ResolvedProcess) | ProcessInvalid(InvalidRequest)
+
+-- What D2's request table makes of the raw argument. Private: the resolver is its
+-- only reader, and nothing outside this module sees a request that is not resolved.
+type TimeoutRequest = NoRequest | ValidMs(int) | BadRequest(Option[int])
+
+-- D2: the largest request, one year in seconds. It keeps `r * 1_000_000` from overflowing.
+pure func max_request_secs() -> int
+  ensures { result > 0 }
+{ 31536000 }
+
+-- The milliseconds a positive number of seconds holds, when it holds a whole number
+-- of them and is within D2's bound.
+--
+-- The test goes back through division because the product is not exact: `1.001 *
+-- 1000.0` is `1000.9999999999999`, so a test on the product alone would call a
+-- whole-millisecond request fractional. `k / 1000.0` and the decoder's reading of
+-- the same digits are both the double nearest that decimal, so they compare equal.
+-- contracts: BLOCKED — calls `round` and `floatToInt`, which the Z3 fragment does not encode.
+pure func whole_ms_of_secs(x: float) -> Option[int] {
+  if x > intToFloat(max_request_secs()) then None
+  else {
+    let k = round(x * 1000.0);
+    if k > 0.0 && k / 1000.0 == x then Some(floatToInt(k)) else None
+  }
+}
+
+-- D2's request table, reading the raw `timeout_secs`. E3: `std/json` holds every
+-- number as a float, so `60.0` cannot be told from `60` and is valid.
+-- contracts: BLOCKED — takes a recursive `Json`, which the Z3 fragment does not encode.
+pure func parse_timeout_request(args: Json) -> TimeoutRequest {
+  match get(args, "timeout_secs") {
+    None => NoRequest,
+    Some(JNull) => NoRequest,
+    Some(JNumber(x)) =>
+      if x > 0.0 && x == floor(x) && x <= intToFloat(max_request_secs())
+      then ValidMs(floatToInt(x) * 1000)
+      else BadRequest(whole_ms_of_secs(x)),
+    Some(_) => BadRequest(None)
+  }
+}
+
+-- I1: the result is at most the ceiling, and it is the request when the request fits.
+-- That the result is the ceiling itself when the request does not fit is left to the
+-- rows: stating it too would pin every result, and the contract would only restate the
+-- body (`verify_classify`'s `spec-equals-body`).
+export pure func clamp_ms(request: int, ceiling: int) -> int
+  ensures { result <= ceiling && (request > ceiling || result == request) }
+  tests [
+    ((1000, 3000), 1000),
+    ((3000, 3000), 3000),
+    ((3001, 3000), 3000),
+    ((60000, 30000), 30000)
+  ]
+{
+  if request <= ceiling then request else ceiling
+}
+
+-- D7's rule for a valid request: its budget, and whether it was clamped. `NoDeadline`
+-- is matched as its own case and never compared, so a shorter scripted request stays
+-- finite. D2's bound keeps `r * 1000000` from overflowing.
+-- contracts: BLOCKED — returns a tuple, which the Z3 fragment does not encode.
+pure func budget_for_request(limits: ProcessLimits, r: int) -> (ProcessBudget, bool) {
+  match limits.ceiling {
+    CeilingMs(c) => (ExplicitMs(clamp_ms(r, c)), r > c),
+    SameAsDefault => match limits.default {
+      NoDeadline => (ExplicitMs(r), false),
+      Finite(d) => {
+        let r_ns = r * 1000000;
+        if r_ns < d then (ExplicitMs(r), false) else (SessionDefault, r_ns > d)
+      }
+    }
+  }
+}
+
+-- D7's resolver, and THE ONLY PLACE EITHER RESULT IS BUILT. Each result has one
+-- construction site below. See the header for what checks that.
+-- contracts: BLOCKED — takes a recursive `Json`, which the Z3 fragment does not encode.
+export pure func resolve_process_limit(limits: ProcessLimits, args: Json) -> ProcessResolution {
+  match parse_timeout_request(args) {
+    BadRequest(requested) => ProcessInvalid({
+      requested_ms: requested,
+      session_default: limits.default,
+      effective_ceiling: limits.ceiling
+    }),
+    request => {
+      let decided = match request {
+        ValidMs(r) => { let outcome = budget_for_request(limits, r); (outcome, Some(r)) },
+        _ => ((SessionDefault, false), None)
+      };
+      match decided {
+        ((budget, clamped), requested) => ProcessResolved({
+          budget: budget,
+          requested_ms: requested,
+          clamped: clamped,
+          session_default: limits.default,
+          effective_ceiling: limits.ceiling
+        })
+      }
+    }
+  }
+}
+
+-- R7: scratchpad loopback runs with the run's limits but no ceiling of its own, so it
+-- can shorten and never extend. It then calls the resolver with its request.
+export pure func loopback_limits(limits: ProcessLimits) -> ProcessLimits
+  ensures { result.ceiling == SameAsDefault }
+{
+  { default: limits.default, ceiling: SameAsDefault }
+}
+
+-- R8: the carrier for an extension effect's process tool. It takes the run's mode,
+-- since that is what the world holds (W6 calls this with `w0.process_limits`), and
+-- answers the value `ToolInvocation.process` holds: `None` in `Legacy`, which D7
+-- requires. No arguments reach the resolver, so `timeout_secs` is not read. With no
+-- request the resolver cannot answer `ProcessInvalid`; that arm exists for the match.
+-- contracts: BLOCKED — returns `Option[ResolvedProcess]`, which the Z3 fragment does not encode.
+export pure func extension_process(mode: LimitMode) -> Option[ResolvedProcess] {
+  match mode {
+    Legacy => None,
+    Limits(limits) => match resolve_process_limit(loopback_limits(limits), JObject([])) {
+      ProcessResolved(resolved) => Some(resolved),
+      ProcessInvalid(_) => None
+    }
+  }
+}
+
+-- D4: a native default in whole milliseconds, rounded up, `0` for any non-positive
+-- value. Written without `n + 999999`, which overflows near the top of the range.
+-- The `ensures` holds over unbounded integers: `ailang run -verify-contracts` fails it near the top of the range, where its product wraps.
+pure func ms_rounded_up(n: int) -> int
+  ensures { (n > 0 || result == 0) && (n <= 0 || result * 1000000 >= n) }
+  tests [
+    (1500000, 2),
+    (1000000, 1),
+    (1500, 1),
+    (1, 1),
+    (30000000000, 30000),
+    (30000000001, 30001),
+    (9223372036854775807, 9223372036855),
+    (0, 0),
+    (-1000000000, 0)
+  ]
+{
+  if n <= 0 then 0
+  else if n % 1000000 == 0 then n / 1000000
+  else n / 1000000 + 1
+}
+
+-- D4: `None` only for `NoDeadline`, and never a negative display.
+pure func display_session_limit(limit: SessionLimit) -> Option[int]
+  ensures { match result { Some(m) => m >= 0 && limit != NoDeadline, None => limit == NoDeadline } }
+{
+  match limit {
+    NoDeadline => None,
+    Finite(n) => Some(ms_rounded_up(n))
+  }
+}
+
+-- D4's `timeout_ms`: the limit given to an attempt. `None` renders as `null`.
+-- contracts: BLOCKED — returns `Option[int]`, which the Z3 fragment does not encode.
+export pure func display_timeout_ms(resolved: ResolvedProcess) -> Option[int] {
+  match resolved.budget {
+    ExplicitMs(m) => Some(m),
+    SessionDefault => display_session_limit(resolved.session_default)
+  }
+}
+
+-- D4's `max_timeout_ms`: the effective ceiling for this origin. `None` renders as `null`.
+-- contracts: BLOCKED — returns `Option[int]`, which the Z3 fragment does not encode.
+export pure func display_max_timeout_ms(session_limit: SessionLimit, ceiling: Ceiling) -> Option[int] {
+  match ceiling {
+    CeilingMs(c) => Some(c),
+    SameAsDefault => display_session_limit(session_limit)
+  }
+}
+
+-- contracts: BLOCKED — returns `Json`, which the Z3 fragment does not encode.
+pure func optional_ms_json(v: Option[int]) -> Json {
+  match v {
+    Some(n) => jint(n),
+    None => JNull
+  }
+}
+
+-- contracts: BLOCKED — its result holds `Json`, which the Z3 fragment does not encode.
+pure func requested_field(v: Option[int]) -> [{key: string, value: Json}] {
+  match v {
+    Some(n) => [{key: "requested_timeout_ms", value: jint(n)}],
+    None => []
+  }
+}
+
+-- contracts: BLOCKED — its result holds `Json`, which the Z3 fragment does not encode.
+pure func max_field(session_limit: SessionLimit, ceiling: Ceiling) -> {key: string, value: Json} {
+  {key: "max_timeout_ms", value: optional_ms_json(display_max_timeout_ms(session_limit, ceiling))}
+}
+
+-- D4's fields in their rendered order, for C4 to put after `tool` and `fault` and
+-- before `cmd`. `attempted` false, or an `InvalidRequest`, has no `timeout_ms`: it
+-- says no limit was applied. `requested_timeout_ms` differs by case: an attempt names
+-- it only when clamped, and a call with no attempt names any request it knows.
+-- contracts: BLOCKED — its result holds `Json`, which the Z3 fragment does not encode.
+export pure func process_limit_fields(result: ProcessResolution, attempted: bool) -> [{key: string, value: Json}] {
+  match result {
+    ProcessInvalid(invalid) =>
+      requested_field(invalid.requested_ms) ++ [max_field(invalid.session_default, invalid.effective_ceiling)],
+    ProcessResolved(resolved) =>
+      if attempted then
+        [{key: "timeout_ms", value: optional_ms_json(display_timeout_ms(resolved))}]
+          ++ (if resolved.clamped then requested_field(resolved.requested_ms) else [])
+          ++ [max_field(resolved.session_default, resolved.effective_ceiling)]
+      else
+        requested_field(resolved.requested_ms) ++ [max_field(resolved.session_default, resolved.effective_ceiling)]
+  }
+}
+
+-- D7's `t * 1_000_000 > n`, for `n > 0`. A program's `t` has no D2 bound, so the
+-- product can wrap. For a whole `t` it is the same test as `t > n / 1000000` rounded
+-- DOWN: rounded up, `t = 2` would not exceed a 1.5 ms default.
+-- The `ensures` holds over unbounded integers: `ailang run -verify-contracts` fails it near the top of the range, where its product wraps.
+pure func scripted_duration_exceeds(t: int, n: int) -> bool
+  ensures { n <= 0 || result == (t * 1000000 > n) }
+  tests [
+    ((1, 1500000), false),
+    ((2, 1500000), true),
+    ((30000, 30000000000), false),
+    ((30001, 30000000000), true),
+    ((9223372036854, 9223372036854775807), false),
+    ((9223372036855, 9223372036854775807), true),
+    ((9223372036855, 30000000000), true),
+    ((9007199255, 9007199254999999), true)
+  ]
+{
+  t > n / 1000000
+}
+
+-- D7's expiry table. `carrier` is `ToolInvocation.process`, and `None` keeps today's
+-- predicate, which reads a 0 as no deadline.
+-- contracts: BLOCKED — takes `Option[ResolvedProcess]`, which the Z3 fragment does not encode.
+export pure func process_deadline_expires(carrier: Option[ResolvedProcess], t: int, legacy_timeout_ms: int) -> bool {
+  match carrier {
+    None => legacy_timeout_ms > 0 && t > legacy_timeout_ms,
+    Some(resolved) => match resolved.budget {
+      ExplicitMs(m) => t > m,
+      SessionDefault => match resolved.session_default {
+        NoDeadline => false,
+        Finite(n) => if n <= 0 then true else scripted_duration_exceeds(t, n)
+      }
+    }
+  }
+}
+
+-- `ToolInvocation.timeout_ms`, made total. `ExplicitMs(m)` records `m`. Everything
+-- else, including a request that resolved to `SessionDefault`, records today's value,
+-- because strict replay compares it.
+-- contracts: BLOCKED — takes `Option[ResolvedProcess]`, which the Z3 fragment does not encode.
+export pure func projected_timeout_ms(carrier: Option[ResolvedProcess], legacy_timeout_ms: int) -> int {
+  match carrier {
+    Some(resolved) => match resolved.budget {
+      ExplicitMs(m) => m,
+      SessionDefault => legacy_timeout_ms
+    },
+    None => legacy_timeout_ms
+  }
+}
+
+-- Go's own limit: `time.ParseDuration` refuses a duration past this.
+pure func max_duration_ns() -> int
+  ensures { result > 0 }
+{ 9223372036854775807 }
+
+-- contracts: BLOCKED — RECURSIVE over a string.
+pure func digits_from(s: string, i: int) -> int {
+  if i >= length(s) then i
+  else {
+    let c = substring(s, i, i + 1);
+    if c >= "0" && c <= "9" then digits_from(s, i + 1) else i
+  }
+}
+
+-- The digits in `[i, j)` as an int, or `None` past Go's limit. Digit by digit, so a
+-- value too large for `stringToInt` and a long run of leading zeros need no special case.
+-- contracts: BLOCKED — RECURSIVE, and returns `Option[int]`, which the Z3 fragment does not encode.
+pure func decimal_value(s: string, i: int, j: int, acc: int) -> Option[int] {
+  if i >= j then Some(acc)
+  else match stringToInt(substring(s, i, i + 1)) {
+    Some(d) => if acc > (max_duration_ns() - d) / 10 then None else decimal_value(s, i + 1, j, acc * 10 + d),
+    None => None
+  }
+}
+
+-- The unit at `i`, as (nanoseconds, its length), or (0, 0). Two-letter units come
+-- first, so `ms` is never read as `m`.
+-- contracts: BLOCKED — returns a tuple and calls `substring`, outside the Z3 fragment.
+pure func duration_unit(s: string, i: int) -> (int, int) {
+  let rest = substring(s, i, length(s));
+  if startsWith(rest, "ns") then (1, 2)
+  else if startsWith(rest, "us") then (1000, 2)
+  else if startsWith(rest, "µs") then (1000, length("µs"))
+  else if startsWith(rest, "μs") then (1000, length("μs"))
+  else if startsWith(rest, "ms") then (1000000, 2)
+  else if startsWith(rest, "s") then (1000000000, 1)
+  else if startsWith(rest, "m") then (60000000000, 1)
+  else if startsWith(rest, "h") then (3600000000000, 1)
+  else (0, 0)
+}
+
+-- A fraction's digits as nanoseconds of `unit`, read to nine digits. For `s` and below
+-- that is all Go keeps too, since a tenth digit is below a nanosecond. For `m` and `h`
+-- it is not: `duration_terms_ns` refuses those before this runs.
+-- contracts: BLOCKED — calls `substring` and `stringToInt`, outside the Z3 fragment.
+pure func fraction_ns(digits: string, unit: int) -> int {
+  let nine = match stringToInt(substring("${digits}000000000", 0, 9)) { Some(v) => v, None => 0 };
+  if unit >= 1000000000 then nine * (unit / 1000000000) else nine * unit / 1000000000
+}
+
+-- D2: a whole number of milliseconds. A whole millisecond of `m` needs at most five
+-- fraction digits and of `h` at most seven, so a non-zero digit past the ninth under
+-- either is never one. Go keeps such a digit when it is worth a nanosecond
+-- (`1.0000000001h` is 3600000000360 ns) and drops it when it is worth less
+-- (`1.00000000001m` is 60000000000 ns), and this refuses both: the second is not the
+-- whole number of milliseconds it would read as.
+-- `decimal_value` is `Some(0)` for all zeros or no digits, and `None` only for a run
+-- too long to hold, which has a non-zero digit.
+-- contracts: BLOCKED — calls `decimal_value`, which returns `Option[int]`, which the Z3 fragment does not encode.
+pure func fraction_below_whole_ms(digits: string, unit: int) -> bool {
+  if unit < 60000000000 then false
+  else match decimal_value(digits, 9, length(digits), 0) {
+    Some(0) => false,
+    _ => true
+  }
+}
+
+-- `<decimal><unit>` terms from `i`, summed in nanoseconds: no terms is `Some(0)`, and
+-- a sign or a bare number is simply not a term. Unlike `process_wall_ms`,
+-- this refuses a sum past Go's limit rather than saturating: a ceiling must be
+-- exactly the value the operator wrote.
+-- contracts: BLOCKED — RECURSIVE over a string.
+pure func duration_terms_ns(s: string, i: int, acc: int) -> Option[int] {
+  if i >= length(s) then Some(acc)
+  else {
+    let j = digits_from(s, i);
+    let has_fraction = j < length(s) && substring(s, j, j + 1) == ".";
+    let k = if has_fraction then digits_from(s, j + 1) else j;
+    let fraction = if has_fraction then substring(s, j + 1, k) else "";
+    if j == i && fraction == "" then None
+    else match duration_unit(s, k) {
+      (0, _) => None,
+      (unit, n) => if fraction_below_whole_ms(fraction, unit) then None else {
+        let whole = match decimal_value(s, i, j, 0) {
+          Some(v) => if v > max_duration_ns() / unit then None else Some(v * unit),
+          None => None
+        };
+        match whole {
+          None => None,
+          Some(w) => {
+            let part = fraction_ns(fraction, unit);
+            if part > max_duration_ns() - w || w + part > max_duration_ns() - acc then None
+            else duration_terms_ns(s, k + n, acc + w + part)
+          }
+        }
+      }
+    }
+  }
+}
+
+-- The strict `tools.process_timeout_max` domain (D2): Go's duration grammar, as
+-- `process_wall_ms` reads it (`packages/motoko-ext-herdr/types.ail`), but positive
+-- and a whole number of milliseconds. Anything else is `None`, a configuration error
+-- for W11 to raise. Unset is W11's case: an empty string here is simply not a duration.
+-- contracts: BLOCKED — calls `trim` and recursive string functions, outside the Z3 fragment.
+export pure func parse_ceiling_ms(s: string) -> Option[int] {
+  let t = trim(s);
+  let body = if startsWith(t, "+") then substring(t, 1, length(t)) else t;
+  match duration_terms_ns(body, 0, 0) {
+    Some(ns) => if ns > 0 && ns % 1000000 == 0 then Some(ns / 1000000) else None,
+    None => None
+  }
+}
+
+-- ===========================================================================
+-- TEST ROWS. Each helper below is reachable only from a `tests` block. Each result
+-- they read came from the resolver; none is written here. Arguments are JSON text
+-- and go through the real decoder, because E3's table is about what it does.
+-- ===========================================================================
+
+func show_session_limit(limit: SessionLimit) -> string {
+  match limit {
+    Finite(n) => "Finite(${show(n)})",
+    NoDeadline => "NoDeadline"
+  }
+}
+
+func show_ceiling(c: Ceiling) -> string {
+  match c {
+    CeilingMs(n) => "CeilingMs(${show(n)})",
+    SameAsDefault => "SameAsDefault"
+  }
+}
+
+func show_requested(v: Option[int]) -> string {
+  match v {
+    Some(n) => show(n),
+    None => "none"
+  }
+}
+
+func show_resolved(r: ResolvedProcess) -> string {
+  let budget = match r.budget {
+    SessionDefault => "SessionDefault",
+    ExplicitMs(m) => "ExplicitMs(${show(m)})"
+  };
+  "${budget} requested=${show_requested(r.requested_ms)} clamped=${show(r.clamped)} default=${show_session_limit(r.session_default)} ceiling=${show_ceiling(r.effective_ceiling)}"
+}
+
+func show_resolution(result: ProcessResolution) -> string {
+  match result {
+    ProcessInvalid(i) =>
+      "invalid requested=${show_requested(i.requested_ms)} default=${show_session_limit(i.session_default)} ceiling=${show_ceiling(i.effective_ceiling)}",
+    ProcessResolved(r) => show_resolved(r)
+  }
+}
+
+-- The arguments as the decoder reads them. `{}` stands in for an undecodable text, and
+-- the `undecodable` row below is what shows that text never gets here.
+func args_of(text: string) -> Json {
+  match decode(text) {
+    Ok(j) => j,
+    Err(_) => JObject([])
+  }
+}
+
+func resolve_text(limits: ProcessLimits, text: string) -> ProcessResolution {
+  resolve_process_limit(limits, args_of(text))
+}
+
+func limits_of(default: SessionLimit, ceiling: Ceiling) -> ProcessLimits {
+  { default: default, ceiling: ceiling }
+}
+
+func carrier_of(default: SessionLimit, ceiling: Ceiling, text: string) -> Option[ResolvedProcess] {
+  match resolve_text(limits_of(default, ceiling), text) {
+    ProcessResolved(r) => Some(r),
+    ProcessInvalid(_) => None
+  }
+}
+
+-- The default and ceiling these rows use when the rule does not depend on them.
+func ceiled_30_300() -> ProcessLimits { limits_of(Finite(30000000000), CeilingMs(300000)) }
+
+-- The whole-millisecond test on a float, with `1.001` for the product that is not exact.
+func row_whole_ms(x: float) -> string
+  tests [
+    (1.5, "1500"),
+    (0.001, "1"),
+    (1.001, "1001"),
+    (60.0, "60000"),
+    (31536000.0, "31536000000"),
+    (0.0000001, "none"),
+    (0.0015, "none"),
+    (0.0, "none"),
+    (-1.5, "none"),
+    (31536000.5, "none"),
+    (31536001.0, "none"),
+    (10000000000000000.0, "none")
+  ]
+{
+  show_requested(whole_ms_of_secs(x))
+}
+
+-- The strict ceiling domain: accepted values, then every way of not being one. The
+-- `288230376151711745ms`, `...1000002ns` and `18446744073710551616ns` rows each wrap to exactly 1 ms in 64 bits if the guard
+-- they test is missing. A value that wraps negative would be refused anyway and test nothing.
+-- `1.0000000001s` is accepted because that tenth digit is below a nanosecond, which is
+-- true only for `s` and below: the rows after `1s5` pin `m` and `h`, whose tenth digit
+-- is whole nanoseconds. A non-zero digit is refused there, and trailing zeros are not.
+func row_ceiling(text: string) -> string
+  tests [
+    ("300s", "300000"),
+    (" 300s ", "300000"),
+    ("1500ms", "1500"),
+    ("1m30s", "90000"),
+    ("1h", "3600000"),
+    ("0.5s", "500"),
+    (".5s", "500"),
+    ("1.s", "1000"),
+    ("1000us", "1"),
+    ("2000µs", "2"),
+    ("2000μs", "2"),
+    ("+2s", "2000"),
+    ("00000000000000000000010s", "10000"),
+    ("1.0000000001s", "1000"),
+    ("9223372036854000000ns", "9223372036854"),
+    ("1500us", "none"),
+    ("1ns", "none"),
+    ("1s1ns", "none"),
+    ("0", "none"),
+    ("0s", "none"),
+    ("000s", "none"),
+    ("0.0s", "none"),
+    ("-1s", "none"),
+    ("-0s", "none"),
+    ("", "none"),
+    ("   ", "none"),
+    ("10", "none"),
+    ("fast", "none"),
+    ("s", "none"),
+    (".s", "none"),
+    ("1s fast", "none"),
+    ("1d", "none"),
+    ("2562048h", "none"),
+    ("9223372036854775808ns", "none"),
+    ("99999999999999999999h", "none"),
+    ("2562047h47m17s", "none"),
+    ("1ss", "none"),
+    ("288230376151711745ms", "none"),
+    ("9223372036854775807ns9223372036854775807ns1000002ns", "none"),
+    ("18446744073710551616ns", "none"),
+    ("1s5", "none"),
+    ("1.0000000001h", "none"),
+    ("1.0000000001m", "none"),
+    ("1.000000000001h", "none"),
+    ("1.5000000000h", "5400000"),
+    ("1.5000000000m", "90000"),
+    ("1.00000000099999999999999999999h", "none")
+  ]
+{
+  show_requested(parse_ceiling_ms(text))
+}
+
+-- A5's parsing half, and E3's table: D2's request column, through the decoder.
+func row_request(text: string) -> string
+  tests [
+    ("{}", "SessionDefault requested=none clamped=false default=Finite(30000000000) ceiling=CeilingMs(300000)"),
+    ("{\"timeout_secs\":null}", "SessionDefault requested=none clamped=false default=Finite(30000000000) ceiling=CeilingMs(300000)"),
+    ("{\"timeout_secs\":60}", "ExplicitMs(60000) requested=60000 clamped=false default=Finite(30000000000) ceiling=CeilingMs(300000)"),
+    ("{\"timeout_secs\":60.0}", "ExplicitMs(60000) requested=60000 clamped=false default=Finite(30000000000) ceiling=CeilingMs(300000)"),
+    ("{\"timeout_secs\":1e2}", "ExplicitMs(100000) requested=100000 clamped=false default=Finite(30000000000) ceiling=CeilingMs(300000)"),
+    ("{\"timeout_secs\":1}", "ExplicitMs(1000) requested=1000 clamped=false default=Finite(30000000000) ceiling=CeilingMs(300000)"),
+    ("{\"timeout_secs\":1e3}", "ExplicitMs(300000) requested=1000000 clamped=true default=Finite(30000000000) ceiling=CeilingMs(300000)"),
+    ("{\"timeout_secs\":31536000}", "ExplicitMs(300000) requested=31536000000 clamped=true default=Finite(30000000000) ceiling=CeilingMs(300000)"),
+    ("{\"timeout_secs\":31536001}", "invalid requested=none default=Finite(30000000000) ceiling=CeilingMs(300000)"),
+    ("{\"timeout_secs\":10000000000000000}", "invalid requested=none default=Finite(30000000000) ceiling=CeilingMs(300000)"),
+    ("{\"timeout_secs\":0}", "invalid requested=none default=Finite(30000000000) ceiling=CeilingMs(300000)"),
+    ("{\"timeout_secs\":-1}", "invalid requested=none default=Finite(30000000000) ceiling=CeilingMs(300000)"),
+    ("{\"timeout_secs\":1.5}", "invalid requested=1500 default=Finite(30000000000) ceiling=CeilingMs(300000)"),
+    ("{\"timeout_secs\":1.001}", "invalid requested=1001 default=Finite(30000000000) ceiling=CeilingMs(300000)"),
+    ("{\"timeout_secs\":0.0000001}", "invalid requested=none default=Finite(30000000000) ceiling=CeilingMs(300000)"),
+    ("{\"timeout_secs\":\"60\"}", "invalid requested=none default=Finite(30000000000) ceiling=CeilingMs(300000)"),
+    ("{\"timeout_secs\":true}", "invalid requested=none default=Finite(30000000000) ceiling=CeilingMs(300000)"),
+    ("{\"timeout_secs\":[60]}", "invalid requested=none default=Finite(30000000000) ceiling=CeilingMs(300000)"),
+    ("{\"timeout_secs\":{\"s\":60}}", "invalid requested=none default=Finite(30000000000) ceiling=CeilingMs(300000)")
+  ]
+{
+  show_resolution(resolve_text(ceiled_30_300(), text))
+}
+
+-- E3's last row belongs to the decoder and not to this module: the whole arguments
+-- object fails to decode, so `1e400` reaches `undecodable_arguments_message` and never
+-- the resolver. W7 owns that path; this row pins the fact the parser relies on.
+func row_undecodable(text: string) -> bool
+  tests [
+    ("{\"timeout_secs\":1e400}", true),
+    ("{\"timeout_secs\":10000000000000000}", false)
+  ]
+{
+  match decode(text) {
+    Ok(_) => false,
+    Err(_) => true
+  }
+}
+
+-- D7's resolver table, all six rows, plus A9's `SameAsDefault` cases, then the
+-- boundaries: `r_ns` above a default that rounds up to `r`, `r` equal to the default
+-- under a ceiling, and a ceiling that is not a whole number of seconds.
+func row_resolve(default: SessionLimit, ceiling: Ceiling, text: string) -> string
+  tests [
+    ((Finite(30000000000), CeilingMs(300000), "{}"), "SessionDefault requested=none clamped=false default=Finite(30000000000) ceiling=CeilingMs(300000)"),
+    ((Finite(30000000000), SameAsDefault, "{}"), "SessionDefault requested=none clamped=false default=Finite(30000000000) ceiling=SameAsDefault"),
+    ((NoDeadline, SameAsDefault, "{}"), "SessionDefault requested=none clamped=false default=NoDeadline ceiling=SameAsDefault"),
+    ((NoDeadline, CeilingMs(3000), "{}"), "SessionDefault requested=none clamped=false default=NoDeadline ceiling=CeilingMs(3000)"),
+    ((Finite(1000000000), CeilingMs(3000), "{\"timeout_secs\":2}"), "ExplicitMs(2000) requested=2000 clamped=false default=Finite(1000000000) ceiling=CeilingMs(3000)"),
+    ((Finite(1000000000), CeilingMs(3000), "{\"timeout_secs\":3}"), "ExplicitMs(3000) requested=3000 clamped=false default=Finite(1000000000) ceiling=CeilingMs(3000)"),
+    ((Finite(1000000000), CeilingMs(3000), "{\"timeout_secs\":4}"), "ExplicitMs(3000) requested=4000 clamped=true default=Finite(1000000000) ceiling=CeilingMs(3000)"),
+    ((NoDeadline, CeilingMs(3000), "{\"timeout_secs\":2}"), "ExplicitMs(2000) requested=2000 clamped=false default=NoDeadline ceiling=CeilingMs(3000)"),
+    ((NoDeadline, CeilingMs(3000), "{\"timeout_secs\":4}"), "ExplicitMs(3000) requested=4000 clamped=true default=NoDeadline ceiling=CeilingMs(3000)"),
+    ((Finite(30000000000), SameAsDefault, "{\"timeout_secs\":29}"), "ExplicitMs(29000) requested=29000 clamped=false default=Finite(30000000000) ceiling=SameAsDefault"),
+    ((Finite(30000000000), SameAsDefault, "{\"timeout_secs\":30}"), "SessionDefault requested=30000 clamped=false default=Finite(30000000000) ceiling=SameAsDefault"),
+    ((Finite(30000000000), SameAsDefault, "{\"timeout_secs\":60}"), "SessionDefault requested=60000 clamped=true default=Finite(30000000000) ceiling=SameAsDefault"),
+    ((Finite(1500000000), SameAsDefault, "{\"timeout_secs\":1}"), "ExplicitMs(1000) requested=1000 clamped=false default=Finite(1500000000) ceiling=SameAsDefault"),
+    ((Finite(1500000000), SameAsDefault, "{\"timeout_secs\":2}"), "SessionDefault requested=2000 clamped=true default=Finite(1500000000) ceiling=SameAsDefault"),
+    ((Finite(1500000), SameAsDefault, "{\"timeout_secs\":1}"), "SessionDefault requested=1000 clamped=true default=Finite(1500000) ceiling=SameAsDefault"),
+    ((Finite(0), SameAsDefault, "{\"timeout_secs\":1}"), "SessionDefault requested=1000 clamped=true default=Finite(0) ceiling=SameAsDefault"),
+    ((Finite(-1000000000), SameAsDefault, "{\"timeout_secs\":1}"), "SessionDefault requested=1000 clamped=true default=Finite(-1000000000) ceiling=SameAsDefault"),
+    ((NoDeadline, SameAsDefault, "{\"timeout_secs\":5}"), "ExplicitMs(5000) requested=5000 clamped=false default=NoDeadline ceiling=SameAsDefault"),
+    ((Finite(30000000000), SameAsDefault, "{\"timeout_secs\":0}"), "invalid requested=none default=Finite(30000000000) ceiling=SameAsDefault"),
+    ((NoDeadline, CeilingMs(3000), "{\"timeout_secs\":1.5}"), "invalid requested=1500 default=NoDeadline ceiling=CeilingMs(3000)"),
+    ((Finite(1000000001), SameAsDefault, "{\"timeout_secs\":1}"), "ExplicitMs(1000) requested=1000 clamped=false default=Finite(1000000001) ceiling=SameAsDefault"),
+    ((Finite(999999999), SameAsDefault, "{\"timeout_secs\":1}"), "SessionDefault requested=1000 clamped=true default=Finite(999999999) ceiling=SameAsDefault"),
+    ((Finite(30000000000), CeilingMs(300000), "{\"timeout_secs\":30}"), "ExplicitMs(30000) requested=30000 clamped=false default=Finite(30000000000) ceiling=CeilingMs(300000)"),
+    ((Finite(1000000000), CeilingMs(1500), "{\"timeout_secs\":2}"), "ExplicitMs(1500) requested=2000 clamped=true default=Finite(1000000000) ceiling=CeilingMs(1500)")
+  ]
+{
+  show_resolution(resolve_text(limits_of(default, ceiling), text))
+}
+
+-- THE AGREEMENT ROWS (r9). Whichever way a result is reached, what it holds is the
+-- limits it was resolved from: valid, invalid and absent requests. `row_loopback` and
+-- `row_extension` pin those two paths, and these rows do not go through them.
+func agrees(result: ProcessResolution, limits: ProcessLimits) -> bool {
+  match result {
+    ProcessResolved(r) => show_session_limit(r.session_default) == show_session_limit(limits.default) && show_ceiling(r.effective_ceiling) == show_ceiling(limits.ceiling),
+    ProcessInvalid(i) => show_session_limit(i.session_default) == show_session_limit(limits.default) && show_ceiling(i.effective_ceiling) == show_ceiling(limits.ceiling)
+  }
+}
+
+func row_agreement(default: SessionLimit, ceiling: Ceiling, text: string) -> bool
+  tests [
+    ((Finite(7000000000), CeilingMs(9000), "{}"), true),
+    ((Finite(7000000000), CeilingMs(9000), "{\"timeout_secs\":8}"), true),
+    ((Finite(7000000000), CeilingMs(9000), "{\"timeout_secs\":10}"), true),
+    ((Finite(7000000000), CeilingMs(9000), "{\"timeout_secs\":0}"), true),
+    ((Finite(7000000000), SameAsDefault, "{\"timeout_secs\":10}"), true),
+    ((NoDeadline, SameAsDefault, "{\"timeout_secs\":1.5}"), true)
+  ]
+{
+  let limits = limits_of(default, ceiling);
+  agrees(resolve_text(limits, text), limits)
+}
+
+-- R7: loopback keeps the default and forces the ceiling, whatever the run's ceiling is.
+func row_loopback(default: SessionLimit, ceiling: Ceiling, text: string) -> string
+  tests [
+    ((Finite(30000000000), CeilingMs(300000), "{\"timeout_secs\":60}"), "SessionDefault requested=60000 clamped=true default=Finite(30000000000) ceiling=SameAsDefault"),
+    ((Finite(30000000000), CeilingMs(300000), "{\"timeout_secs\":5}"), "ExplicitMs(5000) requested=5000 clamped=false default=Finite(30000000000) ceiling=SameAsDefault"),
+    ((Finite(30000000000), CeilingMs(300000), "{\"timeout_secs\":0}"), "invalid requested=none default=Finite(30000000000) ceiling=SameAsDefault")
+  ]
+{
+  show_resolution(resolve_text(loopback_limits(limits_of(default, ceiling)), text))
+}
+
+-- R8: an extension effect gets `SessionDefault` from the resolver, carrying the run's
+-- default and `SameAsDefault` whatever the run's ceiling is, and `Legacy` has no carrier.
+func row_extension(mode: LimitMode) -> string
+  tests [
+    (Legacy, "no carrier"),
+    (Limits({ default: Finite(7000000000), ceiling: CeilingMs(9000) }), "SessionDefault requested=none clamped=false default=Finite(7000000000) ceiling=SameAsDefault"),
+    (Limits({ default: NoDeadline, ceiling: SameAsDefault }), "SessionDefault requested=none clamped=false default=NoDeadline ceiling=SameAsDefault")
+  ]
+{
+  match extension_process(mode) {
+    None => "no carrier",
+    Some(r) => show_resolved(r)
+  }
+}
+
+-- A8, and D4's order: the rendered bytes, so a key out of order or a `null` that went
+-- missing fails. `attempted` false and every `InvalidRequest` have no `timeout_ms`.
+func row_fields(default: SessionLimit, ceiling: Ceiling, text: string, attempted: bool) -> string
+  tests [
+    ((Finite(30000000000), CeilingMs(300000), "{\"timeout_secs\":60}", true), "{\"timeout_ms\":60000,\"max_timeout_ms\":300000}"),
+    ((Finite(30000000000), CeilingMs(300000), "{\"timeout_secs\":400}", true), "{\"timeout_ms\":300000,\"requested_timeout_ms\":400000,\"max_timeout_ms\":300000}"),
+    ((Finite(30000000000), CeilingMs(300000), "{}", true), "{\"timeout_ms\":30000,\"max_timeout_ms\":300000}"),
+    ((Finite(30000000000), SameAsDefault, "{\"timeout_secs\":60}", true), "{\"timeout_ms\":30000,\"requested_timeout_ms\":60000,\"max_timeout_ms\":30000}"),
+    ((Finite(30000000000), SameAsDefault, "{\"timeout_secs\":30}", true), "{\"timeout_ms\":30000,\"max_timeout_ms\":30000}"),
+    ((Finite(30000000000), SameAsDefault, "{\"timeout_secs\":5}", true), "{\"timeout_ms\":5000,\"max_timeout_ms\":30000}"),
+    ((Finite(1500000), SameAsDefault, "{}", true), "{\"timeout_ms\":2,\"max_timeout_ms\":2}"),
+    ((Finite(0), SameAsDefault, "{}", true), "{\"timeout_ms\":0,\"max_timeout_ms\":0}"),
+    ((Finite(-1000000000), SameAsDefault, "{}", true), "{\"timeout_ms\":0,\"max_timeout_ms\":0}"),
+    ((NoDeadline, SameAsDefault, "{}", true), "{\"timeout_ms\":null,\"max_timeout_ms\":null}"),
+    ((NoDeadline, CeilingMs(3000), "{}", true), "{\"timeout_ms\":null,\"max_timeout_ms\":3000}"),
+    ((NoDeadline, SameAsDefault, "{\"timeout_secs\":5}", true), "{\"timeout_ms\":5000,\"max_timeout_ms\":null}"),
+    ((NoDeadline, CeilingMs(3000), "{\"timeout_secs\":5}", true), "{\"timeout_ms\":3000,\"requested_timeout_ms\":5000,\"max_timeout_ms\":3000}"),
+    ((Finite(30000000000), CeilingMs(300000), "{}", false), "{\"max_timeout_ms\":300000}"),
+    ((Finite(30000000000), CeilingMs(300000), "{\"timeout_secs\":60}", false), "{\"requested_timeout_ms\":60000,\"max_timeout_ms\":300000}"),
+    ((Finite(30000000000), CeilingMs(300000), "{\"timeout_secs\":1.5}", true), "{\"requested_timeout_ms\":1500,\"max_timeout_ms\":300000}"),
+    ((Finite(30000000000), CeilingMs(300000), "{\"timeout_secs\":0}", true), "{\"max_timeout_ms\":300000}"),
+    ((Finite(30000000000), SameAsDefault, "{\"timeout_secs\":10000000000000000}", true), "{\"max_timeout_ms\":30000}"),
+    ((NoDeadline, SameAsDefault, "{\"timeout_secs\":\"60\"}", false), "{\"max_timeout_ms\":null}"),
+    ((Finite(30000000000), CeilingMs(300000), "{\"timeout_secs\":400}", false), "{\"requested_timeout_ms\":400000,\"max_timeout_ms\":300000}"),
+    ((Finite(30000000000), CeilingMs(300000), "{\"timeout_secs\":1.5}", false), "{\"requested_timeout_ms\":1500,\"max_timeout_ms\":300000}")
+  ]
+{
+  encode(JObject(process_limit_fields(resolve_text(limits_of(default, ceiling), text), attempted)))
+}
+
+-- D7's expiry table with a carrier, A10's `Finite(0)` at `t = 0`, and `t` compared
+-- safely. The two rows at the largest `n` are the boundary: a `t` on each side of the
+-- point where `t * 1000000` wraps. See `scripted_duration_exceeds`. The rows after the
+-- `-2000` one combine the tables: a ceiling beside a default that decides, and a
+-- non-zero `legacy`, which in `Limits` mode no longer governs a process tool (D7).
+func row_expires(default: SessionLimit, ceiling: Ceiling, text: string, t: int, legacy: int) -> bool
+  tests [
+    ((NoDeadline, SameAsDefault, "{}", 9223372036854775807, 5), false),
+    ((NoDeadline, SameAsDefault, "{}", 0, 0), false),
+    ((Finite(0), SameAsDefault, "{}", 0, 0), true),
+    ((Finite(0), SameAsDefault, "{}", 0, 1000), true),
+    ((Finite(-1000000000), SameAsDefault, "{}", 0, 0), true),
+    ((Finite(30000000000), SameAsDefault, "{}", 30000, 0), false),
+    ((Finite(30000000000), SameAsDefault, "{}", 30001, 0), true),
+    ((Finite(1500000), SameAsDefault, "{}", 1, 0), false),
+    ((Finite(1500000), SameAsDefault, "{}", 2, 0), true),
+    ((Finite(1), SameAsDefault, "{}", 0, 0), false),
+    ((Finite(1), SameAsDefault, "{}", 1, 0), true),
+    ((Finite(9223372036854775807), SameAsDefault, "{}", 9223372036854, 0), false),
+    ((Finite(9223372036854775807), SameAsDefault, "{}", 9223372036855, 0), true),
+    ((Finite(30000000000), SameAsDefault, "{\"timeout_secs\":5}", 5000, 0), false),
+    ((Finite(30000000000), SameAsDefault, "{\"timeout_secs\":5}", 5001, 0), true),
+    ((NoDeadline, CeilingMs(3000), "{\"timeout_secs\":5}", 3000, 0), false),
+    ((NoDeadline, CeilingMs(3000), "{\"timeout_secs\":5}", 3001, 0), true),
+    ((Finite(-1000000000), SameAsDefault, "{}", -2000, 0), true),
+    ((NoDeadline, CeilingMs(3000), "{}", 9223372036854775807, 0), false),
+    ((Finite(1000000000), CeilingMs(3000), "{\"timeout_secs\":2}", 1500, 1000), false),
+    ((Finite(1000000000), CeilingMs(3000), "{\"timeout_secs\":2}", 2001, 5000), true),
+    ((Finite(30000000000), SameAsDefault, "{}", 30000, 1000), false),
+    ((Finite(30000000000), SameAsDefault, "{}", 30001, 60000), true),
+    ((Finite(30000000000), CeilingMs(300000), "{}", 30001, 0), true),
+    ((Finite(30000000000), SameAsDefault, "{\"timeout_secs\":60}", 30001, 0), true),
+    ((Finite(0), CeilingMs(3000), "{\"timeout_secs\":2}", 0, 0), false)
+  ]
+{
+  process_deadline_expires(carrier_of(default, ceiling, text), t, legacy)
+}
+
+-- A10: with no carrier the predicate is today's, so `timeout_ms: 0` is no deadline.
+func row_expires_no_carrier(t: int, legacy: int) -> bool
+  tests [
+    ((0, 0), false),
+    ((9223372036854775807, 0), false),
+    ((1000, 1000), false),
+    ((1001, 1000), true),
+    ((5, -1), false)
+  ]
+{
+  process_deadline_expires(None, t, legacy)
+}
+
+-- A9's projection for each resolved outcome: `ExplicitMs` records its value, and
+-- everything else records the legacy value it was handed, here a value no limit
+-- produces. An invalid request has no projection: D7 stops it before a `ToolInvocation`
+-- exists, and `row_resolve` pins that it is `ProcessInvalid`.
+func row_project(default: SessionLimit, ceiling: Ceiling, text: string) -> int
+  tests [
+    ((Finite(30000000000), SameAsDefault, "{\"timeout_secs\":29}"), 29000),
+    ((Finite(30000000000), SameAsDefault, "{\"timeout_secs\":30}"), 4242),
+    ((Finite(30000000000), SameAsDefault, "{\"timeout_secs\":60}"), 4242),
+    ((Finite(30000000000), SameAsDefault, "{}"), 4242),
+    ((Finite(1500000), SameAsDefault, "{\"timeout_secs\":1}"), 4242),
+    ((Finite(0), SameAsDefault, "{\"timeout_secs\":1}"), 4242),
+    ((NoDeadline, SameAsDefault, "{\"timeout_secs\":5}"), 5000),
+    ((NoDeadline, SameAsDefault, "{}"), 4242),
+    ((Finite(1000000000), CeilingMs(3000), "{\"timeout_secs\":4}"), 3000)
+  ]
+{
+  projected_timeout_ms(carrier_of(default, ceiling, text), 4242)
+}
+
+func row_project_no_carrier(legacy: int) -> int
+  tests [(0, 0), (4242, 4242)]
+{
+  projected_timeout_ms(None, legacy)
+}
