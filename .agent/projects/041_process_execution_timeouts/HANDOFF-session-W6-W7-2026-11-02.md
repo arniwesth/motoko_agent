@@ -193,7 +193,7 @@ All exist and are clean (`dirty=0`) unless noted:
 | `-041-w7` | `arniwesth/041-w7-argument-errors` | `6a93884b` | **#307 open**; keep until merged or closed. Has a gitignored `src/tui/node_modules` from a `bun install` |
 | `-041-singlegate`, `-041-d5-note`, `-041-hygiene` | — | — | merged |
 | `-pathguard`, `-pathguard2`, `-pg3` | — | — | #299/#300 closed; `-pg3` holds #303 |
-| `-handoff` | `docs/041-handoff-w6-w7` | `cd4b5d7b` | this file's pull request |
+| `-handoff` | `docs/041-handoff-w6-w7` | `6731b390` | this file (PR #308) |
 
 `-011-calibration-pilot` is **another session's**. Leave it alone.
 `-improving-experimentation` appeared during this session and is not mine; leave it alone.
@@ -218,4 +218,32 @@ search.** Let them stop: both stopped correctly when something was genuinely wro
 seven "fan-out" files were not under `src/core/`. For W7, C3 had held and every anchor was exact — so the
 table was short. **Measure it each time; do not assume either way.**
 
-Budget: this session used about 215 of 1200 steps
+Budget: this session used about 215 of 1200 steps.
+
+---
+
+## Immediate order of work for the next session
+
+1. **Operator: merge #307.** Then #303 at leisure — nothing in the plan waits on it.
+2. **Next session: there is no ready work.** Check the four upstream issues before anything else:
+
+       gh issue view 2035 --repo sunholo-data/ailang    # and 2036, 2034, 1878
+
+   All four were **OPEN** on 2026-11-02. W8 needs a released tag carrying **both** #2035 and #2036
+   (D3: one without the other unblocks nothing). W9 needs #2034. If nothing has closed with a release,
+   do not delegate — say so and stop. That is the correct outcome, not a failure.
+3. **When a task does unlock:** write a stand-alone brief under `tmp/041-orchestrator/briefs/`, with the
+   plan's section and the graph's criteria and note quoted verbatim, a **freshly measured** re-grounding
+   table at the delegate's exact base, `env -u AILANG_FS_SANDBOX` on every DST target, and the traps above.
+   Quote the pre-dispatch rule verbatim for anything touching `live_tool_outcome`.
+4. **R11's four weeks count from W7's merge**, not from W6's. W7 is the last item before W12 that moves
+   protected symbols, so the clock starts when #307 lands.
+
+## Two questions the operator should answer before W8
+
+- **ADR I2 vs the code: `Search`'s deadline disclosure.** I2 says `ReadFile` and `Search` keep
+  `effects: none`; `deadline_fault` reports `unknown` for every tool. W7 pinned today's bytes. Amend I2
+  or assign the fix to W13 explicitly — W13 is scoped for "A21 across both worlds" and will meet it.
+- **D8 and `event-vocabulary/4`.** W7 read an added variant as not a version change, on the precedent that
+  all three prior bumps were deletions. If you read D8 otherwise, `/5` costs six pinned strings in five
+  DST scripts and no profile bump.
