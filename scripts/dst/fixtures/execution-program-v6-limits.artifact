@@ -1,0 +1,47 @@
+execution-program/6
+digest	072540edb8d2dbaca7e9a80cc48c722b2d987b68a2634b8a60138341940ed356
+generator_id	gen.specimen
+generator_version	gv-2
+seed	23
+world.messages_and_policy	role=user\tmsg=hello\nrole=system\tmsg=be brief
+world.clock_epoch	17
+world.extension_profile	profile.specimen
+world.env	MOTOKO_SESSION_ID	dst-session-0001
+world.env	OPENAI_BASE_URL	https://api.example.com/v1
+world.env	MOTOKO_HEADLESS	headless-on
+world.env	PATH_WITH_BACKSLASH	C:\\tmp\\dir
+world.file	/w/seed/catalog.json	file	{"context_limits":{"m":71}}
+world.file	/w/seed/present-but-empty.json	file	
+world.file	/w/seed/empty-dir	dir	
+world.file	/w/seed/tab\tin path	file	line one\nline two\\end
+bounds	18	19	4096	21	22	20
+manifest.source_revision	rev-aa11
+manifest.toolchain	ailang 0.26.0 (pinned)
+manifest.abi_version	abi-7
+manifest.profile_id	profile-eight
+manifest.profile_version	pv-9
+manifest.event_vocabulary_version	vocab-10
+manifest.normalized_configuration	{"cfg":11}
+manifest.scan_root_commit	commit-12
+manifest.profile_rules_version	prv-13
+manifest.coverage_rules_version	crv-14
+manifest.attribution_rules_version	arv-15
+manifest.fault_catalogue_version	fcv-16
+manifest.package	pkg.alpha	1.2.3
+manifest.package	pkg.beta	4.5.6
+manifest.classifier_2	cls.one
+manifest.classifier_2	cls.two
+manifest.classifier_2	cls.three
+manifest.unrouted_field	unrouted.alpha
+manifest.scan_root	root/a
+manifest.scan_root	root/b
+process_limits	limits	30000000000	120000000000
+applied_faults	[]
+i	0	expect_provider	loop_v2	0	model.limits
+o	-1	0	ok	
+r	rq.provider.limits
+p	{"served":true,"prose":"limits","finish_reason":"stop","input_tokens":1,"output_tokens":2,"tool_calls":[],"error_code":"","error_message":""}
+i	1	expect_tool	loop_v2	call.limits	BashExec
+o	3	3	ok	
+r	tool call.limits BashExec {"cmd":"true","timeout_secs":60}
+p	{"result":"completed","content":"OUT","exit_code":0}

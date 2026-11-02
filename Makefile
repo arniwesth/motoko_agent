@@ -1377,6 +1377,8 @@ program_persistence:
 	         scripts/dst/fixtures/execution-program-v3.artifact \
 	         scripts/dst/fixtures/execution-program-v4.artifact \
 	         scripts/dst/fixtures/execution-program-v5.artifact \
+	         scripts/dst/fixtures/execution-program-v6.artifact \
+	         scripts/dst/fixtures/execution-program-v6-limits.artifact \
 	         scripts/dst/fixtures/execution-program-v0.artifact; do \
 		if [ ! -s "$$f" ]; then \
 			echo "FAIL: the frozen specimen $$f is missing or empty."; \
@@ -1386,8 +1388,8 @@ program_persistence:
 			exit 1; \
 		fi; \
 	done; \
-	echo "  ✓ all six frozen specimens are present ($$(wc -l < scripts/dst/fixtures/execution-program-v1.artifact | tr -d ' ') lines of v1 bytes, $$(wc -l < scripts/dst/fixtures/execution-program-v2.artifact | tr -d ' ') of v2, $$(wc -l < scripts/dst/fixtures/execution-program-v3.artifact | tr -d ' ') of v3 and $$(wc -l < scripts/dst/fixtures/execution-program-v4.artifact | tr -d ' ') of v4, all four now predating this build's encoder, plus $$(wc -l < scripts/dst/fixtures/execution-program-v5.artifact | tr -d ' ') lines of v5 bytes carrying the byte-identity assertion at the version this build writes)"; \
-	writers=$$(grep -rlE 'writeFile[A-Za-z]*\(\s*"?scripts/dst/fixtures|v1_fixture_path\(\)\s*,|v2_fixture_path\(\)\s*,|v3_fixture_path\(\)\s*,|v4_fixture_path\(\)\s*,|v5_fixture_path\(\)\s*,|v0_fixture_path\(\)\s*,' \
+	echo "  ✓ all eight frozen specimens are present ($$(wc -l < scripts/dst/fixtures/execution-program-v1.artifact | tr -d ' ') lines of v1 bytes, $$(wc -l < scripts/dst/fixtures/execution-program-v2.artifact | tr -d ' ') of v2, $$(wc -l < scripts/dst/fixtures/execution-program-v3.artifact | tr -d ' '), $$(wc -l < scripts/dst/fixtures/execution-program-v4.artifact | tr -d ' ') of v4 and $$(wc -l < scripts/dst/fixtures/execution-program-v5.artifact | tr -d ' ') of v5, all five now predating this build's encoder, plus $$(wc -l < scripts/dst/fixtures/execution-program-v6.artifact | tr -d ' ') lines of v6 bytes and $$(wc -l < scripts/dst/fixtures/execution-program-v6-limits.artifact | tr -d ' ') of Limits bytes carrying the byte-identity assertion at the version this build writes)"; \
+	writers=$$(grep -rlE 'writeFile[A-Za-z]*\(\s*"?scripts/dst/fixtures|v1_fixture_path\(\)\s*,|v2_fixture_path\(\)\s*,|v3_fixture_path\(\)\s*,|v4_fixture_path\(\)\s*,|v5_fixture_path\(\)\s*,|v6_fixture_path\(\)\s*,|v6_limits_fixture_path\(\)\s*,|v0_fixture_path\(\)\s*,' \
 	     src scripts --include=*.ail || true); \
 	if [ -n "$$writers" ]; then \
 		echo "FAIL: something in the tree writes to the frozen fixtures:"; \
@@ -2391,6 +2393,8 @@ world_state:
 	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry exit_code_witness scripts/dst/world_state_probe.ail < /dev/null; \
 	echo "  -- 034 W0.5 fault-disclosure witness (full caps; scratch workdir; rows e and f need a non-root user) --"; \
 	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry fault_disclosure_witness scripts/dst/world_state_probe.ail < /dev/null; \
+	echo "  -- 041 C2 guard: no live world leaves Legacy before W12 (reads a source file, so NOT part of main) --"; \
+	ailang run --caps IO,Env,FS,AI,Process,Net,SharedMem,Clock,Stream,Trace --ai-stub --entry c2_guard scripts/dst/world_state_probe.ail < /dev/null; \
 	echo "  -- provider class poison pair (AI withheld) --"; \
 	if ailang run --caps IO,Env,FS,Process,Net,SharedMem,Clock,Stream,Trace --entry main \
 	     scripts/dst/world_state_probe.ail < /dev/null > /dev/null 2>&1; then \

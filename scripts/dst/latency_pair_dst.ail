@@ -73,6 +73,7 @@ import std/list as List (length)
 import std/ai (Message, ToolCall)
 import std/option (Option, None, Some)
 import std/result (Result, Ok, Err)
+import src/core/process_limits (Legacy)
 import src/core/config (CostRates, VerificationConfig)
 import src/core/session as Session
 import src/core/session (TracedSessionResult)
@@ -249,7 +250,8 @@ pure func program_of(w: WorldState, initial: WorldState, tag: string) -> Executi
       -- persistence specimen.
       files: [],
       clock_epoch: initial.clock_ms,
-      extension_profile: "driver_only/${driver_only_version()}"
+      extension_profile: "driver_only/${driver_only_version()}",
+      process_limits: Legacy
     },
     bounds: { max_interactions: 256, max_chunks_per_interaction: 16,
               max_payload_bytes: 4096, max_resource_size: 4096,

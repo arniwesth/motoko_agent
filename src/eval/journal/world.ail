@@ -46,6 +46,7 @@ import std/result (Result, Ok, Err)
 import std/string (join)
 import src/core/ports (WorldState, ScriptedStep, ScriptedTool, empty_world_state)
 import src/core/fs_node (FsNode, FsFile, FsDir)
+import src/core/process_limits (Legacy, Limits)
 import src/eval/journal/reader (RunSelector, parse_lines, EndAt, CutoffBefore)
 import src/eval/journal/configuration (RecordedEnv, EnvPair, ServedFile, profile_config_content, eval_profile_config_path)
 import src/eval/journal/stopping (JournalWorld, RecordedCall, WorldTool, WorldRefusal, read_journal_world)
@@ -214,6 +215,18 @@ pure func test_world_equals_generator() -> bool
   tests [((), true)]
   {
     List.length(fxw_all()) == 37 && List.foldl(\acc f. acc && jw_agrees(f), true, fxw_all())
+  }
+
+-- 041 W5, ADR-002 R6. A journal holds no limits, so its world keeps the `Legacy` it
+-- inherits from `empty_world_state`, and that is correct and not an omission: replay
+-- serves what the journal recorded and does not re-resolve a request.
+pure func test_a_journal_world_is_legacy() -> bool
+  tests [((), true)]
+  {
+    match fixture_world_state(fxw_m3_selector_end(), 7) {
+      Err(_) => false,
+      Ok(w) => match w.process_limits { Legacy => true, Limits(_) => false }
+    }
   }
 
 -- The clean M2 world, literally: three continuation calls, four results in

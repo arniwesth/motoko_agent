@@ -100,6 +100,7 @@ import src/core/dst_interaction (
   approvals_served, wakes_served
 )
 import src/core/dst_program (ExecutionProgram, validate_program, program_rule, program_schema_version)
+import src/core/process_limits (Legacy)
 -- WI-D22: `InitialWorld.files` is kinded, so the fixtures here construct nodes.
 import src/core/fs_node (FsNode, FsFile, FsDir)
 import src/core/dst_result (
@@ -934,6 +935,11 @@ export pure func world_state_of(
                    -- this table — a replayed driver performs those again through
                    -- the same adapters, on top of this seed.
                    files: p.initial_world.files,
+                   -- 041 W5, D7. An input, from the program directly, for the same
+                   -- reason. THE COMPILER WILL NOT FLAG THIS LINE'S ABSENCE: this is a
+                   -- record update, so forgetting it replays a `Limits` program as
+                   -- `Legacy`. `scenario_the_limits_specimen_reaches_the_world` holds it.
+                   process_limits: p.initial_world.process_limits,
                    tools: tools,
                    -- WI-D24. The extension-effect queue, derived from the log
                    -- exactly as `tools` is. `holder_ext_id` is deliberately NOT
@@ -1292,7 +1298,8 @@ pure func fixture_program() -> ExecutionProgram {
                      files: [{ path: "/w/seed.json", node: FsFile("{\"seeded\":true}") },
                              { path: "/w/seed-dir", node: FsDir }],
                      clock_epoch: 5,
-                     extension_profile: "driver_only/1" },
+                     extension_profile: "driver_only/1",
+                     process_limits: Legacy },
     bounds: { max_interactions: 64, max_chunks_per_interaction: 4, max_payload_bytes: 4096,
               max_resource_size: 4096, max_clock_advance_ms: 1000, chunk_draw_hi: 3 },
     manifest: fixture_manifest(),

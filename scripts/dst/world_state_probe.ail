@@ -49,14 +49,14 @@
 module scripts/dst/world_state_probe
 
 import std/io (println, exit)
-import std/list as List (length)
+import std/list as List (length, filter)
 import std/string (contains, trim, substring)
 import std/string as Str (length)
 import std/ai (Message, ToolCall, StreamChunk)
 import std/json (Json, jo, ja, kv, js, jb, encode, decode, get, asString, asNumber, asArray)
 import std/process (exec)
 import std/bytes (toString)
-import std/fs (writeFileResult, fileExists)
+import std/fs (writeFileResult, fileExists, readFileResult)
 import std/option (Option, None, Some)
 import std/result (Result, Ok, Err)
 import src/core/config (CostRates, VerificationConfig)
@@ -101,6 +101,7 @@ import src/core/world_ordinal (request_class_id)
 import src/core/tool_dispatch_adapter (dispatch_one, dispatch_one_typed)
 import src/core/tool_runtime (echoed_tool_name)
 import src/core/fs_node (FsNode, FsFile, FsDir)
+import src/core/process_limits (Legacy, Limits)
 import src/core/dst_interaction (Interaction, interaction_kind, count_kind)
 import src/core/types (Msg)
 import src/core/tool_contract (ToolCallEnvelope)
@@ -1491,4 +1492,38 @@ func w05_doubled(s: string, times: int) -> string {
 func w05_not_evaluated(row: string, what: string) -> bool ! {IO} {
   let _ = println("  NOT EVALUATED: row ${row} (${what}) — running as root, which ignores directory modes; this is not a pass");
   true
+}
+
+-- 041 PLAN-001 C2'S GUARD. ADDED BY W5, REMOVED BY W12, which is what activates the
+-- mode. `LiveAI` in `session.ported_provider` is the one switch and it reads
+-- `empty_world_state()`, so "the live world is `Legacy`" is those two facts, and the
+-- private function is held by its source line rather than by exporting it for a test.
+-- The offered schema is the other half: a model that is not offered `timeout_secs` has
+-- not been told a limit it does not have. The tool count keeps that half from passing on
+-- an empty list, and `BashExec` is the schema W12 changes.
+--
+-- ITS OWN ENTRY POINT, for `exit_code_witness`'s reason. It reads a source file, and
+-- `main` must keep completing with FS withheld: that is `make world_state`'s poison pair.
+export func c2_guard() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
+  let empty_is_legacy = match empty_world_state().process_limits { Legacy => true, Limits(_) => false };
+  let ok_world = check("C2: empty_world_state, the world LiveAI reads, is Legacy", empty_is_legacy,
+                       "standing rule 6: no Limits in a live world before W12");
+  let ok_switch = check("C2: LiveAI still reads empty_world_state",
+                        match readFileResult("src/core/session.ail") {
+                          Ok(src) => contains(src, "LiveAI => { ports: live_ports(rt), world: empty_world_state() },"),
+                          Err(_) => false
+                        },
+                        "session.ported_provider's LiveAI arm changed: it is C2's only switch, and only W12 may move it");
+  let offered = tools_with_extensions(rt_with(passthrough_pre_step, "probe_c2"));
+  let advertising = List.filter(\t. contains(t.parameters, "timeout_secs"), offered);
+  let bash_offered = List.filter(\t. t.name == "BashExec" && contains(t.parameters, "cmd"), offered);
+  let ok_schema = check("C2: the schema offered to a live run has no timeout_secs",
+                        List.length(advertising) == 0 && List.length(bash_offered) == 1,
+                        "offered=${show(List.length(offered))} advertising=${show(List.length(advertising))} bash=${show(List.length(bash_offered))}");
+  if ok_world && ok_switch && ok_schema then
+    println("c2_guard PASS")
+  else {
+    let _ = println("c2_guard FAIL");
+    exit(1)
+  }
 }

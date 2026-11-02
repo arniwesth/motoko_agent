@@ -112,6 +112,7 @@ import std/list as List (length, map, foldl, filter)
 import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
 import std/string (join)
+import src/core/process_limits (Legacy)
 import src/core/ports (WorldState)
 import src/core/phase_vocab (LedgerTrace)
 import src/core/dst_interaction (Interaction, IdentityBody, ProviderIdentity, ToolIdentity, EnvironmentReadIdentity, OutcomeOk)
@@ -656,7 +657,7 @@ pure func test_m14_k2_positions() -> bool
 pure func cc_program_stub() -> ExecutionProgram {
   {
     schema_version: "execution-program/4", generator_id: "fx", generator_version: "fx", seed: 0,
-    initial_world: { messages_and_policy: "{}", synthetic_environment: [], files: [], clock_epoch: 0, extension_profile: "fx" },
+    initial_world: { messages_and_policy: "{}", synthetic_environment: [], files: [], clock_epoch: 0, extension_profile: "fx", process_limits: Legacy },
     bounds: { max_interactions: 0, max_chunks_per_interaction: 0, max_payload_bytes: 0, max_resource_size: 0,
               max_clock_advance_ms: 0, chunk_draw_hi: 0 },
     manifest: cc_manifest_stub(),

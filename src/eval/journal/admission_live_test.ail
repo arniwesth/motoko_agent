@@ -74,6 +74,8 @@ import src/core/dst_driver_only (driver_only_manifest)
 import src/core/session (TracedSessionResult)
 import src/core/dst_fault_catalogue (required_class_ids)
 import src/core/dst_program (ExecutionProgram)
+import src/core/process_limits (LimitMode, Legacy)
+import src/core/dst_persistence (encode_artifact, Encoded, EncodeRefused, decode_artifact, ProgramDecoded, ProgramDecodeRefused)
 import src/core/dst_replay (strict_replay_findings, replay_rule, world_state_of)
 import src/eval/journal/stopping (JournalWorld, EndSuspended, EndFinalize)
 import src/eval/journal/world (journal_world_state, fixture_journal_world, tool_label)
@@ -145,7 +147,7 @@ func p16_end_case(name: string, f: WorldFixture, want_end: string) -> bool ! {AI
       let _ = lt_print_report(r);
       let program_ok = match r.program {
         None => false,
-        Some(p) => p.generator_id == "journal_admission" && p.schema_version == "execution-program/5"
+        Some(p) => p.generator_id == "journal_admission" && p.schema_version == "execution-program/6"
                      && List.length(p.interactions) == r.interactions && p.initial_world.clock_epoch == lt_epoch()
       };
       lt_report(name, report_ok(r) && r.calls == 3 && r.observed_end == want_end && r.expected_end == want_end
@@ -339,14 +341,47 @@ func r6_control(f: WorldFixture, jw: JournalWorld, p: ExecutionProgram, at: int)
   }
 }
 
+pure func r6_is_legacy(m: LimitMode) -> bool {
+  match m { Legacy => true, _ => false }
+}
+
+-- 041 W5, A13, through a real run. The program holding `timeout_secs: 600`, `0` and
+-- "soon" goes through the artifact's real bytes and back, and strict replay of what came
+-- back still serves the recording: the requests are ignored and the mode is `Legacy`.
+func r6_transcoded_replays(jw: JournalWorld, p: ExecutionProgram) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  match encode_artifact(p) {
+    EncodeRefused(_) => lt_report("r6_transcoded_replays_strict (encode refused)", false),
+    Encoded(bytes) => match decode_artifact(bytes) {
+      ProgramDecodeRefused(_) => lt_report("r6_transcoded_replays_strict (decode refused)", false),
+      ProgramDecoded(back) => match world_state_of(back, required_class_ids()) {
+        Err(_) => lt_report("r6_transcoded_replays_strict (world_state_of refused)", false),
+        Ok(w) => {
+          let run = admission_run(jw, w, ".motoko/eval-admission-workdir");
+          let ms = strict_replay_findings(back.interactions, run.world.log);
+          lt_report("r6_transcoded_replays_strict",
+            List.length(ms) == 0 && List.length(run.world.log) == List.length(p.interactions)
+              && r6_is_legacy(back.initial_world.process_limits) && r6_is_legacy(run.world.process_limits)
+              && contains(bytes, "\nprocess_limits\tlegacy\n") && contains(bytes, "timeout_secs"))
+        }
+      }
+    }
+  }
+}
+
 func r6_post_change(f: WorldFixture) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   match fixture_journal_world(f) {
     Err(_) => lt_report("r6_post_change_admits (fixture)", false),
     Ok(jw) => {
       let r = admit("r6_post_change_admits", SyntheticEntry, lt_ids(jw, "a0a0a0-dev"), lt_cmp(f.name), jw, lt_epoch(), ".motoko/eval-admission-workdir");
       let _ = lt_print_report(r);
+      -- 041 W5 TIGHTENED THIS (A14d): the program admission writes is `Legacy`, by the
+      -- field, and it holds the current schema. Before the mode existed this row could
+      -- only say the program was served.
       let a = lt_report("r6_post_change_admits", report_ok(r) && r.observed_end == "EndSuspended(3)" && r.expected_end == "EndSuspended(3)"
-        && (match r.program { Some(p) => r6_all_completed(p), None => false }));
+        && (match r.program {
+              Some(p) => r6_all_completed(p) && r6_is_legacy(p.initial_world.process_limits) && p.schema_version == "execution-program/6",
+              None => false
+            }));
       match r.program {
         None => { let _ = lt_report("r6_post_change_replays_strict (no program)", false); false },
         Some(p) => match world_state_of(p, required_class_ids()) {
@@ -355,7 +390,8 @@ func r6_post_change(f: WorldFixture) -> bool ! {AI, Clock, Env, FS, IO, Net, Pro
             let run = admission_run(jw, w1, ".motoko/eval-admission-workdir");
             let ms = strict_replay_findings(p.interactions, run.world.log);
             let _ = println("r6_replay: interactions=${show(List.length(run.world.log))} findings=[${join(",", List.map(replay_rule, ms))}]");
-            let b = lt_report("r6_post_change_replays_strict", List.length(ms) == 0 && List.length(run.world.log) == r.interactions);
+            let b = lt_report("r6_post_change_replays_strict", List.length(ms) == 0 && List.length(run.world.log) == r.interactions
+              && r6_is_legacy(w1.process_limits) && r6_is_legacy(run.world.process_limits));
             let payloads = r6_payloads(p.interactions);
             let c = lt_report("r6_post_change_content_served",
               lt_strs_eq(r6_tool_labels(p, p.interactions), f.tool_queue)
@@ -367,7 +403,8 @@ func r6_post_change(f: WorldFixture) -> bool ! {AI, Clock, Env, FS, IO, Net, Pro
             let d2 = r6_control(f, jw, p, 1);
             let d3 = r6_control(f, jw, p, 2);
             let d = lt_report("r6_post_change_altered_content_seen", d1 && d2 && d3);
-            a && b && c && d
+            let e = r6_transcoded_replays(jw, p);
+            a && b && c && d && e
           }
         }
       }
