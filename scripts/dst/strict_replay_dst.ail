@@ -1831,6 +1831,16 @@ func invalid_request_scenario() -> bool ! {AI, Clock, Env, FS, IO, Net, Process,
                         && records_named(null_run.trace.records, "ToolArgumentsInvalid") == 0
                         && List.length(null_run.world.tools) == 0,
                       content_for(messages_of(null_run), "one"));
+  -- E3's last row and D4: `1e400` fails to decode, so it never reaches the resolver and gets the
+  -- existing message. Nothing here is an invalid request, and nothing launches.
+  let huge_run = run_recording("srlm_bad", invalid_world("{\"cmd\":\"true\",\"timeout_secs\":1e400}"), 12);
+  let huge_c = content_for(messages_of(huge_run), "one");
+  let ok_huge = check("A5: 1e400 is undecodable, gets the existing message and never launches",
+                      field_in(huge_c, "code") == "\"arguments_undecodable\""
+                        && records_named(huge_run.trace.records, "ToolArgumentsUndecodable") == 1
+                        && records_named(huge_run.trace.records, "ToolArgumentsInvalid") == 0
+                        && List.length(huge_run.world.tools) == 1,
+                      huge_c);
   -- A17: bounded, so it stays whole JSON, under the cap, with its fields.
   let long_run = run_recording("srlm_bad", invalid_world("{\"cmd\":\"true\",\"timeout_secs\":\"${repeat("y", 70000)}\"}"), 12);
   let long_c = content_for(messages_of(long_run), "one");
@@ -1843,7 +1853,7 @@ func invalid_request_scenario() -> bool ! {AI, Clock, Env, FS, IO, Net, Process,
                         row_holds(legacy_run.world.log, legacy_row)
                           && records_named(legacy_run.trace.records, "ToolArgumentsInvalid") == 0,
                         row_seen(legacy_run.world.log, legacy_row));
-  ok_stopped && ok_events && ok_told && ok_disclosed && ok_forms && ok_replay && ok_null && ok_long && ok_legacy
+  ok_stopped && ok_events && ok_told && ok_disclosed && ok_forms && ok_replay && ok_null && ok_huge && ok_long && ok_legacy
 }
 
 -- A scripted fault, in the shape `scripted_tool_outcome` serves.
