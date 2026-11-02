@@ -49,6 +49,7 @@ import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
 import std/string (contains)
 import pkg/sunholo/motoko_ext_abi/types (BudgetPlan)
+import src/core/process_limits (Legacy)
 import src/core/ports (WorldState, ToolInvocation, ToolFailed, empty_world_state, encode_tool_outcome)
 import src/core/dst_interaction (Interaction, ProviderIdentity, ToolIdentity, EnvironmentReadIdentity, OutcomeOk, OutcomeFault)
 import src/core/dst_fault_catalogue (fault_class_tool_failed, required_class_ids)
@@ -144,7 +145,8 @@ pure func lt_program(log: [Interaction], w: WorldState) -> ExecutionProgram {
       synthetic_environment: w.env,
       files: w.files,
       clock_epoch: w.clock_ms,
-      extension_profile: "driver_only/${driver_only_version()}"
+      extension_profile: "driver_only/${driver_only_version()}",
+      process_limits: Legacy
     },
     bounds: { max_interactions: 256, max_chunks_per_interaction: 16, max_payload_bytes: 4096,
               max_resource_size: 4096, max_clock_advance_ms: 60000, chunk_draw_hi: 0 },

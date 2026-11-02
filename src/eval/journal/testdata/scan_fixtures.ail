@@ -15,6 +15,7 @@
 module src/eval/journal/testdata/scan_fixtures
 
 import std/string (repeat, concat)
+import src/core/process_limits (Legacy)
 import src/core/fs_node (FsNode, FsFile, FsDir)
 import src/core/dst_interaction (
   Interaction, CausalIdentity, ProviderIdentity, ToolIdentity, EnvironmentReadIdentity,
@@ -133,7 +134,8 @@ export pure func fxs_program(p: ProgramParts) -> ExecutionProgram {
                               { key: "MOTOKO_SESSION_ID", value: "sess_fx" }],
       files: [{ path: ".motoko/eval-profile/config.json", node: FsFile(p.file_content) }],
       clock_epoch: 1789000000000,
-      extension_profile: "driver_only/fx"
+      extension_profile: "driver_only/fx",
+      process_limits: Legacy
     },
     bounds: { max_interactions: 3, max_chunks_per_interaction: 1, max_payload_bytes: 16,
               max_resource_size: 0, max_clock_advance_ms: 1, chunk_draw_hi: 0 },

@@ -23,6 +23,7 @@ import std/io (println, exit)
 import std/list as List (length)
 
 -- WI-D22: `InitialWorld.files` is kinded.
+import src/core/process_limits (Legacy)
 import src/core/fs_node (FsNode, FsFile, FsDir)
 import src/core/dst_program (
   ExecutionProgram,
@@ -90,7 +91,7 @@ pure func fixture_world() -> InitialWorld {
     -- instead of only through its empty case.
     files: [{ path: "/w/fixture.json", node: FsFile("{}") }],
     clock_epoch: 0,
-    extension_profile: "driver_only/1" }
+    extension_profile: "driver_only/1", process_limits: Legacy }
 }
 
 pure func fixture_bounds() -> GeneratorBounds {

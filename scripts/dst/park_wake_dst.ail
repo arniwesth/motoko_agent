@@ -37,6 +37,7 @@ import std/string (contains, startsWith)
 import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
 import std/ai (Message, ToolCall)
+import src/core/process_limits (Legacy)
 import src/core/config (CostRates)
 import pkg/sunholo/motoko_ext_abi/types (
   BudgetPlan, ExtRuntime, PureCtx, AiCtx, ProviderCtx, InterceptCtx, ProcessCtx, VerificationConfig,
@@ -666,7 +667,8 @@ pure func program_of(w: WorldState, initial: WorldState) -> ExecutionProgram {
       synthetic_environment: initial.env,
       files: [],
       clock_epoch: initial.clock_ms,
-      extension_profile: "driver_only/${driver_only_version()}"
+      extension_profile: "driver_only/${driver_only_version()}",
+      process_limits: Legacy
     },
     bounds: {
       max_interactions: 256,

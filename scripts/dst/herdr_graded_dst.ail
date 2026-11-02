@@ -33,6 +33,7 @@ import std/list as List (length)
 import std/string (contains)
 import std/ai (Message, ToolCall)
 import std/result (Ok, Err)
+import src/core/process_limits (Legacy)
 import src/core/config (CostRates, VerificationConfig)
 import src/core/session as Session
 import src/core/session (TracedSessionResult)
@@ -411,7 +412,8 @@ pure func graded_program(w: WorldState, initial: WorldState) -> ExecutionProgram
       synthetic_environment: initial.env,
       files: [],
       clock_epoch: initial.clock_ms,
-      extension_profile: "driver_plus_herdr/8"
+      extension_profile: "driver_plus_herdr/8",
+      process_limits: Legacy
     },
     bounds: {
       max_interactions: 256,
