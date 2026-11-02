@@ -488,12 +488,26 @@ func validate_path_common(tool: string, id: string, path: string, workdir: strin
       else {
         let guard_script = "set -eu\nwd=$(realpath \"$1\")\nrel=\"$2\"\njoined=\"$wd/$rel\"\ntarget=$(realpath -m \"$joined\")\ncase \"$target\" in\n  \"$wd\"|\"$wd\"/*) ;;\n  *) exit 43 ;;\nesac\nif [ -e \"$joined\" ]; then\n  resolved=$(realpath \"$joined\")\n  case \"$resolved\" in\n    \"$wd\"|\"$wd\"/*) ;;\n    *) exit 44 ;;\n  esac\nfi\n";
         -- exec is Ok for ANY exit code (Err only when bash cannot run), so the
-        -- guard's verdict is its exit code: 43/44 mean the path escapes. Any
-        -- other failure is let through as before: `realpath -m` is GNU-only,
-        -- and refusing on it would refuse every path where it is missing.
-        match exec("bash", ["-lc", guard_script, "motoko-path-guard", workdir, stripped]) {
-          Ok(out) => if out.exitCode == 43 || out.exitCode == 44 then Err(path_error(id, tool, "path escapes workspace: ${path}")) else Ok(()),
-          Err(_) => Err(path_error(id, tool, "path escapes workspace: ${path}"))
+        -- guard's verdict is its exit code. FAIL CLOSED: only 0 lets the path
+        -- through. 43/44 are claims about the path. Everything else, and an
+        -- exec Err, says the guard did not decide: a claim about the environment,
+        -- worded differently so that nobody changes a good path to work around
+        -- a missing binary. `realpath -m` is GNU-only, so a host with only BSD
+        -- `realpath` (stock macOS) refuses every path here, and the guard's
+        -- stderr in the message says why.
+        -- An empty workdir means the process cwd, as in resolve_workdir_path;
+        -- `realpath ""` fails, which would refuse every path.
+        let guard_wd = if workdir == "" then "." else workdir;
+        match exec("bash", ["-lc", guard_script, "motoko-path-guard", guard_wd, stripped]) {
+          Ok(out) =>
+            if out.exitCode == 0 then Ok(())
+            else if out.exitCode == 43 || out.exitCode == 44 then Err(path_error(id, tool, "path escapes workspace: ${path}"))
+            else {
+              let err = trim(toString(out.stderr));
+              let shown = if length(err) > 200 then substring(err, 0, 200) else err;
+              Err(path_error(id, tool, "path guard could not run (exit ${show(out.exitCode)}), so the path was refused; this is a fault in the environment, not in the path: ${path}: ${shown}"))
+            },
+          Err(err) => Err(path_error(id, tool, "path guard could not run (${process_error_to_string(err)}), so the path was refused; this is a fault in the environment, not in the path: ${path}"))
         }
       }
     }
