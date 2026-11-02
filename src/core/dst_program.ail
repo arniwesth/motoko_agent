@@ -31,12 +31,15 @@ module src/core/dst_program
 import std/list as List (length)
 import std/string as Str (length)
 import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
 import src/core/dst_profile (ExecutionManifest)
 import src/core/dst_generator (GeneratorBounds)
 -- WI-D22. `InitialWorld.files` is kinded, and `FsNode` lives in a module that
 -- imports std and nothing else precisely so that THIS module can name it without
 -- importing the port layer. See `src/core/fs_node`'s header.
 import src/core/fs_node (FsNode, FsFile, FsDir)
+-- 041 W5, C1: the mode lives in a leaf so this module stays free of port imports.
+import src/core/process_limits (LimitMode, Legacy, Limits, SessionLimit, Finite, NoDeadline, Ceiling, CeilingMs, SameAsDefault)
 import src/core/dst_interaction (
   IdentityBody,
   ProviderIdentity, ToolIdentity, ApprovalIdentity, WakeIdentity, ExtensionEffectIdentity,
@@ -160,7 +163,29 @@ import src/core/dst_interaction (
 -- and 031's plan carries the note that P2.1 renumbers. The strict byte-identity
 -- assertion moves to v5, frozen BY this encoder; the v4 bytes are untouched and
 -- now decode as a predecessor.
-export pure func program_schema_version() -> string { "execution-program/5" }
+--
+-- 041 PLAN-001 W5 MOVED THIS TO `execution-program/6`, with one payload:
+--
+--   `InitialWorld.process_limits`  the program's mode (041 ADR-002 D7): `legacy`,
+--                             or a default and ceiling as integer nanoseconds. It
+--                             is a version-gated REQUIRED header line, and absence
+--                             before v6 decodes to `Legacy`. That is a DEFAULT and
+--                             it is admissible by the rule above: every older
+--                             version took its limit from
+--                             `MOTOKO_TOOL_TIMEOUT_MS` and ignored a request, and
+--                             that is what `Legacy` means. At v6 absence is
+--                             `MissingSection`, because "an old program" and "a new
+--                             program that lost its line" are different things.
+--
+-- THE MODE IS THE FIELD, NEVER THE VERSION. The encoder always writes the field and
+-- stamps the version it writes, so `Legacy` survives decode, encode and decode under
+-- any later version. Reading "v6 means limits" off the version would turn a
+-- transcoded old recording into a program it never was. Every writer in this tree
+-- stamps `legacy` until 041 W12, and generators stay `legacy` past that (D7).
+--
+-- The strict byte-identity assertion moves to v6, frozen BY this encoder; the v5
+-- bytes are untouched and now decode as a predecessor.
+export pure func program_schema_version() -> string { "execution-program/6" }
 
 -- Every schema version this build can decode. A migration extends this list
 -- and keeps the old decode path, or it does not extend it and old programs
@@ -181,7 +206,7 @@ export pure func program_schema_version() -> string { "execution-program/5" }
 -- pins the relationship between them.
 export pure func decodable_schema_versions() -> [string] {
   ["execution-program/1", "execution-program/2", "execution-program/3", "execution-program/4",
-   program_schema_version()]
+   "execution-program/5", program_schema_version()]
 }
 
 -- ---------------------------------------------------------------------------
@@ -216,7 +241,10 @@ export type InitialWorld = {
   synthetic_environment: [{ key: string, value: string }],
   files: [{ path: string, node: FsNode }],
   clock_epoch: int,
-  extension_profile: string
+  extension_profile: string,
+  -- 041 ADR-002 D7. The mode's only home in a program: `world_state_of` copies it
+  -- into the world, and nothing infers it. See `program_schema_version`.
+  process_limits: LimitMode
 }
 
 -- D2: "Each generator schema declares hard bounds for interactions, stream
@@ -324,6 +352,7 @@ export type ProgramRejection
   -- 034 W1.2: the world-truth list's two structural rules.
   | AppliedFaultNotATool(int, string)          -- listed ordinal, what it names
   | AppliedFaultRepeated(int)                  -- the ordinal listed twice
+  | CeilingInvalid(int, CeilingDefect)         -- 041 W5: the milliseconds, and why
 
 export pure func program_rule(r: ProgramRejection) -> string {
   match r {
@@ -341,7 +370,8 @@ export pure func program_rule(r: ProgramRejection) -> string {
     OutcomeStatusDisagreesWithFault(_, _) => "program-outcome-status-disagrees-with-fault",
     EmptyProgram => "program-empty",
     AppliedFaultNotATool(_, _) => "program-applied-fault-not-a-tool",
-    AppliedFaultRepeated(_) => "program-applied-fault-repeated"
+    AppliedFaultRepeated(_) => "program-applied-fault-repeated",
+    CeilingInvalid(_, _) => "program-ceiling-invalid"
   }
 }
 
@@ -376,7 +406,9 @@ export pure func program_message(r: ProgramRejection) -> string {
     AppliedFaultNotATool(ord, what) =>
       "[program-applied-fault-not-a-tool] applied_faults lists ordinal ${ord}, which ${what}; the world-truth list names tool interactions whose fault applied its effect anyway (034 ADR-001 D4), and only a tool dispatch has an effect the driver's tool queue can apply",
     AppliedFaultRepeated(ord) =>
-      "[program-applied-fault-repeated] applied_faults lists ordinal ${ord} more than once; the list is a set of interactions, and a repeat would count one applied effect twice"
+      "[program-applied-fault-repeated] applied_faults lists ordinal ${ord} more than once; the list is a set of interactions, and a repeat would count one applied effect twice",
+    CeilingInvalid(ms, defect) =>
+      "[program-ceiling-invalid] initial_world.process_limits holds CeilingMs(${ms}), which is ${ceiling_defect_text(defect)}; 041 ADR-002 D2 and D7 require a ceiling to be positive, a whole number of milliseconds, convertible to nanoseconds and at or above a finite default, because the resolver's clamp would otherwise bound a request below the limit a call with no request gets"
   }
 }
 
@@ -424,6 +456,72 @@ pure func validate_initial_world(w: InitialWorld) -> [ProgramRejection] {
   require_initial(w.messages_and_policy, "messages_and_policy")
     ++ require_initial(w.extension_profile, "extension_profile")
     ++ (if w.clock_epoch < 0 then [NegativeTime(-1, "initial_world.clock_epoch", w.clock_epoch)] else [])
+    ++ validate_process_limits(w.process_limits)
+}
+
+-- contracts: SKIPPED — matches a nested sum holding a record, which the Z3 fragment does not encode.
+pure func validate_process_limits(mode: LimitMode) -> [ProgramRejection] {
+  match mode {
+    Legacy => [],
+    Limits(l) => match l.ceiling {
+      SameAsDefault => [],
+      CeilingMs(ms) => match ceiling_ms_defect(l.default, ms) {
+        Some(defect) => [CeilingInvalid(ms, defect)],
+        None => []
+      }
+    }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- 041 W5: what makes a ceiling invalid
+-- ---------------------------------------------------------------------------
+
+-- D7's four cases, stated once and read by both `validate_program` and the
+-- decoder. A record holds whole milliseconds by its type, so `CeilingNotWholeMs`
+-- can only come from the nanoseconds in the header line, and `CeilingTooLarge` has
+-- two sources: text too long for an int, and milliseconds whose nanoseconds overflow.
+export type CeilingDefect = CeilingNotPositive | CeilingNotWholeMs | CeilingTooLarge | CeilingBelowDefault
+
+export pure func ceiling_defect_text(d: CeilingDefect) -> string
+  ensures { result != "" }
+{
+  match d {
+    CeilingNotPositive => "not positive",
+    CeilingNotWholeMs => "not a whole number of milliseconds",
+    CeilingTooLarge => "too large to convert between milliseconds and nanoseconds",
+    CeilingBelowDefault => "below the finite default"
+  }
+}
+
+-- The largest milliseconds whose nanoseconds fit an int: `9223372036854775807 / 1000000`.
+export pure func max_ceiling_ms() -> int
+  ensures { result > 0 }
+{ 9223372036854 }
+
+-- `NoDeadline` has nothing to be below (D2's table: a ceiling alone bounds a request
+-- there). `Finite(d)` keeps D2's native domain, so a non-positive default is not a
+-- defect and is simply below every valid ceiling.
+-- contracts: SKIPPED — returns an Option over a sum, which the Z3 fragment does not encode.
+export pure func ceiling_ms_defect(default: SessionLimit, ms: int) -> Option[CeilingDefect] {
+  if ms <= 0 then Some(CeilingNotPositive)
+  else if ms > max_ceiling_ms() then Some(CeilingTooLarge)
+  else match default {
+    NoDeadline => None,
+    Finite(d) => if ms * 1000000 < d then Some(CeilingBelowDefault) else None
+  }
+}
+
+-- The header's nanoseconds as `CeilingMs`, or the defect that refuses them. The
+-- caller has the digits; text too long for an int is its `CeilingTooLarge`.
+-- contracts: SKIPPED — returns a sum holding a sum, which the Z3 fragment does not encode.
+export pure func ceiling_of_ns(default: SessionLimit, ns: int) -> Result[int, CeilingDefect] {
+  if ns <= 0 then Err(CeilingNotPositive)
+  else if ns % 1000000 != 0 then Err(CeilingNotWholeMs)
+  else match ceiling_ms_defect(default, ns / 1000000) {
+    Some(defect) => Err(defect),
+    None => Ok(ns / 1000000)
+  }
 }
 
 -- Per-class identity component discipline (D2's per-class identity fields).
@@ -802,9 +900,11 @@ pure func test_current_schema_is_decodable_and_an_unknown_one_is_not() -> bool
       && contains_str(decodable_schema_versions(), "execution-program/3")
       -- 034 W1.2: and v4 across the fourth bump, for the same reason.
       && contains_str(decodable_schema_versions(), "execution-program/4")
-      && List.length(decodable_schema_versions()) == 5
-      -- And the bump actually happened: this build does not WRITE v4.
-      && program_schema_version() == "execution-program/5"
+      -- 041 W5: and v5 across the fifth bump, for the same reason.
+      && contains_str(decodable_schema_versions(), "execution-program/5")
+      && List.length(decodable_schema_versions()) == 6
+      -- And the bump actually happened: this build does not WRITE v5.
+      && program_schema_version() == "execution-program/6"
   }
 
 -- WI-D21. THE `ExtPorts.tool_handle` BRIDGE BUILDS AN INVOCATION THIS VALIDATOR

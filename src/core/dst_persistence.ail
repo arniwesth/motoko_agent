@@ -180,8 +180,11 @@ import src/core/dst_program (
   InitialWorld,
   DiscoveryConfig,
   program_schema_version,
-  decodable_schema_versions
+  decodable_schema_versions,
+  CeilingDefect, CeilingNotPositive, CeilingNotWholeMs, CeilingTooLarge, CeilingBelowDefault,
+  ceiling_defect_text, ceiling_of_ns
 )
+import src/core/process_limits (LimitMode, Legacy, Limits, SessionLimit, Finite, NoDeadline, Ceiling, CeilingMs, SameAsDefault)
 import src/core/dst_generator (GeneratorBounds)
 -- WI-D22. The `world.file` lines and the kind vocabulary `ext_world`'s JSON
 -- codec shares with this one — see `src/core/fs_node`'s header for why the two
@@ -265,6 +268,11 @@ export type DecodeRefusal
   -- forbid them at every consumer instead of once, here.
   | UnknownFileKind(int, string)        -- line, kind
   | DirectoryCarriesContent(int, string) -- line, path
+  -- 041 W5. The `process_limits` line: a shape that is neither of C5's two, and a
+  -- ceiling D7 refuses. The second names the defect in its rule, so a row for one
+  -- of the four cases cannot go green on another.
+  | MalformedProcessLimits(int, string)  -- line, the first field
+  | InvalidCeiling(int, string, CeilingDefect) -- line, the text, the defect
 
 export pure func decode_rule(r: DecodeRefusal) -> string {
   match r {
@@ -281,7 +289,12 @@ export pure func decode_rule(r: DecodeRefusal) -> string {
     UnknownOutcomeStatus(_, _) => "artifact-unknown-outcome-status",
     IncompleteInteraction(_, _) => "artifact-incomplete-interaction",
     UnknownFileKind(_, _) => "artifact-unknown-file-kind",
-    DirectoryCarriesContent(_, _) => "artifact-directory-carries-content"
+    DirectoryCarriesContent(_, _) => "artifact-directory-carries-content",
+    MalformedProcessLimits(_, _) => "artifact-malformed-process-limits",
+    InvalidCeiling(_, _, CeilingNotPositive) => "artifact-ceiling-not-positive",
+    InvalidCeiling(_, _, CeilingNotWholeMs) => "artifact-ceiling-not-whole-ms",
+    InvalidCeiling(_, _, CeilingTooLarge) => "artifact-ceiling-too-large",
+    InvalidCeiling(_, _, CeilingBelowDefault) => "artifact-ceiling-below-default"
   }
 }
 
@@ -313,6 +326,10 @@ export pure func decode_message(r: DecodeRefusal) -> string {
       "[artifact-incomplete-interaction] interaction #${ord} has no ${what} line; every interaction records an identity, an outcome, a request projection and a payload, and an absent one is not an empty one",
     UnknownFileKind(n, k) =>
       "[artifact-unknown-file-kind] line ${n} declares initial-world file kind '${k}', and this build defines ${join_kinds(all_fs_kinds())}. There is NO FALLBACK here and that is a different answer from the one ext_world's world-token codec gives on the same question: a token written by an older build carries no kind at all and every entry it could have written was a file, so that codec falls back to a file. No artifact predates 'world.file' — it arrived with execution-program/2 — so a kind this build does not know is a newer schema or a corrupted file, and inventing a node for it would be a decoder supplying a value the encoder never wrote",
+    MalformedProcessLimits(n, first) =>
+      "[artifact-malformed-process-limits] line ${n} opens the process_limits line with '${first}'; 041 C5 gives it two shapes, `legacy` and `limits<TAB><default><TAB><ceiling>`, and any other value is refused rather than read as `legacy`, which would run a program under limits it did not choose",
+    InvalidCeiling(n, txt, defect) =>
+      "[${decode_rule(InvalidCeiling(n, txt, defect))}] line ${n} declares a ceiling of '${txt}' nanoseconds, which is ${ceiling_defect_text(defect)}; 041 ADR-002 D7 refuses it at decode, because the program it would describe cannot be built as a `CeilingMs` the resolver may clamp to",
     DirectoryCarriesContent(n, p) =>
       "[artifact-directory-carries-content] line ${n} declares '${p}' a directory AND carries a non-empty content field; nothing can have written it, because a directory has no body to write. WI-D18 made the world's file entry a SUM precisely so that '{path, kind: \"dir\", content: \"hello\"}' would be unrepresentable in the type; the artifact format is flat and cannot enforce that structurally, so it is enforced here rather than dropped silently on the way into the sum"
   }
@@ -431,6 +448,7 @@ pure func with_bounds_arity(ts: [{ tag: string, arity: int }], n: int) -> [{ tag
 export pure func required_header_tags_at(version: string) -> [{ tag: string, arity: int }] {
   with_bounds_arity(required_header_tags(), bounds_arity_at(version))
     ++ (if version_has_applied_faults(version) then [{ tag: "applied_faults", arity: 1 }] else [])
+    ++ (if version_has_process_limits(version) then [{ tag: "process_limits", arity: 1 }] else [])
 }
 
 -- ---------------------------------------------------------------------------
@@ -467,6 +485,107 @@ export pure func version_has_applied_faults(version: string) -> bool
 {
   not (version == "execution-program/1" || version == "execution-program/2"
        || version == "execution-program/3" || version == "execution-program/4")
+}
+
+-- ---------------------------------------------------------------------------
+-- The mode line — 041 PLAN-001 W5, choice C5
+-- ---------------------------------------------------------------------------
+
+-- `InitialWorld.process_limits`, one required line from execution-program/6 on:
+--
+--   process_limits<TAB>legacy
+--   process_limits<TAB>limits<TAB><default><TAB><ceiling>
+--
+-- The default is `none` or integer nanoseconds, and the ceiling is `same` or integer
+-- nanoseconds. `applied_faults`' argument for a required line applies unchanged: a
+-- repeatable or optional line could not tell a program that is `legacy` from one that
+-- lost its line.
+
+-- Written as the versions that LACK the line, for `version_has_applied_faults`'
+-- reason. The contract is the two halves a mutant would break: v6 has the line and
+-- v5 does not, because the frozen v5 bytes would refuse.
+export pure func version_has_process_limits(version: string) -> bool
+  ensures { (version != "execution-program/6" || result)
+            && (version != "execution-program/5" || not result) }
+{
+  not (version == "execution-program/1" || version == "execution-program/2"
+       || version == "execution-program/3" || version == "execution-program/4"
+       || version == "execution-program/5")
+}
+
+-- The line after its tag, tabs included. A `CeilingMs` is written back in nanoseconds, which
+-- `validate_program` has bounded (`max_ceiling_ms`), so the product fits.
+-- contracts: SKIPPED — unencodable builtin: std/string.join.
+export pure func process_limits_field(mode: LimitMode) -> string {
+  match mode {
+    Legacy => "legacy",
+    Limits(l) => Str.join("\t", [
+      "limits",
+      (match l.default { NoDeadline => "none", Finite(ns) => "${ns}" }),
+      (match l.ceiling { SameAsDefault => "same", CeilingMs(ms) => "${ms * 1000000}" })
+    ])
+  }
+}
+
+-- The field count the line's FIRST field declares. C5's line is the one line in this
+-- schema with two shapes, and `parse_line` checks arity before anything reads a field,
+-- so a table holding one number would refuse one of them. Anything else counts as one
+-- field, and `process_limits_of_fields` then refuses it by name.
+-- contracts: SKIPPED — matches a list of strings, which the Z3 fragment does not encode.
+pure func process_limits_arity(fields: [string]) -> int {
+  match fields {
+    "limits" :: _ => 3,
+    _ => 1
+  }
+}
+
+-- Digits alone: what is left of an integer `stringToInt` refused is one too large for
+-- an int, which is D7's "too large to convert" and not a word in the wrong place.
+-- contracts: BLOCKED — calls `Str.foldChars`, outside the Z3 fragment.
+pure func all_digits(s: string) -> bool {
+  Str.length(s) > 0 && Str.foldChars(\ok c. ok && Str.contains("0123456789", c), true, s)
+}
+
+-- contracts: SKIPPED — returns a sum holding a nested sum, which the Z3 fragment does not encode.
+pure func default_of_field(no: int, txt: string) -> Result[SessionLimit, DecodeRefusal] {
+  if txt == "none" then Ok(NoDeadline)
+  else match Str.stringToInt(txt) {
+    Some(ns) => Ok(Finite(ns)),
+    None => Err(NotAnInteger(no, "process_limits", txt))
+  }
+}
+
+-- D7's refusals for the ceiling, each with its own rule. Text that is not a number is
+-- `NotAnInteger`, as everywhere in this schema.
+-- contracts: SKIPPED — returns a sum holding a nested sum, which the Z3 fragment does not encode.
+pure func ceiling_of_field(no: int, default: SessionLimit, txt: string) -> Result[Ceiling, DecodeRefusal] {
+  if txt == "same" then Ok(SameAsDefault)
+  else match Str.stringToInt(txt) {
+    Some(ns) => match ceiling_of_ns(default, ns) {
+      Ok(ms) => Ok(CeilingMs(ms)),
+      Err(defect) => Err(InvalidCeiling(no, txt, defect))
+    },
+    None => if all_digits(txt) then Err(InvalidCeiling(no, txt, CeilingTooLarge))
+            else Err(NotAnInteger(no, "process_limits", txt))
+  }
+}
+
+-- The one reader of the line. `check_process_limits_line` and `process_limits_at` both
+-- call it, so what the structural phase accepted is what the projection reads.
+-- contracts: SKIPPED — returns a sum holding a nested sum, which the Z3 fragment does not encode.
+pure func process_limits_of_fields(no: int, fields: [string]) -> Result[LimitMode, DecodeRefusal] {
+  match fields {
+    "legacy" :: [] => Ok(Legacy),
+    "limits" :: d :: c :: [] =>
+      match default_of_field(no, d) {
+        Err(r) => Err(r),
+        Ok(default) => match ceiling_of_field(no, default, c) {
+          Err(r) => Err(r),
+          Ok(ceiling) => Ok(Limits({ default: default, ceiling: ceiling }))
+        }
+      },
+    _ => Err(MalformedProcessLimits(no, head_or(fields, "")))
+  }
 }
 
 -- contracts: SKIPPED — unencodable builtin: std/string.join.
@@ -664,6 +783,10 @@ export pure func encode_body(p: ExecutionProgram) -> string {
       -- 034 W1.2, LAST IN THE HEADER and directly above the interactions it
       -- indexes. Written unconditionally, the empty list included: this build
       -- writes only execution-program/5, where the line is required.
+      -- 041 W5, written unconditionally: this build writes only execution-program/6,
+      -- where the line is required. `process_limits_field` holds no free text, so it
+      -- needs no escaping. Above `applied_faults`, which stays last for the reason above.
+      ++ ["process_limits\t${process_limits_field(w.process_limits)}"]
       ++ [line1("applied_faults", applied_faults_field(p.applied_faults))]
       ++ interaction_lines(p.interactions))
 }
@@ -810,7 +933,8 @@ pure func parse_line(
   let tag = head_or(parts, "");
   let fields = drop_first(parts);
   let want = match arity_of(req, tag) {
-    Some(n) => Some(n),
+    -- 041 W5, C5: the one line whose count depends on its first field.
+    Some(n) => if tag == "process_limits" then Some(process_limits_arity(fields)) else Some(n),
     None => match arity_of(repeatable_header_tags(), tag) {
       Some(n) => Some(n),
       None => arity_of(block_tags(), tag)
@@ -929,6 +1053,21 @@ pure func check_applied_faults_line(ls: [Line]) -> [DecodeRefusal] {
         Some(_) => [],
         None => [NotAnInteger(l.no, "applied_faults", txt)]
       }
+    }
+  }
+}
+
+-- 041 W5. Structural for `check_applied_faults_line`'s reason. PRESENCE is
+-- `check_required`'s, from the table the artifact's version declares, so a v6 artifact
+-- without the line is `MissingSection` and never `Legacy`, and a v5 artifact carrying
+-- it is `UnknownTag`.
+-- contracts: SKIPPED — calls `process_limits_of_fields`, whose result is unencodable.
+pure func check_process_limits_line(ls: [Line]) -> [DecodeRefusal] {
+  match find_tag(ls, "process_limits") {
+    [] => [],
+    l :: _ => match process_limits_of_fields(l.no, l.fields) {
+      Ok(_) => [],
+      Err(r) => [r]
     }
   }
 }
@@ -1248,7 +1387,8 @@ pure func decode_body(version: string, body: string) -> ProgramDecode {
                          ++ check_integers(hs, integer_header_tags())
                          ++ check_bounds_line(version, hs)
                          ++ check_file_entries(hs)
-                         ++ check_applied_faults_line(hs);
+                         ++ check_applied_faults_line(hs)
+                         ++ check_process_limits_line(hs);
       match structural {
         r :: rs => ProgramDecodeRefused([r] ++ rs),
         [] => {
@@ -1290,6 +1430,22 @@ pure func applied_faults_at(version: string, hs: [Line]) -> [int] {
   }
 }
 
+-- 041 W5, D7: before execution-program/6 there is no line and the mode is `Legacy`,
+-- because that is what those versions meant (`dst_program.program_schema_version`).
+-- From v6 the line decides, and THE VERSION DECIDES NOTHING ELSE. It has been checked,
+-- so the `Legacy` under `Err` is totality only.
+-- contracts: SKIPPED — calls `process_limits_of_fields`, whose result is unencodable.
+pure func process_limits_at(version: string, hs: [Line]) -> LimitMode {
+  if not version_has_process_limits(version) then Legacy
+  else match find_tag(hs, "process_limits") {
+    [] => Legacy,
+    l :: _ => match process_limits_of_fields(l.no, l.fields) {
+      Ok(mode) => mode,
+      Err(_) => Legacy
+    }
+  }
+}
+
 pure func project(version: string, hs: [Line], xs: [Interaction]) -> ExecutionProgram {
   -- The version the BYTES carried, not the one this build writes. See
   -- `decode_body`.
@@ -1310,7 +1466,8 @@ pure func project(version: string, hs: [Line], xs: [Interaction]) -> ExecutionPr
       -- semantics fixed no value there.
       files: files_of(hs),
       clock_epoch: int_at(hs, "world.clock_epoch", 0),
-      extension_profile: str_at(hs, "world.extension_profile", 0)
+      extension_profile: str_at(hs, "world.extension_profile", 0),
+      process_limits: process_limits_at(version, hs)
     },
     bounds: {
       max_interactions: int_at(hs, "bounds", 0),
@@ -1606,7 +1763,7 @@ pure func stub_program(id: string, version: string, seed: int) -> ExecutionProgr
   { schema_version: program_schema_version(),
     generator_id: id, generator_version: version, seed: seed,
     initial_world: { messages_and_policy: "", synthetic_environment: [], files: [],
-                     clock_epoch: 0, extension_profile: "" },
+                     clock_epoch: 0, extension_profile: "", process_limits: Legacy },
     bounds: { max_interactions: 0, max_chunks_per_interaction: 0,
               max_payload_bytes: 0, max_resource_size: 0, max_clock_advance_ms: 0,
               chunk_draw_hi: 3 },
@@ -1641,16 +1798,68 @@ pure func requires_world_truth(v: string) -> bool {
   contains_str(tag_names(required_header_tags_at(v)), "applied_faults")
 }
 
--- 034 W1.2. The line is required at v5 and at no earlier version, through the
+-- 034 W1.2. The line is required from v5 and at no earlier version, through the
 -- table the ARTIFACT'S version declares. Both halves are asserted: a table that
 -- required it everywhere would refuse every frozen specimen, and one that never
 -- required it would decode a v5 artifact that lost the line as "nothing applied".
 pure func test_the_world_truth_line_is_required_at_v5_only() -> bool
   tests [((), true)]
   {
-    requires_world_truth("execution-program/5") && requires_world_truth(program_schema_version())
+    requires_world_truth("execution-program/5") && requires_world_truth("execution-program/6")
+      && requires_world_truth(program_schema_version())
       && not requires_world_truth("execution-program/4") && not requires_world_truth("execution-program/3")
       && not requires_world_truth("execution-program/2") && not requires_world_truth("execution-program/1")
       && not contains_str(tag_names(required_header_tags()), "applied_faults")
       && not contains_str(tag_names(repeatable_header_tags()), "applied_faults")
+  }
+
+-- 041 W5. The mode line is required at v6 and at no earlier version, by the same table,
+-- for the same two reasons.
+pure func requires_process_limits(v: string) -> bool {
+  contains_str(tag_names(required_header_tags_at(v)), "process_limits")
+}
+
+pure func test_the_mode_line_is_required_from_v6_only() -> bool
+  tests [((), true)]
+  {
+    requires_process_limits("execution-program/6") && requires_process_limits(program_schema_version())
+      && not requires_process_limits("execution-program/5") && not requires_process_limits("execution-program/4")
+      && not requires_process_limits("execution-program/3") && not requires_process_limits("execution-program/2")
+      && not requires_process_limits("execution-program/1")
+      && not contains_str(tag_names(required_header_tags()), "process_limits")
+      && not contains_str(tag_names(repeatable_header_tags()), "process_limits")
+  }
+
+pure func mode_line_of(fields: [string]) -> string {
+  match process_limits_of_fields(9, fields) {
+    Ok(m) => Str.replace(process_limits_field(m), "\t", " "),
+    Err(r) => decode_rule(r)
+  }
+}
+
+-- 041 W5, C5 and D7. Every shape of the line, and all four of the ceiling's refusals,
+-- each with a valid neighbour: a sub-millisecond, zero and negative DEFAULT stay valid
+-- (D2's native domain), and a ceiling equal to a finite default is not below it.
+pure func test_the_mode_line_reads_each_shape_and_refuses_each_defect() -> bool
+  tests [((), true)]
+  {
+    mode_line_of(["legacy"]) == "legacy"
+      && mode_line_of(["limits", "30000000000", "120000000000"]) == "limits 30000000000 120000000000"
+      && mode_line_of(["limits", "30000000000", "same"]) == "limits 30000000000 same"
+      && mode_line_of(["limits", "none", "120000000000"]) == "limits none 120000000000"
+      && mode_line_of(["limits", "none", "same"]) == "limits none same"
+      && mode_line_of(["limits", "1500000", "same"]) == "limits 1500000 same"
+      && mode_line_of(["limits", "0", "1000000"]) == "limits 0 1000000"
+      && mode_line_of(["limits", "-1000000000", "1000000"]) == "limits -1000000000 1000000"
+      && mode_line_of(["limits", "30000000000", "30000000000"]) == "limits 30000000000 30000000000"
+      && mode_line_of(["limits", "none", "0"]) == "artifact-ceiling-not-positive"
+      && mode_line_of(["limits", "none", "-1000000"]) == "artifact-ceiling-not-positive"
+      && mode_line_of(["limits", "none", "1500000"]) == "artifact-ceiling-not-whole-ms"
+      && mode_line_of(["limits", "none", "9223372036854775808"]) == "artifact-ceiling-too-large"
+      && mode_line_of(["limits", "30000000000", "29000000000"]) == "artifact-ceiling-below-default"
+      && mode_line_of(["limits", "abc", "same"]) == "artifact-not-an-integer"
+      && mode_line_of(["limits", "none", "1e9"]) == "artifact-not-an-integer"
+      && mode_line_of(["limits", "none", ""]) == "artifact-not-an-integer"
+      && mode_line_of(["Limits"]) == "artifact-malformed-process-limits"
+      && mode_line_of([""]) == "artifact-malformed-process-limits"
   }
