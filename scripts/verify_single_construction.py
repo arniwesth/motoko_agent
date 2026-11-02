@@ -10,7 +10,11 @@ text about the rule is not mistaken for a breach of it. It exits 1 on any of:
      Both results hold `session_default` and `effective_ceiling`, and a record cannot exist
      without its labels, so a literal cannot avoid this, wherever it is and however it is laid
      out. A label followed by `,` or `}` counts too, in case of a punned field.
-  2. A record update naming any result field (`{ r | clamped: true }`), including `budget`.
+  2. A record update, on any base at all, whose labels are all result fields, including
+     `budget` (`{ r | clamped: true }`, `{ idr(r) | budget: x }`). `PureCtx` has a `budget` too,
+     and this scan has no types, so the labels decide: AILANG refuses an update naming a field
+     the record lacks, which means `{ pure_ctx(c) | task: t, budget: b }` cannot be on a result.
+     Row g7 in the evidence below holds that refusal to account.
   3. `ProcessResolved` or `ProcessInvalid` used as anything but a pattern, the type
      declaration, or an unaliased import: a wrapping call, an alias, or a bare function value.
   4. Inside the module: not exactly one construction of each constructor in the resolver, or
@@ -22,7 +26,9 @@ never a pass. Reading a field (`r.session_default`) and matching (`ProcessResolv
 allowed, because that is how every caller uses the value.
 
 Limits. It is a scan and not a type check: a future function parameter named `session_default`
-is a false alarm, and should be renamed. It does not stop a `.ail` file git ignores.
+is a false alarm, and should be renamed. So is an update of another record that names only result
+fields, `{ ctx | budget: b }`: name one of its other fields as well. It does not stop a `.ail`
+file git ignores.
 
 `make verify_single_construction` runs it, and `check_core` depends on that target, so a breach
 or a could-not-check fails `check_core`. evidence/W4/mutate.sh also runs it, and the proof that
@@ -40,7 +46,9 @@ LABELS = ("session_default", "effective_ceiling", "clamped", "requested_ms")
 UPDATE_FIELDS = LABELS + ("budget",)
 CTORS = ("ProcessResolved", "ProcessInvalid")
 LABEL_RE = re.compile(r"(?<![.\w])(%s)\s*[:,}]" % "|".join(LABELS))
-UPDATE_RE = re.compile(r"\{\s*[\w.]+\s*\|[^{}]*?\b(%s)\s*:" % "|".join(UPDATE_FIELDS), re.S)
+# The head of an update's field list: one `|`, not `||`, then `label:`. Nothing else in the
+# language has that shape, so the base in front of it, braces and all, does not have to be read.
+UPDATE_RE = re.compile(r"(?<!\|)\|(?!\|)\s*(?=\w+\s*:)")
 CTOR_RE = re.compile(r"\b(%s)\b" % "|".join(CTORS))
 IMPORT_RE = re.compile(r"^\s*import\b[^\n(]*(\([^)]*\))?", re.M)
 TOP_RE = re.compile(r"^(?:export\s+)?(?:pure\s+)?(?:func|type)\s+(\w+)", re.M)
@@ -77,6 +85,21 @@ def spans(code):
     ms = list(TOP_RE.finditer(code))
     return {m.group(1): (m.start(), ms[k + 1].start() if k + 1 < len(ms) else len(code))
             for k, m in enumerate(ms)}
+
+
+def update_labels(code, start):
+    """The labels of the update whose field list starts at `start`, not those nested in its values."""
+    depth, top = 0, []
+    for c in code[start:]:
+        if c == "}" and depth == 0:
+            break
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif depth == 0:
+            top.append(c)
+    return re.findall(r"(?:^|,)\s*(\w+)\s*:", "".join(top))
 
 
 def is_pattern(code, end):
@@ -134,8 +157,9 @@ def main():
             if not inside(m.start()):
                 bad.append(f"{rel}:{line(m.start())}: result label `{m.group(1)}` written outside the resolver")
         for m in UPDATE_RE.finditer(code):
-            if not inside(m.start()):
-                bad.append(f"{rel}:{line(m.start())}: record update of result field `{m.group(1)}`")
+            labels = update_labels(code, m.end())
+            if labels and set(labels) <= set(UPDATE_FIELDS) and not inside(m.start()):
+                bad.append(f"{rel}:{line(m.start())}: record update of result field `{labels[0]}`")
 
         imports = [m.span() for m in IMPORT_RE.finditer(code)]
         for m in CTOR_RE.finditer(code):
