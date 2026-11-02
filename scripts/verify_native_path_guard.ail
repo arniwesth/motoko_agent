@@ -9,13 +9,22 @@
 -- the only thing stopping them. This runs without that variable, so the guard
 -- is the only thing under test.
 --
--- Usage:
+-- `main` runs the checks twice, in a child with SHLVL unset and in one with
+-- SHLVL=1, and fails if either leg fails. The caller's SHLVL used to decide the
+-- result: the guard runs under `bash -lc`, a login shell sources ~/.bash_logout
+-- on `exit`, Debian's stock file runs clear_console when SHLVL is 1, and under
+-- `set -e` its failure turned the guard's 43 into 1, which reads as a pass. The
+-- guard now turns errexit off before it exits. The Motoko runtime has no SHLVL,
+-- so the unset leg is the one production sees.
+--
+-- Usage, from the repository root:
 --   AILANG_RELAX_MODULES=1 ailang run --caps IO,FS,Process,Env,Clock \
 --     --entry main scripts/verify_native_path_guard.ail
+-- One leg, in whatever SHLVL the caller has: --entry scenario.
 module scripts/verify_native_path_guard
 
 import std/io (println, exit)
-import std/string (contains, trim)
+import std/string (contains, trim, split, startsWith, substring, length)
 import std/bytes (toString)
 import std/json (jo, ja, kv, js, jnum, encode)
 import std/fs (readFileResult, fileExists, writeFileResult)
@@ -40,7 +49,16 @@ func file_text(p: string) -> string ! {FS} {
   match readFileResult(p) { Ok(t) => t, Err(_) => "" }
 }
 
-export func main() -> () ! {IO, FS, Process, Env, Clock} {
+-- The SHLVL this process really has, not the one the parent meant to give it.
+func shlvl_seen() -> string ! {Process} {
+  match exec("printenv", ["SHLVL"]) {
+    Ok(out) => if out.exitCode == 0 then trim(toString(out.stdout)) else "unset",
+    Err(_) => "unknown"
+  }
+}
+
+export func scenario() -> () ! {IO, FS, Process, Env, Clock} {
+  println("SHLVL seen: ${shlvl_seen()}");
   let root = match exec("mktemp", ["-d"]) { Ok(out) => trim(toString(out.stdout)), Err(_) => "" };
   if root == "" then { println("FAIL: mktemp -d"); exit(1) } else {
     let workdir = "${root}/work";
@@ -75,4 +93,52 @@ export func main() -> () ! {IO, FS, Process, Env, Clock} {
 
 pure func all_true(xs: [bool]) -> bool {
   match xs { [] => true, x :: rest => x && all_true(rest) }
+}
+
+pure func count_ok(lines: [string]) -> int {
+  match lines {
+    [] => 0,
+    l :: rest => (if startsWith(l, "OK: ") then 1 else 0) + count_ok(rest)
+  }
+}
+
+func print_verdicts(label: string, lines: [string]) -> () ! {IO} {
+  match lines {
+    [] => (),
+    l :: rest => {
+      if startsWith(l, "OK: ") then println("OK: [SHLVL ${label}] ${substring_from(l, 4)}")
+      else if startsWith(l, "FAIL: ") then println("FAIL: [SHLVL ${label}] ${substring_from(l, 6)}")
+      else ();
+      print_verdicts(label, rest)
+    }
+  }
+}
+
+pure func substring_from(s: string, n: int) -> string {
+  substring(s, n, length(s))
+}
+
+-- One leg. A child that could not run, or that ran without the pinned SHLVL or
+-- without all six checks passing, fails: a leg must not pass by not testing.
+func leg(label: string, pin: [string]) -> bool ! {IO, Process} {
+  let argv = ["-u", "AILANG_FS_SANDBOX"] ++ pin ++ ["AILANG_RELAX_MODULES=1", "ailang", "run",
+    "--caps", "IO,FS,Process,Env,Clock", "--entry", "scenario", "scripts/verify_native_path_guard.ail"];
+  match exec("env", argv) {
+    Err(_) => check("[SHLVL ${label}] the probe's child runs", false, "exec failed"),
+    Ok(out) => {
+      let text = toString(out.stdout);
+      let lines = split(text, "\n");
+      print_verdicts(label, lines);
+      let pinned = check("[SHLVL ${label}] the child really had that SHLVL", contains(text, "SHLVL seen: ${label}\n"), text);
+      let passed = check("[SHLVL ${label}] all six checks ran and passed", out.exitCode == 0 && count_ok(lines) == 6,
+        "exit ${show(out.exitCode)}, ${show(count_ok(lines))} OK");
+      pinned && passed
+    }
+  }
+}
+
+export func main() -> () ! {IO, FS, Process, Env, Clock} {
+  let unset_ok = leg("unset", ["-u", "SHLVL"]);
+  let one_ok = leg("1", ["SHLVL=1"]);
+  if unset_ok && one_ok then () else exit(1)
 }
