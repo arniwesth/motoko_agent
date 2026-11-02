@@ -11,8 +11,10 @@
 #   - `make check_core` fails, and its last line names this target and that code
 #   - the type-check step did not run, so nothing later in check_core could have failed it
 # make's own exit status is 2 for any failed recipe, so it cannot tell 1 from 2. `Error <code>` can.
-# g1 and g2 also run `ailang check` on the forged file: it must pass, or the compiler would have
-# caught the breach and the row would show nothing about this gate.
+# g1, g2, g5 and g6 also run `ailang check` on the file: it must pass, or the compiler would have
+# caught the breach (or the legal caller is not legal) and the row would show nothing about this gate.
+# g7 is the other way round: `ailang check` must refuse it. The checker's exemption for an update
+# naming a non-result field rests on that refusal, so if AILANG ever allows it this row goes red.
 set -u
 OUT=${1:?log directory}
 M=src/core/process_limits.ail
@@ -37,9 +39,13 @@ trap restore EXIT
 
 row() { # id rule edit expected-code reason-text
   local id=$1 rule=$2 desc=$3 want=$4 reason=$5 verdict=killed rc typed=- trc crc
-  case "$id" in g1|g2)
-    ailang check "$F" >"$OUT/$id.ailang" 2>&1; typed=$?
-    [ "$typed" = 0 ] || verdict=not-well-typed ;;
+  case "$id" in
+    g1|g2|g5*|g6*)
+      ailang check "$F" >"$OUT/$id.ailang" 2>&1; typed=$?
+      [ "$typed" = 0 ] || verdict=not-well-typed ;;
+    g7)
+      ailang check "$F" >"$OUT/$id.ailang" 2>&1; typed=$?
+      [ "$typed" != 0 ] && grep -qF "record field 'task' not found" "$OUT/$id.ailang" || verdict=survived ;;
   esac
   python3 "$CHECK" >"$OUT/$id.script" 2>&1; rc=$?
   make "$T" >"$OUT/$id.target" 2>&1; trc=$?
@@ -77,6 +83,42 @@ git rm -q --cached "$M"
 row g3.index 'exit 2 is not a pass' 'the module is moved off disk and out of the index' 2 "cannot check: $M is not there"
 
 row g4 'clean control: the gate passes for the right reason' 'none' 0 'check_single_construction:'
+
+printf 'module scripts/gate_forged\nimport src/core/process_limits (ResolvedProcess, ExplicitMs)\npure func idr(r: ResolvedProcess) -> ResolvedProcess { r }\nexport pure func forge(r: ResolvedProcess) -> ResolvedProcess { { idr(r) | budget: ExplicitMs(999999) } }\n' >"$F"
+row g5 'D7: only the resolver builds a result' 'another module updates budget on a call result, the form the review found' 1 'record update of result field `budget`'
+
+printf 'module scripts/gate_forged\nimport src/core/process_limits (ResolvedProcess, ExplicitMs)\npure func idr(r: ResolvedProcess) -> ResolvedProcess { r }\nexport pure func forge(r: ResolvedProcess) -> ResolvedProcess { { idr({ r }) | budget: ExplicitMs(999999) } }\n' >"$F"
+row g5.brace 'D7: only the resolver builds a result' 'the same update, with braces inside the base' 1 'record update of result field `budget`'
+
+cat >"$F" <<'AIL'
+module scripts/gate_forged
+import src/core/process_limits (ResolvedProcess, ProcessResolution, ProcessResolved, ProcessInvalid, SessionLimit, ProcessBudget, SessionDefault)
+-- the rule's words, in a comment: { r | budget: x } session_default: effective_ceiling: clamped: requested_ms:
+export pure func note() -> string { "{ r | budget: x } session_default: effective_ceiling: clamped: requested_ms:" }
+export pure func read_default(p: ProcessResolution) -> Option[SessionLimit] {
+  match p {
+    ProcessResolved(r) => Some(r.session_default),
+    ProcessInvalid(_) => None
+  }
+}
+export pure func read_budget(p: ProcessResolution) -> ProcessBudget {
+  match p {
+    ProcessResolved(r) => r.budget,
+    ProcessInvalid(_) => SessionDefault
+  }
+}
+AIL
+sed -i '2i import std/option (Option, Some, None)' "$F"
+row g6 'the rule must not over-fire' 'a legal caller: imports the type, matches ProcessResolved(r), reads session_default and budget, names the fields in a comment and a string' 0 ', 0 breaches'
+
+printf 'module scripts/gate_forged\ntype Ctx = { task: string, budget: int }\npure func mk() -> Ctx { { task: "a", budget: 0 } }\nexport pure func f() -> Ctx { { mk() | task: "b", budget: 1 } }\n' >"$F"
+row g6.ctx 'the rule must not over-fire' 'an update of another record on a call result, naming budget and a non-result field, the shape of the 16 PureCtx updates in the tree' 0 ', 0 breaches'
+
+printf 'module scripts/gate_forged\nexport pure func lit(a: bool, b: bool) -> {ok: bool, budget: int} { { ok: a || b, budget: 3 } }\nexport pure func blk(a: bool, b: bool) -> int { let ok = a || b; let budget: int = 3; if ok then budget else 0 }\n' >"$F"
+row g6.or 'the rule must not over-fire' 'a `||` and then a `budget:` that is a literal label or a let annotation, in the same braces' 0 ', 0 breaches'
+
+printf 'module scripts/gate_forged\nimport src/core/process_limits (ResolvedProcess, ExplicitMs)\npure func idr(r: ResolvedProcess) -> ResolvedProcess { r }\nexport pure func forge(r: ResolvedProcess) -> ResolvedProcess { { idr(r) | task: "t", budget: ExplicitMs(999999) } }\n' >"$F"
+row g7 'the exemption rests on the compiler' 'an update of a result naming a non-result field: the checker exempts it, so ailang check must refuse it' 0 ', 0 breaches'
 trap - EXIT
 
 clean && echo "tree clean" || { echo "tree dirty"; exit 2; }
