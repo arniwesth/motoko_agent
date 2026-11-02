@@ -1416,7 +1416,7 @@ func replay_tool_seam(xs: [Interaction], w: WorldState) -> WorldState ! {IO, Pro
       match i.identity.body {
         ToolIdentity(_, call_id, tool) => {
           let inv: ToolInvocation = { call: { id: call_id, tool: tool, arguments: jo([]) },
-                                      workdir: "", timeout_ms: i.deadline_ms, started_at_ms: 0 };
+                                      workdir: "", timeout_ms: i.deadline_ms, started_at_ms: 0, process: None };
           replay_tool_seam(rest, recording_tool(w, inv).next_state)
         },
         _ => replay_tool_seam(rest, { w | log: w.log ++ [i] })

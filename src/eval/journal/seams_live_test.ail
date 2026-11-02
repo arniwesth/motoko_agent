@@ -97,7 +97,7 @@ func m8_tool_empty_queue_no_live_effect() -> bool ! {AI, Clock, Env, FS, IO, Pro
   let w = { empty_world_state() | log: lt_prior_log(), clock_ms: 500, ordinal: 4 };
   let inv: ToolInvocation = {
     call: { id: "c9", tool: "BashExec", arguments: jo([kv("cmd", js("touch")), kv("args", ja([js(lt_sentinel())]))]) },
-    workdir: ".", timeout_ms: 30000, started_at_ms: 500
+    workdir: ".", timeout_ms: 30000, started_at_ms: 500, process: None
   };
   let ex = eval_ports(recording_ports(empty_rt())).tool_exec(w, inv);
   let absent_after = not fileExists(lt_sentinel());

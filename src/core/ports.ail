@@ -50,7 +50,7 @@ import src/core/tool_dispatch_adapter (dispatch_one_typed)
 -- `src/core/fs_node`'s header for the decision and for the two codecs that now
 -- share its kind vocabulary.
 import src/core/fs_node (FsNode, FsFile, FsDir)
-import src/core/process_limits (LimitMode, Legacy) -- 041 C1: the mode's types are in a leaf, so naming them here pins no new span
+import src/core/process_limits (LimitMode, Legacy, ResolvedProcess, SessionLimit, Finite, NoDeadline, Ceiling, CeilingMs, SameAsDefault, ProcessResolved, ProcessInvalid, resolve_process_limit, process_deadline_expires, deadline_display_ms, needs_process_primitive) -- 041 C1: the mode's types are in a leaf, so naming them here pins no new span
 -- WI-A13 stage 2. The interaction log rides in `WorldState`, so this module has
 -- to name D2's `Interaction`. `src/core/dst_interaction` was split out of
 -- `src/core/dst_program` for exactly this: it imports nothing but std, so the
@@ -682,7 +682,12 @@ export type ToolInvocation = {
   call: ToolCallEnvelope,
   workdir: string,
   timeout_ms: int,
-  started_at_ms: int
+  started_at_ms: int,
+  -- 041 D7: the resolved limit. `Some` only for `BashExec` and `RunTests` in `Limits`
+  -- mode, and `None` for every other tool and all of `Legacy`, which keep today's
+  -- deadline exactly. When it is `Some`, it decides a scripted expiry and `timeout_ms`
+  -- above is only what gets recorded (`projected_timeout_ms`).
+  process: Option[ResolvedProcess]
 }
 
 -- D1's part 3: the typed result/error that replaces
@@ -1868,10 +1873,28 @@ export func world_tool(state: WorldState, inv: ToolInvocation) -> ToolExecution 
 -- one place it would be least visible: both compile, both return a
 -- `ToolCompleted`, and the drift shows up only as one seam binding an exit code
 -- the other does not.
+--
+-- 041 W6, UNTIL W10 (ADR-002 §6 step 3). A `Limits` program with an empty queue
+-- reaches this arm, and no primitive exists yet to apply an `ExplicitMs`. Running a
+-- plain `exec` would then run the command under the session default while the
+-- result and the recording said otherwise, so it is refused here, before dispatch,
+-- and nothing runs. `SessionDefault` is not this case: it is a plain `exec`, which
+-- is what D7 asks of it and what the run does today.
 pure func live_tool_outcome(inv: ToolInvocation) -> ToolOutcome ! {IO, Process, FS} {
-  let d = dispatch_one_typed(inv.workdir, envelope_to_call(inv.call));
-  ToolCompleted({ tool_call_id: inv.call.id, content: d.content, exit_code: d.exit_code })
+  if needs_process_primitive(inv.process) then
+    ToolFailed({ tool_call_id: inv.call.id, code: process_limit_unavailable_code(),
+                 message: "this call asked for a process limit the live executor cannot apply yet, so the command was NOT run. Nothing was executed.",
+                 after_dispatch: false })
+  else {
+    let d = dispatch_one_typed(inv.workdir, envelope_to_call(inv.call));
+    ToolCompleted({ tool_call_id: inv.call.id, content: d.content, exit_code: d.exit_code })
+  }
 }
+
+-- The stated code of that refusal. W10 removes it with the arm's refusal.
+export pure func process_limit_unavailable_code() -> string
+  ensures { result != "" }
+{ "process_limit_unavailable" }
 
 -- The SCRIPTED arm's outcome, lifted out for `live_tool_outcome`'s reason and
 -- with a sharper one: the fault ORDER below (correlation, then deadline, then
@@ -1887,8 +1910,8 @@ pure func live_tool_outcome(inv: ToolInvocation) -> ToolOutcome ! {IO, Process, 
 pure func scripted_tool_outcome(inv: ToolInvocation, t: ScriptedTool) -> ToolOutcome {
   if t.tool_call_id != "" && t.tool_call_id != inv.call.id then
     ToolCorrelationMismatch({ expected_id: inv.call.id, got_id: t.tool_call_id })
-  else if inv.timeout_ms > 0 && t.duration_ms > inv.timeout_ms then
-    ToolDeadlineExceeded({ tool_call_id: inv.call.id, elapsed_ms: t.duration_ms, timeout_ms: inv.timeout_ms })
+  else if process_deadline_expires(inv.process, t.duration_ms, inv.timeout_ms) then
+    ToolDeadlineExceeded({ tool_call_id: inv.call.id, elapsed_ms: t.duration_ms, timeout_ms: deadline_display_ms(inv.process, inv.timeout_ms) })
   else if t.code != "" then
     -- The stage is copied and `t.applied` is not read: D4's "no carrier".
     ToolFailed({ tool_call_id: inv.call.id, code: t.code, message: t.message,
@@ -2956,7 +2979,7 @@ pure func test_each_tool_outcome_round_trips_to_a_world_input_that_reproduces_it
 pure func stage_round_trip(after: bool) -> bool {
   let o = ToolFailed({ tool_call_id: "c1", code: "E42", message: "boom", after_dispatch: after });
   let inv = { call: { id: "c1", tool: "BashExec", arguments: jo([]) },
-              workdir: "/w", timeout_ms: 0, started_at_ms: 0 };
+              workdir: "/w", timeout_ms: 0, started_at_ms: 0, process: None };
   match decode_tool_outcome(encode_tool_outcome(o), 11) {
     ToolRecordUndecodable(_) => false,
     ToolRecordDecoded(t) =>
@@ -3019,7 +3042,7 @@ pure func test_applied_never_reaches_the_outcome_or_its_payload() -> bool
   tests [((), true)]
   {
     let inv = { call: { id: "c1", tool: "BashExec", arguments: jo([]) },
-                workdir: "/w", timeout_ms: 0, started_at_ms: 0 };
+                workdir: "/w", timeout_ms: 0, started_at_ms: 0, process: None };
     let t = { tool_call_id: "", duration_ms: 3, code: "E42", message: "boom", content: "",
               exit_code: -1, after_dispatch: true, applied: false };
     let a = scripted_tool_outcome(inv, t);
@@ -3120,3 +3143,95 @@ export func ports_shape_probe(
     ext_effect_exec: world_ext_effect
   }
 }
+
+-- ===========================================================================
+-- 041 W6: `scripted_tool_outcome` WITH A CARRIER. Each carrier comes from the resolver.
+-- `recorded` is `ToolInvocation.timeout_ms`, passed here apart from the carrier because D7
+-- says enforcement of a process tool never reads it: the row with `recorded` 1000 is one
+-- `projected_timeout_ms` would never build, and it is what tells the two values apart.
+-- ===========================================================================
+
+pure func carried(default: SessionLimit, ceiling: Ceiling, args: Json) -> Option[ResolvedProcess] {
+  match resolve_process_limit({ default: default, ceiling: ceiling }, args) {
+    ProcessResolved(r) => Some(r),
+    ProcessInvalid(_) => None
+  }
+}
+
+pure func outcome_shape(o: ToolOutcome) -> string {
+  match o {
+    ToolCompleted(_) => "completed",
+    ToolFailed(f) => "failed:${f.code}",
+    ToolCorrelationMismatch(_) => "mismatch",
+    ToolDeadlineExceeded(d) => "deadline:${show(d.timeout_ms)} after ${show(d.elapsed_ms)}"
+  }
+}
+
+pure func scripted_row(process: Option[ResolvedProcess], recorded: int, duration: int) -> string {
+  let inv = { call: { id: "c1", tool: "BashExec", arguments: jo([]) },
+              workdir: "/w", timeout_ms: recorded, started_at_ms: 0, process: process };
+  let t = { tool_call_id: "", duration_ms: duration, code: "", message: "", content: "ok",
+            exit_code: 0, after_dispatch: true, applied: false };
+  outcome_shape(scripted_tool_outcome(inv, t))
+}
+
+-- A9, THE 1000/3000/2000 ROW: default 1 s, ceiling 3 s, request 2 s, and `recorded` a value
+-- that disagrees with the carrier. Mutant s1 reads `inv.timeout_ms` and fails the first row.
+pure func row_1000_3000_2000(recorded: int, duration: int) -> string
+  tests [
+    ((1000, 1500), "completed"),
+    ((1000, 2000), "completed"),
+    ((1000, 2001), "deadline:2000 after 2001"),
+    ((9000, 2001), "deadline:2000 after 2001"),
+    ((0, 2001), "deadline:2000 after 2001")
+  ]
+{
+  scripted_row(carried(Finite(1000000000), CeilingMs(3000), jo([kv("timeout_secs", jnum(2.0))])), recorded, duration)
+}
+
+-- A8 and A9's default: a call with no request is decided by the default, and `recorded` (the
+-- env's value, here 5000) does not govern it.
+-- The rows are in a body because a `tests` literal cannot name an imported constructor.
+pure func row_no_request(default: SessionLimit, ceiling: Ceiling, duration: int) -> string {
+  scripted_row(carried(default, ceiling, jo([])), 5000, duration)
+}
+
+pure func test_no_request_is_decided_by_the_default_and_not_by_the_env() -> bool
+  tests [((), true)]
+  {
+    row_no_request(Finite(1000000000), CeilingMs(3000), 1000) == "completed"
+      && row_no_request(Finite(1000000000), CeilingMs(3000), 1001) == "deadline:1000 after 1001"
+      && row_no_request(Finite(1500000), SameAsDefault, 1) == "completed"
+      && row_no_request(Finite(1500000), SameAsDefault, 2) == "deadline:2 after 2"
+      && row_no_request(Finite(0), SameAsDefault, 0) == "deadline:0 after 0"
+      && row_no_request(Finite(-1000000000), SameAsDefault, 0) == "deadline:0 after 0"
+      && row_no_request(NoDeadline, SameAsDefault, 59000) == "completed"
+      && row_no_request(NoDeadline, CeilingMs(3000), 59000) == "completed"
+  }
+
+-- A10: with no carrier the predicate is today's. 0 is no deadline, and a positive value
+-- reports itself.
+pure func row_no_carrier(recorded: int, duration: int) -> string
+  tests [
+    ((0, 0), "completed"),
+    ((0, 59000), "completed"),
+    ((50, 50), "completed"),
+    ((50, 51), "deadline:50 after 51")
+  ]
+{
+  scripted_row(None, recorded, duration)
+}
+
+-- The order is unchanged by the carrier: correlation, then deadline, then code.
+pure func test_a_carrier_keeps_the_order_of_the_checks() -> bool
+  tests [((), true)]
+  {
+    let inv = { call: { id: "c1", tool: "BashExec", arguments: jo([]) },
+                workdir: "/w", timeout_ms: 0, started_at_ms: 0,
+                process: carried(Finite(0), SameAsDefault, jo([])) };
+    let t = { tool_call_id: "", duration_ms: 0, code: "E42", message: "boom", content: "",
+              exit_code: -1, after_dispatch: true, applied: false };
+    outcome_shape(scripted_tool_outcome(inv, { t | tool_call_id: "other" })) == "mismatch"
+      && outcome_shape(scripted_tool_outcome(inv, t)) == "deadline:0 after 0"
+      && outcome_shape(scripted_tool_outcome({ inv | process: None }, t)) == "failed:E42"
+  }
