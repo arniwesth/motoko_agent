@@ -187,6 +187,7 @@ export pure func extension_process(mode: LimitMode) -> Option[ResolvedProcess] {
 
 -- D4: a native default in whole milliseconds, rounded up, `0` for any non-positive
 -- value. Written without `n + 999999`, which overflows near the top of the range.
+-- The `ensures` holds over unbounded integers: `ailang run -verify-contracts` fails it near the top of the range, where its product wraps.
 pure func ms_rounded_up(n: int) -> int
   ensures { (n > 0 || result == 0) && (n <= 0 || result * 1000000 >= n) }
   tests [
@@ -277,6 +278,7 @@ export pure func process_limit_fields(result: ProcessResolution, attempted: bool
 -- D7's `t * 1_000_000 > n`, for `n > 0`. A program's `t` has no D2 bound, so the
 -- product can wrap. For a whole `t` it is the same test as `t > n / 1000000` rounded
 -- DOWN: rounded up, `t = 2` would not exceed a 1.5 ms default.
+-- The `ensures` holds over unbounded integers: `ailang run -verify-contracts` fails it near the top of the range, where its product wraps.
 pure func scripted_duration_exceeds(t: int, n: int) -> bool
   ensures { n <= 0 || result == (t * 1000000 > n) }
   tests [
@@ -630,7 +632,9 @@ func row_undecodable(text: string) -> bool
   }
 }
 
--- D7's resolver table, all six rows, plus A9's `SameAsDefault` cases.
+-- D7's resolver table, all six rows, plus A9's `SameAsDefault` cases, then the
+-- boundaries: `r_ns` above a default that rounds up to `r`, `r` equal to the default
+-- under a ceiling, and a ceiling that is not a whole number of seconds.
 func row_resolve(default: SessionLimit, ceiling: Ceiling, text: string) -> string
   tests [
     ((Finite(30000000000), CeilingMs(300000), "{}"), "SessionDefault requested=none clamped=false default=Finite(30000000000) ceiling=CeilingMs(300000)"),
@@ -653,14 +657,18 @@ func row_resolve(default: SessionLimit, ceiling: Ceiling, text: string) -> strin
     ((NoDeadline, SameAsDefault, "{\"timeout_secs\":5}"), "ExplicitMs(5000) requested=5000 clamped=false default=NoDeadline ceiling=SameAsDefault"),
     ((Finite(30000000000), SameAsDefault, "{\"timeout_secs\":0}"), "invalid requested=none default=Finite(30000000000) ceiling=SameAsDefault"),
     ((NoDeadline, CeilingMs(3000), "{\"timeout_secs\":1.5}"), "invalid requested=1500 default=NoDeadline ceiling=CeilingMs(3000)"),
-    ((Finite(1000000001), SameAsDefault, "{\"timeout_secs\":1}"), "ExplicitMs(1000) requested=1000 clamped=false default=Finite(1000000001) ceiling=SameAsDefault")
+    ((Finite(1000000001), SameAsDefault, "{\"timeout_secs\":1}"), "ExplicitMs(1000) requested=1000 clamped=false default=Finite(1000000001) ceiling=SameAsDefault"),
+    ((Finite(999999999), SameAsDefault, "{\"timeout_secs\":1}"), "SessionDefault requested=1000 clamped=true default=Finite(999999999) ceiling=SameAsDefault"),
+    ((Finite(30000000000), CeilingMs(300000), "{\"timeout_secs\":30}"), "ExplicitMs(30000) requested=30000 clamped=false default=Finite(30000000000) ceiling=CeilingMs(300000)"),
+    ((Finite(1000000000), CeilingMs(1500), "{\"timeout_secs\":2}"), "ExplicitMs(1500) requested=2000 clamped=true default=Finite(1000000000) ceiling=CeilingMs(1500)")
   ]
 {
   show_resolution(resolve_text(limits_of(default, ceiling), text))
 }
 
 -- THE AGREEMENT ROWS (r9). Whichever way a result is reached, what it holds is the
--- limits it was resolved from: valid, invalid and absent requests, loopback, extension.
+-- limits it was resolved from: valid, invalid and absent requests. `row_loopback` and
+-- `row_extension` pin those two paths, and these rows do not go through them.
 func agrees(result: ProcessResolution, limits: ProcessLimits) -> bool {
   match result {
     ProcessResolved(r) => show_session_limit(r.session_default) == show_session_limit(limits.default) && show_ceiling(r.effective_ceiling) == show_ceiling(limits.ceiling),
@@ -730,15 +738,19 @@ func row_fields(default: SessionLimit, ceiling: Ceiling, text: string, attempted
     ((Finite(30000000000), CeilingMs(300000), "{\"timeout_secs\":1.5}", true), "{\"requested_timeout_ms\":1500,\"max_timeout_ms\":300000}"),
     ((Finite(30000000000), CeilingMs(300000), "{\"timeout_secs\":0}", true), "{\"max_timeout_ms\":300000}"),
     ((Finite(30000000000), SameAsDefault, "{\"timeout_secs\":10000000000000000}", true), "{\"max_timeout_ms\":30000}"),
-    ((NoDeadline, SameAsDefault, "{\"timeout_secs\":\"60\"}", false), "{\"max_timeout_ms\":null}")
+    ((NoDeadline, SameAsDefault, "{\"timeout_secs\":\"60\"}", false), "{\"max_timeout_ms\":null}"),
+    ((Finite(30000000000), CeilingMs(300000), "{\"timeout_secs\":400}", false), "{\"requested_timeout_ms\":400000,\"max_timeout_ms\":300000}"),
+    ((Finite(30000000000), CeilingMs(300000), "{\"timeout_secs\":1.5}", false), "{\"requested_timeout_ms\":1500,\"max_timeout_ms\":300000}")
   ]
 {
   encode(JObject(process_limit_fields(resolve_text(limits_of(default, ceiling), text), attempted)))
 }
 
 -- D7's expiry table with a carrier, A10's `Finite(0)` at `t = 0`, and `t` compared
--- safely. The last two rows are the boundary: at the largest `n`, a `t` on each side
--- of the point where `t * 1000000` wraps. See `scripted_duration_exceeds`.
+-- safely. The two rows at the largest `n` are the boundary: a `t` on each side of the
+-- point where `t * 1000000` wraps. See `scripted_duration_exceeds`. The rows after the
+-- `-2000` one combine the tables: a ceiling beside a default that decides, and a
+-- non-zero `legacy`, which in `Limits` mode no longer governs a process tool (D7).
 func row_expires(default: SessionLimit, ceiling: Ceiling, text: string, t: int, legacy: int) -> bool
   tests [
     ((NoDeadline, SameAsDefault, "{}", 9223372036854775807, 5), false),
@@ -758,7 +770,15 @@ func row_expires(default: SessionLimit, ceiling: Ceiling, text: string, t: int, 
     ((Finite(30000000000), SameAsDefault, "{\"timeout_secs\":5}", 5001, 0), true),
     ((NoDeadline, CeilingMs(3000), "{\"timeout_secs\":5}", 3000, 0), false),
     ((NoDeadline, CeilingMs(3000), "{\"timeout_secs\":5}", 3001, 0), true),
-    ((Finite(-1000000000), SameAsDefault, "{}", -2000, 0), true)
+    ((Finite(-1000000000), SameAsDefault, "{}", -2000, 0), true),
+    ((NoDeadline, CeilingMs(3000), "{}", 9223372036854775807, 0), false),
+    ((Finite(1000000000), CeilingMs(3000), "{\"timeout_secs\":2}", 1500, 1000), false),
+    ((Finite(1000000000), CeilingMs(3000), "{\"timeout_secs\":2}", 2001, 5000), true),
+    ((Finite(30000000000), SameAsDefault, "{}", 30000, 1000), false),
+    ((Finite(30000000000), SameAsDefault, "{}", 30001, 60000), true),
+    ((Finite(30000000000), CeilingMs(300000), "{}", 30001, 0), true),
+    ((Finite(30000000000), SameAsDefault, "{\"timeout_secs\":60}", 30001, 0), true),
+    ((Finite(0), CeilingMs(3000), "{\"timeout_secs\":2}", 0, 0), false)
   ]
 {
   process_deadline_expires(carrier_of(default, ceiling, text), t, legacy)
@@ -777,8 +797,10 @@ func row_expires_no_carrier(t: int, legacy: int) -> bool
   process_deadline_expires(None, t, legacy)
 }
 
--- A9's projection for each outcome: `ExplicitMs` records its value, and everything else
--- records the legacy value it was handed, here a value no limit produces.
+-- A9's projection for each resolved outcome: `ExplicitMs` records its value, and
+-- everything else records the legacy value it was handed, here a value no limit
+-- produces. An invalid request has no projection: D7 stops it before a `ToolInvocation`
+-- exists, and `row_resolve` pins that it is `ProcessInvalid`.
 func row_project(default: SessionLimit, ceiling: Ceiling, text: string) -> int
   tests [
     ((Finite(30000000000), SameAsDefault, "{\"timeout_secs\":29}"), 29000),
@@ -789,8 +811,7 @@ func row_project(default: SessionLimit, ceiling: Ceiling, text: string) -> int
     ((Finite(0), SameAsDefault, "{\"timeout_secs\":1}"), 4242),
     ((NoDeadline, SameAsDefault, "{\"timeout_secs\":5}"), 5000),
     ((NoDeadline, SameAsDefault, "{}"), 4242),
-    ((Finite(1000000000), CeilingMs(3000), "{\"timeout_secs\":4}"), 3000),
-    ((Finite(30000000000), SameAsDefault, "{\"timeout_secs\":0}"), 4242)
+    ((Finite(1000000000), CeilingMs(3000), "{\"timeout_secs\":4}"), 3000)
   ]
 {
   projected_timeout_ms(carrier_of(default, ceiling, text), 4242)
