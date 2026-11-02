@@ -344,12 +344,62 @@ m c.micro-3bc 'Go grammar: the micro sign U+03BC' 'U+03BC is not a unit' row_cei
 edit 'let nine = match stringToInt(substring("${digits}000000000", 0, 9)) { Some(v) => v, None => 0 };' 'let nine = 0;'
 m c.fraction 'Go grammar: a decimal fraction' 'the fraction is dropped' row_ceiling_test_6 row_ceiling_test_7
 edit 'substring("${digits}000000000", 0, 9)' 'digits'
-m c.fraction-digits 'Go: precision past nanoseconds is dropped' 'the digits are not cut or padded to nine' row_ceiling_test_6 row_ceiling_test_14
+m c.fraction-digits 'Go: under s and below, precision past nanoseconds is dropped' 'the digits are not cut or padded to nine' row_ceiling_test_6 row_ceiling_test_14
 edit '(0, _) => None,' '(0, _) => Some(acc),'
 m c.no-unit 'Go grammar: every term has a unit' 'trailing text ends the parse' row_ceiling_test_41
 edit 'if j == i && fraction == "" then None
     else ' ''
 m c.no-digits 'Go grammar: every term has digits' 'a unit alone is a term' row_ceiling_test_37
+
+# ---- parse_ceiling_ms, the review's 5.1: a fraction under m and h.
+edit 'if unit < 60000000000 then false' 'if unit != 60000000000 then false'
+m c.subms-h 'D2 "a whole number of milliseconds": 1.0000000001h is 3600000000360 ns' 'the refusal is lost under h' row_ceiling_test_42
+edit 'if unit < 60000000000 then false' 'if unit != 3600000000000 then false'
+m c.subms-m 'D2 "a whole number of milliseconds": 1.0000000001m is 60000000006 ns' 'the refusal is lost under m' row_ceiling_test_43
+edit 'decimal_value(digits, 9, length(digits), 0)' 'decimal_value(digits, 9, if length(digits) > 10 then 10 else length(digits), 0)'
+m c.subms-far 'D2 "a whole number of milliseconds": 1.000000000001h is 3600000000003 ns' 'only the tenth digit is read' row_ceiling_test_44
+edit 'Some(0) => false,' 'Some(0) => length(digits) > 9,'
+m c.subms-zeros 'survival, D2: trailing zeros under m and h leave a whole number of milliseconds' 'any digit past the ninth is refused' row_ceiling_test_45 row_ceiling_test_46
+edit '    _ => true
+' '    Some(_) => true,
+    None => false
+'
+m c.subms-long 'D2 "a whole number of milliseconds": a digit run too long to hold is not all zeros' 'a run too long to hold is read as zeros' row_ceiling_test_47
+edit 'if unit < 60000000000 then false' 'if unit < 1000000000 then false'
+m c.subms-s 'Go: under s a tenth digit is below a nanosecond' 'the refusal reaches s' row_ceiling_test_14
+
+# ---- The review's section 2, B-numbers its own. Each edit breaks one combination of two tables.
+edit 'NoDeadline => false,' 'NoDeadline => match resolved.effective_ceiling { CeilingMs(c) => t > c, SameAsDefault => false },'
+m B1 'D7: NoDeadline with a CeilingMs: a call that asks for nothing has no deadline' 'the NoDeadline arm expires at the ceiling' row_expires_test_19
+edit 'ExplicitMs(m) => t > m,' 'ExplicitMs(m) => t > m || (legacy_timeout_ms > 0 && t > legacy_timeout_ms),'
+m B2a 'D7: in Limits mode legacy no longer governs process tools (default 1000, ceiling 3000, request 2000)' 'legacy also expires an explicit budget' row_expires_test_20
+edit 'ExplicitMs(m) => t > m,' 'ExplicitMs(m) => t > m && (legacy_timeout_ms <= 0 || t > legacy_timeout_ms),'
+m B2d 'D7: in Limits mode legacy no longer governs process tools (the thirteenth row)' 'a larger legacy extends an explicit budget' row_expires_test_21
+edit 'else scripted_duration_exceeds(t, n)' 'else scripted_duration_exceeds(t, n) || (legacy_timeout_ms > 0 && t > legacy_timeout_ms)'
+m B2b 'D7: in Limits mode legacy no longer governs process tools (a session default)' 'legacy also expires a finite default' row_expires_test_22
+edit 'else scripted_duration_exceeds(t, n)' 'else scripted_duration_exceeds(t, n) && (legacy_timeout_ms <= 0 || t > legacy_timeout_ms)'
+m B2c 'D7: in Limits mode legacy no longer governs process tools (legacy above the default)' 'a larger legacy extends a finite default' row_expires_test_23
+edit 'else scripted_duration_exceeds(t, n)' 'else match resolved.effective_ceiling { CeilingMs(c) => t > c, SameAsDefault => scripted_duration_exceeds(t, n) }'
+m B3 'ADR 6: a call that requests nothing stops at the default; D7: SessionDefault, Finite(n) expires when t * 1_000_000 > n' 'SessionDefault under a ceiling expires at the ceiling' row_expires_test_24
+edit 'SessionDefault => match resolved.session_default {
+        NoDeadline' 'SessionDefault => if resolved.clamped then (match resolved.requested_ms { Some(r) => t > r, None => false }) else match resolved.session_default {
+        NoDeadline'
+m B4 'ADR 6: a request of 60 s must not extend it' 'a clamped SessionDefault expires at the request' row_expires_test_25
+edit 'ExplicitMs(m) => t > m,' 'ExplicitMs(m) => match resolved.session_default { Finite(n) => n <= 0 || t > m, NoDeadline => t > m },'
+m B5 'D7: ExplicitMs(m) expires when t > m; n <= 0 is under SessionDefault only' 'a non-positive default beats an explicit budget' row_expires_test_26
+edit '(SessionDefault, r_ns > d)' '(SessionDefault, r > ms_rounded_up(d))'
+m B6 'D7: r_ns >= d is SessionDefault, clamped only if r_ns > d' 'the clamp compares r with the default rounded up to ms' row_resolve_test_22
+edit 'CeilingMs(c) => (ExplicitMs(clamp_ms(r, c)), r > c),' 'CeilingMs(c) => match limits.default {
+      Finite(d) => if r * 1000000 == d then (SessionDefault, false) else (ExplicitMs(clamp_ms(r, c)), r > c),
+      NoDeadline => (ExplicitMs(clamp_ms(r, c)), r > c)
+    },'
+m B14 'D7: CeilingMs(c), r <= c is ExplicitMs(r)' 'under a ceiling, r_ns equal to the default gives SessionDefault' row_resolve_test_23
+edit 'if request <= ceiling then request else ceiling' 'if request <= ceiling then request else ceiling / 1000 * 1000'
+m B15 'D7: CeilingMs(c), r > c is ExplicitMs(c)' 'the clamp rounds c down to whole seconds' row_resolve_test_24
+edit 'requested_field(resolved.requested_ms) ++ [max_field(resolved.session_default, resolved.effective_ceiling)]' '(if resolved.clamped then [] else requested_field(resolved.requested_ms)) ++ [max_field(resolved.session_default, resolved.effective_ceiling)]'
+m B16 'D4: no attempt carries requested_timeout_ms for a positive whole-millisecond request' 'the no-attempt arm drops a clamped request' row_fields_test_20
+edit 'requested_field(invalid.requested_ms) ++ [max_field(invalid.session_default, invalid.effective_ceiling)]' '(if attempted then requested_field(invalid.requested_ms) else []) ++ [max_field(invalid.session_default, invalid.effective_ceiling)]'
+m B18 'D4: no attempt carries requested_timeout_ms for a positive whole-millisecond request' 'the invalid arm reads attempted' row_fields_test_21
 
 clean && echo "tree clean" || { echo "tree dirty"; exit 2; }
 echo "commit $COMMIT"
