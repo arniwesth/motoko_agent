@@ -115,7 +115,7 @@ Peak machine memory during the heavy runs was about 8 GiB, sampled every 20 s, u
 
 `manifest-A`, `tools/eval_protected/`, `scripts/eval/` and `MATRIX.expected.tsv` are untouched. 33 rows fail and 33 are missing, all at base too. `evidence/W5/matrix_rows_left_red.txt` lists each one:
 
-- **Failed:** `M13.*` (17) and `M15.*` (16), the rows that see a stale `manifest-A`.
+- **Failed:** `M13.*` (16) and `M15.*` (17), the rows that see a stale `manifest-A`.
 - **Missing:** `M7.*` (33), because `tools/eval_protected/selftest.py` exits non-zero.
 
 `make eval_matrix` does not report W1's checks, or the new `r6_transcoded_replays_strict`, because `MATRIX.expected.tsv` has no rows for them. They ran inside it and passed. Proposed row for the regeneration:
