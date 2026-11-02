@@ -1221,7 +1221,8 @@ export func exit_code_witness() -> () ! {AI, Clock, Env, FS, IO, Net, Process, S
     call: { id: "d23-live", tool: "BashExec", arguments: jo([kv("cmd", js("exit 7"))]) },
     workdir: ".",
     timeout_ms: 0,
-    started_at_ms: 0
+    started_at_ms: 0,
+    process: None
   };
   let live = world_tool(empty_world_state(), live_inv);
   let ok_live = check("live arm: a real BashExec exiting 7 carries typed exit_code 7",

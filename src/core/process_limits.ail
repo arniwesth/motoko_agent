@@ -185,6 +185,74 @@ export pure func extension_process(mode: LimitMode) -> Option[ResolvedProcess] {
   }
 }
 
+-- D7's carrier rule names these two tools and no others: `ReadFile`, `Search`,
+-- `WriteFile` and `EditFile` keep today's scripted deadline exactly (A10).
+export pure func is_process_tool(tool: string) -> bool
+  ensures {
+    (tool != "BashExec" || result) && (tool != "RunTests" || result)
+      && (tool != "ReadFile" || not result) && (tool != "Search" || not result)
+      && (tool != "WriteFile" || not result) && (tool != "EditFile" || not result)
+  }
+  tests [
+    ("BashExec", true),
+    ("RunTests", true),
+    ("ReadFile", false),
+    ("Search", false),
+    ("WriteFile", false),
+    ("EditFile", false),
+    ("bashexec", false),
+    ("", false)
+  ]
+{
+  tool == "BashExec" || tool == "RunTests"
+}
+
+-- D7's main-dispatch rule, as `tool_phase` calls it: `None` for a tool with no carrier
+-- and for all of `Legacy`, where a request is ignored as it is today, and the
+-- resolver's answer otherwise. It sits here so the rows below can pin it without a world.
+-- contracts: BLOCKED — takes a recursive `Json` and returns `Option[ProcessResolution]`, which the Z3 fragment does not encode.
+export pure func dispatch_resolution(mode: LimitMode, tool: string, args: Json) -> Option[ProcessResolution] {
+  match mode {
+    Legacy => None,
+    Limits(limits) => if is_process_tool(tool) then Some(resolve_process_limit(limits, args)) else None
+  }
+}
+
+-- R8's rule, as `session.ail`'s bridge calls it: a process tool takes
+-- `extension_process`, and any other tool has no carrier. It does not take the
+-- arguments, so it cannot read `timeout_secs`.
+-- contracts: BLOCKED — returns `Option[ResolvedProcess]`, which the Z3 fragment does not encode.
+export pure func extension_tool_process(tool: string, mode: LimitMode) -> Option[ResolvedProcess] {
+  if is_process_tool(tool) then extension_process(mode) else None
+}
+
+-- D7's display of `ToolDeadlineExceeded.timeout_ms`: what the carrier says, and with no
+-- carrier the value that decided the deadline. `NoDeadline` displays nothing because
+-- it never expires, so a deadline cannot ask; the fallback keeps this total.
+-- contracts: BLOCKED — takes `Option[ResolvedProcess]`, which the Z3 fragment does not encode.
+export pure func deadline_display_ms(carrier: Option[ResolvedProcess], legacy_timeout_ms: int) -> int {
+  match carrier {
+    None => legacy_timeout_ms,
+    Some(resolved) => match display_timeout_ms(resolved) {
+      Some(m) => m,
+      None => legacy_timeout_ms
+    }
+  }
+}
+
+-- Whether a carrier holds a limit a plain `exec` cannot apply. `SessionDefault` is a
+-- plain `exec` (D7), so only `ExplicitMs` needs the primitive W10 wires in.
+-- contracts: BLOCKED — takes `Option[ResolvedProcess]`, which the Z3 fragment does not encode.
+export pure func needs_process_primitive(carrier: Option[ResolvedProcess]) -> bool {
+  match carrier {
+    None => false,
+    Some(resolved) => match resolved.budget {
+      ExplicitMs(_) => true,
+      SessionDefault => false
+    }
+  }
+}
+
 -- D4: a native default in whole milliseconds, rounded up, `0` for any non-positive
 -- value. Written without `n + 999999`, which overflows near the top of the range.
 -- The `ensures` holds over unbounded integers: `ailang run -verify-contracts` fails it near the top of the range, where its product wraps.
@@ -820,4 +888,70 @@ func row_project_no_carrier(legacy: int) -> int
   tests [(0, 0), (4242, 4242)]
 {
   projected_timeout_ms(None, legacy)
+}
+
+-- D7's main-dispatch rule (W6). `Legacy` ignores a request, a tool with no carrier
+-- never reaches the resolver, and an invalid request is the resolver's to answer.
+func row_dispatch_resolution(mode: LimitMode, tool: string, text: string) -> string
+  tests [
+    ((Legacy, "BashExec", "{\"timeout_secs\":2}"), "no resolution"),
+    ((Legacy, "BashExec", "{\"timeout_secs\":0}"), "no resolution"),
+    ((Limits({ default: Finite(1000000000), ceiling: CeilingMs(3000) }), "ReadFile", "{\"timeout_secs\":2}"), "no resolution"),
+    ((Limits({ default: Finite(1000000000), ceiling: CeilingMs(3000) }), "BashExec", "{\"timeout_secs\":2}"), "ExplicitMs(2000) requested=2000 clamped=false default=Finite(1000000000) ceiling=CeilingMs(3000)"),
+    ((Limits({ default: Finite(1000000000), ceiling: CeilingMs(3000) }), "RunTests", "{}"), "SessionDefault requested=none clamped=false default=Finite(1000000000) ceiling=CeilingMs(3000)"),
+    ((Limits({ default: Finite(1000000000), ceiling: CeilingMs(3000) }), "RunTests", "{\"timeout_secs\":0}"), "invalid requested=none default=Finite(1000000000) ceiling=CeilingMs(3000)")
+  ]
+{
+  match dispatch_resolution(mode, tool, args_of(text)) {
+    None => "no resolution",
+    Some(r) => show_resolution(r)
+  }
+}
+
+-- R8 through the tool name: only a process tool has a carrier, and `Legacy` has none.
+func row_extension_tool(tool: string, mode: LimitMode) -> string
+  tests [
+    (("BashExec", Legacy), "no carrier"),
+    (("ReadFile", Limits({ default: Finite(7000000000), ceiling: CeilingMs(9000) })), "no carrier"),
+    (("RunTests", Limits({ default: Finite(7000000000), ceiling: CeilingMs(9000) })), "SessionDefault requested=none clamped=false default=Finite(7000000000) ceiling=SameAsDefault")
+  ]
+{
+  match extension_tool_process(tool, mode) {
+    None => "no carrier",
+    Some(r) => show_resolved(r)
+  }
+}
+
+-- D7: the deadline reports D4's display value, and with no carrier what decided it.
+func row_deadline_display(default: SessionLimit, ceiling: Ceiling, text: string, legacy: int) -> int
+  tests [
+    ((Finite(1000000000), CeilingMs(3000), "{\"timeout_secs\":2}", 5000), 2000),
+    ((Finite(1000000000), CeilingMs(3000), "{\"timeout_secs\":4}", 5000), 3000),
+    ((Finite(1000000000), CeilingMs(3000), "{}", 5000), 1000),
+    ((Finite(1500000), SameAsDefault, "{}", 5000), 2),
+    ((Finite(0), SameAsDefault, "{}", 5000), 0),
+    ((NoDeadline, SameAsDefault, "{}", 5000), 5000)
+  ]
+{
+  deadline_display_ms(carrier_of(default, ceiling, text), legacy)
+}
+
+func row_deadline_display_no_carrier(legacy: int) -> int
+  tests [(5000, 5000), (0, 0)]
+{
+  deadline_display_ms(None, legacy)
+}
+
+-- Only `ExplicitMs` needs the primitive. `SessionDefault` is a plain `exec`, including a
+-- request that resolved to it, and no carrier is `Legacy` or another tool.
+func row_needs_primitive(default: SessionLimit, ceiling: Ceiling, text: string) -> bool
+  tests [
+    ((Finite(30000000000), CeilingMs(300000), "{\"timeout_secs\":60}"), true),
+    ((Finite(30000000000), SameAsDefault, "{\"timeout_secs\":5}"), true),
+    ((Finite(30000000000), SameAsDefault, "{\"timeout_secs\":60}"), false),
+    ((Finite(30000000000), CeilingMs(300000), "{}"), false),
+    ((Finite(30000000000), CeilingMs(300000), "{\"timeout_secs\":0}"), false)
+  ]
+{
+  needs_process_primitive(carrier_of(default, ceiling, text))
 }

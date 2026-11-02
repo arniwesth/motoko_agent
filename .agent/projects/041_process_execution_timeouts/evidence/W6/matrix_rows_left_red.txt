@@ -1,0 +1,71 @@
+# make eval_matrix at d066e961 (head) and df14e9cb (base), both run from /workspaces.
+# 619 rows on each side, 0 differ in any field but the commit. credited=418 equal=124 failed=33 inapplicable=11 missing=33 on both.
+# Rows left red under R11, all red at base too. case_id, observed, expected.
+# failed (33):
+M13.ProtectedRegionTouched.span_hash refused ProtectedRegionTouched:changed:<imports:1> expects refused ProtectedRegionTouched:changed:tool_outcome_record
+M13.ProtectedRegionTouched.missing refused ProtectedRegionTouched:changed:<imports:1> expects refused ProtectedRegionTouched:missing:scripted_step_faults
+M13.ProtectedRegionTouched.duplicate refused ProtectedRegionTouched:changed:<imports:1> expects refused ProtectedRegionTouched:duplicate:provider_api_model
+M13.ProtectedRegionTouched.moved refused ProtectedRegionTouched:changed:<imports:1> expects refused ProtectedRegionTouched:moved:provider_api_model
+M13.clean.refusals refused ProtectedRegionTouched:changed:<imports:1> expects pass -
+M13.GuardTripped.run refused ProtectedRegionTouched:changed:<imports:1> expects refused GuardTripped:monitor_not_started
+M13.PreflightMismatch.warm_cache.live fail (asserted) expects refused PreflightMismatch:compiled_set:hits
+M13.PreflightMismatch.selection.module_outside_root.live fail (asserted) expects refused PreflightMismatch:selection:module_outside_root:src/core/phase_vocab
+M13.PreflightMismatch.loader_rules fail (asserted) expects refused PreflightMismatch:loader_rules:moved:internal/loader/stdlib_resolver.go
+M13.PreflightMismatch.trace_loader_discarded fail (asserted) expects pass -
+M13.PreflightMismatch.pins fail (asserted) expects pass -
+M13.PreflightMismatch.run.during_run fail (asserted) expects refused PreflightMismatch:profile:profile_id
+M13.PreflightMismatch.run.dev_evaluator_real_entry refused ProtectedRegionTouched:changed:<imports:1> expects refused PreflightMismatch:e_unpinned:dev_generator
+M13.live.provenance_record fail (asserted) expects pass -
+M13.ProgramUndecodable.run refused ProtectedRegionTouched:changed:<imports:1> expects refused ProgramUndecodable:ProgramStructurallyInvalid(artifact-digest-mismatch)
+M13.ProgramUndecodable.run.live refused ProtectedRegionTouched:changed:<imports:1> expects refused ProgramUndecodable:ProgramStructurallyInvalid(artifact-digest-mismatch)
+M15.InadmissibleCandidate.path.passes_path fail (asserted) expects pass -
+M15.InadmissibleCandidate.path.passes_k0 fail (asserted) expects pass -
+M15.InadmissibleCandidate.intent.passes_intent refused ProtectedRegionTouched:changed:<imports:1> expects pass -
+M15.InadmissibleCandidate.path.passes_protected fail (asserted) expects pass -
+M15.InadmissibleCandidate.digest_function_only.passes_path refused ProtectedRegionTouched:changed:<imports:1> expects pass -
+M15.InadmissibleCandidate.digest_function_only.passes_k0 fail (asserted) expects pass -
+M15.InadmissibleCandidate.digest_function_only.intent.passes_intent refused ProtectedRegionTouched:changed:<imports:1> expects pass -
+M15.EvaluatorTouched.passes_evaluator refused ProtectedRegionTouched:changed:<imports:1> expects pass -
+M15.ProtectedRegionTouched.passes_protected refused ProtectedRegionTouched:changed:<imports:1> expects pass -
+M15.clean.candidate fail (asserted) expects reproduced -
+M15.InadmissibleCandidate.path fail (asserted) expects diverged K2:ProjectionDiffers
+M15.InadmissibleCandidate.intent fail (asserted) expects diverged K2:ProjectionDiffers
+M15.InadmissibleCandidate.digest_function_only fail (asserted) expects diverged K7:SeedDigestDiffers
+M15.InadmissibleCandidate.digest_function_only.intent fail (asserted) expects diverged K7:SeedDigestDiffers
+M15.EvaluatorTouched fail (asserted) expects diverged K2:UnsafeIdentity
+M15.ProtectedRegionTouched.fixture_comment_only refused ProtectedRegionTouched:changed:<imports:1> expects refused ProtectedRegionTouched:changed:has_key
+M15.ProtectedRegionTouched fail (asserted) expects diverged K2:UnsafeIdentity
+# missing (33): tools/eval_protected/selftest.py exits non-zero on both sides:
+M7.clean
+M7.ws_in_literal
+M7.ws_doubled_in_literal
+M7.token_tool_outcome_record
+M7.import_paren_name
+M7.import_joined
+M7.import_alias
+M7.comment_in_span
+M7.unbraced_last_line
+M7.deriving
+M7.moved_other_file
+M7.renamed_missing
+M7.renamed_readded
+M7.moved_within_file
+M7.outside_every_span
+M7.interp_brace
+M7.new_decl_dup_name
+M7.dup_in_other_protected_file
+M7.call_site_changed
+M7.call_site_duplicated
+M7.unterminated_string
+M7.unbalanced_paren
+M7.pin_drift_reported
+M7.diff_names_only
+M7.gen_missing_symbol
+M7.gen_overlap
+M7.gen_duplicate_symbol
+M7.overlap_two_declarations
+M7.crosscheck_every_nonbraced_span
+M7.crosscheck_detects_short_span
+M7.pins_at_a
+M7.pins_at_a_with_reader
+M7.pins_corrupted

@@ -340,7 +340,7 @@ func sm_base() -> Ports ! {AI, Clock, Env, FS, IO, Process, Trace} { recording_p
 
 pure func sm_inv(id: string, command: string) -> ToolInvocation {
   { call: { id: id, tool: "BashExec", arguments: jo([kv("command", js(command))]) },
-    workdir: ".", timeout_ms: 30000, started_at_ms: 500 }
+    workdir: ".", timeout_ms: 30000, started_at_ms: 500, process: None }
 }
 
 pure func sm_tool(id: string, content: string, duration: int) -> ScriptedTool {

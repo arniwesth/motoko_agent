@@ -124,15 +124,17 @@
 
 module scripts/dst/strict_replay_dst
 
-import std/json (Json, jo)
-import std/fs as FS (readFileResult)
+import std/json (Json, jo, decode, JObject)
+import std/process (exec)
+import std/bytes (toString)
+import std/fs as FS (readFileResult, fileExists)
 import std/io (println, exit)
 import std/list as List (length)
-import std/string (contains)
+import std/string (contains, trim)
 import std/ai (Message, ToolCall)
 import std/option (Option, None, Some)
 import std/result (Result, Ok, Err)
-import src/core/process_limits (Legacy)
+import src/core/process_limits (ResolvedProcess, LimitMode, Legacy, Limits, Finite, NoDeadline, CeilingMs, SameAsDefault, SessionLimit, Ceiling, ProcessResolved, ProcessInvalid, resolve_process_limit)
 import src/core/config (CostRates, VerificationConfig)
 import src/core/session as Session
 import src/core/session (TracedSessionResult)
@@ -141,6 +143,7 @@ import src/core/test/stub_step (RecordingWorld)
 import src/core/ports (ScriptedStep, WorldState, ScriptedTool, empty_world_state,
   -- 034 W1.3: the frozen v5 fixture's tool seam is replayed through the recorder.
   ToolInvocation, ToolCompleted, ToolFailed, recording_tool, encode_tool_outcome,
+  world_tool, world_ext_effect, ToolOutcome, process_limit_unavailable_code,
   encode_provider_outcome, encode_exhausted_provider_outcome)
 import src/core/types (Msg)
 import src/core/tool_contract (ToolCallEnvelope)
@@ -231,6 +234,8 @@ import pkg/sunholo/motoko_ext_abi/types (PreStepOutcome, ToolHandleOutcome, Resp
   ToolSchema
 )
 import src/core/test/ext_fixture (fixture_hooks)
+import src/core/ext_world (world_to_token, world_json)
+import src/core/test/stub_step (scripted_ports)
 
 -- ---------------------------------------------------------------------------
 -- Fixtures
@@ -674,7 +679,7 @@ pure func program_of(w: WorldState, initial: WorldState) -> ExecutionProgram {
       files: [],
       clock_epoch: initial.clock_ms,
       extension_profile: "driver_only/${driver_only_version()}",
-      process_limits: Legacy
+      process_limits: initial.process_limits
     },
     bounds: {
       max_interactions: 256,
@@ -697,6 +702,8 @@ pure func program_of(w: WorldState, initial: WorldState) -> ExecutionProgram {
 -- ---------------------------------------------------------------------------
 
 func run_scenario(
+  -- 041 W6: the mode the discovery run starts in. The program takes it from there.
+  mode: LimitMode,
   label: string,
   script: [ScriptedStep],
   answers: [string],
@@ -723,7 +730,7 @@ func run_scenario(
   -- which is the claim WI-D3 measured to be false.
   context_resolutions: int
 ) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
-  let initial = base_world(script, answers, tools);
+  let initial = { base_world(script, answers, tools) | process_limits: mode };
 
   -- ---- Discovery: produce the exact program ------------------------------
   let discovery = run_recording("srdisc_${label}", initial, step_budget);
@@ -1416,7 +1423,7 @@ func replay_tool_seam(xs: [Interaction], w: WorldState) -> WorldState ! {IO, Pro
       match i.identity.body {
         ToolIdentity(_, call_id, tool) => {
           let inv: ToolInvocation = { call: { id: call_id, tool: tool, arguments: jo([]) },
-                                      workdir: "", timeout_ms: i.deadline_ms, started_at_ms: 0 };
+                                      workdir: "", timeout_ms: i.deadline_ms, started_at_ms: 0, process: None };
           replay_tool_seam(rest, recording_tool(w, inv).next_state)
         },
         _ => replay_tool_seam(rest, { w | log: w.log ++ [i] })
@@ -1481,16 +1488,494 @@ pure func join_strs(xs: [string]) -> string {
   match xs { [] => "", x :: [] => x, x :: rest => "${x} | ${join_strs(rest)}" }
 }
 
+-- ===========================================================================
+-- 041 W6: A `Limits` PROGRAM, DRIVEN THROUGH THE WHOLE SESSION
+-- ===========================================================================
+--
+-- The rows below are ADR-002 D7's scripted half. No writer produces a `Limits` program and
+-- no live world holds one (standing rule 6), so these worlds are built here.
+
+-- The default, ceiling and request the plan's row names: 1000, 3000 and 2000. The env's
+-- 5000 (`world_env`) is a value none of them equal, so a process tool governed by the env
+-- is visible, and it is what the other four tools keep.
+pure func lm_mode() -> LimitMode { Limits({ default: Finite(1000000000), ceiling: CeilingMs(3000) }) }
+
+pure func lm_tool(duration: int, content: string) -> ScriptedTool {
+  { tool_call_id: "", duration_ms: duration, code: "", message: "", content: content, exit_code: 0, after_dispatch: true, applied: false }
+}
+
+pure func lm_call(id: string, tool: string, args: string) -> ToolCall { { id: id, name: tool, arguments: args } }
+
+-- One dispatch: what it asks, how long the world says it took, the `deadline_ms` it must
+-- record, and a piece of the payload it must record.
+type LimitRow = { rule: string, id: string, tool: string, args: string, duration: int, recorded: int, payload: string }
+
+pure func late(ms: int) -> string { "\"result\":\"deadline_exceeded\",\"timeout_ms\":${show(ms)}" }
+pure func done_with(content: string) -> string { "\"content\":\"${content}\"" }
+
+pure func two_secs() -> string { "{\"cmd\":\"true\",\"timeout_secs\":2}" }
+pure func five_secs() -> string { "{\"cmd\":\"true\",\"timeout_secs\":5}" }
+
+func limit_rows() -> [LimitRow] {
+  [{ rule: "A9 1000/3000/2000: a request outlives the default", id: "req", tool: "BashExec", args: two_secs(), duration: 1500, recorded: 2000, payload: done_with("LM-req") },
+   { rule: "A9 1000/3000/2000: a request stops at itself", id: "req_late", tool: "BashExec", args: two_secs(), duration: 2500, recorded: 2000, payload: late(2000) },
+   { rule: "A14a: a clamped request runs to the ceiling", id: "clamp", tool: "BashExec", args: five_secs(), duration: 2900, recorded: 3000, payload: done_with("LM-clamp") },
+   { rule: "A14a: a clamped request stops at the ceiling", id: "clamp_late", tool: "RunTests", args: five_secs(), duration: 3100, recorded: 3000, payload: late(3000) },
+   { rule: "A9: no request runs to the default and records today's value", id: "none", tool: "BashExec", args: "{\"cmd\":\"true\"}", duration: 900, recorded: 5000, payload: done_with("LM-none") },
+   { rule: "A9: no request stops at the default, not at the env's 5000", id: "none_late", tool: "RunTests", args: "{\"cmd\":\"true\"}", duration: 1100, recorded: 5000, payload: late(1000) },
+   { rule: "A10 ReadFile keeps today's deadline: past the program's default, under the env's", id: "read", tool: "ReadFile", args: "{\"path\":\"x\",\"timeout_secs\":1}", duration: 4000, recorded: 5000, payload: done_with("LM-read") },
+   { rule: "A10 ReadFile keeps today's deadline: stops at the env's", id: "read_late", tool: "ReadFile", args: "{\"path\":\"x\",\"timeout_secs\":1}", duration: 5001, recorded: 5000, payload: late(5000) },
+   { rule: "A10 Search keeps today's deadline", id: "search", tool: "Search", args: "{\"pattern\":\"x\"}", duration: 4000, recorded: 5000, payload: done_with("LM-search") },
+   { rule: "A10 Search keeps today's deadline: stops at the env's", id: "search_late", tool: "Search", args: "{\"pattern\":\"x\"}", duration: 5001, recorded: 5000, payload: late(5000) },
+   { rule: "A10 WriteFile keeps today's deadline", id: "write", tool: "WriteFile", args: "{\"path\":\"x\",\"content\":\"y\"}", duration: 4000, recorded: 5000, payload: done_with("LM-write") },
+   { rule: "A10 WriteFile keeps today's deadline: stops at the env's", id: "write_late", tool: "WriteFile", args: "{\"path\":\"x\",\"content\":\"y\"}", duration: 5001, recorded: 5000, payload: late(5000) },
+   { rule: "A10 EditFile keeps today's deadline", id: "edit", tool: "EditFile", args: "{\"path\":\"x\",\"edits\":[]}", duration: 4000, recorded: 5000, payload: done_with("LM-edit") },
+   { rule: "A10 EditFile keeps today's deadline: stops at the env's", id: "edit_late", tool: "EditFile", args: "{\"path\":\"x\",\"edits\":[]}", duration: 5001, recorded: 5000, payload: late(5000) }]
+}
+
+pure func rows_to_calls(rows: [LimitRow]) -> [ToolCall] {
+  match rows { [] => [], r :: rest => lm_call(r.id, r.tool, r.args) :: rows_to_calls(rest) }
+}
+
+pure func rows_to_tools(rows: [LimitRow]) -> [ScriptedTool] {
+  match rows { [] => [], r :: rest => lm_tool(r.duration, "LM-${r.id}") :: rows_to_tools(rest) }
+}
+
+pure func approvals(n: int) -> [string] {
+  if n <= 0 then [] else approve_line() :: approvals(n - 1)
+}
+
+pure func tool_interaction(xs: [Interaction], id: string) -> Option[Interaction] {
+  match xs {
+    [] => None,
+    i :: rest => match i.identity.body {
+      ToolIdentity(_, call_id, _) => if call_id == id then Some(i) else tool_interaction(rest, id),
+      _ => tool_interaction(rest, id)
+    }
+  }
+}
+
+pure func row_holds(xs: [Interaction], r: LimitRow) -> bool {
+  match tool_interaction(xs, r.id) {
+    None => false,
+    Some(i) => i.deadline_ms == r.recorded && contains(i.outcome.payload, r.payload)
+  }
+}
+
+pure func row_seen(xs: [Interaction], r: LimitRow) -> string {
+  match tool_interaction(xs, r.id) {
+    None => "no interaction",
+    Some(i) => "deadline_ms=${show(i.deadline_ms)} payload=${i.outcome.payload}"
+  }
+}
+
+func check_rows(label: string, xs: [Interaction], rows: [LimitRow]) -> bool ! {IO} {
+  match rows {
+    [] => true,
+    r :: rest => {
+      let ok = check("${label}: ${r.rule}", row_holds(xs, r), row_seen(xs, r));
+      let others = check_rows(label, xs, rest);
+      ok && others
+    }
+  }
+}
+
+pure func script_of(rows: [LimitRow]) -> [ScriptedStep] {
+  [multi_step("lm", rows_to_calls(rows), []), multi_step("lm done", [], [])]
+}
+
+-- A14a, A9, A10: the whole table, through discovery, the artifact codec and strict replay.
+-- `run_scenario` carries every axis the Legacy scenarios do, including the env count
+-- (`check_discovery`, one read per dispatch) that mutant s4 fails.
+func limits_scenario() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let rows = limit_rows();
+  let n = List.length(rows);
+  let script = script_of(rows);
+  let tools = rows_to_tools(rows);
+  let ok_axes = run_scenario(lm_mode(), "limits", script, approvals(n), tools, 12, true, false, 1);
+
+  let _ = println("");
+  let _ = println("limits (041 W6): every row of the table, recorded, persisted and replayed");
+  let initial = { base_world(script, approvals(n), tools) | process_limits: lm_mode() };
+  let discovery = run_recording("srlm_disc", initial, 12);
+  let ok_rows = check_rows("limits", discovery.world.log, rows);
+  let program = program_of(discovery.world, initial);
+  match persist_round_trip(program) {
+    Err(why) => check("A14a: the Limits program round-trips through the artifact codec", false, why),
+    Ok(back) => {
+      let ok_mode = check("A14a: the decoded program is still Limits",
+                          match back.initial_world.process_limits { Limits(_) => true, Legacy => false },
+                          "the artifact codec returned Legacy");
+      match world_state_of(back, required_class_ids()) {
+        Err(r) => check("A14a: the decoded Limits program reconstitutes a world", false, refusal_rule(r)),
+        Ok(rw) => {
+          let replay = run_recording("srlm_disc", rw, 12);
+          let ms = strict_replay_findings(back.interactions, replay.world.log);
+          let _ = if List.length(ms) > 0 then report_replay(ms) else ();
+          let ok_replay = check("A14a: a Limits program with a clamped request replays strictly from its artifact",
+                                List.length(ms) == 0, "${show(List.length(ms))} mismatch(es) above");
+          let ok_replayed_rows = check_rows("limits replay", replay.world.log, rows);
+          -- THE CONTROL: the same recording against a Legacy world must not agree, or the
+          -- rows above would pass with the mode ignored.
+          let legacy_run = run_recording("srlm_disc", { rw | process_limits: Legacy }, 12);
+          let ok_control = check("A14a control: the same program replayed as Legacy does NOT match",
+                                 List.length(strict_replay_findings(back.interactions, legacy_run.world.log)) > 0,
+                                 "a Legacy replay matched a Limits recording, so nothing above reads the mode");
+          ok_axes && ok_rows && ok_mode && ok_replay && ok_replayed_rows && ok_control
+        }
+      }
+    }
+  }
+}
+
+-- One dispatch in a world of its own, for a row whose limits differ from `lm_mode`.
+type ModeRow = { rule: string, mode: LimitMode, env: [{ key: string, value: string }], row: LimitRow }
+
+pure func mode_of(default: SessionLimit, ceiling: Ceiling) -> LimitMode { Limits({ default: default, ceiling: ceiling }) }
+
+pure func bash_row(args: string, duration: int, recorded: int, payload: string) -> LimitRow {
+  { rule: "", id: "one", tool: "BashExec", args: args, duration: duration, recorded: recorded, payload: payload }
+}
+
+pure func no_env() -> [{ key: string, value: string }] { [] }
+
+-- A8, A9's `SameAsDefault` rows with a 30 s default, and A10's `Finite(0)`. With no env the
+-- legacy value is 0, which is "records today's value" on a live run.
+func mode_rows() -> [ModeRow] {
+  let none = "{\"cmd\":\"true\"}";
+  let d30 = Finite(30000000000);
+  [{ rule: "A8 NoDeadline, no ceiling, no request: never expires", mode: mode_of(NoDeadline, SameAsDefault), env: no_env(), row: bash_row(none, 59000, 0, done_with("LM-one")) },
+   { rule: "A8 NoDeadline with a ceiling, no request: never expires", mode: mode_of(NoDeadline, CeilingMs(3000)), env: no_env(), row: bash_row(none, 59000, 0, done_with("LM-one")) },
+   { rule: "A8 NoDeadline with a ceiling, a request stops at the ceiling", mode: mode_of(NoDeadline, CeilingMs(3000)), env: no_env(), row: bash_row(five_secs(), 3001, 3000, late(3000)) },
+   { rule: "A8 NoDeadline, no ceiling, a request stays finite", mode: mode_of(NoDeadline, SameAsDefault), env: no_env(), row: bash_row(five_secs(), 5001, 5000, late(5000)) },
+   { rule: "A9 30 s, no ceiling, no request: runs to the default", mode: mode_of(d30, SameAsDefault), env: no_env(), row: bash_row(none, 30000, 0, done_with("LM-one")) },
+   { rule: "A9 30 s, no ceiling, no request: stops at the default", mode: mode_of(d30, SameAsDefault), env: no_env(), row: bash_row(none, 30001, 0, late(30000)) },
+   { rule: "A9 30 s, no ceiling, 60 s does not extend", mode: mode_of(d30, SameAsDefault), env: no_env(), row: bash_row("{\"timeout_secs\":60}", 30001, 0, late(30000)) },
+   { rule: "A9 30 s, no ceiling, equal to the default", mode: mode_of(d30, SameAsDefault), env: no_env(), row: bash_row("{\"timeout_secs\":30}", 30001, 0, late(30000)) },
+   { rule: "A9 30 s, no ceiling, a shorter request records itself", mode: mode_of(d30, SameAsDefault), env: no_env(), row: bash_row("{\"timeout_secs\":5}", 5001, 5000, late(5000)) },
+   { rule: "A9 a fractional default displays rounded up", mode: mode_of(Finite(1500000), SameAsDefault), env: no_env(), row: bash_row(none, 2, 0, late(2)) },
+   { rule: "A9 a non-positive default expires at once", mode: mode_of(Finite(-1000000000), SameAsDefault), env: no_env(), row: bash_row(none, 0, 0, late(0)) },
+   { rule: "A10 Finite(0) expires at t = 0", mode: mode_of(Finite(0), SameAsDefault), env: no_env(), row: bash_row(none, 0, 0, late(0)) },
+   { rule: "A10 timeout_ms 0 with no carrier never expires", mode: Legacy, env: no_env(), row: bash_row(none, 59000, 0, done_with("LM-one")) },
+   { rule: "D7 Legacy ignores a request: the env decides, and it records the env", mode: Legacy, env: world_env(), row: bash_row(two_secs(), 2500, 5000, done_with("LM-one")) }]
+}
+
+func check_mode_rows(rows: [ModeRow]) -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  match rows {
+    [] => true,
+    m :: rest => {
+      let script = script_of([m.row]);
+      let w = { base_world(script, approvals(1), rows_to_tools([m.row])) | process_limits: m.mode, env: m.env };
+      let run = run_recording("srlm_one", w, 12);
+      let ok = check(m.rule, row_holds(run.world.log, m.row), row_seen(run.world.log, m.row));
+      let others = check_mode_rows(rest);
+      ok && others
+    }
+  }
+}
+
+func limit_table_scenario() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("");
+  let _ = println("limit table (041 W6): one dispatch per world, for limits other than 1000/3000");
+  check_mode_rows(mode_rows())
+}
+
+-- D7, AND THE ROW MUTANT s5 FAILS. A recording compared with a replay of itself cannot see a
+-- wrong projection, because both sides project it the same way. What it must equal is what
+-- the same call records in `Legacy`: a call with no request records today's value, byte for
+-- byte, and that is what lets a recording made today replay strictly against a `Limits` world.
+func no_request_twin_scenario() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("");
+  let _ = println("no-request twin (041 W6): a call with no request records today's bytes in Limits");
+  let rows = [bash_row("{\"cmd\":\"true\"}", 900, 5000, done_with("LM-one"))];
+  let w = base_world(script_of(rows), approvals(1), rows_to_tools(rows));
+  let legacy_run = run_recording("srlm_twin", w, 12);
+  let limits_run = run_recording("srlm_twin", { w | process_limits: lm_mode() }, 12);
+  let ms = strict_replay_findings(legacy_run.world.log, limits_run.world.log);
+  let _ = if List.length(ms) > 0 then report_replay(ms) else ();
+  check("strict replay: a Legacy recording of a call with no request replays strictly against a Limits world",
+        List.length(ms) == 0 && List.length(legacy_run.world.log) > 0,
+        "${show(List.length(ms))} mismatch(es) above")
+}
+
+pure func any_message_contains(ms: [Message], text: string) -> bool {
+  match ms { [] => false, m :: rest => contains(m.content, text) || any_message_contains(rest, text) }
+}
+
+-- W6's stand-in for W7. D7 says an invalid request never reaches the port, so the queue stays
+-- whole and no tool interaction is recorded, and `Legacy` ignores the same request. W7 adds
+-- the event and the fields, and replaces this scenario's message row.
+func invalid_request_scenario() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("");
+  let _ = println("invalid request (041 W6, until W7): it never reaches the port");
+  let row = bash_row("{\"cmd\":\"true\",\"timeout_secs\":0}", 1, 5000, done_with("LM-one"));
+  let w = base_world(script_of([row]), approvals(1), rows_to_tools([row]));
+  let limits_run = run_recording("srlm_bad", { w | process_limits: lm_mode() }, 12);
+  let msgs = match limits_run.result { Ok(ms) => ms, Err(_) => [] };
+  let ok_stopped = check("invalid: the queue is untouched and no tool interaction is recorded",
+                         List.length(limits_run.world.tools) == 1
+                           && count_kind(limits_run.world.log, identity_kind(ToolIdentity("", "", ""))) == 0,
+                         "queue ${show(List.length(limits_run.world.tools))}, log ${row_seen(limits_run.world.log, row)}");
+  let ok_told = check("invalid: the model is told, with the stated code",
+                      any_message_contains(msgs, "process_request_invalid"), "no message names it");
+  let legacy_run = run_recording("srlm_bad", w, 12);
+  let ok_legacy = check("invalid: the same request in Legacy is ignored and the call is served",
+                        row_holds(legacy_run.world.log, row), row_seen(legacy_run.world.log, row));
+  ok_stopped && ok_told && ok_legacy
+}
+
+-- ---------------------------------------------------------------------------
+-- A14c, A25, A16: an extension effect, through the real token
+-- ---------------------------------------------------------------------------
+
+-- `ctx.world` is the token the driver built and `ctx.ports` is `ext_ports_of`, so this is the
+-- production bridge, and the hook hands the token straight back. Two hooks because a hook
+-- closes over nothing: one sends the argument main dispatch honours, one a value main
+-- dispatch refuses. R8 says neither is read.
+func ext_intercept_two(ctx: InterceptCtx, _text: string)
+  -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
+  let p = ctx.ports;
+  let out = p.tool_handle(ctx.world, "BashExec", two_secs());
+  { decision: { NoIntercept }, next_state: out.next_state }
+}
+
+func ext_intercept_zero(ctx: InterceptCtx, _text: string)
+  -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} {
+  let p = ctx.ports;
+  let out = p.tool_handle(ctx.world, "BashExec", "{\"cmd\":\"true\",\"timeout_secs\":0}");
+  { decision: { NoIntercept }, next_state: out.next_state }
+}
+
+func ext_rt(id: string, intercept: (InterceptCtx, string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}) -> ExtRuntime {
+  let v: VerificationConfig = { enabled: false, command: "" };
+  let hooks = fixture_hooks(id, {
+    config: jo([]), tools: [], describe: no_describe, prompt: no_prompt, budget: no_budget,
+    compact: passthrough_pre_step, policy: pending_policy, provide: no_handle,
+    intercept: intercept, judge: no_solver
+  });
+  { registry: { entries: [hooks] }, strict_mode: false, verification: v }
+}
+
+func run_ext(rt: ExtRuntime, w: WorldState) -> TracedSessionResult
+  ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  Session.run_v2_session_traced(rt, "task", "", budget(), "phase-c-model", history(), ".",
+                                12, false, 0, zero_rates(), RecordingWorld(w))
+}
+
+pure func ext_payloads(xs: [Interaction]) -> [string] {
+  match xs {
+    [] => [],
+    i :: rest => match i.identity.body {
+      ExtensionEffectIdentity(_, _, _) => i.outcome.payload :: ext_payloads(rest),
+      _ => ext_payloads(rest)
+    }
+  }
+}
+
+pure func ext_deadlines_all_zero(xs: [Interaction]) -> bool {
+  match xs {
+    [] => true,
+    i :: rest => match i.identity.body {
+      ExtensionEffectIdentity(_, _, _) => i.deadline_ms == 0 && ext_deadlines_all_zero(rest),
+      _ => ext_deadlines_all_zero(rest)
+    }
+  }
+}
+
+-- The first effect takes 1500 ms and the second 900, around the 1000 ms default. The spare is
+-- `effect_tools`'s reason: an empty `ext_effects` queue runs a real subprocess.
+func ext_world_for(mode: LimitMode) -> WorldState {
+  let call = lm_call("ext_main", "T", "{}");
+  { base_world([multi_step("e0", [call], []), multi_step("e1", [], [])], approvals(1), [lm_tool(7, "EXT-MAIN")]) |
+    process_limits: mode,
+    ext_effects: [lm_tool(1500, "EXT-A"), lm_tool(900, "EXT-B"), lm_tool(11, "EXT-SPARE")] }
+}
+
+pure func first_two_are(xs: [string], a: string, b: string) -> bool {
+  match xs { x :: y :: _ => contains(x, a) && contains(y, b), _ => false }
+}
+
+-- The R8 row. `label` names which argument the hook sent.
+func ext_limits_row(label: string, intercept: (InterceptCtx, string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock})
+  -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let initial = ext_world_for(lm_mode());
+  let run = run_ext(ext_rt("ext_limits", intercept), initial);
+  let got = ext_payloads(run.world.log);
+  let ok_r8 = check("R8 (${label}): an extension BashExec expires against the program default and its timeout_secs is not read",
+                    first_two_are(got, late(1000), done_with("EXT-B")),
+                    "payloads ${join_strs(got)}");
+  let ok_zero = check("R8 (${label}): timeout_ms 0 stays on the envelope",
+                      List.length(got) >= 2 && ext_deadlines_all_zero(run.world.log),
+                      "the extension effect's recorded deadline is not 0");
+  ok_r8 && ok_zero
+}
+
+func limits_extension_scenario() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("");
+  let _ = println("extension effect (041 W6): A14c, A25 and A16 through the real token");
+  let ok_two = ext_limits_row("timeout_secs 2", ext_intercept_two);
+  let ok_zero = ext_limits_row("timeout_secs 0", ext_intercept_zero);
+
+  -- A14c's recording and replay, from the artifact.
+  let initial = ext_world_for(lm_mode());
+  let rt = ext_rt("ext_limits", ext_intercept_two);
+  let run = run_ext(rt, initial);
+  let program = program_of(run.world, initial);
+  let ok_replay = match persist_round_trip(program) {
+    Err(why) => check("A14c: the program round-trips through the artifact codec", false, why),
+    Ok(back) => match world_state_of(back, required_class_ids()) {
+      Err(r) => check("A14c: the decoded program reconstitutes a world", false, refusal_rule(r)),
+      Ok(rw) => {
+        let replay = run_ext(rt, rw);
+        let ms = strict_replay_findings(back.interactions, replay.world.log);
+        let _ = if List.length(ms) > 0 then report_replay(ms) else ();
+        let served = ext_payloads(replay.world.log);
+        check("A14c: the recorded extension deadline replays strictly and is served again",
+              List.length(ms) == 0 && first_two_are(served, late(1000), done_with("EXT-B")),
+              "${show(List.length(ms))} mismatch(es) above; payloads ${join_strs(served)}")
+      }
+    }
+  };
+
+  -- Today's behaviour, which is what the mode changes: `Legacy` never expires.
+  let legacy = run_ext(rt, ext_world_for(Legacy));
+  let legacy_got = ext_payloads(legacy.world.log);
+  let ok_legacy = check("A14c control: the same effects in Legacy never expire",
+                        first_two_are(legacy_got, done_with("EXT-A"), done_with("EXT-B")),
+                        "payloads ${join_strs(legacy_got)}");
+
+  -- A16, scripted half: one argument, `timeout_secs: 2`, down each entry point this item
+  -- wires. Main dispatch honours it, so 1500 ms completes. The extension does not, so
+  -- 1500 ms expires at the default. Loopback is W10's.
+  let row = bash_row(two_secs(), 1500, 2000, done_with("LM-one"));
+  let main_run = run_recording("srlm_a16", { base_world(script_of([row]), approvals(1), rows_to_tools([row])) | process_limits: lm_mode() }, 12);
+  let ok_a16 = check("A16: the same argument at 1500 ms completes in main dispatch and expires in an extension effect",
+                     row_holds(main_run.world.log, row) && first_two_are(ext_payloads(run.world.log), late(1000), done_with("EXT-B")),
+                     row_seen(main_run.world.log, row));
+  ok_two && ok_zero && ok_replay && ok_legacy && ok_a16
+}
+
+-- A25 at the bridge, where the token is in hand: the mode crosses it, and a token without the
+-- key runs the effect as `Legacy`, which D7 accepts.
+func extension_token_scenario() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace} {
+  let _ = println("");
+  let _ = println("token (041 W6): A25, what the effect does with and without the key");
+  let w = ext_world_for(lm_mode());
+  let eports = Session.ext_ports_of(scripted_ports(), w, "");
+  let limited = eports.tool_handle(world_to_token(w), "BashExec", two_secs());
+  let ok_limited = check("A25: a token holding Limits expires the effect at the default",
+                         contains(limited.output, "ToolDeadlineExceeded") && contains(limited.output, "\"timeout_ms\":1000"),
+                         limited.output);
+  let stripped = match world_json(w) {
+    JObject(fields) => JObject(without_key(fields, "process_limits")),
+    other => other
+  };
+  let bare = eports.tool_handle({ token: stripped }, "BashExec", two_secs());
+  let ok_bare = check("A25: a token without the key runs its effect as Legacy, which D7 accepts",
+                      bare.output == "EXT-A", bare.output);
+  ok_limited && ok_bare
+}
+
+pure func without_key(fields: [{ key: string, value: Json }], k: string) -> [{ key: string, value: Json }] {
+  match fields {
+    [] => [],
+    f :: rest => if f.key == k then without_key(rest, k) else f :: without_key(rest, k)
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- THE LIVE ARM BEFORE W10
+-- ---------------------------------------------------------------------------
+
+pure func carrier_for(mode_default: SessionLimit, ceiling: Ceiling, args: Json) -> Option[ResolvedProcess] {
+  match resolve_process_limit({ default: mode_default, ceiling: ceiling }, args) {
+    ProcessResolved(r) => Some(r),
+    ProcessInvalid(_) => None
+  }
+}
+
+pure func is_refusal(o: ToolOutcome) -> bool {
+  match o {
+    ToolFailed(f) => f.code == process_limit_unavailable_code() && not f.after_dispatch,
+    _ => false
+  }
+}
+
+func touching(path: string, secs: string) -> Json {
+  match decode("{\"cmd\":\"touch ${path}\"${secs}}") { Ok(j) => j, Err(_) => jo([]) }
+}
+
+-- EVIDENCE THAT NOTHING RAN IS A FILE THAT IS NOT THERE, and the file is only evidence if the
+-- same call without the limit does create it, so each refusal has a twin that runs. Every
+-- row goes through `world_tool` or `world_ext_effect` with an empty queue, and through the
+-- whole session once, the way a `Limits` program would get there. The paths are absolute
+-- because `BashExec` does not read `workdir`: a relative one lands in the process's cwd, and
+-- the first draft of these rows looked for its files in the wrong place. The twins caught that.
+func live_arm_scenario() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("");
+  let _ = println("live arm (041 W6, until W10): ExplicitMs is refused before dispatch, and nothing runs");
+  let root = match exec("mktemp", ["-d"]) { Ok(out) => trim(toString(out.stdout)), Err(_) => "" };
+  if root == "" then check("live arm: a scratch workdir", false, "mktemp -d gave none")
+  else {
+    let d30 = Finite(30000000000);
+    let w = empty_world_state();
+    let inv = \id. \file. \secs. \tool. {
+      call: { id: id, tool: tool, arguments: touching(file, secs) },
+      workdir: root, timeout_ms: 0, started_at_ms: 0,
+      process: carrier_for(d30, CeilingMs(300000), touching(file, secs))
+    };
+    let main_refused = world_tool(w, inv("a", "${root}/ran_a", ",\"timeout_secs\":60", "BashExec"));
+    let ok_a = check("live arm: world_tool refuses BashExec with ExplicitMs before dispatch, and the command did not run",
+                     is_refusal(main_refused.outcome) && not fileExists("${root}/ran_a"),
+                     "refused=${show(is_refusal(main_refused.outcome))} ran=${show(fileExists("${root}/ran_a"))}");
+    let tests_refused = world_tool(w, inv("b", "${root}/ran_b", ",\"timeout_secs\":60", "RunTests"));
+    let ok_b = check("live arm: world_tool refuses RunTests with ExplicitMs before dispatch, and the command did not run",
+                     is_refusal(tests_refused.outcome) && not fileExists("${root}/ran_b"),
+                     "refused=${show(is_refusal(tests_refused.outcome))} ran=${show(fileExists("${root}/ran_b"))}");
+    let ext_refused = world_ext_effect(w, inv("c", "${root}/ran_c", ",\"timeout_secs\":60", "BashExec"));
+    let ok_c = check("live arm: world_ext_effect refuses the same carrier before dispatch, and the command did not run",
+                     is_refusal(ext_refused.outcome) && not fileExists("${root}/ran_c"),
+                     "refused=${show(is_refusal(ext_refused.outcome))} ran=${show(fileExists("${root}/ran_c"))}");
+    let session_default = world_tool(w, inv("d", "${root}/ran_d", "", "BashExec"));
+    let ok_d = check("live arm control: SessionDefault is a plain exec, and the command ran",
+                     not is_refusal(session_default.outcome) && fileExists("${root}/ran_d"),
+                     "ran=${show(fileExists("${root}/ran_d"))}");
+    let no_carrier = world_tool(w, { inv("e", "${root}/ran_e", ",\"timeout_secs\":60", "BashExec") | process: None });
+    let ok_e = check("live arm control: no carrier, which is Legacy, is a plain exec, and the command ran",
+                     not is_refusal(no_carrier.outcome) && fileExists("${root}/ran_e"),
+                     "ran=${show(fileExists("${root}/ran_e"))}");
+
+    -- The whole way: a `Limits` world with an empty queue, through discovery's own driver.
+    let call = lm_call("f", "BashExec", "{\"cmd\":\"touch ${root}/ran_f\",\"timeout_secs\":2}");
+    let session = run_recording("srlm_live",
+      { base_world([multi_step("f", [call], []), multi_step("f done", [], [])], approvals(1), []) | process_limits: lm_mode() }, 12);
+    let row = { rule: "", id: "f", tool: "BashExec", args: "", duration: 0, recorded: 2000, payload: process_limit_unavailable_code() };
+    let ok_f = check("live arm: a Limits program with an empty queue records the refusal, and the command did not run",
+                     row_holds(session.world.log, row) && not fileExists("${root}/ran_f"),
+                     "${row_seen(session.world.log, row)} ran=${show(fileExists("${root}/ran_f"))}");
+    let _ = exec("rm", ["-rf", root]);
+    ok_a && ok_b && ok_c && ok_d && ok_e && ok_f
+  }
+}
+
 export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
   let _ = println("strict_replay_dst: WI-A13 stage 3 — strict replay against driver_only");
 
-  let ok_rich = run_scenario("rich", rich_script(), rich_answers(), rich_tools(), 12, true, true, 1);
-  let ok_fail = run_scenario("maxsteps", rich_script(), failure_answers(), rich_tools(), 1, false, false, 1);
+  let ok_rich = run_scenario(Legacy, "rich", rich_script(), rich_answers(), rich_tools(), 12, true, true, 1);
+  let ok_fail = run_scenario(Legacy, "maxsteps", rich_script(), failure_answers(), rich_tools(), 1, false, false, 1);
   let ok_world_truth = world_truth_scenario();
   let ok_v5_fixture = v5_fixture_scenario();
+  let ok_limits = limits_scenario();
+  let ok_limit_table = limit_table_scenario();
+  let ok_no_request = no_request_twin_scenario();
+  let ok_invalid = invalid_request_scenario();
+  let ok_ext = limits_extension_scenario();
+  let ok_token = extension_token_scenario();
+  let ok_live = live_arm_scenario();
 
   let _ = println("");
-  if ok_rich && ok_fail && ok_world_truth && ok_v5_fixture then
+  if ok_rich && ok_fail && ok_world_truth && ok_v5_fixture && ok_limits && ok_limit_table
+     && ok_no_request && ok_invalid && ok_ext && ok_token && ok_live then
     println("strict_replay_dst PASS")
   else {
     let _ = println("strict_replay_dst FAIL");
