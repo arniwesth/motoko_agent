@@ -187,8 +187,12 @@ export pure func extension_process(mode: LimitMode) -> Option[ResolvedProcess] {
 
 -- D7's carrier rule names these two tools and no others: `ReadFile`, `Search`,
 -- `WriteFile` and `EditFile` keep today's scripted deadline exactly (A10).
--- contracts: BLOCKED — a contract would only restate the body (`verify_classify`'s `spec-equals-body`), so the rows hold it.
 export pure func is_process_tool(tool: string) -> bool
+  ensures {
+    (tool != "BashExec" || result) && (tool != "RunTests" || result)
+      && (tool != "ReadFile" || not result) && (tool != "Search" || not result)
+      && (tool != "WriteFile" || not result) && (tool != "EditFile" || not result)
+  }
   tests [
     ("BashExec", true),
     ("RunTests", true),
