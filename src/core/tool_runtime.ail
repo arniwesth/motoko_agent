@@ -491,7 +491,16 @@ func validate_path_common(tool: string, id: string, path: string, workdir: strin
         -- guard's verdict is its exit code: 43/44 mean the path escapes. Any
         -- other failure is let through as before: `realpath -m` is GNU-only,
         -- and refusing on it would refuse every path where it is missing.
-        match exec("bash", ["-lc", guard_script, "motoko-path-guard", workdir, stripped]) {
+        --
+        -- `-c`, never `-lc`: the verdict is the exit code, so nothing may run on
+        -- the way out. A login shell sources ~/.bash_logout on `exit`; with
+        -- SHLVL unset or 0 (the Motoko runtime has none) Debian's stock file
+        -- runs clear_console, which returns 1 with no console; `set -e` then
+        -- ends the shell with 1 instead of 43, and that reads as a pass.
+        -- The cost: a `realpath` found only through a profile (Homebrew
+        -- coreutils on macOS, say) is not found here, and the guard's exit 127
+        -- is also let through. Untested on macOS.
+        match exec("bash", ["-c", guard_script, "motoko-path-guard", workdir, stripped]) {
           Ok(out) => if out.exitCode == 43 || out.exitCode == 44 then Err(path_error(id, tool, "path escapes workspace: ${path}")) else Ok(()),
           Err(_) => Err(path_error(id, tool, "path escapes workspace: ${path}"))
         }
@@ -850,7 +859,10 @@ func apply_edits(text: string, edits: [EditOp], idx: int) -> Result[{ content: s
 func acquire_temp_path(path: string) -> Result[string, string] ! {Process} {
   let dir = path_dirname(path);
   let script = "set -eu\nmktemp \"$1/.motoko-edit.XXXXXX\"\n";
-  match exec("bash", ["-lc", script, "motoko-mktemp", dir]) {
+  -- `-c`, as for the path guard: an internal helper reads no profile. Its exit
+  -- code is unread and this script has no `exit`, so ~/.bash_logout changes
+  -- nothing today, but a profile that prints would corrupt the path on stdout.
+  match exec("bash", ["-c", script, "motoko-mktemp", dir]) {
     Err(err) => Err("failed to create temp file: ${process_error_to_string(err)}"),
     Ok(out) => {
       let tmp = trim(toString(out.stdout));
