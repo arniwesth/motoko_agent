@@ -9,17 +9,27 @@
 -- the only thing stopping them. This runs without that variable, so the guard
 -- is the only thing under test.
 --
--- Usage:
+-- The guard also fails closed: it allows a path only on exit 0. `policy_rows`
+-- makes the guard unable to decide, in children whose PATH has a stub `bash`
+-- exiting 127 or 1, or no `bash` at all, and asks for a path that really does
+-- leave the workdir. Without the policy those children read the secret and
+-- write outside it. Each refusal must say "could not run", never "escapes
+-- workspace": one is a claim about the environment, the other about the path.
+-- The stub stands in for `bash` because a login shell's profile can reset PATH,
+-- so a PATH without `realpath` does not reach a guard run under `bash -lc`.
+--
+-- Usage, from the repository root:
 --   AILANG_RELAX_MODULES=1 ailang run --caps IO,FS,Process,Env,Clock \
 --     --entry main scripts/verify_native_path_guard.ail
 module scripts/verify_native_path_guard
 
 import std/io (println, exit)
-import std/string (contains, trim)
+import std/string (contains, trim, split, startsWith)
 import std/bytes (toString)
 import std/json (jo, ja, kv, js, jnum, encode)
 import std/fs (readFileResult, fileExists, writeFileResult)
 import std/process (exec)
+import std/env (getEnvOr)
 import std/result (Ok, Err)
 import src/core/tool_dispatch_adapter (dispatch_one)
 
@@ -68,11 +78,97 @@ export func main() -> () ! {IO, FS, Process, Env, Clock} {
       check("...and the outside file is unchanged", file_text("${outside}/secret.txt") == "secret\n", file_text("${outside}/secret.txt")),
       check("ReadFile inside the workdir still works", not contains(read_in, "\"error\":true"), read_in)
     ];
+    let policy_ok = policy_rows(root, workdir, outside);
     let _ = exec("rm", ["-rf", root]);
-    if all_true(results) then () else exit(1)
+    if all_true(results) && policy_ok then () else exit(1)
   }
 }
 
 pure func all_true(xs: [bool]) -> bool {
   match xs { [] => true, x :: rest => x && all_true(rest) }
+}
+
+pure func could_not_run(result: string) -> bool {
+  contains(result, "\"error\":true") && contains(result, "could not run") && not contains(result, "escapes workspace")
+}
+
+-- Runs in a child with the guard made unable to decide. `want` must be in each
+-- refusal, so that a stub's exit code is seen to reach the message.
+export func undecided_leg() -> () ! {IO, FS, Process, Env, Clock} {
+  let workdir = getEnvOr("GUARD_PROBE_WORKDIR", "");
+  let want = getEnvOr("GUARD_PROBE_WANT", "");
+  let read = call(workdir, "r", "ReadFile",
+    encode(jo([kv("path", js("link/secret.txt")), kv("start", jnum(1.0)), kv("end", jnum(5.0))])));
+  let write = call(workdir, "w", "WriteFile",
+    encode(jo([kv("path", js("link/planted.txt")), kv("content", js("planted"))])));
+  let edit = call(workdir, "e", "EditFile",
+    encode(jo([kv("path", js("link/secret.txt")),
+      kv("edits", ja([jo([kv("old", js("secret")), kv("new", js("changed"))])]))])));
+  let _ = check("ReadFile is refused as could-not-run", could_not_run(read) && contains(read, want), read);
+  let _ = check("WriteFile is refused as could-not-run", could_not_run(write) && contains(write, want), write);
+  let _ = check("EditFile is refused as could-not-run", could_not_run(edit) && contains(edit, want), edit);
+  ()
+}
+
+pure func count_ok(lines: [string]) -> int {
+  match lines {
+    [] => 0,
+    l :: rest => (if startsWith(l, "OK: ") then 1 else 0) + count_ok(rest)
+  }
+}
+
+func print_rows(label: string, lines: [string]) -> () ! {IO} {
+  match lines {
+    [] => (),
+    l :: rest => {
+      if startsWith(l, "OK: ") || startsWith(l, "FAIL: ") then println("${l} [${label}]") else ();
+      print_rows(label, rest)
+    }
+  }
+}
+
+-- One way of stopping the guard from deciding. A child that could not run, or
+-- did not reach all three tools, fails: a leg must not pass by not testing.
+func undecided(label: string, ailang: string, path_dir: string, workdir: string, want: string) -> bool ! {IO, Process} {
+  match exec("env", ["-u", "AILANG_FS_SANDBOX", "PATH=${path_dir}", "AILANG_RELAX_MODULES=1",
+      "GUARD_PROBE_WORKDIR=${workdir}", "GUARD_PROBE_WANT=${want}",
+      ailang, "run", "--caps", "IO,FS,Process,Env,Clock", "--entry", "undecided_leg",
+      "scripts/verify_native_path_guard.ail"]) {
+    Err(_) => check("[${label}] the probe's child runs", false, "exec failed"),
+    Ok(out) => {
+      let lines = split(toString(out.stdout), "\n");
+      print_rows(label, lines);
+      check("[${label}] all three tools were refused", out.exitCode == 0 && count_ok(lines) == 3,
+        "exit ${show(out.exitCode)}, ${show(count_ok(lines))} OK")
+    }
+  }
+}
+
+func stub_bash(dir: string, code: int) -> () ! {FS, Process} {
+  let _ = exec("mkdir", ["-p", dir]);
+  let _ = writeFileResult("${dir}/bash", "#!/bin/sh\nexit ${show(code)}\n");
+  let _ = exec("chmod", ["+x", "${dir}/bash"]);
+  ()
+}
+
+func policy_rows(root: string, workdir: string, outside: string) -> bool ! {IO, FS, Process, Env, Clock} {
+  let ailang = match exec("bash", ["-c", "command -v ailang"]) { Ok(out) => trim(toString(out.stdout)), Err(_) => "" };
+  let empty = "${root}/no-bash";
+  let _ = exec("mkdir", ["-p", empty]);
+  let _ = stub_bash("${root}/exit-127", 127);
+  let _ = stub_bash("${root}/exit-1", 1);
+  let found = check("the probe found ailang", ailang != "", "command -v ailang printed nothing");
+  let leg_127 = undecided("guard exits 127", ailang, "${root}/exit-127", workdir, "exit 127");
+  let leg_1 = undecided("guard exits 1", ailang, "${root}/exit-1", workdir, "exit 1");
+  let leg_none = undecided("no bash at all", ailang, empty, workdir, "not found");
+  let planted = check("...and nothing was written outside by an undecided guard",
+    not fileExists("${outside}/planted.txt"), "planted.txt exists");
+  let unchanged = check("...and the outside file is unchanged by an undecided guard",
+    file_text("${outside}/secret.txt") == "secret\n", file_text("${outside}/secret.txt"));
+  -- An empty workdir is the process cwd, here the repository root. It must not
+  -- read as "the guard could not run".
+  let empty_wd = call("", "r3", "ReadFile",
+    encode(jo([kv("path", js("scripts/verify_native_path_guard.ail")), kv("start", jnum(1.0)), kv("end", jnum(1.0))])));
+  let wd_ok = check("ReadFile with an empty workdir still works", not contains(empty_wd, "\"error\":true"), empty_wd);
+  all_true([found, leg_127, leg_1, leg_none, planted, unchanged, wd_ok])
 }
