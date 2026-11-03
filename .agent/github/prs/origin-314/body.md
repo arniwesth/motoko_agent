@@ -14,6 +14,8 @@ Its worked example is a Lean model of the journal fold's pairing check (`pair_st
 
 The worked example cannot settle whether Lean is worth its cost. Up to length 4, running the two real functions against each other shows everything the theorems state. So the PR also **pre-registers a trial** (`PLAN-001`). Two arms, Lean and executed checks on the real code, get equal budgets on six targets, with planted defects sealed from both and a decision rule fixed in advance. It is frozen by hash and has not started; the operator's approval is its next step.
 
+A note, **NOTE-001**, asks whether Rocq would serve the method better than Lean, and answers by porting the worked example. **Keep Lean.** The proofs come out even: the same 16 theorems check, the port's output is byte-identical to the Lean model's, and it has 0 mismatches against the real fold. Rocq loses on the parts around the proof. Running the model needs extraction to OCaml. `Print Assumptions` does not show a proof checked by the VM, where Lean shows `native_decide`. And a same-typed field swap type-checks in Rocq; only the fold comparison and the theorems catch it, not the host comparison. The note does not touch PLAN-001: no hashed file is edited, and the trial tree is built from PLAN-001's own commit.
+
 ## Changes
 
 - docs(042): research note on proving harness properties in Lean, after Kiro
@@ -21,6 +23,7 @@ The worked example cannot settle whether Lean is worth its cost. Up to length 4,
 - docs(043): renumber the Lean project from 042, which #306 holds
 - docs(043): the AILANG half — the pairing model against the real fold
 - docs(043): pre-register the trial of Lean against differential checks (PLAN-001)
+- docs(043): NOTE-001, Rocq compared with Lean on the worked example
 
 1. **The note and its evidence**, the first commit, applied unchanged from a patch written in another session: `RESEARCH-lean-harness-properties.md`, `evidence/PairingModel.lean`, and the differential test under `evidence/diff/`.
 2. **The Lean run**, the second commit: recorded in `evidence/diff/README.md` with the toolchain, the hashes, the axiom report and a negative control on `updatePending`.
@@ -33,15 +36,18 @@ The worked example cannot settle whether Lean is worth its cost. Up to length 4,
 
 5. **The pre-registration**, the fifth commit: `PLAN-001-trial-lean-against-differential-checks.md`, with `trial/predictions.tsv` and `trial/sequence.log`, whose first lines hash both. It fixes the targets and their properties, the arms, the planted-defect classes and their sealing, blinding, the scoring procedure, the outcomes in 042's dimensions, the decision rule and its consequences, and the author's predictions (outcome D, differential checks suffice, about 60%). It also lists what is known before the trial: two items from reading the herdr failure vocabulary while writing it, one a candidate `means_agent_gone` twin disagreement (K7), which has not been run.
 
+6. **The Rocq comparison**, the sixth commit: `NOTE-001-rocq-compared-2026-11-03.md` and `evidence/rocq/`. The port (`PairingModel.v`, `Enumerate.v`) runs against a fresh three-way run through `run_rocq.sh`. `audit/` shows what each prover's assumption report says about a proof by computation, and `install_rocq.sh` installs Rocq 9.3.0 without root. It answers the operator's question and changes nothing else. It edits no file of the trial, and the trial tree is built from PLAN-001's own commit (§7).
+
 The note and the model's header each carry a dated marker at the top and are not otherwise edited, per the research-doc convention: the original states what was believed when it was written.
 
-11 files in the project, plus this record.
+20 files in the project, plus this record.
 
 ## Governing docs
 
 - `.agent/projects/043_lean_harness_properties/RESEARCH-lean-harness-properties.md`
 - `.agent/projects/043_lean_harness_properties/evidence/diff/README.md`
 - `.agent/projects/043_lean_harness_properties/PLAN-001-trial-lean-against-differential-checks.md`
+- `.agent/projects/043_lean_harness_properties/NOTE-001-rocq-compared-2026-11-03.md`
 
 ## Predicted outcome
 
@@ -58,6 +64,7 @@ Nothing in the harness changes: no source file is touched. What changes is that 
 
 ```
 .agent/github/prs/origin-314/body.md
+.agent/projects/043_lean_harness_properties/NOTE-001-rocq-compared-2026-11-03.md
 .agent/projects/043_lean_harness_properties/PLAN-001-trial-lean-against-differential-checks.md
 .agent/projects/043_lean_harness_properties/RESEARCH-lean-harness-properties.md
 .agent/projects/043_lean_harness_properties/evidence/PairingModel.lean
@@ -67,6 +74,14 @@ Nothing in the harness changes: no source file is touched. What changes is that 
 .agent/projects/043_lean_harness_properties/evidence/diff/enumerate.ts
 .agent/projects/043_lean_harness_properties/evidence/diff/enumerate_fold.ail
 .agent/projects/043_lean_harness_properties/evidence/diff/run_diff.sh
+.agent/projects/043_lean_harness_properties/evidence/rocq/Enumerate.v
+.agent/projects/043_lean_harness_properties/evidence/rocq/PairingModel.v
+.agent/projects/043_lean_harness_properties/evidence/rocq/README.md
+.agent/projects/043_lean_harness_properties/evidence/rocq/audit/Audit.lean
+.agent/projects/043_lean_harness_properties/evidence/rocq/audit/Audit.v
+.agent/projects/043_lean_harness_properties/evidence/rocq/install_rocq.sh
+.agent/projects/043_lean_harness_properties/evidence/rocq/main.ml
+.agent/projects/043_lean_harness_properties/evidence/rocq/run_rocq.sh
 .agent/projects/043_lean_harness_properties/trial/predictions.tsv
 .agent/projects/043_lean_harness_properties/trial/sequence.log
 ```
@@ -110,5 +125,22 @@ exit=0
 | `pair_step`: a result never closes its call | model and fold; host and fold | 500; 86 of 327 within H1/H2 |
 
 **6. Transcription, read against the source.** `pairStep` matches `pair_step` (`journal.ail:1634`) branch for branch. `call_ids` (`:1372`) does not filter empty ids, and `valid_message_transcript` (`phase_vocab.ail`) checks a tool message only for a non-empty `tool_call_id`.
+
+**7. The Rocq port (NOTE-001).** Rocq 9.3.0 (`rocq-stdlib` 9.2.0, OCaml 4.14.2), against a fresh `run_diff.sh` run at this branch's `12672be8`. That run reproduced item 2 exactly, with `lean.out` sha256 `c729a3cb…` and `ail.out` `953896c1…`.
+
+```
+$ evidence/rocq/run_rocq.sh <run_diff scratch> <rocq scratch>
+kernel: PairingModel.v checks; Print Assumptions: 8 of 8 theorems closed
+rocq: 16105 histories, sha256 c729a3cb30df336a
+rocq vs lean: byte-identical to lean.out
+  model / real fold: refuse / pairing          15272
+  model / real fold: accept / other:transcript     83
+  model / real fold: accept / accept             750
+fold: 16105 histories, 0 mismatches between the model and the real fold
+twin: 449 histories the real fold accepts within H1/H2, 0 where host and fold disagree; 213 disagree outside H1/H2
+exit=0
+```
+
+Negative control on the port: swapping `openIds` and `curIds` in `pairStep`'s record update type-checks. It gives 0 host mismatches, 517 fold mismatches of 16,105, and `admits_duplicate_result` no longer checks. On the assumption reports, Lean's `native_decide` shows `[Lean.ofReduceBool, Lean.trustCompiler]`, while Rocq's `vm_compute` and `<:` proofs both show "Closed under the global context".
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
