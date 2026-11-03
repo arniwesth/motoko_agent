@@ -1,5 +1,13 @@
 # RESEARCH: Proving harness properties in Lean, after Kiro — what transfers to Motoko
 
+> **Update, 2026-11-03, after this note was written.** §10 item 1 is done. The Lean half of §6
+> ran on a machine where elan could install 4.28.0: every theorem in `evidence/PairingModel.lean`
+> checks, none uses an axiom beyond `propext` and `Quot.sound`, and the model's host side matches
+> the real `updatePending` on all 16,105 histories (0 mismatches; each of three mutants planted
+> in `updatePending` produces 1,842 to 2,940). The model's fold side is still untested against
+> AILANG, so "no finding" below still stands. The record is `evidence/diff/README.md`. The text
+> below is as first written.
+
 Date: 2026-11-03.
 Status: Research, with one worked example in `evidence/`. Proposes an order of work and names
 what it would need. **No finding**: the worked example's Lean half could not run in the session

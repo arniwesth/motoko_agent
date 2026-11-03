@@ -1,6 +1,11 @@
 /-
 PairingModel.lean — the worked example for RESEARCH-lean-harness-properties.md §6.
 
+CHECKED 2026-11-03, after this header was written: Lean 4.28.0 accepts the file with no
+error, no theorem uses an axiom beyond `propext` and `Quot.sound`, and `hostPending` matched
+the real `updatePending` on 16,105 histories (diff/README.md). `pairing` has still not been
+run against `ailang run`. The header below is as first written.
+
 A Lean model of two implementations of one rule, at origin/main 43530c0a:
 
   * `pair_step`, and the fold over it in `finish_fold`  (src/core/journal.ail)
@@ -293,3 +298,6 @@ theorem h1_not_free_in_trailing_batch :
 #print axioms twin_disagrees_without_h2
 #print axioms h1_not_free_in_trailing_batch
 #print axioms host_twin_agrees
+#print axioms refuses_unanswered_call_before_user
+#print axioms refuses_result_for_unmade_call
+#print axioms trailing_call_is_dangling
