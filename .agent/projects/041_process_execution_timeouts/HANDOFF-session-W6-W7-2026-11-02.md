@@ -197,7 +197,7 @@ All exist and are clean (`dirty=0`) unless noted:
 | `-041-w7` | `arniwesth/041-w7-argument-errors` | `6a93884b` | merged (#307); delete when convenient. Has a gitignored `src/tui/node_modules` from a `bun install` |
 | `-041-singlegate`, `-041-d5-note`, `-041-hygiene` | — | — | merged |
 | `-pathguard`, `-pathguard2`, `-pg3` | — | — | #299/#300 closed; `-pg3` holds #303 |
-| `-handoff` | `docs/041-handoff-w6-w7` | `6731b390` | this file (PR #308) |
+| `-handoff` | `docs/041-handoff-w6-w7` | — (see PR) | this file (PR #308). Its head is deliberately not named: a blob cannot record the SHA of the commit that contains it, so the PR is the reference that stays true |
 
 `-011-calibration-pilot` is **another session's**. Leave it alone.
 `-improving-experimentation` appeared during this session and is not mine; leave it alone.
