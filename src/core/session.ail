@@ -48,7 +48,7 @@ import src/core/ext_world (world_to_token, token_to_world, clear_holder, adopt_w
 import src/core/compaction (estimate_tokens_messages, usage_percent_with_limit, exhaustion_pct, effective_input_limit)
 import src/core/context_usage (resolve_context_limit_sum)
 import src/core/context_limit (Bounded, Catalogue, is_bounded, raw_window_of, working_budget_for_ext) -- PLAN-001 P1: the sum's three int projections; nothing else erases the reason
-import src/core/ext/ctx_defaults (empty_ext_artifacts, zero_token_telemetry, empty_tool_evidence, noop_ext_ports) import src/core/process_limits (extension_tool_process) -- 8.0: the D3 window default, on this line to hold the anchors, and 041 W6's import for the same reason
+import src/core/ext/ctx_defaults (empty_ext_artifacts, zero_token_telemetry, empty_tool_evidence, noop_ext_ports) import src/core/process_limits (extension_tool_process, ResolvedProcess, carrier_limit_fields, Limits, Finite, CeilingMs) -- 8.0: the D3 window default, on this line to hold the anchors, and 041 W6's import for the same reason
 import src/core/ext/exit_manifest (publish_exit_manifest, manifest_path_var)
 import src/core/ext/runtime (
   dispatch_response_intercept,
@@ -1147,12 +1147,12 @@ func ext_ai_step(p: Ports, world: WorldState, model: string, base_url: string, m
 -- return. Faults are RENDERED rather than dropped: an extension handed "" when
 -- a tool actually failed is the silent-wrong shape this whole item exists to
 -- remove, even on a seam A12 does not own.
-pure func tool_outcome_text(o: ToolOutcome) -> string {
+pure func tool_outcome_text(process: Option[ResolvedProcess], o: ToolOutcome) -> string {
   match o {
     ToolCompleted(c) => c.content,
-    ToolFailed(f) => encode(jo([kv("error", jb(true)), kv("code", js(f.code)), kv("message", js(f.message)), kv("tool_call_id", js(f.tool_call_id))])),
-    ToolCorrelationMismatch(m) => encode(jo([kv("error", jb(true)), kv("code", js("ToolCorrelationMismatch")), kv("expected_id", js(m.expected_id)), kv("got_id", js(m.got_id))])),
-    ToolDeadlineExceeded(d) => encode(jo([kv("error", jb(true)), kv("code", js("ToolDeadlineExceeded")), kv("tool_call_id", js(d.tool_call_id)), kv("elapsed_ms", jnum(_int_to_float(d.elapsed_ms))), kv("timeout_ms", jnum(_int_to_float(d.timeout_ms)))]))
+    ToolFailed(f) => encode(jo([kv("error", jb(true)), kv("code", js(f.code))] ++ carrier_limit_fields(process, f.after_dispatch) ++ [kv("message", js(f.message)), kv("tool_call_id", js(f.tool_call_id))])),
+    ToolCorrelationMismatch(m) => encode(jo([kv("error", jb(true)), kv("code", js("ToolCorrelationMismatch"))] ++ carrier_limit_fields(process, true) ++ [kv("expected_id", js(m.expected_id)), kv("got_id", js(m.got_id))])),
+    ToolDeadlineExceeded(d) => encode(jo([kv("error", jb(true)), kv("code", js("ToolDeadlineExceeded"))] ++ carrier_limit_fields(process, true) ++ [kv("tool_call_id", js(d.tool_call_id)), kv("elapsed_ms", jnum(_int_to_float(d.elapsed_ms)))] ++ (match process { Some(_) => [], None => [kv("timeout_ms", jnum(_int_to_float(d.timeout_ms)))] })))
   }
 }
 
@@ -1379,7 +1379,7 @@ export func ext_ports_of(p: Ports, world: WorldState, base_url: string) -> ExtPo
         -- The id comes off the world because this closure is built once per step and
         -- cannot name its caller; `ext/runtime`'s fold stamps it on the re-seat.
         let execution = p.ext_effect_exec(w0, inv);
-        { output: tool_outcome_text(execution.outcome),
+        { output: tool_outcome_text(inv.process, execution.outcome),
           exit_code: tool_outcome_exit_code(execution.outcome),
           next_state: world_to_token(execution.next_state) }
       }
@@ -5821,3 +5821,50 @@ func test_w14_policy_denied_message_none() -> bool
       && m.content == "{\"error\":true,\"denied_by_policy\":true,\"tool\":\"BashExec\",\"fault\":{\"kind\":\"denied\",\"effects\":\"none\",\"note\":\"No change was made: the tool failed before it could write or change anything.\"},\"reason\":\"no\"}"
   }
 
+-- 041 W7, D4: an extension effect's faults report the limit through `tool_outcome_text`,
+-- by R8's carrier: `SameAsDefault`, so `max_timeout_ms` is the default and not the run's
+-- ceiling. At the end of the file so no anchor moves.
+func w7_extension_carrier() -> Option[ResolvedProcess] {
+  extension_tool_process("BashExec", Limits({ default: Finite(1000000000), ceiling: CeilingMs(3000) }))
+}
+
+-- Mutant e8 fails the first row, and H1 is the second.
+func test_w7_outcome_text_failed_reports_the_limit() -> bool
+  tests [((), true)]
+  {
+    tool_outcome_text(w7_extension_carrier(), ToolFailed({ tool_call_id: "tc", code: "E", message: "boom", after_dispatch: true }))
+      == "{\"error\":true,\"code\":\"E\",\"timeout_ms\":1000,\"max_timeout_ms\":1000,\"message\":\"boom\",\"tool_call_id\":\"tc\"}"
+  }
+
+func test_w7_outcome_text_failed_before_dispatch_reports_no_applied_limit() -> bool
+  tests [((), true)]
+  {
+    tool_outcome_text(w7_extension_carrier(), ToolFailed({ tool_call_id: "tc", code: "E", message: "boom", after_dispatch: false }))
+      == "{\"error\":true,\"code\":\"E\",\"max_timeout_ms\":1000,\"message\":\"boom\",\"tool_call_id\":\"tc\"}"
+  }
+
+-- Mutant e7 fails this row: the deadline's `timeout_ms` is replaced, not written twice.
+func test_w7_outcome_text_deadline_reports_timeout_ms_once() -> bool
+  tests [((), true)]
+  {
+    tool_outcome_text(w7_extension_carrier(), ToolDeadlineExceeded({ tool_call_id: "tc", elapsed_ms: 1500, timeout_ms: 1000 }))
+      == "{\"error\":true,\"code\":\"ToolDeadlineExceeded\",\"timeout_ms\":1000,\"max_timeout_ms\":1000,\"tool_call_id\":\"tc\",\"elapsed_ms\":1500}"
+  }
+
+func test_w7_outcome_text_mismatch_reports_the_limit() -> bool
+  tests [((), true)]
+  {
+    tool_outcome_text(w7_extension_carrier(), ToolCorrelationMismatch({ expected_id: "tc", got_id: "tx" }))
+      == "{\"error\":true,\"code\":\"ToolCorrelationMismatch\",\"timeout_ms\":1000,\"max_timeout_ms\":1000,\"expected_id\":\"tc\",\"got_id\":\"tx\"}"
+  }
+
+-- D4: `Legacy` has no carrier and today's bytes, and a completion is served as written.
+func test_w7_outcome_text_legacy_and_completed_are_unchanged() -> bool
+  tests [((), true)]
+  {
+    tool_outcome_text(None, ToolDeadlineExceeded({ tool_call_id: "tc", elapsed_ms: 1500, timeout_ms: 1000 }))
+      == "{\"error\":true,\"code\":\"ToolDeadlineExceeded\",\"tool_call_id\":\"tc\",\"elapsed_ms\":1500,\"timeout_ms\":1000}"
+    && tool_outcome_text(None, ToolFailed({ tool_call_id: "tc", code: "E", message: "boom", after_dispatch: true }))
+      == "{\"error\":true,\"code\":\"E\",\"message\":\"boom\",\"tool_call_id\":\"tc\"}"
+    && tool_outcome_text(w7_extension_carrier(), ToolCompleted({ tool_call_id: "tc", content: "authored", exit_code: 0 })) == "authored"
+  }

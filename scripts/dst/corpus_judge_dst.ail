@@ -102,7 +102,10 @@ module scripts/dst/corpus_judge_dst
 
 import std/io (println, exit)
 import std/list as List (length)
-import std/string (startsWith)
+import std/string (startsWith, contains)
+import std/json (encode)
+import src/core/process_limits (Limits, Finite, CeilingMs)
+import src/core/journal (message_json)
 import std/option (Option, None, Some)
 import std/result (Result, Ok, Err)
 import std/fs as FS (fileExists)
@@ -112,14 +115,14 @@ import src/core/test/stub_step (prose_step, tool_step, scripted_world_state)
 import src/core/phase_vocab (
   LedgerRecord, WireRecord, RunSummary,
   ProviderCallPrepared, StreamErrorRetry, WorldRequest, V2ToolDispatchStart,
-  ExtSolverFeedback,
+  ExtSolverFeedback, HistoryAppended,
   run_summary_finish_reason
 )
 import src/core/dst_interaction (Interaction, interaction_kind)
 import src/core/dst_execution (execution_of)
 import src/core/dst_result (unknown_replay_metadata)
 import src/core/dst_invariants (
-  NoReplay, Violation, evaluate, violation_family, violation_rule, violation_message,
+  NoReplay, Violation, EffectDisclosureUnsound, effect_disclosure_findings, evaluate, violation_family, violation_rule, violation_message,
   family_id, first_failed_invariant, FamilyEvidence, family_evidence, invariant_set_version
 )
 import src/core/dst_discovery (DiscoveryFinding, UnderRecorded, OverRecorded, class_balance)
@@ -997,6 +1000,59 @@ func scenario_branch_controls()
 }
 
 -- ---------------------------------------------------------------------------
+-- 041 W7: AN INVALID REQUEST, UNDER THE JUDGE (A14b)
+-- ---------------------------------------------------------------------------
+--
+-- D7's reason for a separate event: a `Limits` program's invalid request has no Start and no
+-- tool interaction, so the two channels of `tool-dispatches-unbalanced` stay equal. Mutant e1
+-- gives it a Start, which is what fails the first row.
+--
+-- THE SECOND ROW IS P1'S PRESENCE CHECK, AND WHAT MUTANT e5 FAILS. The harness's own message
+-- carries `fault`, so P1 is silent on the real bytes whichever records the run wrote. Presence is
+-- only visible on a message that has LOST its disclosure: the run's own trace, with that one
+-- message replaced, must be a finding at (-1, id), and it is one only because the run's own
+-- `ToolArgumentsInvalid` put the id in `refused_call_ids`. Omit the event and P1 cannot see it.
+pure func undisclosed(r: LedgerRecord) -> LedgerRecord {
+  match r {
+    WireRecord(HistoryAppended(i)) =>
+      if contains(encode(i.message), "process_request_invalid")
+      then WireRecord(HistoryAppended({ i | message: message_json({ role: "tool", content: "{\"error\":true}", tool_calls: [], tool_call_id: "bad", images: [] }) }))
+      else r,
+    _ => r
+  }
+}
+
+pure func unsound_refusal(vs: [Violation], id: string) -> bool {
+  match vs {
+    [] => false,
+    v :: rest => (match v { EffectDisclosureUnsound(o, c) => o == 0 - 1 && c == id, _ => false }) || unsound_refusal(rest, id)
+  }
+}
+
+func scenario_invalid_request_control()
+  -> bool ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Trace, Rand} {
+  let _ = println("\n-- an invalid request: a Limits program's refusal, not a bank member --");
+  let step = { tool_step("BashExec", "{\"cmd\":\"true\",\"timeout_secs\":0}", "bad") |
+               tool_calls: [{ id: "bad", name: "BashExec", arguments: "{\"cmd\":\"true\",\"timeout_secs\":0}" }] };
+  let initial: WorldState = { scripted_world_state([step, prose_step("done")]) |
+                              tools: [tool_answer("UNSERVED")],
+                              process_limits: Limits({ default: Finite(1000000000), ceiling: CeilingMs(3000) }) };
+  let c = judged_control("invalid-request", initial,
+                         run_recording_allowing_at("corpus_judge_invalid-request", initial, 2), 2);
+  let starts = dispatch_starts(c.judged.obs.records);
+  let left = List.length(c.run.world.tools);
+  let a = report("A14b: the tool-dispatches-unbalanced rule and the whole set are clean on an invalid request, with no Start, no tool interaction and the queue whole",
+                 is_clean(c.judged) && starts == 0 && c.judged.obs.tools_logged == 0 && left == 1,
+                 "${starts} start(s), ${c.judged.obs.tools_logged} tool interaction(s), ${left} left; set: [${join_with(set_rules(c.judged.set), ",")}]; red: [${join_with(red_rules(c.judged.rows), ",")}]");
+  let doctored = { c.run | trace: { c.run.trace | records: List.map(undisclosed, c.run.trace.records) } };
+  let x = execution_of(doctored, initial.clock_ms, NoReplay, budgets_for(2).decision, budgets_for(2).retry, 0, [], unknown_replay_metadata());
+  let b = report("P1 presence: the run's ToolArgumentsInvalid lets P1 see a refusal whose message lost its disclosure",
+                 unsound_refusal(effect_disclosure_findings(x), "bad"),
+                 "P1 found nothing, so the run's records do not name this refusal");
+  a && b
+}
+
+-- ---------------------------------------------------------------------------
 -- THE FAILURE RECORD (ruling 16): what 009 ADR-001 D8 lists
 -- ---------------------------------------------------------------------------
 --
@@ -1092,6 +1148,7 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
 
   let controls_ok = scenario_budget_edge_controls();
   let branches_ok = scenario_branch_controls();
+  let invalid_ok = scenario_invalid_request_control();
 
   -- THE VERDICT, after every rule row above.
   let _ = println("\n-- the verdict on the bank --");
@@ -1128,8 +1185,8 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
 
   let _ = print_failure_records(bank, budgets);
 
-  if checks_ok && controls_ok && branches_ok && a && b && c && d && e && f then
-    println("\n✓ corpus_judge: ${members} members, the invariant set and six checks, two budget-edge controls, two branch controls")
+  if checks_ok && controls_ok && branches_ok && invalid_ok && a && b && c && d && e && f then
+    println("\n✓ corpus_judge: ${members} members, the invariant set and six checks, two budget-edge controls, two branch controls, the invalid-request control")
   else {
     let _ = println("\n✗ corpus_judge FAILED");
     exit(1)

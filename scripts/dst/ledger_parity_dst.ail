@@ -75,6 +75,7 @@ import src/core/test/stub_step (
   prose_step, tool_step, continuing_token_step, chunked_prose_step
 )
 import src/core/ports (ScriptedStep, WorldState, empty_world_state, WakeObservation, Settled)
+import src/core/process_limits (Limits, Finite, CeilingMs)
 import src/core/phase_vocab (LedgerTrace, LedgerRecord, WireRecord)
 import src/core/dst_event_vocabulary (EventRow, event_vocabulary, is_logical)
 import src/core/dst_invariants (d64_gap_register, record_variant, join_str)
@@ -338,6 +339,12 @@ pure func delegated_script() -> [ScriptedStep] {
   [tool_step("BashExec", "{\"cmd\":\"true | cat\"}", "d2-deleg"), prose_step("done")]
 }
 
+pure func invalid_request_world() -> WorldState {
+  { empty_world_state() |
+    script: [tool_step("BashExec", "{\"cmd\":\"true\",\"timeout_secs\":0}", "w7-tc"), prose_step("done")],
+    process_limits: Limits({ default: Finite(1000000000), ceiling: CeilingMs(3000) }) }
+}
+
 pure func approval_world() -> WorldState {
   { empty_world_state() |
     script: tool_script(),
@@ -547,6 +554,18 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
   let f9 = end_frame("parked", parked);
   let r9 = check_scenario("parked", parked, ["ParkEntered", "WakeReceived"]);
 
+  -- Subject 10 (041 W7): an invalid request in a `Limits` world, whose only records are its
+  -- own refusal. It is why the shell can see a Start that reaches the wire and not the trace:
+  -- `corpus_judge` reads the trace alone, so only this comparison fails on that.
+  let p10 = ScriptedWorld(invalid_request_world());
+  let _ = begin_frame("invalid", p10);
+  let invalid = Session.run_v2_session_traced(
+    empty_rt(), "task", "", mk_budget(), "phase-c-model",
+    [system_msg()], "/tmp", 6, false, 0, zero_rates(), p10
+  );
+  let f10 = end_frame("invalid", invalid);
+  let r10 = check_scenario("invalid", invalid, ["ToolArgumentsInvalid"]);
+
   -- ORDER, PINNED, because the wire comparison cannot see it. The shell counts
   -- per variant, and a count is green on a log appended as a BLOCK in the wrong
   -- place — after the batch results instead of inside the batch, say. A global
@@ -615,11 +634,11 @@ export func main() -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Str
               count_of("NativeToolDenied", native_vs) == 0,
               "the native subject denied a tool, so it is not isolating the allowed arm");
 
-  let _ = println("LEDGER_SUBJECTS 8");
-  let _ = println("WORLD_RUN_FRAMES 8");
-  let framed = f1 && f2 && f3 && f4 && f5 && f7 && f8 && f9;
+  let _ = println("LEDGER_SUBJECTS 9");
+  let _ = println("WORLD_RUN_FRAMES 9");
+  let framed = f1 && f2 && f3 && f4 && f5 && f7 && f8 && f9 && f10;
 
-  if req_ok && r1 && r2 && r3 && r4 && r5 && r7 && r8 && r9 && order_ok && disjoint && framed then println("ledger_parity_dst PASS")
+  if req_ok && r1 && r2 && r3 && r4 && r5 && r7 && r8 && r9 && r10 && order_ok && disjoint && framed then println("ledger_parity_dst PASS")
   else {
     let _ = println("ledger_parity_dst FAIL");
     exit(1)
