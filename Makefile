@@ -2967,7 +2967,13 @@ verify_native_path_guard:
 	@out=$$(env -u AILANG_FS_SANDBOX AILANG_RELAX_MODULES=1 ailang run --caps IO,FS,Process,Env,Clock --entry main \
 		scripts/verify_native_path_guard.ail 2>/dev/null); rc=$$?; \
 	echo "$$out" | grep -E '^(OK|FAIL)' | cut -c1-200; \
-	[ $$rc -eq 0 ] || (echo "verify_native_path_guard: a native file tool followed a symlink out of the workdir" && exit 1)
+	[ $$rc -eq 0 ] || { if ! echo "$$out" | grep -qE '^(OK|FAIL):'; then \
+		echo "verify_native_path_guard: the probe produced no verdict (exit $$rc): is ailang on PATH? Otherwise the run failed before its first check"; \
+	elif echo "$$out" | grep -qE '^FAIL: ((Read|Write|Edit)File through a symlink|\.\.\.and )'; then \
+		echo "verify_native_path_guard: a native file tool followed a symlink out of the workdir"; \
+	elif echo "$$out" | grep -q '^FAIL:'; then \
+		echo "verify_native_path_guard: the probe failed, but not on a symlink row: read the FAIL rows above (FAIL: mktemp -d points at the environment, not the guard)"; \
+	else echo "verify_native_path_guard: the probe exited $$rc with no FAIL row: it failed outside its checks; its stderr is discarded, so rerun the ailang command by hand"; fi; exit 1; }
 
 verify_exit_intent:
 	@out=$$(AILANG_RELAX_MODULES=1 ailang run --caps $(HERDR_GATE_CAPS) --ai-stub --entry main \
