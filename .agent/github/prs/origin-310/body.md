@@ -8,11 +8,12 @@ title: "docs(041): stop the handoff's trap list pinning Makefile line numbers"
 
 ## Summary
 
-Trap 9 of the W6–W7 handoff cited the overclaiming `verify_*` recipes by `Makefile` line number. #309's 6-line change shifted three of those targets by +6 the moment it merged, so the trap now names the targets instead of pinning lines. It also says **eight** recipes, not seven (the earlier list missed `verify_repetition_guard`), records that AILANG v0.55.0, v0.56.0 and v0.56.1 landed without the per-call timeout (`exec(cmd, args)` still has no timeout argument at the v0.56.1 tag, so W8 stays blocked), and warns that the check for the list must be scoped to trap 9's own sentence.
+Trap 9 of the W6–W7 handoff cited the overclaiming `verify_*` recipes by `Makefile` line number. #309's 6-line change shifted three of those targets by +6 the moment it merged, so the trap now names the targets instead of pinning lines. It also says **eight** recipes, not seven (the earlier list missed `verify_repetition_guard`), records that AILANG v0.55.0, v0.56.0 and v0.56.1 landed without the per-call timeout (`exec(cmd, args)` still has no timeout argument at the v0.56.1 tag, so W8 stays blocked), and warns that the check for the list must be scoped to trap 9's own name list. The trap's self-check command was corrected twice after the first push and is now the command that was actually run (see below).
 
 ## Changes
 
 - docs(041): name the verify_* targets instead of their line numbers
+- docs(041): make the trap-9 self-check command actually correct
 
 1 file changed. The eight overclaiming recipes are **not** fixed here; the `Makefile`, `src/`, `scripts/` and the plan files are untouched.
 
@@ -23,18 +24,19 @@ Trap 9 of the W6–W7 handoff cited the overclaiming `verify_*` recipes by `Make
 ## Predicted outcome
 
 - The trap list no longer goes stale when lines are added above a cited target: it contains no `verify_<name>:<line>` reference, so a future `Makefile` edit cannot make it point at the wrong recipe.
-- The eight names in trap 9 equal exactly the set of recipes whose body has `[ $$rc -eq 0 ] || (echo`, the overclaiming shape. Checked by the scoped diff below; anyone can rerun it after a `Makefile` change.
+- The eight names in trap 9 equal exactly the set of recipes whose body has `[ $$rc -eq 0 ] || (echo`, the overclaiming shape. Checked by the scoped diff below, using the command written in trap 9 itself; anyone can rerun it after a `Makefile` change.
 - Document structure unchanged: traps numbered 1–13 and 12 `## ` sections.
 
 ## Test evidence
 
-The committed file is byte-identical to the operator's final source (`.dagr/HANDOFF-W6-W7.md` in the shared checkout): `cmp` exit 0, 320 lines each, sha256 `2bf1d2e076f47cc94c365904849200e302310e408d51cacf532978ad89789219` for both, and `git show HEAD:<path> | cmp - <source>` exit 0.
+The committed file is byte-identical to the operator's final source (`.dagr/HANDOFF-W6-W7.md` in the shared checkout): `cmp` exit 0, 334 lines each, sha256 `4f4f75b368415eb23561e1e08730e433f0c354340ee572ca7be77222f5cf0ae4` for both, and `git show HEAD:<path> | cmp - <source>` exit 0.
 
-Trap 9's names against the recipes that overclaim (A = names in trap 9's own sentence, minus `verify_native_path_guard`; B = from the `Makefile`):
+Trap 9's names against the recipes that overclaim (A = trap 9's own self-check command, run verbatim against the committed copy; B = an independent derivation from the `Makefile`):
 
 ```
-$ sed -n '/\*\*Eight\*\* recipes/,/Only .verify_native/p' <copy> \
-    | grep -oE '`verify_[a-z_]+`' | tr -d '`' | grep -v '^verify_native_path_guard$' | sort -u > A.txt
+$ awk '/all still unfixed after #309:/{f=1} f{print} \
+       /^   Only .verify_native_path_guard. distinguishes/{if(f) exit}' <copy> \
+    | grep -oE 'verify_[a-z_]+' | grep -v '^verify_native_path_guard$' | sort -u > A.txt
 $ awk '/^verify_[a-z_]+:/{t=$1; sub(/:$/,"",t); g=t} /\[ \$\$rc -eq 0 \] \|\| \(echo/{print g}' Makefile | sort -u > B.txt
 $ cat A.txt          # B.txt is identical
 verify_delegate_kind
@@ -60,6 +62,6 @@ $ grep -c '^## ' <copy>
 12
 ```
 
-Note on the scoped check: the `sed` range opens a second time at the caveat's own line, because it quotes "**Eight** recipes", and closes on the next line. The only name in that second range is `verify_native_path_guard`, which is filtered out, so A is unaffected.
+Note on the self-check: the first push scoped A with a `sed` range on the prose, which opened a second time at the caveat's own line (it quotes "**Eight** recipes") and passed only because the one name in that second range was filtered out by `grep -v`. Its replacement was corrected twice — the first draft read only one of the five lines holding the names; the second broke on a literal backtick in the awk pattern — and the closing marker now uses `.` for the backtick and is anchored. The command above is the one now written in trap 9, run verbatim against the committed copy; it reproduces the eight names and `diff` against B is empty.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
