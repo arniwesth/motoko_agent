@@ -180,10 +180,24 @@ Also: `.git/config` is a read-only mount. `git checkout -B` and `pr.ts create` p
             /\[ \$\$rc -eq 0 \] \|\| \(echo/{print g}' Makefile | sort -u
 
    **Scope any check to this trap's own sentence, not the whole document.** A whole-file grep also finds
-   `verify_herdr_orchestrator` (trap 7), `verify_classify` (trap 11) and `verify_native_path_guard`
-   (named in the paragraph below, as the one #309 fixed), and the comparison then looks like a mismatch
-   when the list is right. Compare only the backticked names between "**Eight** recipes" and
-   "Only `verify_native_path_guard`" against the awk output above.
+   syntax targets named in other traps, and the comparison then looks like a mismatch when the list is
+   right. Two ways it bites, both hit during this session: `verify_classify` is trap 11 and
+   `verify_herdr_orchestrator` is trap 7, and the target #309 fixed is named below as fixed.
+
+   **Do not scope by `sed` range on the prose** — this trap's own warning repeats the words "Eight
+   recipes" and the fixed target's name, so a range matches twice and passes only by luck of a `grep -v`.
+   Take the block that lists the names instead, bounded by two explicit markers, which is unambiguous even
+   though the list spans five lines. Run it against the **copy** in `.agent/`, not the gitignored source:
+
+       awk '/all still unfixed after #309:/{f=1} f{print} \
+            /^   Only .verify_native_path_guard. distinguishes/{if(f) exit}' <copy> \
+         | grep -oE 'verify_[a-z_]+' | grep -v '^verify_native_path_guard$' | sort -u
+
+   The closing marker uses `.` for the backtick on purpose: a literal backtick inside a single-quoted awk
+   pattern ends the quoting and the command fails with `awk: unexpected character`. That bit twice while
+   writing this. The `grep -v` drops the fixed target, which the closing line names. `diff` the result
+   against the `awk` output above; both must be the same eight names. **This exact command was run against
+   the committed copy and reproduces the eight** — if it stops doing so, the list or the Makefile moved.
 
    Low severity (all narrow gates), but one batch fix would be worth it.
 
