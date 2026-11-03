@@ -24,6 +24,7 @@ A note, **NOTE-001**, asks whether Rocq would serve the method better than Lean,
 - docs(043): the AILANG half — the pairing model against the real fold
 - docs(043): pre-register the trial of Lean against differential checks (PLAN-001)
 - docs(043): NOTE-001, Rocq compared with Lean on the worked example
+- docs(043): §11, the method combined with DST, added to the research note
 
 1. **The note and its evidence**, the first commit, applied unchanged from a patch written in another session: `RESEARCH-lean-harness-properties.md`, `evidence/PairingModel.lean`, and the differential test under `evidence/diff/`.
 2. **The Lean run**, the second commit: recorded in `evidence/diff/README.md` with the toolchain, the hashes, the axiom report and a negative control on `updatePending`.
@@ -38,7 +39,9 @@ A note, **NOTE-001**, asks whether Rocq would serve the method better than Lean,
 
 6. **The Rocq comparison**, the sixth commit: `NOTE-001-rocq-compared-2026-11-03.md` and `evidence/rocq/`. The port (`PairingModel.v`, `Enumerate.v`) runs against a fresh three-way run through `run_rocq.sh`. `audit/` shows what each prover's assumption report says about a proof by computation, and `install_rocq.sh` installs Rocq 9.3.0 without root. It answers the operator's question and changes nothing else. It edits no file of the trial, and the trial tree is built from PLAN-001's own commit (§7).
 
-The note and the model's header each carry a dated marker at the top and are not otherwise edited, per the research-doc convention: the original states what was believed when it was written.
+7. **The DST addendum**, §11 of the research note, at the operator's request and by reading only. DST supplies the method's steps 3, 5, 6 and 7: inputs at the driver's own lengths and shapes (every execution's journal lines, on the `JournalFold` path), reproduction as a corpus program, and reachability. The method supplies the for-every-length statement that `JournalFold` and `ToolPairing` sample. The dry run's K8-K10, all in the replacement path that neither the alphabet nor the model reaches, are its evidence that the shapes a model leaves out are the ones the driver writes. It names what does not combine (the transcription gap, the projection, 007's naming rule, cost) and a first step: the PR corpus's executions through the three halves. It edits no hashed file.
+
+The note's §1-§10 and the model's header are as first written, each with a dated marker at the top; §11 is a dated addendum. That is the research-doc convention: the original states what was believed when it was written.
 
 20 files in the project, plus this record.
 
@@ -57,6 +60,7 @@ Nothing in the harness changes: no source file is touched. What changes is that 
 - Reachability of the three shapes, Kiro's steps 6 and 7.
 - The other twins (item 4).
 - The trial (`PLAN-001`): the operator approves it (W0.5), then a planter session plants and seals the defects (W1), and the trial starts.
+- §11.6's exporter: the PR corpus's executions through the three halves, and whether any reaches §6.1's shapes, (H1), (H2) or K8-K10.
 
 ## Test evidence
 

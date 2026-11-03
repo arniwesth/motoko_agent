@@ -15,7 +15,10 @@
 >   not an in-module test, so that no test pins the admitted shapes as correct before item 3
 >   decides whether they are.
 >
-> The text below is as first written.
+> - **§11**, an addendum of the same date, on how the method combines with DST. By reading;
+>   nothing run.
+>
+> The text below is as first written, through §10; §11 is the addendum.
 
 Date: 2026-11-03.
 Status: Research, with one worked example in `evidence/`. Proposes an order of work and names
@@ -358,5 +361,121 @@ which is why §4 puts the person there.
    Not done here: filing is outward-facing.
 7. **Only then, a gate.** `make verify_lean`, each model pinned by its source body's hash, with
    the three-valued verdict 029 §9 item 3 asks for (`verified`, `refused`, `unavailable`).
+
+## 11. Addendum, 2026-11-03: the method combined with DST
+
+Added after §1-§10, after the dry run (PLAN-001 W0.9), at the operator's request. **By reading
+only: nothing in this section was run.** Anchors are at `43530c0a` for `src/core` and at this
+branch's `4ecaa292` for the project's files. It edits no hashed file, and the trial tree is
+built from PLAN-001's own commit (PLAN §7), so no arm session sees it.
+
+### 11.1 The question, and the answer in one paragraph
+
+Whether the method and Motoko's DST (007 ADR-001: single-actor, logical-fault DST of the real
+session driver against a seeded world) combine. They do, at specific joints. DST supplies the
+method's steps 3, 5, 6 and 7: inputs at the driver's own lengths and shapes, a reproduction
+artefact, and reachability. The method supplies what DST's invariant families only sample: a
+statement for every length, about a model. Neither replaces the other, and the trial needs no
+amendment for it (§11.5).
+
+### 11.2 Where DST already states §6's rule
+
+| Family | What it reads | What it checks |
+|---|---|---|
+| `ToolPairing` (`dst_invariants.ail:1767`) | the world's interaction log, `x.world.log` | a dispatch with no answer (`OutcomeMissing`), an answer to an id nobody asked for, a dispatch after a denial, effect disclosure, and a re-dispatch (`redispatched`, `:1749`, marked `contracts: BLOCKED — RECURSIVE`) |
+| `JournalFold` (`:2410`) | the trace's records | builds journal lines with `journal_lines_of_records` (`journal.ail:2137`), folds them with the real `fold_journal`, and compares with the driver's `final` field by field, on every traced fixture that calls `evaluate` (`:2429`) |
+
+ADR-003 D4 says (`:421`): "In the harness the `ToolPairing` family is the same rule over the
+trace." Read against the code, the two are the same rule over two representations, the log of
+dispatches and the journal of messages, as §6's two functions are the same rule in two
+languages. Two consequences:
+
+- PLAN-001's T3 (P3.2, the round trip) is the for-every-length form of what `JournalFold`
+  samples on every traced fixture. The DST report §5.1 names the sample's limit itself:
+  registration in `evaluate` does not show that every scenario invokes it.
+- The `ToolPairing`/`pair_step` pair is a model the method has not written (§11.3 item 3).
+
+### 11.3 The joints
+
+| Kiro's step | The worked example has | DST adds |
+|---|---|---|
+| 3. Differential test | eleven messages, length ≤ 4; the model is tied to the code only up to length 4 (`evidence/diff/README.md`) | every execution's journal lines, at the driver's lengths and shapes |
+| 5. Reproduce | a script per counterexample | a constructed execution program in the PR corpus |
+| 6-7. Reachability | by reading; none shown | the corpus as a sampler of what the driver writes; a catalogued fault class for what it does not |
+| 1. Targets | the twins and the fold | the harness's own pure leaves |
+
+1. **DST executions as the differential test's inputs.** Every DST execution already yields its
+   journal lines on the `JournalFold` path. An exporter that projects them to the model's `Msg`
+   (role, call ids, `tool_call_id`) and feeds the existing Lean and AILANG halves extends the tie
+   past length 4 to what the driver writes: catalogued faults, denials, checkpoints with
+   `history_replaced`, resumes. **The dry run is the evidence that these shapes matter.** Arm A's
+   three findings (K8-K10, `trial/dryrun/README.md`; recorded, not counted) all sit in the
+   replacement path, `replaces_previous` and `history_replaced`, which the alphabet does not
+   reach and which arm B's model, like `PairingModel.lean`, leaves out. A compaction or a
+   resume in a corpus run is what writes those shapes; whether the PR corpus's runs reach one
+   is the first thing the exporter would report.
+   **Limit:** the generator cannot violate (H1) or (H2). Its ids are `gcall_<n>_<v>`
+   (`dst_generator.ail:711`), and the driver builds every tool message with `tool_calls: []`
+   (`tool_phase.ail:122`, `:228`). `invariants_dst.ail:52` already records that the generator
+   "provably cannot reach every shape the invariant set protects". The enumeration stays for
+   the boundary cases; the two input sets complement each other.
+2. **DST as the reachability instrument** (steps 6 and 7, open in §6.3 and in the dry run's
+   reports). DST drives the real driver, so the corpus answers, bounded by the generator's reach,
+   whether any run writes a duplicate result, a result after a user message, an empty call id, a
+   tool message with calls, or K8-K10's shapes. A negative answer is bounded evidence of
+   unreachability, not a proof; a positive one is a finding with its program as the
+   reproduction. The stronger form is a catalogued fault class (ADR-001 D3) for a malformed
+   provider message, with a `ReachStatus` (`dst_run_report.ail:152`), which turns (H2) from an
+   assumption about the driver into a measured class.
+3. **One model across the two representations.** A Lean model of `tool_pairing_findings` over
+   the log and of `pair_step` over the journal, with the theorem that a clean log implies an
+   accepted journal, under stated hypotheses about how a dispatch becomes a message. §1 records
+   that most of Kiro's findings were "at a boundary between two representations"; this is that
+   class, and every DST execution supplies both sides as inputs for its differential test.
+4. **Counterexamples reproduced as corpus programs.** A `bug_` theorem's witness becomes a
+   constructed execution program in the PR corpus (ADR-001 D11; the README: "a bank of seeds
+   and one constructed scenario"), which is the project's own reproduction artefact and one
+   command that fails on the defect. Promotion of a failure into the corpus is "the stated
+   policy and is not built yet" (README), so this joint is partly a build.
+5. **The harness itself, later.** Kiro's title is "properties of its own harness". Motoko's DST
+   substrate has pure leaves with a stated intent that Z3 marks `blocked`: `world_ordinal.advance`
+   (`:40`; strict +1, request order), `dst_replay.reconstitution_balance` (`:581`), the seed
+   aliasing `dst_corpus.ail:33` measured at 29 of 29 and provable, `check_seed_sensitivity`
+   (`dst_generator.ail:251`), and `redispatched`. The driver loop stays out of reach: 013
+   RESEARCH §1 measures the DST surface at 20,037 lines with world state threaded by hand. 013
+   §2.D's `step : (StepState, WorldResponse) -> (StepState, [Command], [LedgerEvent])` is the
+   one change that would make the method and DST check a single object.
+
+### 11.4 What does not combine
+
+- **The transcription gap** (§9) is the same whatever the input source.
+- **The projection** from journal lines to `Msg` must be one AILANG function, used by both the
+  enumeration and the exporter, or it is a third representation with its own boundary.
+- **The name.** 007 ADR-001's naming rule holds: an enumerated alphabet through two real
+  functions is exhaustive testing, and the combination is "DST executions as the differential
+  test's inputs and as the reproduction vehicle", not "Lean-verified DST".
+- **Cost.** The AILANG half took 1 min 45 s for 16,105 small folds (`evidence/diff/README.md`).
+  Corpus-sized sets, hundreds of executions of real length, are the scale; not tens of thousands.
+- **Reach.** DST's shapes are the generator's shapes (§11.3 item 1's limit), and 011's finding
+  stands that the oracle set, not the substrate, is where DST's gaps have been.
+
+### 11.5 The trial
+
+PLAN-001 is approved (W0.5), amended (A1-A3) and not started (`trial/sequence.log`). Nothing
+here amends it. Arm A's brief already allows recorded inputs, and arm B may execute the real
+code for steps 3 and 5, so neither arm needs a change to use DST executions, and neither is
+told to. The combination is compatible with each outcome in §10: D's consequence is "use Lean
+only where a person names a property that must hold for every length", which is §11.3 items 3
+and 5; L scopes `verify_lean` to what the proofs found, which is where DST inputs would widen
+the differential test. Anything in this section that runs goes in a NOTE-002 beside NOTE-001,
+after W5 or outside the trial's files.
+
+### 11.6 First step
+
+The exporter of §11.3 item 1, over the PR corpus: each execution's journal lines through the
+three halves of `run_diff.sh`, with one report: the number of histories, the longest, the
+mismatches per half, and whether any history carries §6.1's shapes, violates (H1) or (H2), or
+has K8-K10's shapes. It touches no hashed file. Then §11.3 item 3's model, after §10 item 4's
+twins.
 
 [kiro]: https://kiro.dev/blog/harness-properties-in-lean/
