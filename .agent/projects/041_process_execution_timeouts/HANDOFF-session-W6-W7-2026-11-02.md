@@ -167,10 +167,12 @@ Also: `.git/config` is a read-only mount. `git checkout -B` and `pr.ts create` p
 9. **Seven more `verify_*` Makefile recipes overclaim a cause the way #309 fixed for the path guard.**
    They all use `[ $$rc -eq 0 ] || (echo "verify_X: <a specific cause>" && exit 1)`, so each claims a
    specific cause on **any** non-zero exit, including when the probe never ran. Still unfixed:
-   `verify_herdr_check_answer:2773`, `verify_wait_descriptor_fixtures:2787`,
-   `verify_herdr_delegate_wait:2794`, `verify_herdr_owner_tag:2814`, `verify_exit_intent:2980`,
-   `verify_herdr_dagr_pane:2994`, `verify_delegate_kind:3043`. Low severity (all narrow gates), but one
-   batch fix would be worth it. Only `verify_native_path_guard` distinguishes the cases now.
+   `verify_herdr_check_answer:2769`, `verify_wait_descriptor_fixtures:2784`,
+   `verify_herdr_delegate_wait:2790`, `verify_herdr_owner_tag:2810`, `verify_exit_intent:2972`,
+   `verify_herdr_dagr_pane:2986`, `verify_delegate_kind:3035`. Those are the **target** lines; the
+   offending `[ $$rc -eq 0 ] || (echo …)` is a few lines below each inside the recipe. Low severity (all
+   narrow gates), but one batch fix would be worth it. Only `verify_native_path_guard` distinguishes the
+   cases now.
 10. **The path-guard diagnostic had a second overclaim, found while fixing the first.** Two of the
     probe's six rows are not symlink claims at all — `FAIL: mktemp -d` is an **environment** failure and
     `FAIL: ReadFile inside the workdir still works` is the **control** row — yet both used to print
