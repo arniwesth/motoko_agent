@@ -43,6 +43,10 @@ Write, under /home/motoko/trial-043/planter/:
     seeded_tree_sha256=<the hash build_tree.sh printed>
   and a fourth line, s2_valid=<how many S2 seeds passed validation>.
 
+Do not ask the operator anything while you work: make the reasonable choice and record it in
+/home/motoko/trial-043/planter/validation/NOTES.md. If you are truly stuck, reply with exactly one
+line, PLANTER STUCK: <one sentence with no seed detail>, and wait.
+
 Do not encrypt anything: the operator does that. Do not run git commit, push or any command
 that changes a branch. When everything above is done, reply with exactly one line:
 PLANTER DONE: /home/motoko/trial-043/planter/HASHES
