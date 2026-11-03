@@ -164,7 +164,7 @@ Also: `.git/config` is a read-only mount. `git checkout -B` and `pr.ts create` p
 8. ~~**`src/core/process_limits.ail:18` names the old checker path**~~ — **FIXED in #309.** It named
    `evidence/W4/check_single_construction.py`, which `1270f310` had moved to
    `scripts/verify_single_construction.py`. The comment now names the script and the Make target.
-9. **Seven more `verify_*` Makefile recipes overclaim a cause the way #309 fixed for the path guard.**
+9. **Eight more `verify_*` Makefile recipes overclaim a cause the way #309 fixed for the path guard.**
    They all use `[ $$rc -eq 0 ] || (echo "verify_X: <a specific cause>" && exit 1)`, so each claims a
    specific cause on **any** non-zero exit, including when the probe never ran. Still unfixed:
    **Eight** recipes, all still unfixed after #309: `verify_delegate_kind`, `verify_exit_intent`,
@@ -180,8 +180,8 @@ Also: `.git/config` is a read-only mount. `git checkout -B` and `pr.ts create` p
             /\[ \$\$rc -eq 0 \] \|\| \(echo/{print g}' Makefile | sort -u
 
    **Scope any check to this trap's own sentence, not the whole document.** A whole-file grep also finds
-   syntax targets named in other traps, and the comparison then looks like a mismatch when the list is
-   right. Two ways it bites, both hit during this session: `verify_classify` is trap 11 and
+   targets named in other traps, and the comparison then looks like a mismatch when the list is right.
+   Two ways it bites, both hit during this session: `verify_classify` is trap 11 and
    `verify_herdr_orchestrator` is trap 7, and the target #309 fixed is named below as fixed.
 
    **Do not scope by `sed` range on the prose** — this trap's own warning repeats the words "Eight
@@ -193,11 +193,27 @@ Also: `.git/config` is a read-only mount. `git checkout -B` and `pr.ts create` p
             /^   Only .verify_native_path_guard. distinguishes/{if(f) exit}' <copy> \
          | grep -oE 'verify_[a-z_]+' | grep -v '^verify_native_path_guard$' | sort -u
 
-   The closing marker uses `.` for the backtick on purpose: a literal backtick inside a single-quoted awk
-   pattern ends the quoting and the command fails with `awk: unexpected character`. That bit twice while
-   writing this. The `grep -v` drops the fixed target, which the closing line names. `diff` the result
-   against the `awk` output above; both must be the same eight names. **This exact command was run against
-   the committed copy and reproduces the eight** — if it stops doing so, the list or the Makefile moved.
+   The closing marker uses `.` for the backtick only to keep the pattern readable; a backtick **is** literal
+   inside single quotes, and `awk '… `x` …'` matches normally. The `grep -v` drops the fixed target, which
+   the closing line names. `diff` the result against the `awk` output above; both must be the same eight
+   names. **This exact command was run against the committed copy and reproduces the eight** — if it stops
+   doing so, the list or the Makefile moved.
+
+   **One real awk trap, for whoever edits this — and note it is awk's, not the shell's.** Never put a bare
+   pattern (one with no `{…}` action) directly before a `/regex/` rule on the same logical line. awk reads
+   `f /^   Only…/{…}` as `f` **divided by** that regex, and fails with `syntax error at or near ^`. A
+   trailing `\` inside the single quotes joins the lines and so triggers this too, but the shell is not
+   involved: the identical program on **one physical line with no backslash fails identically at `line 1`**.
+   The shell passes the whole program as one argument either way.
+
+   The document's working command above has `f{print} \` then the next pattern, which is fine **because `f`
+   has an action.** Two fixed forms: give the bare pattern an action (`f{print}`), or end it with a real
+   newline instead of a backslash continuation.
+
+   **The nastier variant, worth knowing because it does not error:** a bare `f \` followed by a
+   **non-regex** rule such as `NR==4{…}` is read as **string concatenation** — `f NR==4` — which compares a
+   nonsense string, exits **0**, and silently matches nothing. A wrong count from that reads exactly like a
+   real result. Prefer `f{print}` so the intent cannot be misread.
 
    Low severity (all narrow gates), but one batch fix would be worth it.
 
