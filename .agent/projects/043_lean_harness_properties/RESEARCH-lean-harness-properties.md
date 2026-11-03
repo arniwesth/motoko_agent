@@ -1,12 +1,21 @@
 # RESEARCH: Proving harness properties in Lean, after Kiro — what transfers to Motoko
 
-> **Update, 2026-11-03, after this note was written.** §10 item 1 is done. The Lean half of §6
-> ran on a machine where elan could install 4.28.0: every theorem in `evidence/PairingModel.lean`
-> checks, none uses an axiom beyond `propext` and `Quot.sound`, and the model's host side matches
-> the real `updatePending` on all 16,105 histories (0 mismatches; each of three mutants planted
-> in `updatePending` produces 1,842 to 2,940). The model's fold side is still untested against
-> AILANG, so "no finding" below still stands. The record is `evidence/diff/README.md`. The text
-> below is as first written.
+> **Update, 2026-11-03, after this note was written.** §10 items 1 and 2 are done. The record
+> is `evidence/diff/README.md`.
+>
+> - **Lean** (item 1): every theorem in `evidence/PairingModel.lean` checks under 4.28.0, and
+>   none uses an axiom beyond `propext` and `Quot.sound`.
+> - **Three-way differential**, over all 16,105 histories: the model matches the real
+>   `updatePending` and the real `fold_journal` with 0 mismatches, and the two real functions
+>   agree on every history the fold accepts within (H1) and (H2). Mutants planted in either
+>   real function are caught.
+> - **Reproduction** (item 2): the two admitted shapes (§6.1) and the trailing empty id (§6.2)
+>   reproduce on the real fold. None is shown reachable (§6.3), so each is still an
+>   observation, and "no finding" below still stands. Item 2 is a program beside the evidence,
+>   not an in-module test, so that no test pins the admitted shapes as correct before item 3
+>   decides whether they are.
+>
+> The text below is as first written.
 
 Date: 2026-11-03.
 Status: Research, with one worked example in `evidence/`. Proposes an order of work and names

@@ -2,9 +2,9 @@
 PairingModel.lean — the worked example for RESEARCH-lean-harness-properties.md §6.
 
 CHECKED 2026-11-03, after this header was written: Lean 4.28.0 accepts the file with no
-error, no theorem uses an axiom beyond `propext` and `Quot.sound`, and `hostPending` matched
-the real `updatePending` on 16,105 histories (diff/README.md). `pairing` has still not been
-run against `ailang run`. The header below is as first written.
+error, and no theorem uses an axiom beyond `propext` and `Quot.sound`. On all 16,105 histories
+in diff/, `hostPending` matched the real `updatePending` and `pairing` matched the real
+`fold_journal` (diff/README.md). The header below is as first written.
 
 A Lean model of two implementations of one rule, at origin/main 43530c0a:
 

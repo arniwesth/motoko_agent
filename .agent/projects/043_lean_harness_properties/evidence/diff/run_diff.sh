@@ -1,18 +1,25 @@
 #!/usr/bin/env bash
 # Differential test for ../PairingModel.lean (RESEARCH-lean-harness-properties.md §6).
 #
-# Runs the model's `hostPending` and the REAL `SessionJournal.updatePending` over every
-# history of length 0..4 in the eleven-message alphabet of enumerate.*, and compares them.
-# Then a bounded check on the model alone: for every history the model's pairing check
-# accepts and that satisfies (H1) and (H2), host pending equals fold open ids. Histories
-# that violate (H1) or (H2) and still disagree are listed, not failed: they are the cases
-# the theorem's hypotheses exist to exclude.
+# Three halves over every history of length 0..4 in the eleven-message alphabet of
+# enumerate.*: the model (Lean), the REAL `SessionJournal.updatePending` (bun), and the
+# REAL `fold_journal` (ailang, enumerate_fold.ail).
 #
-#   run_diff.sh [scratch dir]          needs `lean` (4.28.0, core only) and `bun` on PATH
+#   1. The model's `hostPending` against the real `updatePending`: diff.
+#   2. A bounded check on the model alone: for every history the model's pairing check
+#      accepts and that satisfies (H1) and (H2), host pending equals fold open ids.
+#   3. compare_fold.awk: the model's fold against the real fold, and the real host against
+#      the real fold, which is the cross-language contract itself, on the real code.
+#
+# Histories that violate (H1) or (H2) and still disagree are listed, not failed: they are
+# the cases the theorem's hypotheses exist to exclude.
+#
+#   run_diff.sh [scratch dir]          needs `lean` (4.28.0, core only), `bun` and `ailang`
+#                                      (v0.54.14) on PATH; the AILANG half takes ~2 minutes
 #   run_diff.sh --ts-only [scratch]    the bun half alone, when no Lean toolchain is present
 #
-# Exit 0 only when the full comparison ran and found no mismatch. --ts-only exits 2: it
-# is not a pass, it is the half that could run.
+# Exit 0 only when all three halves ran and found no mismatch. --ts-only, or a missing
+# toolchain, exits 2: it is not a pass, it is the part that could run.
 set -euo pipefail
 
 ts_only=0
@@ -59,3 +66,12 @@ awk -F'|' '
     exit (bad > 0)
   }' "$scratch/lean.out"
 echo "axiom report: $scratch/axioms.txt"
+
+command -v ailang >/dev/null || { echo "fold: NOT RUN -- no ailang on PATH"; exit 2; }
+# From the repository root, so `src/core/...` imports resolve; stderr holds ailang's notices.
+( cd "$repo" && ailang run --relax-modules --caps IO --entry main \
+    "${here#"$repo"/}/enumerate_fold.ail" ) > "$scratch/ail.raw" 2> "$scratch/ail.err"
+grep -E '^[0-9,]*\|' "$scratch/ail.raw" > "$scratch/ail.out"
+echo "ail: $(wc -l < "$scratch/ail.out") histories, sha256 $(sha256sum "$scratch/ail.out" | cut -c1-16)"
+paste -d'|' "$scratch/lean.out" "$scratch/ail.out" > "$scratch/fold.joined"
+awk -f "$here/compare_fold.awk" "$scratch/fold.joined"
