@@ -3,12 +3,12 @@ repo: arniwesth/motoko_agent
 pr: 314
 branch: arniwesth/042-lean-harness-properties
 ticket: null
-title: "docs(042): proving harness properties in Lean, after Kiro, with the pairing model's Lean run"
+title: "docs(043): proving harness properties in Lean, after Kiro, with the pairing model's Lean run"
 ---
 
 ## Summary
 
-A new research project, **042**, reads Kiro's 2026-11-02 post on proving properties of its own harness in Lean and maps its method (model, differential test, prove, reproduce) onto Motoko. The verdict is **adopt the method; there is no tooling to adopt**. Lean takes what Z3 reports as `blocked` or cannot state: folds, event sequences, and the rules implemented once in TypeScript and once in AILANG. The note ranks the targets and the order of work.
+A new research project, **043**, reads Kiro's 2026-11-02 post on proving properties of its own harness in Lean and maps its method (model, differential test, prove, reproduce) onto Motoko. The verdict is **adopt the method; there is no tooling to adopt**. Lean takes what Z3 reports as `blocked` or cannot state: folds, event sequences, and the rules implemented once in TypeScript and once in AILANG. The note ranks the targets and the order of work.
 
 Its worked example is a Lean model of the journal fold's pairing check (`pair_step`) and its TypeScript twin (`updatePending`). In the session that wrote it, the Lean half could not run (`release.lean-lang.org` answered 403). **It has now run.** All 16 theorems check, none uses an axiom beyond `propext` and `Quot.sound`, and the model's host side matches the real `updatePending` on all 16,105 histories. **This is still not a finding.** The model's fold side has not been compared with AILANG, so the note's "no finding" stands.
 
@@ -16,16 +16,19 @@ Its worked example is a Lean model of the journal fold's pairing check (`pair_st
 
 - docs(042): research note on proving harness properties in Lean, after Kiro
 - docs(042): record the Lean run of the pairing model (0 mismatches)
+- docs(043): renumber the Lean project from 042, which #306 holds
 
 1. **The note and its evidence**, the first commit, applied unchanged from a patch written in another session: `RESEARCH-lean-harness-properties.md`, `evidence/PairingModel.lean`, and the differential test under `evidence/diff/`.
 2. **The run**, the second commit. It is recorded in `evidence/diff/README.md`'s runs table, with the toolchain, the hashes, the axiom report and a negative control. The note and the model's header each get a dated marker at the top and are not otherwise edited, per the research-doc convention: the original states what was believed when it was written. The model now also prints axioms for its two controls and its witness theorem.
 
 6 files changed.
 
+The project was first numbered 042, which `042_improving_experimentation` (#306) already holds. The third commit renames the directory to `043_lean_harness_properties`. The first two commits' subjects still say 042.
+
 ## Governing docs
 
-- `.agent/projects/042_lean_harness_properties/RESEARCH-lean-harness-properties.md`
-- `.agent/projects/042_lean_harness_properties/evidence/diff/README.md`
+- `.agent/projects/043_lean_harness_properties/RESEARCH-lean-harness-properties.md`
+- `.agent/projects/043_lean_harness_properties/evidence/diff/README.md`
 
 ## Predicted outcome
 
@@ -36,19 +39,19 @@ Nothing in the harness changes: no source file is touched. What changes is that 
 **1. Files changed.** Only the new project directory: `git diff --name-only origin/main...HEAD`
 
 ```
-.agent/projects/042_lean_harness_properties/RESEARCH-lean-harness-properties.md
-.agent/projects/042_lean_harness_properties/evidence/PairingModel.lean
-.agent/projects/042_lean_harness_properties/evidence/diff/README.md
-.agent/projects/042_lean_harness_properties/evidence/diff/enumerate.lean.tail
-.agent/projects/042_lean_harness_properties/evidence/diff/enumerate.ts
-.agent/projects/042_lean_harness_properties/evidence/diff/run_diff.sh
+.agent/projects/043_lean_harness_properties/RESEARCH-lean-harness-properties.md
+.agent/projects/043_lean_harness_properties/evidence/PairingModel.lean
+.agent/projects/043_lean_harness_properties/evidence/diff/README.md
+.agent/projects/043_lean_harness_properties/evidence/diff/enumerate.lean.tail
+.agent/projects/043_lean_harness_properties/evidence/diff/enumerate.ts
+.agent/projects/043_lean_harness_properties/evidence/diff/run_diff.sh
 ```
 
 **2. The full differential run.** Lean 4.28.0 (elan 4.2.4, linux aarch64) and bun 1.4.4, at `origin/main` `43530c0a`:
 
 ```
 $ PATH=~/.elan/toolchains/leanprover--lean4---v4.28.0/bin:$PATH \
-    .agent/projects/042_lean_harness_properties/evidence/diff/run_diff.sh <scratch>
+    .agent/projects/043_lean_harness_properties/evidence/diff/run_diff.sh <scratch>
 ts: 16105 histories, sha256 6de0b5877d1ace2f
 differential: 16105 histories, 0 mismatches
 bounded: 449 accepted histories within H1/H2, 0 disagree; 222 outside H1/H2 disagree
