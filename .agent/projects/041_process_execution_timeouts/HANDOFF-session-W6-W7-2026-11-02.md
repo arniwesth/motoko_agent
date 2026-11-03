@@ -18,8 +18,8 @@ waits on an AILANG release.**
 - `.dagr/run-041-plan-001.json` is gitignored, so a fresh checkout does not have it.
   `start-orchestrator.sh` writes it from the committed `PLAN-001.dagr.json`; `MERGED` names the finished
   tasks, which are **W1 to W7**.
-- **The operator must merge #307.** #303 is also still open (review required) but nothing in the plan
-  waits on it.
+- **Nothing is waiting on the operator to merge.** #307 merged as `5fe68724` on 2026-11-03, so W1-W7 are
+  all in `main`. #303 is still open (review required) but nothing in the plan waits on it.
 
 ---
 
@@ -36,11 +36,15 @@ waits on an AILANG release.**
 | D5 SIGKILL wording | **merged** (#297) | R10/D6 byte-identical |
 | hygiene | **merged** (#298) | `new.sh --no-track`; `gh pr edit` note |
 | **W6 scripted carrier, expiry, projection** | **merged** (#305, `9400bd07`) | s1-s5 + 5 own mutants killed; 619 matrix rows unchanged |
-| **W7 argument errors, scripted metadata** | **open, #307 at `6a93884b`** | e1-e8 + 8 own mutants killed; W6's stand-in removed; 0 matrix rows moved |
+| **W7 argument errors, scripted metadata** | **merged** (#307, `5fe68724`) | e1-e8 + 8 own mutants killed; W6's stand-in removed; 0 matrix rows moved |
 | W1-W5 handoff docs | **merged** (#304, `cd4b5d7b`) | |
 
-`origin/main` is **`cd4b5d7b`**. The shared checkout is fast-forwarded to it and its 9 modified tracked
+`origin/main` is **`5fe68724`**. The shared checkout is fast-forwarded to it and its 9 modified tracked
 files are the same unrelated ones — no work of this session is in them.
+
+**R11's four-week fallback clock now runs from W7's merge, 2026-11-03.** If W12 has not landed by
+**2026-12-01**, one regeneration of `manifest-A` follows the scripted work alone. That date is the
+plan's, not a preference.
 
 ---
 
@@ -62,7 +66,7 @@ being emitted on an invalid request.
 
 ---
 
-## W7 — awaiting merge, #307 at `6a93884b`
+## W7 — merged as `5fe68724`
 
 **Verified by me, not taken on the delegate's word:**
 
@@ -171,14 +175,14 @@ Also: `.git/config` is a read-only mount. `git checkout -B` and `pr.ts create` p
 
 | PR | Branch | State | What to do |
 |---|---|---|---|
-| **#307** | `arniwesth/041-w7-argument-errors` (`6a93884b`) | OPEN, **REVIEW_REQUIRED** | **Merge this.** All gates verified by me |
+| ~~#307~~ | `arniwesth/041-w7-argument-errors` (`6a93884b`) | **MERGED** as `5fe68724` | done |
 | **#303** | `fix/path-guard-set-plus-e` (`813c0ce6`) | OPEN, **REVIEW_REQUIRED**, all 8 CI checks pass | Merge when convenient. Nothing in the plan waits on it |
 | #299 | `fix/path-guard-login-shell` | closed, superseded by #303 | nothing to do |
 | #300 | `fix/path-guard-fail-closed` | closed; needs a rebase onto #303 if revived | nothing to do |
 | #234 | `fix/portable-path-guard` | open | the better long-term macOS fix; nothing waits on it |
 | #287 | `fix/cost-cap-cache-tokens` | open | **overlaps 041**: changes `session.ail`, may move its anchors. Whichever lands second rebases |
 
-Both #307 and #303 sit in `REVIEW_REQUIRED` with no reviewer requested, so neither will move on its own.
+#303 sits in `REVIEW_REQUIRED` with no reviewer requested, so it will not move on its own.
 
 ---
 
@@ -190,7 +194,7 @@ All exist and are clean (`dirty=0`) unless noted:
 |---|---|---|---|
 | `-041-w1` … `-041-w5` | `arniwesth/041-w{1..5}-*` | — | merged; delete when convenient |
 | `-041-w6` | `arniwesth/041-w6-scripted-carrier` | `516faade` | merged (#305); delete when convenient |
-| `-041-w7` | `arniwesth/041-w7-argument-errors` | `6a93884b` | **#307 open**; keep until merged or closed. Has a gitignored `src/tui/node_modules` from a `bun install` |
+| `-041-w7` | `arniwesth/041-w7-argument-errors` | `6a93884b` | merged (#307); delete when convenient. Has a gitignored `src/tui/node_modules` from a `bun install` |
 | `-041-singlegate`, `-041-d5-note`, `-041-hygiene` | — | — | merged |
 | `-pathguard`, `-pathguard2`, `-pg3` | — | — | #299/#300 closed; `-pg3` holds #303 |
 | `-handoff` | `docs/041-handoff-w6-w7` | `6731b390` | this file (PR #308) |
@@ -224,7 +228,7 @@ Budget: this session used about 215 of 1200 steps.
 
 ## Immediate order of work for the next session
 
-1. **Operator: merge #307.** Then #303 at leisure — nothing in the plan waits on it.
+1. **Nothing to merge for the plan.** W7 merged as `5fe68724`. #303 is still open and can land at leisure.
 2. **Next session: there is no ready work.** Check the four upstream issues before anything else:
 
        gh issue view 2035 --repo sunholo-data/ailang    # and 2036, 2034, 1878
