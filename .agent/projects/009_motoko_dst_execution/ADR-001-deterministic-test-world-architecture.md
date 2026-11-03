@@ -2240,6 +2240,40 @@ four axes. A change to any variant, wire name, payload schema, or classification
 change, and the compatibility rule for old traces is the one D8 applies to old programs: preserve
 decoding or pin a runner, never silently reinterpret.
 
+**Amendment, 2026-11-03 (041 W7; `c730efcf`). Adding a variant is not a version change.** The
+clause just above ends "a change to any variant, wire name, payload schema, or classification is a
+version change". Read literally, that makes **adding** a variant a bump. The WI-A14 amendment
+earlier in this decision restates the rule in the same unqualified form and attributes it to D8;
+both points are corrected below. The tree has never bumped for an addition, and it should not. **A
+change to an existing variant, wire name, payload schema or classification is a version change;
+adding a variant is not.**
+
+The distinction follows from the rule's purpose, not from an exception to it. A version exists so
+that no old trace is read by a vocabulary that cannot interpret it, and the tree has no decoder for
+wire events: old traces are read by a pinned runner (`src/core/dst_event_vocabulary.ail`). An old
+trace cannot name a variant that did not exist when it was written, so an addition orphans no old
+trace. A deletion can: the trace names a variant the new code no longer has, nothing can skip it,
+and a bump is the only honest signal. All three bumps to date were deletions: `/2` deleted
+`Dp7VerifierRejected`, `/3` `PersistNudge`, and `/4` `HybridBashExtracted`. 041 W7 added
+`ToolArgumentsInvalid` and stayed at `/4`. A bump is not free either:
+`dst_profile.version_matches` refuses any manifest whose version string differs, with
+`ManifestVersionDrifted`, so bumping for an addition would refuse every recording at the old
+version for no gain. The added variant still arrives classified, because the artifact fails closed
+on an unclassified variant. That is the classification of a new row, not a change to an existing
+one.
+
+The qualifier has one consequence. Within a version the vocabulary only grows, so an earlier commit
+at `/N` may not read a later `/N` trace. The reader of a `/N` trace is the **last** commit at `/N`,
+the commit `/N+1` was cut from, and that is the commit each pin in the artifact already names.
+
+**Two citations need correcting.** First, `ToolArgumentsUndecodable` (`8980ba61`, 2026-09-06) was
+added at `/1`, under this rule, without a bump. But its commit does not mention versioning, so it is
+an unexamined instance and not a precedent for this amendment. The reasoned precedent is the WI-A14
+amendment's: the version did not change because the change touched none of the versioned surfaces.
+Second, that amendment says "D8 makes" the change a version change. D8 records the vocabulary
+version and supplies the decode-or-pin rule for old programs; the bump condition is stated here, in
+D6.
+
 ### D7. Invariants are evaluated over the whole execution
 
 The runner applies reusable invariants to the returned outcome and complete trace. At minimum, the
