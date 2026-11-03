@@ -77,12 +77,14 @@
 -- confused.
 --
 -- AND THE SEPARATION EARNED SOMETHING CONCRETE. WI-A14 closed one gap, and
--- `event_vocabulary_version` did NOT change: D8 makes a change to a variant, a
--- wire name, a payload schema or a CLASSIFICATION a version change, and
--- `reaches_trace_today` is none of those four. Had the survey been folded into
--- the classification, closing a gap would have been a compatibility event and
--- every old trace would have needed a decoder — which is a strong argument for
--- keeping a measurement out of an artifact whose changes are versioned.
+-- `event_vocabulary_version` did NOT change: D6 makes a change to an EXISTING
+-- variant, a wire name, a payload schema or a CLASSIFICATION a version change,
+-- and `reaches_trace_today` is none of those four. (Adding a variant is not a
+-- version change either; the rule above `event_vocabulary_version` says why.)
+-- Had the survey been folded into the classification, closing a gap would
+-- have been a compatibility event and every old trace would have needed a
+-- decoder — which is a strong argument for keeping a measurement out of an
+-- artifact whose changes are versioned.
 --
 -- Six rows are display-only, and three of those six share one reason: the
 -- compaction wire events are the display face of a `CompactionStageRecord`,
@@ -114,10 +116,25 @@ import src/core/phase_vocab (
   CheckpointTaken, StreamDelta
 )
 
--- D8's compatibility rule applies to this artifact: a change to any variant,
--- wire name, payload schema or classification is a version change, and old
--- traces are decoded or a runner is pinned, never silently reinterpreted. The
--- version lands in the execution manifest (WI-A10) and the failure record (D8).
+-- D6's versioning rule applies to this artifact: a change to an EXISTING
+-- variant, wire name, payload schema or classification is a version change, and
+-- old traces are decoded or a runner is pinned, never silently reinterpreted —
+-- the compatibility rule D6 takes from D8. The version lands in the execution
+-- manifest (WI-A10) and the failure record (D8).
+--
+-- ADDING A VARIANT IS NOT A VERSION CHANGE, and that follows from the rule's
+-- purpose rather than escaping it. A bump exists so that no old trace is read
+-- by a vocabulary that cannot interpret it. An old trace cannot name a variant
+-- that did not exist when it was written, so an addition orphans no old trace;
+-- a deletion can, because the trace still names a variant the new code no
+-- longer has and, with no decoder, nothing can skip it. All three real bumps
+-- below were deletions, and 041 W7 added `ToolArgumentsInvalid` at `/4`. Nor
+-- is a bump free: with no decoder, `dst_profile.version_matches` refuses any
+-- manifest whose version string differs, with `ManifestVersionDrifted`, so
+-- bumping for an addition would refuse every recording at the old version for
+-- no gain. What the qualifier does cost is that a version only grows while it
+-- lasts, so the reader of a `/N` trace is the LAST commit at `/N` — which is
+-- what each pin below already names.
 --
 -- `/2` (005 WI-4) deleted the `Dp7VerifierRejected` variant, `/3` (005 W2-2)
 -- deleted `PersistNudge`, and `/4` (005 W3-3) deleted `HybridBashExtracted`.
