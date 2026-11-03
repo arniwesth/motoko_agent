@@ -16,6 +16,8 @@ Commits the 041 PLAN-001 handoff for the W6-W7 session, which until now lived on
 
 **Final revision.** `9fee48dd` replaces the copy once more with the orchestrator's corrected source. The only change is the `-handoff` row of the worktree table, which named this branch's head as `6731b390` and was stale. That row could never stay correct: a blob cannot record the SHA of the commit that contains it, so naming its own head guarantees it drifts on every push. The row now names no SHA and points at this PR, the reference that stays true, and says why.
 
+**#309 recorded.** `7301ba54` replaces the copy with the orchestrator's source revised after hygiene PR #309. The handoff now records that #309 fixed the stale checker path in `src/core/process_limits.ail:18` and the misleading path-guard diagnostic, which used to report a symlink escape for rows that are not symlink claims. It also records that seven further `verify_*` Makefile recipes share the same overclaim and remain unfixed. The trap list grows from 11 to 13 items.
+
 The handoff records a finished session. Its factual claims were verified by the orchestrator and are not re-verified by this PR.
 
 ## Changes
@@ -24,6 +26,7 @@ The handoff records a finished session. Its factual claims were verified by the 
 - docs(041): complete the W6-W7 handoff
 - docs(041): record W7's merge and R11's clock
 - docs(041): drop the self-referential head from the worktree table
+- docs(041): record #309 in the trap list
 
 1 document added, plus this PR's own record.
 
@@ -37,9 +40,11 @@ No behaviour change. One document is added and no other file is touched, apart f
 
 ## Test evidence
 
-- `cmp .dagr/HANDOFF-W6-W7.md <copy>` exit **0**, and the committed blob (`git show HEAD:<copy>`) also `cmp`s exit **0** against the source. Both files: 253 lines by `wc -l`, `shasum` `b276441fad7cc63dcf0a2027bb8625668fe7aa2b`, `sha256` `799f6b4a3d0dcc6f2061a9f67f824f90cc484ae95a71d075de3537a0c89ed621`.
-- In the copy, by `grep`: `5fe68724` appears 6 times, `awaiting merge` 0 times (case-insensitive), `2026-12-01` once, `6731b390` (the stale head) 0 times, and there are 12 `## ` headings.
+- `cmp .dagr/HANDOFF-W6-W7.md <copy>` exit **0**, and the committed blob (`git show HEAD:<copy>`) also `cmp`s exit **0** against the source. Both files: 267 lines by `wc -l`, `shasum` `6b84d444c5c03ec0968f7bc57331d96fd1481fb9`, `sha256` `52c977bf6affcb01881b48f59cfad82d565e13c1135ba2902ac99d2cb8c32f42`.
+- In the copy, by `grep`: `5fe68724` appears 6 times, `awaiting merge` 0 times (case-insensitive), `2026-12-01` once, `6731b390` (the stale head) 0 times, there are 12 `## ` headings, and the `## Traps carried forward` list numbers 1 to 13 with no repeats or gaps.
 - Post-merge confirmation, run by the orchestrator: `make check_core` on the merged `main` at `5fe68724`, with `AILANG_FS_SANDBOX` unset, passed: exit **0**, 211 OK / 0 FAIL, `src/core/ type-check: 61 passed, 0 failed`, `check_single_construction: 578 .ail files, 0 breaches`.
+- #309, run by the orchestrator at `567053fd`: `make check_core` exit **0**, 211 OK / 0 FAIL, `src/core/ type-check: 61 passed, 0 failed`. The orchestrator also confirmed the four diagnostic cases there: (a) a pass prints 6 OK rows and exits 0; (b) with `ailang` unreachable it prints "probe produced no verdict (exit 127), is ailang on PATH?" and exits 2; (c) a real symlink escape in a scratch tree, with the guard reverted, prints the symlink message; (d) `FAIL: mktemp -d`, forced with a stub `mktemp`, prints "the probe failed, but not on a symlink row".
+- The (d) differential, measured by the orchestrator on the same tree and input: the **old** recipe from `main` printed "a native file tool followed a symlink out of the workdir", and the **new** recipe prints the non-symlink message. That is the defect #309 removes.
 - This PR has no `.ail`, `.ts` or `Makefile` changes, so no gates were run for it. CI not awaited.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
