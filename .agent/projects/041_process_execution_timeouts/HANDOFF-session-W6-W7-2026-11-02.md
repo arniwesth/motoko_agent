@@ -82,15 +82,17 @@ being emitted on an invalid request.
 onto an existing line so `:499` did not move. No off-limits file touched (`tool_catalog.ail`,
 `tools/eval_protected/`, `scripts/eval/`, `Makefile`, `src/tui/`, `packages/` all clean).
 
-### The three findings needing an operator or W13 decision
+### The findings that needed an operator or W13 decision
 
-1. **A21's `Search` half does not hold, and it is a real ADR/code conflict predating W7.** ADR **I2** says
-   "`ReadFile` and `Search` keep 034 D2's `none`". A scripted `Search` deadline reports `effects: unknown`,
-   because `deadline_fault` (`tool_fault.ail:314`) hardcodes `EffectsUnknown` for every tool and does not
-   look at which one. W7 pinned today's bytes rather than change them, which is right: changing it would
-   alter a `Legacy` program's output and contradict A10, and `unknown` is the safe direction. **The plan
-   gives Search to W10 (line 546) but line 653 asks W13 for "A21 across both worlds", so W13 will meet
-   this.** Amend I2 or assign it explicitly.
+1. ~~**A21's `Search` half does not hold**~~ — **RULED and FIXED in #311.** ADR **I2** said "`ReadFile` and
+   `Search` keep 034 D2's `none`" without restricting it to the live path, while a scripted `Search`
+   deadline reports `effects: unknown` because `deadline_fault` (`tool_fault.ail:314`) is tool-blind. **The
+   operator chose to amend the ADR's scope, not the code** — the reasoning being that `unknown` is the safe
+   direction, that changing it would alter a `Legacy` program's output against D4's byte rule, and that
+   A10 keeps `Search`'s scripted deadline behaviour. So ADR-002 is now at its **tenth revision**: I2's
+   `none` is scoped to live runs and the scripted arm's `unknown` is stated, and the plan's W13 acceptance
+   asserts A21 **per world** rather than promising `none` in both. **No code changed.** W7's pinned row
+   (`"deadline" "unknown"`) was already right and stays.
 2. **The plan's `e1` mutant was under-specified and W7 closed the gap correctly.** As written, `e1` emits
    Start on the wire only, and `corpus_judge` reads the trace, so nothing saw it. The delegate did not
    weaken the mutant: it made `e1` emit on both channels and added `e1w` as the wire-only form, then added
@@ -203,8 +205,10 @@ Also: `.git/config` is a read-only mount. `git checkout -B` and `pr.ts create` p
    pattern (one with no `{…}` action) directly before a `/regex/` rule on the same logical line. awk reads
    `f /^   Only…/{…}` as `f` **divided by** that regex, and fails with `syntax error at or near ^`. A
    trailing `\` inside the single quotes joins the lines and so triggers this too, but the shell is not
-   involved: the identical program on **one physical line with no backslash fails identically at `line 1`**.
-   The shell passes the whole program as one argument either way.
+   involved: the identical program on **one physical line with no backslash fails the same way, reported at
+   `line 1`** (the continuation form reports it at `line 2`, because the text spans two physical lines; the
+   error and the cause are the same). The shell passes the whole program as one argument either way.
+   Measured on mawk 1.3.4 — gawk would word the message differently.
 
    The document's working command above has `f{print} \` then the next pattern, which is fine **because `f`
    has an action.** Two fixed forms: give the bare pattern an action (`f{print}`), or end it with a real
@@ -340,11 +344,11 @@ Budget: this session used about 215 of 1200 steps.
 4. **R11's four weeks count from W7's merge**, not from W6's. W7 is the last item before W12 that moves
    protected symbols, so the clock starts when #307 lands.
 
-## Two questions the operator should answer before W8
+## One question the operator should still answer before W8
 
-- **ADR I2 vs the code: `Search`'s deadline disclosure.** I2 says `ReadFile` and `Search` keep
-  `effects: none`; `deadline_fault` reports `unknown` for every tool. W7 pinned today's bytes. Amend I2
-  or assign the fix to W13 explicitly — W13 is scoped for "A21 across both worlds" and will meet it.
+- ~~**ADR I2 vs the code: `Search`'s deadline disclosure.**~~ **Ruled and amended in #311 — see the W7
+  section above.** ADR-002 is at its tenth revision: I2's `none` is live-only and the scripted arm's
+  `unknown` is stated, with the code deliberately unchanged. Nothing here waits on the operator.
 - **D8 and `event-vocabulary/4`.** W7 read an added variant as not a version change, on the precedent that
   all three prior bumps were deletions. If you read D8 otherwise, `/5` costs six pinned strings in five
-  DST scripts and no profile bump.
+  DST scripts and no profile bump. **This one is still open.**
