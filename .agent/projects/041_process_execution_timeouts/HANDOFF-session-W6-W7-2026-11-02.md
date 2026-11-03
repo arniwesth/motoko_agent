@@ -238,6 +238,21 @@ search.** Let them stop: both stopped correctly when something was genuinely wro
 seven "fan-out" files were not under `src/core/`. For W7, C3 had held and every anchor was exact — so the
 table was short. **Measure it each time; do not assume either way.**
 
+**Every number this session wrote was wrong at least once, and a delegate's "I did not verify this" caught
+each one.** Not one of these was found by the author:
+
+| The handoff said | The delegate's words | The truth |
+|---|---|---|
+| 10 sections, ended mid-sentence | "the end may have been cut off" | truncated by the authoring tool; two sections missing |
+| `-handoff` head `6731b390` | "still gives the head as `6731b390`" | unfixable by update — a blob cannot name its own commit |
+| `FAIL: …was unchanged` | "the probe prints `…is unchanged`" | the brief's prefix would have misclassified a symlink row |
+| seven `verify_*:LINE` refs | "They are the orchestrator's claim." | all seven wrong; three pointed at other recipes |
+
+**The lesson is procedural, not moral.** A delegate that reports what it did not check is more valuable than
+one that asserts everything passed, and the cheapest way to make a number true is to have someone else run
+the command that produces it. Ask for checks that are mechanical (a `grep`, a `cmp`, an `awk` sequence),
+not for agreement.
+
 Budget: this session used about 215 of 1200 steps.
 
 ---
