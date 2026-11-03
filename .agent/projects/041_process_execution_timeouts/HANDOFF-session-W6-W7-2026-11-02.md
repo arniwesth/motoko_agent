@@ -161,12 +161,26 @@ Also: `.git/config` is a read-only mount. `git checkout -B` and `pr.ts create` p
 6. **A foreground shell call dies at ~30 s and takes its child with it.** Use
    `(setsid cmd > log 2>&1 &)` then poll. `nohup ... &` inside the call is not enough.
 7. **`verify_herdr_orchestrator` creates `./.tmp-herdr-orch/`** in whatever checkout it runs from.
-8. **`src/core/process_limits.ail:18` still names the old checker path** — stale, fix it next time the
-   module changes.
-9. **`new_contract_policy` and `verify_classify` cannot read `VERIFIED (bounded: depth 2)`.**
-10. **`verify_single_construction.py` reads only the first import on a joined line.** A result constructor
+8. ~~**`src/core/process_limits.ail:18` names the old checker path**~~ — **FIXED in #309.** It named
+   `evidence/W4/check_single_construction.py`, which `1270f310` had moved to
+   `scripts/verify_single_construction.py`. The comment now names the script and the Make target.
+9. **Seven more `verify_*` Makefile recipes overclaim a cause the way #309 fixed for the path guard.**
+   They all use `[ $$rc -eq 0 ] || (echo "verify_X: <a specific cause>" && exit 1)`, so each claims a
+   specific cause on **any** non-zero exit, including when the probe never ran. Still unfixed:
+   `verify_herdr_check_answer:2773`, `verify_wait_descriptor_fixtures:2787`,
+   `verify_herdr_delegate_wait:2794`, `verify_herdr_owner_tag:2814`, `verify_exit_intent:2980`,
+   `verify_herdr_dagr_pane:2994`, `verify_delegate_kind:3043`. Low severity (all narrow gates), but one
+   batch fix would be worth it. Only `verify_native_path_guard` distinguishes the cases now.
+10. **The path-guard diagnostic had a second overclaim, found while fixing the first.** Two of the
+    probe's six rows are not symlink claims at all — `FAIL: mktemp -d` is an **environment** failure and
+    `FAIL: ReadFile inside the workdir still works` is the **control** row — yet both used to print
+    "a native file tool followed a symlink out of the workdir". #309 splits the `FAIL:` branch, so only
+    the five symlink rows claim an escape. **If you add a row to this probe, and it is not a symlink
+    claim, check it is not matched by `(Read|Write|Edit)File through a symlink` or `^FAIL: \.\.\.and `.**
+11. **`new_contract_policy` and `verify_classify` cannot read `VERIFIED (bounded: depth 2)`.**
+12. **`verify_single_construction.py` reads only the first import on a joined line.** A result constructor
     in a joined import is misread as a value and reported as a false breach. Put the import first.
-11. **`make verify_classify` can exit 1 on a solver timeout** in a module you did not touch, while still
+13. **`make verify_classify` can exit 1 on a solver timeout** in a module you did not touch, while still
     writing the register. Commit only the pins your change moved, and say so.
 
 ---
