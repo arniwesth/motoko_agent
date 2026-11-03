@@ -167,12 +167,31 @@ Also: `.git/config` is a read-only mount. `git checkout -B` and `pr.ts create` p
 9. **Seven more `verify_*` Makefile recipes overclaim a cause the way #309 fixed for the path guard.**
    They all use `[ $$rc -eq 0 ] || (echo "verify_X: <a specific cause>" && exit 1)`, so each claims a
    specific cause on **any** non-zero exit, including when the probe never ran. Still unfixed:
-   `verify_herdr_check_answer:2769`, `verify_wait_descriptor_fixtures:2784`,
-   `verify_herdr_delegate_wait:2790`, `verify_herdr_owner_tag:2810`, `verify_exit_intent:2972`,
-   `verify_herdr_dagr_pane:2986`, `verify_delegate_kind:3035`. Those are the **target** lines; the
-   offending `[ $$rc -eq 0 ] || (echo …)` is a few lines below each inside the recipe. Low severity (all
-   narrow gates), but one batch fix would be worth it. Only `verify_native_path_guard` distinguishes the
-   cases now.
+   **Eight** recipes, all still unfixed after #309: `verify_delegate_kind`, `verify_exit_intent`,
+   `verify_herdr_check_answer`, `verify_herdr_dagr_pane`, `verify_herdr_delegate_wait`,
+   `verify_herdr_owner_tag`, `verify_repetition_guard`, `verify_wait_descriptor_fixtures`.
+   Only `verify_native_path_guard` distinguishes the cases now.
+
+   **Name the targets, never their line numbers — do not add line numbers here.** They rot: see below.
+   Derive the list mechanically rather than from memory, because an earlier draft of this trap said "seven"
+   and missed `verify_repetition_guard` entirely:
+
+       awk '/^verify_[a-z_]+:/{t=$1; sub(/:$/,"",t); g=t} \
+            /\[ \$\$rc -eq 0 \] \|\| \(echo/{print g}' Makefile | sort -u
+
+   **Scope any check to this trap's own sentence, not the whole document.** A whole-file grep also finds
+   `verify_herdr_orchestrator` (trap 7), `verify_classify` (trap 11) and `verify_native_path_guard`
+   (named in the paragraph below, as the one #309 fixed), and the comparison then looks like a mismatch
+   when the list is right. Compare only the backticked names between "**Eight** recipes" and
+   "Only `verify_native_path_guard`" against the awk output above.
+
+   Low severity (all narrow gates), but one batch fix would be worth it.
+
+   **Why no line numbers: they rotted within the hour.** This trap originally cited seven target lines. They
+   were correct when measured. #309's 6-line change to `verify_native_path_guard`'s recipe sits *above* three
+   of those targets, so merging #309 shifted them by +6 while the four above stayed put. The document became
+   wrong at the moment its own fix landed. This is the same defect as the `-handoff` row above, and the
+   remedy is the same: name the thing, not its line.
 10. **The path-guard diagnostic had a second overclaim, found while fixing the first.** Two of the
     probe's six rows are not symlink claims at all — `FAIL: mktemp -d` is an **environment** failure and
     `FAIL: ReadFile inside the workdir still works` is the **control** row — yet both used to print
@@ -267,6 +286,23 @@ Budget: this session used about 215 of 1200 steps.
    All four were **OPEN** on 2026-11-02. W8 needs a released tag carrying **both** #2035 and #2036
    (D3: one without the other unblocks nothing). W9 needs #2034. If nothing has closed with a release,
    do not delegate — say so and stop. That is the correct outcome, not a failure.
+
+   **Checked beyond the issue state, on 2026-11-03 — the answer is still no.** Three releases landed while
+   this session ran (v0.55.0, v0.56.0, v0.56.1, the last on 2026-11-02T19:10Z) and the issues stayed open,
+   so issue state alone is not evidence either way. The decisive test is the **published source at the
+   latest tag**, not the issue and not the release notes (v0.56.1's notes are empty):
+
+       gh api "repos/sunholo-data/ailang/contents/std/process.ail?ref=v0.56.1" \
+         --jq .content | base64 -d | sed -n '55,70p'
+
+   It is still `export func exec(cmd: string, args: [string])` — **no per-call timeout argument** — and
+   there is no exported query for the configured limit. So U2035 and U2036 are unshipped as of v0.56.1,
+   and W8/W10/W11/W12 stay blocked. The repo is still pinned at `ailang = ">=0.54.14"` (`ailang.toml:6`)
+   with `ailang.lock` recording v0.52.5; bumping is W8's job, not a chore.
+
+   **Re-run that command against whatever tag is latest before concluding nothing has changed.** The
+   version in the monorepo is not the version on the command line: several v0.55+ trees exist under `/tmp`
+   from other sessions, and `ailang --version` here prints v0.54.14.
 3. **When a task does unlock:** write a stand-alone brief under `tmp/041-orchestrator/briefs/`, with the
    plan's section and the graph's criteria and note quoted verbatim, a **freshly measured** re-grounding
    table at the delegate's exact base, `env -u AILANG_FS_SANDBOX` on every DST target, and the traps above.
