@@ -1,7 +1,7 @@
 # ADR-002: Per-call process timeouts and what a timeout tells the model
 
 Date: 2026-10-30
-Status: **Accepted 2026-10-31 under R9, ninth revision. Not implemented. Rulings R1-R11 are in §7.**
+Status: **Accepted 2026-10-31 under R9, tenth revision. Not implemented. Rulings R1-R11 are in §7.**
 Grounded at: `origin/main` `a393314b` (#284 merged). AILANG v0.54.14, with the upstream API also
 read at v0.55.0.
 
@@ -18,7 +18,12 @@ lacked a value its readers need, and the extension token dropped the run's limit
 all of them. The check R9 requires found that both design changes hold, with amendments. This revision
 applies those, plus six gaps PLAN-001 found. These last changes have not been reviewed, by the operator's
 choice: what remains is left to the plan's tests. The route for startup limits is the one new piece of
-design here, and W11 confirms it.
+design here, and W11 confirms it. A tenth revision, after W7, corrected I2 and its acceptance bullet:
+both stated `none` for a `Search` timeout without restricting it to the live path, while the scripted
+arm builds every deadline through `deadline_fault`, which is tool-blind and reports `unknown`. It scopes
+both to the live path and states the scripted path's `unknown`. The code was not changed instead,
+because D4 renders a `Legacy` program as it does today and A10 keeps `Search`'s scripted deadline
+behaviour.
 
 Requested by the operator after #284 merged and tool calls were still seen to stop at 30 s.
 
@@ -104,8 +109,10 @@ Three gaps remain after #284:
   operator's ceiling. Detached descendants (D5) and a killed runtime (D6) are outside this bound,
   and are stated here so that it is not read as absolute.
 - **I2.** A timeout of `BashExec`, `RunTests` or another tool that may change state is never reported
-  as `effects: none`. `ReadFile` and `Search` keep 034 D2's `none`: `Search` overrides the disclosure
-  at `src/core/tool_runtime.ail:632-638`.
+  as `effects: none`. In a **live** run `ReadFile` and `Search` keep 034 D2's `none`: `Search` overrides
+  the disclosure at `src/core/tool_runtime.ail:632-638`. **A scripted `Search` deadline reports
+  `unknown`**, not `none`: the scripted arm builds every deadline through `deadline_fault`, which is
+  tool-blind, and A10 keeps that path's behaviour as it is today. The two worlds differ here, deliberately.
 - **I3.** Live and scripted runs get their limit from the same resolver and report it in the same
   fields wherever the harness renders the result, so DST exercises what production does. A scripted
   completion is served as authored (D4). Their configuration may differ.
@@ -559,8 +566,9 @@ Accepted when:
 - After #1878, partial stdout and stderr are preserved on a timeout; before it, their absence is
   explicit.
 - Timing tests separate the enforced deadline from return latency, which can include `WaitDelay`.
-- A `BashExec` or `RunTests` timeout reports `effects: unknown`, and a `Search` timeout still reports
-  `effects: none` (I2).
+- A `BashExec` or `RunTests` timeout reports `effects: unknown`. A **live** `Search` timeout reports
+  `effects: none` (I2). A **scripted** `Search` deadline reports `unknown`, because the scripted arm's
+  `deadline_fault` is tool-blind and A10 keeps that path as it is today; the two worlds differ here.
 - Cancelling a run with SIGTERM or SIGINT stops the command and its ordinary descendants with no late effect. A recorded
   failure alone does not satisfy this.
 - An existing `MOTOKO_PROCESS_TIMEOUT` above any shipped limit still starts, with no new setting (I4).

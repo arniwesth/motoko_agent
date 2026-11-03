@@ -650,7 +650,8 @@ symbols, so R11's regeneration follows it.
   message cap.
 - A14d, final form. A failure here reopens R6, as a failure in W1 would.
 - A16, in full: every row of D7's table. *Coverage* lists them.
-- A17, A20 and A21 across both worlds.
+- A17, A20 and A21 across both worlds, with A21's `Search` disclosure asserted **per world**: live
+  `none`, scripted `unknown` (ADR I2 as amended).
 
 **Mutant.** `m1`: live reports `elapsed_ms` as `timeout_ms` → the parity row fails.
 
@@ -704,7 +705,7 @@ W12's absence marker. A partial stream is unbounded, so fields keep D4's order.
 | A18 | Draws and interactions kept; diff limited; old journals fold and resume (554) | W5, W12 |
 | A19 | Partial output, or explicit absence (557) | W12, W14 |
 | A20 | Deadline separated from return latency (559) | W2, W10, W13 |
-| A21 | Timeout `unknown`; `Search` timeout `none` (560) | W7, W10, W13 |
+| A21 | Timeout `unknown`; live `Search` timeout `none`, scripted `Search` deadline `unknown` (560) | W7, W10, W13 |
 | A22 | Cancelling with SIGTERM or SIGINT stops command and descendants (562) | W3, **W9** |
 | A23 | Existing large `MOTOKO_PROCESS_TIMEOUT` still starts (564) | W11 |
 | A24 | `tools.delegated_timeout_ms` gains no role (565) | W11 |
