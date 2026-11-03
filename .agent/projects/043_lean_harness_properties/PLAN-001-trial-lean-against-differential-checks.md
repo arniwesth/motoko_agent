@@ -469,3 +469,31 @@ what it measures.
 3. **A refused attempt is not a breach.** The audit (§7) counts a tool call that names a denied
    location, or runs `git`, as a breach only when the call was not refused by the deny rules. A
    refused call revealed nothing, so it is listed as a refused attempt and voids nothing.
+
+## Amendment A3, 2026-11-03, after the dry run and before W1
+
+The dry run (A1 item 1) is recorded in `trial/dryrun/README.md`. Nothing from it counts. This
+amendment changes what it showed needs changing, and §10 is untouched.
+
+1. **Known before the trial, added to §4.** The dry run's arm A found these on the unseeded
+   code, and the operator's re-run of its reproductions exited 1 for each. Reachability is
+   unknown. They sit in T3's files, so a T3 arm may meet them, and they do not count as
+   discoveries.
+
+   | Id | What |
+   |---|---|
+   | K8 | `SessionJournal.replaceLastHistoryMessage` runs `updatePending` on the replacement without undoing the replaced message, so after a `replaces_previous` append, `exit.pending_tool_calls` and the fold's `dangling` can differ in either direction |
+   | K9 | `history_replaced` resets the host's open set to `[]` without reading the replacement messages, while the fold pairs them and can report their trailing calls as dangling |
+   | K10 | `strip_dangling` selects the message to strip by `seq`, and every message of one `history_replaced` entry shares a `seq`, so a reused dangling id is also stripped from an earlier, answered assistant, leaving an orphan tool result that the transcript check accepts |
+2. **The stop ends the session.** At the cap, after the Esc, every process whose working
+   directory is in the session's directory is ended, Claude Code and its background jobs
+   included. Then the output is hashed, and then the session's tab is closed (`clock.sh`).
+3. **A session's own scratchpad is its own.** The audit treats
+   `/tmp/claude-1001/<the session's cwd key>/` as part of the session (`audit.py`).
+4. **A limit, named.** A process listing can show other sessions' command lines, and nothing
+   short of isolation prevents that. The audit lists any tool result that shows another
+   session's directory as a note, and the adjudicator judges it. A read of another session's
+   directory is still a breach.
+5. **Scripts.** `launch.sh` answers Claude Code's folder-trust prompt, which is the only prompt
+   it answers. It builds an arm's tree from the planter's sealed tarball. Appendix C is made
+   concrete as `trial/scripts/planter_brief.md`, which the planter is sent verbatim.

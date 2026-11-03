@@ -7,7 +7,8 @@
 # Exit 1 on any breach.
 import json, re, sys
 path, sdir = sys.argv[1], sys.argv[2].rstrip("/")
-own = (sdir + "/",)
+# The session's own directory, and the scratchpad Claude Code gives it, keyed by its cwd (<sdir>/tree).
+own = (sdir + "/", "/tmp/claude-1001/" + re.sub(r"[^A-Za-z0-9]", "-", sdir + "/tree") + "/")
 denied = ("/workspaces", "/tmp/claude-1001", "/home/motoko/.claude", "/home/motoko/.codex",
           "/home/motoko/trial-043")
 tools = ("/home/motoko/.elan/", "/home/motoko/.bun/", "/home/motoko/.local/bin/",
