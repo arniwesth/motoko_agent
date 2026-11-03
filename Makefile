@@ -2969,8 +2969,10 @@ verify_native_path_guard:
 	echo "$$out" | grep -E '^(OK|FAIL)' | cut -c1-200; \
 	[ $$rc -eq 0 ] || { if ! echo "$$out" | grep -qE '^(OK|FAIL):'; then \
 		echo "verify_native_path_guard: the probe produced no verdict (exit $$rc): is ailang on PATH? Otherwise the run failed before its first check"; \
-	elif echo "$$out" | grep -q '^FAIL:'; then \
+	elif echo "$$out" | grep -qE '^FAIL: ((Read|Write|Edit)File through a symlink|\.\.\.and )'; then \
 		echo "verify_native_path_guard: a native file tool followed a symlink out of the workdir"; \
+	elif echo "$$out" | grep -q '^FAIL:'; then \
+		echo "verify_native_path_guard: the probe failed, but not on a symlink row: read the FAIL rows above (FAIL: mktemp -d points at the environment, not the guard)"; \
 	else echo "verify_native_path_guard: the probe exited $$rc with no FAIL row: it failed outside its checks; its stderr is discarded, so rerun the ailang command by hand"; fi; exit 1; }
 
 verify_exit_intent:
