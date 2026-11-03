@@ -400,3 +400,72 @@ Tab-separated, with a header row:
 | `repro` | One command from the tree root. Exit 1 when the defect is present, 0 when absent, within 120 s |
 | `witness` | The concrete input |
 | `notes` | Anything else, such as reachability if known |
+
+---
+
+## Amendment A1, 2026-11-03, before W1
+
+Made after the operator's approval and before any seed exists. It changes how the trial is run,
+not what it measures, and §10 is untouched.
+
+1. **A dry run, W0.9, before W1.** One arm A session and one arm B session, 20 minutes each, run
+   at the same time on an **unseeded** tree with target **T0**, the worked example:
+   `pair_step` and `finish_fold` (`src/core/journal.ail:1634`, `:1715`) against `updatePending`
+   (`src/tui/src/session-journal.ts:865`). Its property is **P0.1**: for every history the fold
+   accepts in which no call id is empty and no tool message carries calls,
+   `exit.pending_tool_calls` equals `SessionState.dangling`. The tree already holds a solution
+   for T0 in `evidence/`; that does not matter, because the dry run tests the plumbing:
+   - the tree builds;
+   - AILANG imports resolve and bun and Lean run from the copy;
+   - the cap and the stop work;
+   - the deliverables appear;
+   - the deny rules (item 4) hold, and the audit (§7) can be run.
+
+   Nothing from it counts. Its record goes to `trial/dryrun/` and `sequence.log`. If it shows a
+   fault in this plan's procedure, the fix is a further amendment before W1. A fault in how the
+   arms performed is not a reason to change anything.
+2. **Launch.** Every session is a fresh Claude Code session (`claude --model claude-opus-5-5
+   --effort xhigh --permission-mode bypassPermissions`) in its own herdr pane, in a herdr tab
+   kept for the trial. This orchestrating session launches the sessions and sends each brief as
+   its first prompt. The trial's files live under `/home/motoko/trial-043/`, outside every
+   checkout. For each session, its tree copy is the working directory, and its output
+   directory is added with `--add-dir`.
+3. **The trial tree also leaves out** `AGENTS.md`, `tools/code-graph/AGENTS.md` and `.claude/`.
+   Claude Code loads them, and they tell a session to work through git worktrees, which the
+   briefs forbid.
+4. **Read-blinding is enforced where Claude Code can see it, and audited everywhere.** Each arm
+   session runs with `--settings` deny rules on reads of `/workspaces/**`, `/tmp/claude-1001/**`,
+   `/home/motoko/.claude/**`, the planter's directory and every other session's tree and output
+   directory, and on `git`. A test before this amendment showed that these rules refuse the Read
+   tool and any Bash command that names a denied path. They do not see a path a program opens at
+   run time, and they do not restrict writes. So §7's transcript audit stands unchanged, and it
+   also covers programs the session ran.
+5. **Batches.** Eight sessions at a time: two targets per batch, with the A1, A2, B1 and B2
+   sessions of each target running together, so that both arms share CPU load equally. The order
+   is fixed: (T1, T4), then (T2, T5), then (T3, T6). The 8-core machine is the reason.
+6. **The clock.** A session's 2 hours start when its brief is sent. At 1 h 50 min the
+   orchestrator sends every session the same line: "Ten minutes left: write your deliverables to
+   [out] now." At 2 h it interrupts the session (Esc) and hashes the output directory as it stands.
+7. **The planter** works in a fresh git worktree at `43530c0a` and in
+   `/home/motoko/trial-043/planter/`. **The operator runs the encryption step themselves** in the
+   planter's pane (`! openssl enc -aes-256-cbc -pbkdf2 ...`, with the passphrase typed at the
+   prompt), so the passphrase never enters any session's context. After sealing, the planter's
+   worktree and plaintext files are deleted. Its transcript is kept as the record; it lives under
+   `/home/motoko/.claude/`, which item 4 denies to the arms.
+
+## Amendment A2, 2026-11-03, before W1
+
+Found while building the trial tree, before the dry run. It changes how the trial is run, not
+what it measures.
+
+1. **The trial tree also leaves out `.mcp.json`.** It would ask each new session to approve
+   project MCP servers, which stalls startup, and it would give arm sessions Linear and Obsidian
+   access. Sessions also launch with `--strict-mcp-config` and no MCP configuration, so they have
+   no MCP tools at all.
+2. **The operator scripts are in `trial/scripts/`:** `build_tree.sh`, `settings.py`, `brief.py`,
+   `launch.sh`, `clock.sh` and `audit.py`. They are how §7 and amendment A1 are carried out, and
+   `brief.py` renders Appendices A and B verbatim. Changes to them before W1 are logged in
+   `sequence.log`; after W1, any change is a deviation.
+3. **A refused attempt is not a breach.** The audit (§7) counts a tool call that names a denied
+   location, or runs `git`, as a breach only when the call was not refused by the deny rules. A
+   refused call revealed nothing, so it is listed as a refused attempt and voids nothing.
