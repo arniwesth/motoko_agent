@@ -37,11 +37,21 @@ def session_of(pid, ps):
         p, hops = ps[p][0], hops + 1
     return None
 
+def cwd_session(pid):
+    try: d = os.readlink(f"/proc/{pid}/cwd")
+    except OSError: return None
+    return d[len(ROOT) + 3:].split("/", 1)[0] if d.startswith(ROOT + "/s/") else None
+
 def candidates():
     ps = procs()
+    arms = [pid for pid, (_, _, cmd) in ps.items() if cmd.startswith("claude ") and MARK in cmd]
+    panes = {ps[pid][0] for pid in arms}  # the shell each arm's Claude Code runs in
     for pid, (ppid, rss, cmd) in ps.items():
-        if cmd.startswith("claude ") or pid == os.getpid(): continue
-        s = session_of(pid, ps)
+        if cmd.startswith("claude ") or pid == os.getpid() or pid in panes: continue
+        # A descendant of an arm's Claude Code; or, when its parent has gone and it was re-parented
+        # to PID 1 (a job left running), a process working in an arm's directory, as clock.sh
+        # finds them at the stop. Added before batch 3 (sequence.log).
+        s = session_of(pid, ps) or cwd_session(pid)
         if s: yield rss, pid, s, cmd
 
 def log(reason, rss, pid, s, cmd):
