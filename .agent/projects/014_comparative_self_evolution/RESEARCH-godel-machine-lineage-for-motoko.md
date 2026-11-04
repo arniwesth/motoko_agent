@@ -5,6 +5,9 @@ Status: Research — **opening draft**. §1 is a literature survey (external cla
 verification level); §2 is measured at HEAD; §3–§5 are analysis; §6–§7 are open threads, not
 conclusions.
 Pinned binary: AILANG **v0.33.0** (`ailang.lock`)
+Re-read: `NOTE-001-re-read-2026-11-02.md` (2026-11-02) re-measures §2 at `e49a3ec3` / AILANG
+v0.54.14, verifies §1's MGM numbers against the paper, and re-ranks §4. Per 027's convention this
+file is not edited below this line; corrections live in the note.
 Relates to:
 - `.agent/projects/005_harness_policy_boundary/` (what a mutation operator may touch — §3.6)
 - `.agent/projects/011_improve_test_axises/RESEARCH-test-axes-beyond-dst.md` (the acceptance oracle — §3.4)
