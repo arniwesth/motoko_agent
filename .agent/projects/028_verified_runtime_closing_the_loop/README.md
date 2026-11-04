@@ -76,6 +76,16 @@ targeted task never touches.
     (`MotokoRuntimeStatus`), and records six complexity levers (delete dead
     paths → split the three giants → sum types → single-source catalog →
     shrink/lazy-load order → isolate the two couplings).
+15. **NOTE-010-sixth-session-long-demo-issues.md** — sixth session
+    (2026-11-04): long live demo (`check_core`, `verify_core`, `corpus_pr`,
+    `event_vocabulary` all green; EditFile dry-run and SHA guard behave) and
+    eight issues, led by three self-contradicting status reports: the
+    scratchpad summary says `verified` over a `skipped` contract (I-1),
+    BashExec reports `spawn_failed` for a process that ran (I-2), and
+    file-scoped `Search` puts line numbers in `path` (I-5). Also: the 30 s
+    process wall, the unwired Delegated backend, stale-delegation debris in
+    every `Delegate` result, repository hygiene, gate speed, and the TUI
+    silently dropping the GitHub token (I-9).
 
 ## The one-paragraph state
 
