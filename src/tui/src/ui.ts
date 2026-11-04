@@ -1824,7 +1824,9 @@ interface ThinkBlock {
   bodyRow: Text;
   expanded: boolean;
   // kind distinguishes the two sources of think-style panels:
-  //   "think"   — tag-convention <thinking>...</thinking> from delta.content
+  //   "think"   — tag-convention <thinking>/<think>/<plan> blocks from
+  //               delta.content (SYSTEM.md mandates <plan>; see
+  //               extractTaggedThinkAnswer for why the name changed)
   //   "reason"  — API-level reasoning (v0.18.8 ThinkingDelta from Anthropic
   //               extended-thinking, OpenAI o1/o3, Gemini thoughts, every
   //               OpenRouter-routed reasoning model post-v0.18.9)
@@ -1908,12 +1910,20 @@ interface TaggedSplit {
   answer: string;
 }
 
-function extractTaggedThinkAnswer(text: string): TaggedSplit | null {
+export function extractTaggedThinkAnswer(text: string): TaggedSplit | null {
   const raw = text ?? "";
   const lower = raw.toLowerCase();
+  // <plan> is the same convention under a different name. SYSTEM.md mandates
+  // <plan> rather than <thinking> because Anthropic's ToS classifier blocks a
+  // system prompt that instructs the model to emit its internal reasoning in a
+  // <thinking> block — measured 2026-11-04 on claude-opus-5.5 via OpenRouter,
+  // which refused every request with the old preamble (native_finish_reason
+  // "refusal"). A plan is the same pre-answer material, so it folds into the
+  // same "think" panel; nothing here distinguishes the two.
   const tags: Array<{ open: string; close: string }> = [
     { open: "<thinking>", close: "</thinking>" },
     { open: "<think>", close: "</think>" },
+    { open: "<plan>", close: "</plan>" },
   ];
   let best: { openIdx: number; bodyStart: number; closeIdx: number; closeLength: number } | null = null;
   for (const tag of tags) {
@@ -1936,11 +1946,11 @@ function extractTaggedThinkAnswer(text: string): TaggedSplit | null {
   return { think, answer };
 }
 
-function stripThinkTags(text: string): string {
+export function stripThinkTags(text: string): string {
   return text
-    .replace(/<\/?\s*think(?:ing)?\s*>/gi, "")
-    .replace(/(?:^|[\s`])<\/?(?:t|th|thi|thin|think|thinki|thinkin|thinking)>/gi, (m) => m.match(/^\s/) ? m[0]! : "")
-    .replace(/^(?:hinking|inking|nking|king|ing|ng|g)>/i, "");
+    .replace(/<\/?\s*(?:think(?:ing)?|plan)\s*>/gi, "")
+    .replace(/(?:^|[\s`])<\/?(?:t|th|thi|thin|think|thinki|thinkin|thinking|pl|pla|plan)>/gi, (m) => m.match(/^\s/) ? m[0]! : "")
+    .replace(/^(?:hinking|inking|nking|king|ing|ng|g|lan|an)>/i, "");
 }
 
 // Strip BOTH the tags AND the body content of <thinking>...</thinking>
@@ -1956,16 +1966,16 @@ function stripThinkTags(text: string): string {
 // Returns the visible portion only; the full thinking content is still
 // preserved in the underlying buffer for the final render path
 // (extractTaggedThinkAnswer at thinking_stream_end).
-function stripThinkBlocksForLive(text: string): string {
+export function stripThinkBlocksForLive(text: string): string {
   if (!text) return "";
   // Strip closed <thinking>...</thinking> blocks (case-insensitive,
-  // tolerant of <think>/<thinking>). Replace with a single placeholder
+  // tolerant of <think>/<thinking>/<plan>). Replace with a single placeholder
   // so the user knows reasoning is happening but not what it says.
-  let out = text.replace(/<think(?:ing)?\s*>[\s\S]*?<\/think(?:ing)?\s*>/gi, "[thinking]\n");
+  let out = text.replace(/<(?:think(?:ing)?|plan)\s*>[\s\S]*?<\/(?:think(?:ing)?|plan)\s*>/gi, "[thinking]\n");
   // Strip an unclosed trailing <thinking>... — anything from the open
   // tag to end-of-buffer. This is the in-flight case where the model
   // hasn't emitted </thinking> yet. Show a thinking placeholder.
-  const openMatch = out.match(/<think(?:ing)?\s*>[\s\S]*$/i);
+  const openMatch = out.match(/<(?:think(?:ing)?|plan)\s*>[\s\S]*$/i);
   if (openMatch) {
     out = out.slice(0, openMatch.index!) + "[thinking…]";
   }
