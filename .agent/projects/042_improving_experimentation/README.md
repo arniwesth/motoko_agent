@@ -19,6 +19,10 @@ predecessor on unseen problems using the same foundation model and comparable bu
 - [Research direction and proposed first experiment](RESEARCH-improving-experimentation.md) —
   motivation, candidate method changes, evaluation criteria, evidence boundaries and open
   questions.
+- [Running a pre-registered comparison of two methods](NOTE-001-preregistered-method-comparison.md) —
+  the protocol 043's trial uses, extracted for the comparison step: hypotheses, a decision rule
+  and predictions frozen by hash, a sealed answer key, blinding, mechanical scoring, and what
+  running it on this machine taught.
 - [Parent RSI direction](../../../design_docs/planned/m-motoko-dst-recursive-self-improvement.md) —
   the broader ambition of improving execution, discovery and verification.
 
