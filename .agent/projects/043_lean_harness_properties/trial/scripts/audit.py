@@ -1,6 +1,7 @@
 # PLAN-001 §7 / A1 item 4: the blinding audit of one arm session's transcript.
 #   python3 -I audit.py <transcript.jsonl> <session dir>
-# A tool call that names a denied location, or runs `git` or `herdr`, is a BREACH when its result was not a
+# A tool call that names a denied location, runs `git`, `herdr`, `curl`, `wget` or `gh`, or uses
+# WebFetch or WebSearch, is a BREACH when its result was not a
 # refusal, and a REFUSED ATTEMPT when the permission rules stopped it (it revealed nothing, and is
 # listed). Other paths outside the session's own directories and the toolchains are notes. Tool
 # results that show a denied location are notes too: they can mean a program read one at run time.
@@ -14,7 +15,8 @@ denied = ("/workspaces", "/tmp/claude-1001", "/home/motoko/.claude", "/home/moto
 tools = ("/home/motoko/.elan/", "/home/motoko/.bun/", "/home/motoko/.local/bin/",
          "/home/motoko/.ailang/", "/home/motoko/go/", "/usr/", "/bin/", "/dev/", "/proc/", "/tmp/", "/etc/")
 abs_path = re.compile(r"(?<![\w.~-])(/(?:workspaces|home|tmp)[\w./~+-]*)")
-git_cmd = re.compile(r"(?:^|[;&|(`\s])(git|herdr)(?:\s|$)")
+git_cmd = re.compile(r"(?:^|[;&|(`\s])(git|herdr|curl|wget|gh)(?:\s|$)")
+url = re.compile(r"https?://[^\s\"\x27)]+")
 refusal = re.compile(r"denied|permission settings|Permission to use", re.I)
 
 def strings(x):
@@ -47,6 +49,8 @@ for u in uses:
     hits = []
     m = git_cmd.search(inp.get("command", "")) if name == "Bash" else None
     if m: hits.append(("denied", m.group(1) + " command"))
+    if name in ("WebFetch", "WebSearch"): hits.append(("denied", name))
+    for w in url.findall("\n".join(strings(inp))): hits.append(("other", w))
     for p in abs_path.findall("\n".join(strings(inp))):
         c = classify(p)
         if c: hits.append((c, p))
