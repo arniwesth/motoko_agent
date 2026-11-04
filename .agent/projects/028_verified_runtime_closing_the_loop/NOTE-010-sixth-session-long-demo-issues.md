@@ -125,6 +125,27 @@ first delegation of a session.
 Together they make the verify-before-done rule (MANDATORY in the project
 instructions) cost several minutes per edit.
 
+### I-9. The TUI drops the GitHub token, and `gh` then reports "not logged in"
+
+Found while opening this note's PR. The operator's shell exported `GH_TOKEN` and
+`MOTOKO_BOT_GH_TOKEN`, and Motoko was started from that shell. Both variables are
+present in `herdr`, the shell, `make motoko`, `run-agent.sh` and the TUI (`bun
+src/tui/src/index.ts`). Both are absent from the `ailang run` runtime and from every
+BashExec command (checked by name in `/proc/<pid>/environ`, never by value).
+
+The cause is `buildChildEnv` (`src/tui/src/runtime-process.ts:499-676`). It builds
+the runtime's environment from an explicit allowlist, and neither name is on it.
+`gh auth status` inside the session then said "not logged in" and `git push`
+failed with `could not read Username`. Both messages point at a missing login, not
+at a filtered variable. This is the third time this allowlist has silently dropped
+something; the egress proxy and `HERDR_*` are recorded in the same file.
+
+Expected: forward `MOTOKO_BOT_GH_TOKEN` only (not `GH_TOKEN`, since
+`tools/pr/README.md` says identity is never inherited), with a test like
+`proxy-child-env.test.ts`. Or have the TUI print which allowlisted secrets it
+dropped. Until then, the gitignored `.env` is the way to give a session the bot
+token.
+
 ## 3. Not reproduced this session
 
 - Lean scratchpad unavailable (no default elan toolchain). Recorded in
@@ -134,4 +155,5 @@ instructions) cost several minutes per edit.
 ## 4. Suggested order
 
 I-1, I-2, I-5 (status reports that contradict themselves or the facts; small, local
-fixes), then I-4 (wire or delete), I-6, I-3, I-7, I-8.
+fixes), then I-9 (one allowlist entry and a test), I-4 (wire or delete), I-6, I-3,
+I-7, I-8.

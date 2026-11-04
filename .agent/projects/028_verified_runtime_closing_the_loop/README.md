@@ -84,7 +84,8 @@ targeted task never touches.
     BashExec reports `spawn_failed` for a process that ran (I-2), and
     file-scoped `Search` puts line numbers in `path` (I-5). Also: the 30 s
     process wall, the unwired Delegated backend, stale-delegation debris in
-    every `Delegate` result, repository hygiene, gate speed.
+    every `Delegate` result, repository hygiene, gate speed, and the TUI
+    silently dropping the GitHub token (I-9).
 
 ## The one-paragraph state
 
