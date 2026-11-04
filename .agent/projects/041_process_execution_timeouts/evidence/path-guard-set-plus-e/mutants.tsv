@@ -1,0 +1,7 @@
+id	rule	edit	probe_row	expected	commit	observed	verdict
+m1	set +e keeps the 43 verdict	remove set +e at the 43 site	all six checks ran and passed	unset=red,one=green	d23109ed6646680c5f86fd6e322ea0cd8a7a26d7	unset=red,one=green,make=2	killed
+m2	set +e keeps the 44 verdict	remove set +e at the 44 site	all six checks ran and passed	unset=green,one=green	d23109ed6646680c5f86fd6e322ea0cd8a7a26d7	unset=green,one=green,make=0	survived
+m2a	the 44 arm refuses by itself	43 arm falls through; 44 site as fixed	ReadFile through a symlink out of the workdir is refused	unset=green,one=green	d23109ed6646680c5f86fd6e322ea0cd8a7a26d7	unset=green,one=green,make=2	passed
+m2b	set +e keeps the 44 verdict	43 arm falls through; remove set +e at the 44 site	ReadFile through a symlink out of the workdir is refused	unset=red,one=green	d23109ed6646680c5f86fd6e322ea0cd8a7a26d7	unset=red,one=green,make=2	killed
+m3	the rows read the verdict	exit 43 becomes exit 0	all six checks ran and passed	unset=red,one=red	d23109ed6646680c5f86fd6e322ea0cd8a7a26d7	unset=red,one=red,make=2	killed
+m4	survival control	no edit	all six checks ran and passed	unset=green,one=green	d23109ed6646680c5f86fd6e322ea0cd8a7a26d7	unset=green,one=green,make=0	passed

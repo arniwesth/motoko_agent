@@ -1,0 +1,43 @@
+# make exit status per shape. base = df14e9cb, after = d23109ed.
+# literal = env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/home/motoko (ailang is not on this PATH)
+# clean   = env -i PATH=/home/motoko/.local/bin:/usr/local/bin:/usr/bin:/bin HOME=/home/motoko
+# ambient = env -u AILANG_FS_SANDBOX, in the session's shell
+base guard-literal rc=2
+base guard-clean rc=2
+base guard-ambient rc=0
+base core-literal rc=2
+base core-clean rc=2
+base core-ambient rc=0
+after guard-literal rc=2
+after guard-clean rc=0
+after guard-ambient rc=0
+after core-literal rc=2
+after core-clean rc=0
+after core-ambient rc=0
+
+# guard script exit codes at d23109ed, run directly (SHLVL unset, then SHLVL=1)
+inside: SHLVL-unset=0 SHLVL=1:0
+new.txt: SHLVL-unset=0 SHLVL=1:0
+link/secret: SHLVL-unset=43 SHLVL=1:43
+link/planted: SHLVL-unset=43 SHLVL=1:43
+
+# probe c023e16d on the unfixed guard, clean shape
+FAIL: [SHLVL unset] ReadFile through a symlink out of the workdir is refused — {"tool":"
+FAIL: [SHLVL unset] WriteFile through a symlink out of the workdir is refused — {"tool":
+FAIL: [SHLVL unset] ...and nothing was written outside — planted.txt exists
+FAIL: [SHLVL unset] EditFile through a symlink out of the workdir is refused — {"tool":"
+FAIL: [SHLVL unset] ...and the outside file is unchanged — changed
+OK: [SHLVL unset] ReadFile inside the workdir still works
+OK: [SHLVL unset] the child really had that SHLVL
+FAIL: [SHLVL unset] all six checks ran and passed — exit 1, 1 OK
+OK: [SHLVL 1] ReadFile through a symlink out of the workdir is refused
+OK: [SHLVL 1] WriteFile through a symlink out of the workdir is refused
+OK: [SHLVL 1] ...and nothing was written outside
+OK: [SHLVL 1] EditFile through a symlink out of the workdir is refused
+OK: [SHLVL 1] ...and the outside file is unchanged
+OK: [SHLVL 1] ReadFile inside the workdir still works
+OK: [SHLVL 1] the child really had that SHLVL
+OK: [SHLVL 1] all six checks ran and passed
+verify_native_path_guard: a native file tool followed a symlink out of the workdir
+make: *** [Makefile:2967: verify_native_path_guard] Error 1
+make rc=2

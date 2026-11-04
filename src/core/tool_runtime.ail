@@ -486,7 +486,15 @@ func validate_path_common(tool: string, id: string, path: string, workdir: strin
       else if starts_with_root_dir(stripped) then
         Err(path_error(id, tool, "path appears absolute (missing leading slash): ${path}"))
       else {
-        let guard_script = "set -eu\nwd=$(realpath \"$1\")\nrel=\"$2\"\njoined=\"$wd/$rel\"\ntarget=$(realpath -m \"$joined\")\ncase \"$target\" in\n  \"$wd\"|\"$wd\"/*) ;;\n  *) exit 43 ;;\nesac\nif [ -e \"$joined\" ]; then\n  resolved=$(realpath \"$joined\")\n  case \"$resolved\" in\n    \"$wd\"|\"$wd\"/*) ;;\n    *) exit 44 ;;\n  esac\nfi\n";
+        -- `set +e` before each exit keeps the verdict. A login shell sources
+        -- ~/.bash_logout on `exit`, and under errexit a failing command there
+        -- ends the shell with that command's code instead: Debian's stock file
+        -- runs clear_console at SHLVL 1, which returns 1 with no console, and 1
+        -- reads as a pass below. errexit is for the realpath calls above, where
+        -- a failure would make the comparison meaningless; once the guard has
+        -- decided, only the code matters. An `exit` in a profile or logout file
+        -- can still replace the code; this does not stop that.
+        let guard_script = "set -eu\nwd=$(realpath \"$1\")\nrel=\"$2\"\njoined=\"$wd/$rel\"\ntarget=$(realpath -m \"$joined\")\ncase \"$target\" in\n  \"$wd\"|\"$wd\"/*) ;;\n  *) set +e; exit 43 ;;\nesac\nif [ -e \"$joined\" ]; then\n  resolved=$(realpath \"$joined\")\n  case \"$resolved\" in\n    \"$wd\"|\"$wd\"/*) ;;\n    *) set +e; exit 44 ;;\n  esac\nfi\n";
         -- exec is Ok for ANY exit code (Err only when bash cannot run), so the
         -- guard's verdict is its exit code: 43/44 mean the path escapes. Any
         -- other failure is let through as before: `realpath -m` is GNU-only,
