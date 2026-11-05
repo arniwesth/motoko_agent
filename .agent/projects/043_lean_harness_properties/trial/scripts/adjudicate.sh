@@ -7,7 +7,7 @@
 #   adjudicate.sh prepare            one work directory per session, with a copy of its out/
 #   adjudicate.sh run [JOBS]         every report on every tree; resumable; JOBS sessions at once
 #   adjudicate.sh pairs [JOBS]       T−{s,t} for every pair, for reports §8 calls seed interaction
-#   adjudicate.sh table              classifies, and writes $ADJ/table.tsv and $ADJ/summary.tsv
+#   adjudicate.sh table              classifies, and writes $ADJ/table.tsv, summary.tsv and runs.tsv
 #   adjudicate.sh check              the 24 output directories still hash to their W2 values
 #   adjudicate.sh all [JOBS]         check build prepare run pairs table check
 #
@@ -375,6 +375,54 @@ def do_table():
                   [res[f"T-{x}"] or "-" for x in SEEDS] + [c, ",".join(det), ",".join(man[x]["class"] for x in det), "; ".join(notes)]
             f.write("\t".join(row) + "\n")
     print(open(os.path.join(ADJ, "table.tsv")).read().count("\n") - 1, "rows in", os.path.join(ADJ, "table.tsv"))
+    # summary.tsv: per session, then per arm replicate (its six sessions, one per target), then per
+    # arm (the mean of its two replicates, §10). A seed counts once per session however many of the
+    # session's reports detect it (§8, "same defect ... for seeds, the same seed").
+    classes = ["S1", "S2", "S3", "S4", "E"]
+    rows = {}
+    for r in reps:
+        c, det, res, notes = classify(db, r)
+        a = rows.setdefault(r["session"], {"seeds": set(), "reports": 0, "false": 0, "error": 0, "real": 0,
+                                           "interaction": 0, "unstable": 0, "other": 0})
+        a["reports"] += 1
+        if c in ("detects", "detects (pair)"): a["seeds"].update(det)
+        elif c == "false report": a["false"] += 1
+        elif c == "error": a["error"] += 1
+        elif c == "real defect": a["real"] += 1
+        elif c.startswith("interaction") or c == "unclassified": a["interaction"] += 1
+        elif c == "unstable": a["unstable"] += 1
+        else: a["other"] += 1
+    def counts(seeds):
+        return [sum(1 for x in seeds if man[x]["class"] == k) for k in classes]
+    head = ["unit", "reports"] + [f"D({k})" for k in classes] + ["seeds", "false", "error", "real", "interaction", "unstable", "other"]
+    out = ["\t".join(head)]
+    for s in SESSIONS:
+        a = rows[s]
+        out.append("\t".join(map(str, [s, a["reports"]] + counts(a["seeds"]) + [",".join(sorted(a["seeds"])),
+                   a["false"], a["error"], a["real"], a["interaction"], a["unstable"], a["other"]])))
+    rep_tot = {}
+    for arm in "ab":
+        for i in "12":
+            ss = [f"t043-t{t}-{arm}{i}" for t in "123456"]
+            seeds = set().union(*(rows[s]["seeds"] for s in ss))
+            tot = {k: sum(rows[s][k] for s in ss) for k in ("reports", "false", "error", "real", "interaction", "unstable", "other")}
+            rep_tot[arm + i] = (counts(seeds), tot)
+            out.append("\t".join(map(str, [f"{arm.upper()}{i}", tot["reports"]] + counts(seeds) + [",".join(sorted(seeds)),
+                       tot["false"], tot["error"], tot["real"], tot["interaction"], tot["unstable"], tot["other"]])))
+    for arm in "ab":
+        c1, t1 = rep_tot[arm + "1"]; c2, t2 = rep_tot[arm + "2"]
+        mean = [(x + y) / 2 for x, y in zip(c1, c2)]
+        out.append("\t".join(map(str, [f"{arm.upper()} mean", (t1["reports"] + t2["reports"]) / 2] + mean + ["",
+                   (t1["false"] + t2["false"]) / 2, (t1["error"] + t2["error"]) / 2, (t1["real"] + t2["real"]) / 2,
+                   (t1["interaction"] + t2["interaction"]) / 2, (t1["unstable"] + t2["unstable"]) / 2, (t1["other"] + t2["other"]) / 2])))
+    open(os.path.join(ADJ, "summary.tsv"), "w").write("\n".join(out) + "\n")
+    # runs.tsv: every run, without its command (the command is the report's, with the path rewrite)
+    keys = ["session", "report_id", "variant", "tag", "status", "rc", "wall_s", "peak_rss_mib", "started", "jobs"]
+    with open(os.path.join(ADJ, "runs.tsv"), "w") as f:
+        f.write("\t".join(keys) + "\n")
+        for line in open(DB):
+            r = json.loads(line); f.write("\t".join(str(r[k]) for k in keys) + "\n")
+    print("summary.tsv and runs.tsv written")
 
 {"run": do_run, "pairs": do_pairs, "table": do_table}[mode]()
 PY
