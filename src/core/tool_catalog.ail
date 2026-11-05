@@ -21,8 +21,9 @@ module src/core/tool_catalog
 import std/ai (ToolSchema)
 import std/list as List (length)
 import std/string (contains)
-import std/json (Json, jo, kv, js, getString)
-import std/option (Some, None)
+import std/json (Json, jo, kv, js, getString, decode, get, asString, asArray)
+import std/option (Option, Some, None)
+import std/result (Ok, Err)
 import src/core/config (VerificationConfig)
 import pkg/sunholo/motoko_ext_abi/types (ExtRuntime, ExtEntry, Capability, DescribeTools, ToolProvider, ProviderCtx, ToolCallEnvelope, ToolHandleOutcome, Delegate)
 
@@ -46,7 +47,7 @@ pure func write_file_schema() -> ToolSchema = {
 pure func edit_file_schema() -> ToolSchema = {
   name: "EditFile",
   description: "Apply a sequence of substring edits to a file. Supports dry-run mode and SHA-256 guard for optimistic concurrency.",
-  parameters: "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"edits\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"old\":{\"type\":\"string\"},\"new\":{\"type\":\"string\"}},\"required\":[\"old\",\"new\"]}},\"dry_run\":{\"type\":\"boolean\"},\"expected_sha256\":{\"type\":\"string\"}},\"required\":[\"path\",\"edits\"]}"
+  parameters: "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"edits\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"old\":{\"type\":\"string\",\"description\":\"Exact text to replace. Must be non-empty and match exactly once unless replace_all is true.\"},\"new\":{\"type\":\"string\"},\"replace_all\":{\"type\":\"boolean\",\"description\":\"Replace every occurrence of old (default false)\"}},\"required\":[\"old\",\"new\"]}},\"dry_run\":{\"type\":\"boolean\"},\"expected_sha256\":{\"type\":\"string\"}},\"required\":[\"path\",\"edits\"]}"
 }
 
 pure func bash_exec_schema() -> ToolSchema = {
@@ -58,7 +59,7 @@ pure func bash_exec_schema() -> ToolSchema = {
 pure func run_tests_schema() -> ToolSchema = {
   name: "RunTests",
   description: "Run the project's test suite (e.g. make test, pytest). Returns exit code, stdout, stderr.",
-  parameters: "{\"type\":\"object\",\"properties\":{\"cmd\":{\"type\":\"string\",\"description\":\"Test command, defaults to 'make test'\"},\"args\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[]}"
+  parameters: "{\"type\":\"object\",\"properties\":{\"cmd\":{\"type\":\"string\",\"description\":\"Test command to run, e.g. 'make test' or 'pytest'\"},\"args\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"cmd\"]}"
 }
 
 pure func search_schema() -> ToolSchema = {
@@ -369,4 +370,80 @@ pure func test_two_extensions_one_name_keeps_the_earlier_entry() -> bool
     let backward = tools_with_extensions(rt_of([second, first]));
     names_csv(forward) == "${native_names_csv()},Shared,OnlyFirst,OnlySecond" && description_of(forward, "Shared") == "first"
       && names_csv(backward) == "${native_names_csv()},Shared,OnlySecond,OnlyFirst" && description_of(backward, "Shared") == "second"
+  }
+
+-- THE SCHEMAS SAY WHAT THE RUNTIME READS. The model sees only these strings, so
+-- an argument the runtime honours and the schema omits is invisible to it, and a
+-- default the schema promises and the runtime lacks is a trap:
+--   RunTests  `parse_exec_from_args` defaults `cmd` to "", and `exec("")` comes
+--             back as a FAILED TEST RUN, not a missing argument. So `cmd` is
+--             required, and its description promises no default.
+--   EditFile  `parse_edit_ops_rec` reads `replace_all`, and `apply_edits` tells a
+--             model to "set replace_all=true", so each edit item declares it.
+-- Decoded rather than substring-matched, so a schema that stops being valid JSON
+-- fails here too.
+func json_at(j: Json, keys: [string]) -> Option[Json] {
+  match keys {
+    [] => Some(j),
+    k :: rest => match get(j, k) {
+      Some(next) => json_at(next, rest),
+      None => None
+    }
+  }
+}
+
+func string_at(j: Json, keys: [string]) -> string {
+  match json_at(j, keys) {
+    Some(v) => match asString(v) {
+      Some(s) => s,
+      None => ""
+    },
+    None => ""
+  }
+}
+
+func json_strings_csv(xs: [Json]) -> string {
+  match xs {
+    [] => "",
+    x :: rest => {
+      let s = match asString(x) {
+        Some(v) => v,
+        None => "?"
+      };
+      match rest {
+        [] => s,
+        _ => "${s},${json_strings_csv(rest)}"
+      }
+    }
+  }
+}
+
+func required_at(j: Json, keys: [string]) -> string {
+  match json_at(j, keys) {
+    Some(obj) => match get(obj, "required") {
+      Some(r) => match asArray(r) {
+        Some(xs) => json_strings_csv(xs),
+        None => "?"
+      },
+      None => "?"
+    },
+    None => "?"
+  }
+}
+
+func test_schemas_state_what_the_runtime_reads() -> bool
+  tests [((), true)]
+  {
+    match decode(run_tests_schema().parameters) {
+      Err(_) => false,
+      Ok(rt) => match decode(edit_file_schema().parameters) {
+        Err(_) => false,
+        Ok(ed) =>
+          required_at(rt, []) == "cmd"
+            && not contains(string_at(rt, ["properties", "cmd", "description"]), "default")
+            && string_at(ed, ["properties", "edits", "items", "properties", "replace_all", "type"]) == "boolean"
+            && required_at(ed, ["properties", "edits", "items"]) == "old,new"
+            && required_at(ed, []) == "path,edits"
+      }
+    }
   }
