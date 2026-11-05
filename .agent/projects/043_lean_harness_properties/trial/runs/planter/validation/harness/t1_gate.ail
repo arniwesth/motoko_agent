@@ -1,0 +1,14 @@
+module t1_gate
+-- P1.1, the AILANG side: herdr_env_ready over the cases in argv order. Unset is passed as "".
+import std/io (println)
+import pkg/sunholo/motoko_ext_herdr/types (herdr_env_ready)
+
+pure func b(x: bool) -> string { if x then "ready" else "closed" }
+
+export func main() -> () ! {IO} {
+  println("s01-witness ENV=1 BIN=<set,empty> PANE=a -> ${b(herdr_env_ready("1", "", "a"))}");
+  println("s02-witness ENV=2 BIN=a PANE=a -> ${b(herdr_env_ready("2", "a", "a"))}");
+  println("s02-witness' ENV=a BIN=a PANE=a -> ${b(herdr_env_ready("a", "a", "a"))}");
+  println("control ENV=1 BIN=a PANE=a -> ${b(herdr_env_ready("1", "a", "a"))}");
+  println("control ENV=<unset> BIN=a PANE=a -> ${b(herdr_env_ready("", "a", "a"))}")
+}

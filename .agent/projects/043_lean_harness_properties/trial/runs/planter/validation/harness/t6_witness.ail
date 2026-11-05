@@ -1,0 +1,24 @@
+module t6_witness
+-- P6.1 / P6.2 for truncate_utf8_by_bytes on the s14 witness and controls.
+import std/io (println)
+import std/bytes as B (fromString, toInts)
+import std/string as Str (join, intToStr)
+import std/list as List (length, map)
+import pkg/sunholo/motoko_ext_compose/store (zz_probe_truncate)
+
+pure func blen(s: string) -> int { B.length(fromString(s)) }
+pure func is_prefix(a: [int], b: [int]) -> bool {
+  match a { [] => true, x :: r => match b { [] => false, y :: q => x == y && is_prefix(r, q) } }
+}
+func case(s: string, n: int) -> () ! {IO} {
+  let out = zz_probe_truncate(s, n);
+  let p61 = blen(out) <= n;
+  let p62 = is_prefix(toInts(fromString(out)), toInts(fromString(s))) && (blen(s) > n || out == s);
+  println("input=\"${s}\" (${show(blen(s))} bytes) n=${show(n)} -> \"${out}\" (${show(blen(out))} bytes) P6.1 ${if p61 then "holds" else "VIOLATED"} P6.2 ${if p62 then "holds" else "VIOLATED"}")
+}
+export func main() -> () ! {IO} {
+  case("é", 1);
+  case("a€", 3);
+  case("aa", 1);
+  case("é", 2)
+}

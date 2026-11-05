@@ -1,0 +1,11 @@
+--- a/packages/motoko-ext-herdr/register.ail
++++ b/packages/motoko-ext-herdr/register.ail
+@@ -46,7 +46,7 @@
+   -- PREFER THE INJECTED PATH OVER A `PATH` LOOKUP. HERDR_BIN_PATH is an
+   -- absolute path to the RUNNING server's own binary; a self-updated `herdr` in
+   -- ~/.local/bin could otherwise shadow it and talk to a different socket.
+-  let bin_path  = getEnvOr("HERDR_BIN_PATH", "");
++  let bin_path  = getEnvOr("HERDR_BIN_PATH", "herdr");
+   let pane_id   = getEnvOr("HERDR_PANE_ID", "");
+ 
+   let cfg: HerdrConfig = {

@@ -1,0 +1,169 @@
+--- a/ailang.lock
++++ b/ailang.lock
+@@ -205,7 +205,7 @@
+     },
+     {
+       "ailang": ">=0.21.0",
+-      "content_hash": "sha256:a5bb5f685331c6eea725ef38164e843534853fe78fad8e0cfdf43f4df7904850",
++      "content_hash": "sha256:a764dbf655884dc093f971e0c34c8f4bd696302f2d11e2a3c2ca0d43ef493ebc",
+       "effects": [
+         "AI",
+         "Clock",
+@@ -368,7 +368,7 @@
+       "version": "0.2.7"
+     },
+     {
+-      "content_hash": "sha256:6ad70260565a80fa4c9c10996f8eefe75a07c839f53825ae47dcb02482e5dd04",
++      "content_hash": "sha256:78de1949d2b3c6a1656290b4a40ae3238c7d8db2db534677aa824fe2a6af8588",
+       "effects": [
+         "AI",
+         "Clock",
+--- a/packages/motoko-ext-compose/store.ail
++++ b/packages/motoko-ext-compose/store.ail
+@@ -1,6 +1,7 @@
+ module sunholo/motoko_ext_compose/store
+ 
+ import std/bytes (fromString, length, slice, toString)
++import std/string as Str
+ import std/crypto (sha256Hex)
+ 
+ -- WI-D20. `std/fs` IS GONE FROM THIS MODULE, and that is the whole of what
+@@ -18,7 +19,7 @@
+ 
+ func truncate_utf8_by_bytes(s: string, max_bytes: int) -> string {
+   let b = fromString(s);
+-  let n = length(b);
++  let n = Str.length(s);
+   if n <= max_bytes then s
+   else {
+     match slice(b, 0, max_bytes) {
+--- a/packages/motoko-ext-herdr/register.ail
++++ b/packages/motoko-ext-herdr/register.ail
+@@ -46,7 +46,7 @@
+   -- PREFER THE INJECTED PATH OVER A `PATH` LOOKUP. HERDR_BIN_PATH is an
+   -- absolute path to the RUNNING server's own binary; a self-updated `herdr` in
+   -- ~/.local/bin could otherwise shadow it and talk to a different socket.
+-  let bin_path  = getEnvOr("HERDR_BIN_PATH", "");
++  let bin_path  = getEnvOr("HERDR_BIN_PATH", "herdr");
+   let pane_id   = getEnvOr("HERDR_PANE_ID", "");
+ 
+   let cfg: HerdrConfig = {
+--- a/packages/motoko-ext-herdr/types.ail
++++ b/packages/motoko-ext-herdr/types.ail
+@@ -1137,7 +1137,7 @@
+     if exit_code == 0 then "ok"
+     else if exit_code == 2 then "cli_syntax"
+     else if contains(stderr, "nested herdr") then "nested_herdr"
+-    else if contains(stderr, "\"error\"") then "herdr_json"
++    else if contains(stderr, "{\"error\"") then "herdr_json"
+     else if stderr == "" then "unknown"
+     else "plain_text"
+   }
+@@ -1430,7 +1430,7 @@
+     (("1", "/usr/local/bin/herdr", ""), false),
+     (("0", "/usr/local/bin/herdr", "w1:p7"), false)
+   ]
+-  { herdr_env == "1" && bin_path != "" && pane_id != "" }
++  { herdr_env >= "1" && bin_path != "" && pane_id != "" }
+ 
+ -- ---------------------------------------------------------------------------
+ -- Reading herdr's answers, and the tool runtime's
+--- a/src/core/journal.ail
++++ b/src/core/journal.ail
+@@ -262,7 +262,7 @@
+ }
+ 
+ export pure func chain_digest_over(base: string, ms: [Message]) -> string {
+-  List.foldl(chain_step, base, ms)
++  List.foldl(chain_digest_after, base, ms)
+ }
+ 
+ -- THE CHAIN'S INTERMEDIATE VALUES, one per message — the prefix chain, not just
+@@ -290,7 +290,7 @@
+ }
+ 
+ export pure func chain_digests_over(base: string, ms: [Message]) -> [string] {
+-  List.foldl(chain_prefix_step, { last: base, out: [] }, ms).out
++  List.foldl(chain_prefix_step, { last: chain_empty_base(), out: [] }, ms).out
+ }
+ 
+ -- The same list as JSON, because every caller that reports it is building a wire
+@@ -1402,7 +1402,7 @@
+ -- would not terminate. Recursion depth is the PATH length, not the file's.
+ pure func path_up(es: [JournalEntry], id: string, seen: [string], acc: [JournalEntry]) -> [JournalEntry] {
+   if id == "" then acc
+-  else if contains_string(seen, id) then acc
++  else if contains_string(seen, id) then []
+   else match find_entry(es, id) {
+     None => acc,
+     Some(e) => path_up(es, e.parent_id, id :: seen, e :: acc)
+@@ -2046,7 +2046,7 @@
+                   kv("digest_after", js(i.digest_after))];
+       let kvs = match i.first_kept { None => base, Some(n) => base ++ [kv("first_kept", jint(n))] };
+       let next = twin_line({ acc | run_id: i.run_id }, "history_replaced", kvs);
+-      { next | digest: i.digest_after, replaced_since_seed: true }
++      { next | digest: i.digest_after }
+     },
+ 
+     StateDelta(i) => {
+--- a/src/tui/src/herdr-agent-state.ts
++++ b/src/tui/src/herdr-agent-state.ts
+@@ -161,7 +161,7 @@
+   if (env.HERDR_ENV !== "1") return null;
+   const paneId = env.HERDR_PANE_ID;
+   const bin = env.HERDR_BIN_PATH;
+-  if (!paneId || !bin) return null;
++  if (!paneId || bin === undefined) return null;
+   return { paneId, bin };
+ }
+ 
+--- a/src/tui/src/runtime-process.ts
++++ b/src/tui/src/runtime-process.ts
+@@ -628,7 +628,7 @@
+   // extension reads HERDR_*, so the family is the unit. Enumerating members of
+   // a family that grows is the fragility, not the allowlist itself.
+   for (const [key, value] of Object.entries(process.env)) {
+-    if (key.startsWith("HERDR_") && value) {
++    if (key.startsWith("HERDR_") && value && value.trim() !== "") {
+       childEnv[key] = value;
+     }
+   }
+--- a/src/tui/src/session-journal.ts
++++ b/src/tui/src/session-journal.ts
+@@ -601,7 +601,7 @@
+         return 0;
+       }
+       let written = 0;
+-      for (let i = 0; i < messages.length; i += 1) {
++      for (let i = 0; i < digests.length; i += 1) {
+         const next = str(digests[i]);
+         if (
+           this.append("history_appended", {
+@@ -853,7 +853,6 @@
+ 
+   private replaceLastHistoryMessage(message: unknown): void {
+     if (this.historyMessages === 0) this.historyMessages = 1;
+-    this.updatePending(message);
+   }
+ 
+   /**
+--- a/src/tui/src/wake-waiter.ts
++++ b/src/tui/src/wake-waiter.ts
+@@ -128,7 +128,7 @@
+ /** herdr's JSON `error.code` from stderr, "" on success, `herdr_cli_rejected` when stderr is not herdr JSON. */
+ export function herdrFailureCode(r: HerdrResult): string {
+   if (r.spawnError !== undefined) return "spawn_error";
+-  if (r.code === 0) return "";
++  if (r.code <= 0) return "";
+   if (r.code === 2) return "cli_syntax";
+   try {
+     const parsed = JSON.parse(r.stderr.trim()) as { error?: { code?: unknown } };
+@@ -140,7 +140,7 @@
+ }
+ 
+ export function herdrMeansAgentGone(r: HerdrResult): boolean {
+-  return herdrFailureCode(r) === "agent_not_found";
++  return herdrFailureCode(r).endsWith("_not_found");
+ }
+ 
+ /** `agent get`'s `agent_status`, "" when it is absent or the output is not agent_info. */

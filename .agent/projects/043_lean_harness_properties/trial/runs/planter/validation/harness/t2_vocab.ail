@@ -1,0 +1,44 @@
+module t2_vocab
+-- P2.1, the AILANG side. Appendix C's strings: every string of at most 8 bytes over
+-- {a, 1, space, ", é, €}, in depth-first order (the order t2_vocab.ts uses), for each exit code
+-- in {-1, 0, 1, 2, 3}. Prints, per exit code, how many strings means_agent_gone calls gone and
+-- the strings it calls gone; then the witness cases.
+import std/io (println)
+import std/string (join, length)
+import std/list as List (length, map, filter)
+import std/bytes as Bytes (fromString)
+import pkg/sunholo/motoko_ext_herdr/types (means_agent_gone, failure_code)
+
+pure func syms() -> [string] { ["a", "1", " ", "\"", "é", "€"] }
+
+pure func blen(s: string) -> int { Bytes.length(fromString(s)) }
+
+pure func extend(prefix: string, budget: int, ss: [string]) -> [string] {
+  match ss {
+    [] => [],
+    x :: rest => {
+      let n = blen(x);
+      let here = if n <= budget then strings_from("${prefix}${x}", budget - n) else [];
+      here ++ extend(prefix, budget, rest)
+    }
+  }
+}
+
+pure func strings_from(prefix: string, budget: int) -> [string] {
+  prefix :: extend(prefix, budget, syms())
+}
+
+pure func gone_list(code: int, xs: [string]) -> [string] {
+  filter(\s. means_agent_gone(code, s), xs)
+}
+
+export func main() -> () ! {IO} {
+  let all = strings_from("", 8);
+  println("strings=${show(List.length(all))}");
+  let _e1 = { let g = gone_list(-1, all); println("exit=-1 gone=${show(List.length(g))} ${join("|", g)}") };
+  let _e2 = { let g = gone_list(0, all); println("exit=0 gone=${show(List.length(g))} ${join("|", g)}") };
+  let _e3 = { let g = gone_list(1, all); println("exit=1 gone=${show(List.length(g))} ${join("|", g)}") };
+  let _e4 = { let g = gone_list(2, all); println("exit=2 gone=${show(List.length(g))} ${join("|", g)}") };
+  let _e5 = { let g = gone_list(3, all); println("exit=3 gone=${show(List.length(g))} ${join("|", g)}") };
+  ()
+}

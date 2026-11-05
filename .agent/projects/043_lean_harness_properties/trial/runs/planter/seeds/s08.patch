@@ -1,0 +1,11 @@
+--- a/src/core/journal.ail
++++ b/src/core/journal.ail
+@@ -2046,7 +2046,7 @@
+                   kv("digest_after", js(i.digest_after))];
+       let kvs = match i.first_kept { None => base, Some(n) => base ++ [kv("first_kept", jint(n))] };
+       let next = twin_line({ acc | run_id: i.run_id }, "history_replaced", kvs);
+-      { next | digest: i.digest_after, replaced_since_seed: true }
++      { next | digest: i.digest_after }
+     },
+ 
+     StateDelta(i) => {

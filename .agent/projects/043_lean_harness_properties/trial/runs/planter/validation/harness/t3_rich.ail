@@ -1,0 +1,182 @@
+module t3_rich
+-- T3, a RICHER record alphabet than Appendix C's (beyond it, for the S2 seeds' minimality).
+-- T3, the AILANG half. For every case: the wire events a run emits (as `to_schema_v1` puts them
+-- on the wire), and the TWIN's journal (`journal_lines_of_records`) folded by `fold_journal`.
+--   E <tab> case <tab> event-json          one per wire event, in order
+--   W <tab> case <tab> verdict|dangling|n|history-sha|rule3
+-- Cases: Appendix C's T3 alphabet (every history of 0..4 appended messages over the eleven
+-- messages of evidence/diff/enumerate.*, with enumerate_fold.ail's prologue and epilogue), then
+-- the named witness scenarios. rule3 is P3.2's history check: for an accepted journal with no
+-- dangling call, `ok` iff the folded history is the seed then one message per appended entry.
+import std/io (println)
+import std/ai (Message, ToolCall)
+import std/string as Str (join, concat, intToStr)
+import std/list as List (length, map)
+import std/json (Json, encode)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/crypto (sha256Hex)
+import src/core/phase_vocab (
+  RuntimeStatusCounts, LedgerRecord, WireRecord, LedgerEvent, to_schema_v1,
+  HistorySeeded, HistoryAppended, HistoryReplaced, StateDelta, SessionStart, RunSummary, SessionResumed
+)
+import src/core/journal (
+  SessionState, refusal_id, fold_journal, journal_lines_of_records, journal_leaf, harness_header,
+  default_run_identity, chain_digest_after, chain_digest_over, chain_digests_over, chain_digests_json,
+  chain_empty_base, chain_digest_base, messages_json, message_json
+)
+
+pure func call(id: string) -> ToolCall { { id: id, name: "bash", arguments: "{}" } }
+pure func calls_of(ids: [string]) -> [ToolCall] { match ids { [] => [], i :: rest => call(i) :: calls_of(rest) } }
+pure func mk(role: string, ids: [string], tcid: string) -> Message {
+  { role: role, content: "", tool_calls: calls_of(ids), tool_call_id: tcid, images: [] }
+}
+pure func mc(role: string, content: string, ids: [string]) -> Message {
+  { role: role, content: content, tool_calls: calls_of(ids), tool_call_id: "", images: [] }
+}
+pure func alphabet() -> [Message] {
+  [ mk("assistant", [], ""), mk("assistant", ["a"], ""), mk("assistant", ["a", "b"], ""),
+    mk("assistant", ["b"], ""), mk("tool", [], "a"), mk("tool", [], "b"), mk("tool", [], ""),
+    mk("user", [], ""), mk("tool", ["b"], "a"), mk("assistant", [], "a"), mk("assistant", ["a", ""], "") ]
+}
+pure func nth(xs: [Message], i: int) -> Message {
+  match xs { [] => mk("user", [], ""), x :: rest => if i == 0 then x else nth(rest, i - 1) }
+}
+
+-- enumerate_fold.ail's fixtures (copies of journal.ail's private test fixtures).
+pure func t_sys() -> Message { { role: "system", content: "you are motoko", tool_calls: [], tool_call_id: "", images: [] } }
+pure func t_user() -> Message { { role: "user", content: "list the files", tool_calls: [], tool_call_id: "", images: [] } }
+pure func t_seed() -> [Message] { [t_sys(), t_user()] }
+pure func t_seed_digest() -> string { chain_digest_over(chain_empty_base(), t_seed()) }
+pure func rid() -> string { "sess_1.r0.0" }
+pure func t_counts() -> RuntimeStatusCounts {
+  { provider_calls_started: 2, provider_calls_completed: 2, stage_applied_total: 0,
+    stage_rejected_total: 0, compaction_ai_applied: 0 }
+}
+pure func seeded(run_id: string, ms: [Message]) -> LedgerRecord {
+  WireRecord(HistorySeeded({ run_id: run_id, messages: messages_json(ms),
+    digest: chain_digest_over(chain_empty_base(), ms),
+    digests: chain_digests_json(chain_digests_over(chain_empty_base(), ms)) }))
+}
+pure func t_start(run_id: string) -> LedgerRecord {
+  WireRecord(SessionStart({ task: "list the files", model: "m", mode: "v2", run_id: run_id }))
+}
+pure func t_append(run_id: string, m: Message, replaces: bool, digest: string) -> LedgerRecord {
+  WireRecord(HistoryAppended({ run_id: run_id, step: 1, message: message_json(m), replaces_previous: replaces, digest_after: digest }))
+}
+pure func t_delta() -> LedgerRecord {
+  WireRecord(StateDelta({ run_id: rid(), step: 1, cumulative: t_counts(),
+    telemetry: { last_input_tokens: 120, last_output_tokens: 40, last_estimated_input_tokens: 100 },
+    ext_artifacts_digest: "sha256:ext", ext_artifacts: None }))
+}
+pure func t_summary() -> LedgerRecord {
+  WireRecord(RunSummary({ model: "m", motoko_commit: "abc", finish_reason: "stop", steps_executed: 1,
+    input_tokens: 10, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0,
+    total_cost_usd: 0.0, total_cost_millicents: 0, duration_ms: 5, error: "", cumulative: t_counts(), world_ordinal: 4 }))
+}
+pure func t_checkpoint(prefix: [Message], summary: Message) -> LedgerRecord {
+  WireRecord(HistoryReplaced({ run_id: rid(), step: 3, reason: "checkpoint", first_kept: None,
+    messages: messages_json([summary]), digest_after: chain_digest_base(prefix ++ [summary]) }))
+}
+pure func t_resumed() -> LedgerRecord {
+  WireRecord(SessionResumed({ resume_count: 1, from_id: "0004", from_ordinal: 0, profile_from: "p", profile_to: "p",
+    prompt_digest_from: "sha256:p", prompt_digest_to: "sha256:p", forced: false }))
+}
+
+-- One case: the events, then the twin's fold.
+pure func event_lines(name: string, rs: [LedgerRecord]) -> [string] {
+  match rs { [] => [], r :: rest => match r {
+    WireRecord(e) => "E\t${name}\t${encode(to_schema_v1(e))}" :: event_lines(name, rest),
+    _ => event_lines(name, rest) } }
+}
+pure func result_of(lines: [Json], expected: Option[[Message]]) -> string {
+  match fold_journal(lines, journal_leaf(lines)) {
+    Err(r) => "${refusal_id(r)}||0||n/a",
+    Ok(s) => {
+      let h = sha256Hex(encode(messages_json(s.history)));
+      let r3 = match expected { None => "n/a", Some(ms) =>
+        if List.length(s.dangling) > 0 then "n/a" else if encode(messages_json(s.history)) == encode(messages_json(ms)) then "ok" else "differs" };
+      "accept|${join(",", s.dangling)}|${intToStr(List.length(s.dangling))}|${h}|${r3}"
+    }
+  }
+}
+func print_all(xs: [string]) -> () ! {IO} { match xs { [] => (), x :: rest => { println(x); print_all(rest) } } }
+func emit(name: string, rs: [LedgerRecord], expected: Option[[Message]]) -> () ! {IO} {
+  print_all(event_lines(name, rs));
+  let lines = journal_lines_of_records(harness_header(default_run_identity("sess_1"), "m"), rs);
+  println("W\t${name}\t${result_of(lines, expected)}")
+}
+
+
+-- The record alphabet. After the session's first seed (one record), each action adds records the
+-- way a run emits them, tracking the child's chain:
+--   p  append a plain assistant (no calls)        c  append an assistant with call_1
+--   t  append the tool result for call_1          u  append a user message
+--   h  the hybrid batch's augmented assistant (call_1) REPLACING the previous message
+--   k  a checkpoint: history_replaced, the head system prefix plus one summary
+--   r  a resume: session_resumed (same prompt) and the seed of the folded history (TWO records)
+-- `ok` is false once the sequence stops being one a run can emit: a resume of a journal the fold
+-- refuses (D6 refuses it before any seed), or a hybrid replacement that does not follow the plain
+-- assistant it supersedes.
+type St = { rs: [LedgerRecord], d: string, dprev: string, run: string, ok: bool, last: string }
+
+pure func sys_prefix(ms: [Message]) -> [Message] { match ms { [] => [], m :: r => if m.role == "system" then m :: sys_prefix(r) else [] } }
+pure func folded(rs: [LedgerRecord]) -> [Message] {
+  let lines = journal_lines_of_records(harness_header(default_run_identity("sess_1"), "m"), rs);
+  match fold_journal(lines, journal_leaf(lines)) { Ok(s) => s.history, Err(_) => [] }
+}
+pure func folds(rs: [LedgerRecord]) -> bool {
+  let lines = journal_lines_of_records(harness_header(default_run_identity("sess_1"), "m"), rs);
+  match fold_journal(lines, journal_leaf(lines)) { Ok(_) => true, Err(_) => false }
+}
+pure func app(st: St, m: Message) -> St {
+  let d = chain_digest_after(st.d, m);
+  { st | rs: st.rs ++ [t_append(st.run, m, false, d)], d: d, dprev: st.d }
+}
+pure func step(st0: St, a: string) -> St {
+  let st = { st0 | last: a, ok: st0.ok && (a != "h" || st0.last == "p") && (a != "r" || folds(st0.rs)) };
+  if a == "p" then app(st, mc("assistant", "running ls", []))
+  else if a == "c" then app(st, mc("assistant", "calling", ["call_1"]))
+  else if a == "t" then app(st, { role: "tool", content: "ok", tool_calls: [], tool_call_id: "call_1", images: [] })
+  else if a == "u" then app(st, mc("user", "go on", []))
+  else if a == "h" then {
+    let m = mc("assistant", "running ls", ["call_1"]);
+    let d = chain_digest_after(st.dprev, m);
+    { st | rs: st.rs ++ [t_append(st.run, m, true, d)], d: d }
+  }
+  else if a == "k" then {
+    let s = mc("assistant", "[checkpoint summary]", []);
+    let pre = sys_prefix(folded(st.rs));
+    let d = chain_digest_base(pre ++ [s]);
+    { st | rs: st.rs ++ [WireRecord(HistoryReplaced({ run_id: st.run, step: 3, reason: "checkpoint", first_kept: None,
+        messages: messages_json([s]), digest_after: d }))], d: d, dprev: st.d }
+  }
+  else {
+    let h = folded(st.rs);
+    let run2 = "${st.run}+";
+    let d = chain_digest_over(chain_empty_base(), h);
+    { st | rs: st.rs ++ [t_resumed(), seeded(run2, h)], d: d, dprev: d, run: run2 }
+  }
+}
+pure func size(a: string) -> int { if a == "r" then 2 else 1 }
+pure func acts() -> [string] { ["p", "c", "t", "u", "h", "k", "r"] }
+pure func run_all(st: St, xs: [string]) -> St { match xs { [] => st, a :: r => run_all(step(st, a), r) } }
+pure func start() -> St { { rs: [seeded(rid(), t_seed())], d: t_seed_digest(), dprev: t_seed_digest(), run: rid(), ok: true, last: "" } }
+
+-- Every action sequence whose records, the first seed included, number exactly `n`.
+func seqs_of(prefix: [string], left: int, xs: [string]) -> () ! {IO} {
+  match xs { [] => (), a :: rest => {
+    let k = size(a);
+    if k <= left then {
+      let p = prefix ++ [a];
+      if k == left then { let st = run_all(start(), p); emit("R${show(1 + List.length(p) + count_r(p))}${if st.ok then "" else "ne"}:${join("", p)}", st.rs, None) }
+      else seqs_of(p, left - k, acts())
+    } else ();
+    seqs_of(prefix, left, rest) } }
+}
+pure func count_r(p: [string]) -> int { match p { [] => 0, a :: r => (if a == "r" then 1 else 0) + count_r(r) } }
+
+export func main() -> () ! {IO} {
+  emit("R1:", start().rs, None);
+  seqs_of([], 1, acts()); seqs_of([], 2, acts()); seqs_of([], 3, acts()); seqs_of([], 4, acts())
+}

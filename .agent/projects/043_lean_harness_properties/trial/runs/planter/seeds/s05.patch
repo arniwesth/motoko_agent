@@ -1,0 +1,11 @@
+--- a/src/tui/src/wake-waiter.ts
++++ b/src/tui/src/wake-waiter.ts
+@@ -128,7 +128,7 @@
+ /** herdr's JSON `error.code` from stderr, "" on success, `herdr_cli_rejected` when stderr is not herdr JSON. */
+ export function herdrFailureCode(r: HerdrResult): string {
+   if (r.spawnError !== undefined) return "spawn_error";
+-  if (r.code === 0) return "";
++  if (r.code <= 0) return "";
+   if (r.code === 2) return "cli_syntax";
+   try {
+     const parsed = JSON.parse(r.stderr.trim()) as { error?: { code?: unknown } };

@@ -1,0 +1,11 @@
+--- a/src/tui/src/runtime-process.ts
++++ b/src/tui/src/runtime-process.ts
+@@ -628,7 +628,7 @@
+   // extension reads HERDR_*, so the family is the unit. Enumerating members of
+   // a family that grows is the fragility, not the allowlist itself.
+   for (const [key, value] of Object.entries(process.env)) {
+-    if (key.startsWith("HERDR_") && value) {
++    if (key.startsWith("HERDR_") && value && value.trim() !== "") {
+       childEnv[key] = value;
+     }
+   }

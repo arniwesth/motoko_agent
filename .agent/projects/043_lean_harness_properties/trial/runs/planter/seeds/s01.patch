@@ -1,0 +1,11 @@
+--- a/src/tui/src/herdr-agent-state.ts
++++ b/src/tui/src/herdr-agent-state.ts
+@@ -161,7 +161,7 @@
+   if (env.HERDR_ENV !== "1") return null;
+   const paneId = env.HERDR_PANE_ID;
+   const bin = env.HERDR_BIN_PATH;
+-  if (!paneId || !bin) return null;
++  if (!paneId || bin === undefined) return null;
+   return { paneId, bin };
+ }
+ 

@@ -1,0 +1,79 @@
+module t4_witness
+-- P4.1 and P4.2 over Appendix C's T4 alphabet: every split xs ++ ys = ms with |ms| <= 4 over the
+-- eleven messages of evidence/diff/enumerate.*, for two bases (chain_empty_base() and "sha256:b").
+-- Prints, per base, the number of cases, how many hold and fail, the failing cases, and a digest of
+-- every property verdict in enumeration order. Then the s11 witness.
+import std/io (println)
+import std/ai (Message, ToolCall)
+import std/string as Str (join, concat, intToStr)
+import std/list as List (length, map, foldl, reverse)
+import std/crypto (sha256Hex)
+import src/core/journal (chain_digest_over, chain_digests_over, chain_empty_base)
+
+pure func call(id: string) -> ToolCall { { id: id, name: "bash", arguments: "{}" } }
+pure func calls_of(ids: [string]) -> [ToolCall] { match ids { [] => [], i :: rest => call(i) :: calls_of(rest) } }
+pure func mk(role: string, ids: [string], tcid: string) -> Message {
+  { role: role, content: "", tool_calls: calls_of(ids), tool_call_id: tcid, images: [] }
+}
+pure func alphabet() -> [Message] {
+  [ mk("assistant", [], ""), mk("assistant", ["a"], ""), mk("assistant", ["a", "b"], ""),
+    mk("assistant", ["b"], ""), mk("tool", [], "a"), mk("tool", [], "b"), mk("tool", [], ""),
+    mk("user", [], ""), mk("tool", ["b"], "a"), mk("assistant", [], "a"), mk("assistant", ["a", ""], "") ]
+}
+pure func nth(xs: [Message], i: int) -> Message {
+  match xs { [] => mk("user", [], ""), x :: rest => if i == 0 then x else nth(rest, i - 1) }
+}
+pure func msgs(ix: [int]) -> [Message] { map(\i. nth(alphabet(), i), ix) }
+pure func take(n: int, xs: [int]) -> [int] { if n <= 0 then [] else match xs { [] => [], x :: r => x :: take(n - 1, r) } }
+pure func drop(n: int, xs: [int]) -> [int] { if n <= 0 then xs else match xs { [] => [], _ :: r => drop(n - 1, r) } }
+pure func last_or(d: string, xs: [string]) -> string { match xs { [] => d, x :: r => match r { [] => x, _ => last_or(d, r) } } }
+
+pure func p42(b: string, ix: [int]) -> bool {
+  let ms = msgs(ix);
+  let ds = chain_digests_over(b, ms);
+  List.length(ds) == List.length(ms) && (List.length(ms) == 0 || last_or("", ds) == chain_digest_over(b, ms))
+}
+pure func p41(b: string, ix: [int], k: int) -> bool {
+  let xs = msgs(take(k, ix));
+  let ys = msgs(drop(k, ix));
+  chain_digests_over(b, xs ++ ys) == chain_digests_over(b, xs) ++ chain_digests_over(chain_digest_over(b, xs), ys)
+}
+pure func ints(xs: [int]) -> string { join(",", map(\x. intToStr(x), xs)) }
+
+pure func range_from(i: int, n: int) -> [int] { if i >= n then [] else i :: range_from(i + 1, n) }
+pure func seqs(n: int) -> [[int]] {
+  if n == 0 then [[]] else List.foldl(\acc. \s. acc ++ map(\i. s ++ [i], range_from(0, 11)), [], seqs(n - 1))
+}
+pure func all_seqs() -> [[int]] { seqs(0) ++ seqs(1) ++ seqs(2) ++ seqs(3) ++ seqs(4) }
+
+-- One verdict string per sequence: P4.2, then P4.1 at every split point k = 0..n.
+pure func verdicts(b: string, ix: [int]) -> string {
+  let v42 = if p42(b, ix) then "1" else "0";
+  let v41 = concat(map(\k. if p41(b, ix, k) then "1" else "0", range_from(0, List.length(ix) + 1)));
+  "${v42}${v41}"
+}
+pure func fails(b: string, ss: [[int]], vs: [string]) -> [string] {
+  match ss { [] => [], s :: rs => match vs { [] => [], v :: rv =>
+    if Str.contains(v, "0") then "[${ints(s)}]:${v}" :: fails(b, rs, rv) else fails(b, rs, rv) } }
+}
+pure func ones(s: string) -> int { Str.length(Str.replace(s, "0", "")) }
+
+pure func outputs(b: string, ix: [int]) -> string {
+  let ms = msgs(ix);
+  "${join(",", chain_digests_over(b, ms))};${chain_digest_over(b, ms)}"
+}
+
+func report(name: string, b: string, ss: [[int]]) -> () ! {IO} {
+  let vs = map(\s. verdicts(b, s), ss);
+  println("base=${name} function-outputs-sha256=${sha256Hex(join("|", map(\s. outputs(b, s), ss)))}");
+  let all = concat(vs);
+  let f = fails(b, ss, vs);
+  println("base=${name} sequences=${show(List.length(ss))} property-checks=${show(Str.length(all))} hold=${show(ones(all))} fail=${show(Str.length(all) - ones(all))} verdicts-sha256=${sha256Hex(all)}");
+  println("  failing (seq:verdicts P4.2,P4.1@k=0..n), first 12: ${join(" ", take_s(12, f))}")
+}
+pure func take_s(n: int, xs: [string]) -> [string] { if n <= 0 then [] else match xs { [] => [], x :: r => x :: take_s(n - 1, r) } }
+
+export func main() -> () ! {IO} {
+  println("s11-witness P4.2 base=sha256:b ms=[0]: ${if p42("sha256:b", [0]) then "holds" else "VIOLATED"}");
+  println("s11-witness P4.1 base=chain_empty_base xs=[0] ys=[0]: ${if p41(chain_empty_base(), [0, 0], 1) then "holds" else "VIOLATED"}")
+}
