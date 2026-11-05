@@ -47,5 +47,20 @@ mkdir x && tar -xJf t043-runs.tar.xz -C x
 # x/s/<session>/out hashes to the session's W2 out_sha256 with hash_dir in ../scripts/common.sh
 ```
 
+## The transcripts
+
+**`t043-transcripts.tar.xz`**, in the same release, holds the Claude Code transcripts of the 35
+trial sessions:
+
+- the 24 arm sessions
+- the 8 of batch 1's lost first attempt
+- the dry run's 2
+- the planter
+
+They are published with one change: the operator's email address, which Claude Code adds to
+each session's context, is replaced by `[operator email]`. `TRANSCRIPTS.tsv` gives each file's
+sha256 before and after. The 24 arm sessions' original hashes are the ones `../sequence.log`
+recorded at W2. The operator keeps the originals off GitHub.
+
 The seeded tree is not kept. `../scripts/build_tree.sh` with `planter/seeds.patch` rebuilds it,
 and W1 checked that the rebuilt tree matches `seeded_tree_sha256`.
