@@ -19,9 +19,38 @@ PLAN-001 §8, run by the adjudicator, t043-adjudicator, on 2026-11-05. Read with
 | `../scripts/adjudicate.sh` | §8's procedure. Its header says how a reproduction is run |
 | `../scripts/audit_w4.py` | The sweep behind `audit/<s>.w4.txt` |
 
-Not in git: the trees, the work directories and the 2,000-odd run logs are under
+Not in git: the trees, the work directories and the 2,753 run logs are under
 `/home/motoko/trial-043/adjudication/` (`trees/`, `work/`, `results/<session>/<report>/<tree>.<kind>.log`,
-`results/runs.jsonl`). `RESULTS.sha256` lists the sha256 of every log, and the size of the whole.
+`results/runs.jsonl`). `RESULTS.sha256` lists the sha256 of every log.
+
+**`t043-adjudication.tar.xz`** is a release asset of
+[`trial-043-data`](https://github.com/arniwesth/motoko_agent/releases/tag/trial-043-data), beside
+the W3 assets. Its sha256 is in `../sequence.log`. It holds:
+
+- `results/`: every run log and `runs.jsonl`
+- `run.log`
+- `trees/HASHES`
+- the adjudicator's helper scripts (`bin/`)
+- `audit/`, and the three tables
+
+It was scanned before upload for credentials, this environment's secret values and the
+operator's address; none was found.
+
+Left out:
+
+- **The trees.** `build_tree.sh` and `runs/planter/` rebuild them, and `TREES.sha256` checks
+  them.
+- **The work directories.** They are copies of the trees and of the outputs already in
+  `t043-runs.tar.xz`.
+
+To check it:
+
+```bash
+gh release download trial-043-data -R arniwesth/motoko_agent -p t043-adjudication.tar.xz
+sha256sum t043-adjudication.tar.xz        # as in ../sequence.log
+mkdir x && tar -xJf t043-adjudication.tar.xz -C x
+(cd x/adjudication && sha256sum -c --quiet <this dir>/RESULTS.sha256)
+```
 
 ## How it was run
 
