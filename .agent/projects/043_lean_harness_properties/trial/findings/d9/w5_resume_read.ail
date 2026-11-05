@@ -1,0 +1,23 @@
+module w5_resume_read
+
+import std/io (println)
+import std/fs (readFile, fileExists)
+import std/string as Str (concat)
+import std/result (Result, Ok, Err)
+import src/core/journal (refusal_id, fold_journal, parse_journal_text, journal_leaf)
+
+-- W5: rpc.ail's resume_from_journal read, steps 2 (fileExists, parse_journal_text, journal_leaf,
+-- fold_journal), on one journal path; prints the verdict and stops before plan_resume.
+export func main(path: string) -> () ! {IO, FS} {
+  if not fileExists(path) then println("missing file: refused header")
+  else match parse_journal_text(readFile(path)) {
+    Err(r) => println(concat(["parse refused: ", refusal_id(r)])),
+    Ok(entries) => {
+      let leaf = journal_leaf(entries);
+      match fold_journal(entries, leaf) {
+        Err(r) => println(concat(["leaf ", leaf, ": fold refused: ", refusal_id(r)])),
+        Ok(_) => println(concat(["leaf ", leaf, ": fold accepted"]))
+      }
+    }
+  }
+}
