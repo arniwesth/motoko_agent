@@ -1,5 +1,12 @@
 # RESEARCH: Proving harness properties in Lean, after Kiro — what transfers to Motoko
 
+> **Revisited, 2026-11-05: PLAN-001's trial gave outcome D.** The results are in
+> `FINDINGS-001-trial-lean-against-differential-checks.md`. As PLAN-001 §10 committed before
+> the trial, the verdict in §2 becomes: **adopt cross-language differential and property checks
+> as standing tests; use Lean only where a person names a property that must hold for every
+> length.** §10 item 7 (`make verify_lean`) is dropped. Nothing below this marker is edited:
+> the update of 2026-11-03 and the text after it are as they were.
+
 > **Update, 2026-11-03, after this note was written.** §10 items 1 and 2 are done. The record
 > is `evidence/diff/README.md`.
 >
