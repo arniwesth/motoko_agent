@@ -139,4 +139,30 @@ rule decides this, not a judgement.
 
 ## The operator's decisions
 
-(Recorded below as the operator gives them in the adjudicator's session.)
+The operator decided in the adjudicator's session, in two rounds of questions. Both were asked
+after the drafts were committed (`8d46fe20`, 18:25:54Z on 2026-11-05). The answers were recorded
+in `../sequence.log` at 18:59:42Z and 19:00Z. Each question gave the draft and its reason, as
+above.
+
+| Call | The operator's decision |
+|---|---|
+| Same defect: the grouping | **Accepted as drafted**: D1-D12, S1-S7 and X1-X10 as above, including the drafts that S1 and S2 are K6, S3 is K7 and S7 is K2 |
+| Is D1 the same as K7? | **Yes.** D1 is known |
+| What "known" means | **Only §4 entries.** D6 and D10 are unknown, although both were written down before the trial |
+| Is D9 the same as K5? | **No.** Separate defects; D9 is unknown |
+| Reachability of D9 | **Not shown reachable**, as drafted |
+| Reachability of D2-D8 and D10-D12 | **The drafts accepted.** D10 is reachable; D2-D8, D11 and D12 are not shown reachable |
+
+**On the first round** the operator answered "I'm not sure about this" to which defects are the
+same as a §4 entry. That question was put again in plainer form, as three questions: D1 against
+K7, what "known" means, and D9 against K5. Those are the three answers above.
+
+**Where this leaves the primary properties.**
+
+| Kind | Defects |
+|---|---|
+| Known | D1 (K7) |
+| Unknown | D2-D12, eleven defects |
+| Unknown and reachable | D10, found by A1, B1 and B2 |
+| Found by arm B and by no arm A session | D9, not shown reachable |
+| Found by arm A and by no arm B session | D7 and D11, neither shown reachable |

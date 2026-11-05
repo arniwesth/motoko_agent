@@ -13,6 +13,9 @@ PLAN-001 §8, run by the adjudicator, t043-adjudicator, on 2026-11-05. Read with
 | `summary.tsv` | Per session and arm: seeds detected by class, false reports, errors, real-defect reports |
 | `runs.tsv` | Every run: session, report, tree, kind of run, status, exit code, wall clock, peak memory |
 | `CALLS.md` | The same-defect and reachability calls (§8): the adjudicator's drafts and the operator's decisions |
+| `probe/` | The AILANG probe behind CALLS.md's D9 draft: how `std/json` encode treats invalid UTF-8 |
+| `TREES.sha256` | `hash_dir` of B0, T and each T−s |
+| `RESULTS.sha256` | The sha256 of every run log on disk, and of `runs.jsonl` |
 | `../scripts/adjudicate.sh` | §8's procedure. Its header says how a reproduction is run |
 | `../scripts/audit_w4.py` | The sweep behind `audit/<s>.w4.txt` |
 
