@@ -1,0 +1,69 @@
+=== 2026-11-04T17:09:02Z tree: /home/motoko/trial-043/s/t043-t4-b2/tree
+=== lean/check.sh
+check: 35 theorems, no error, no sorryAx, no Lean.ofReduceBool
+exit 0
+=== diff/run_diff.sh
+ail:  1820 lines, sha256 b9849c4b6e27294f
+lean: 1820 lines, sha256 b9849c4b6e27294f
+differential: 1820 lines, 0 mismatches
+mutant fixed-base (chain_digests_over starts from base): 1290 of 1820 lines mismatch
+mutant frame-first (frame ++ previous): 1555 of 1820 lines mismatch
+mutant prepend (d :: out): 1512 of 1820 lines mismatch
+mutant bytes-not-runes (frame length in UTF-8 bytes): 1220 of 1820 lines mismatch
+axiom report: /home/motoko/trial-043/s/t043-t4-b2/out/diff/../runs/diff/axioms.txt (35 theorems)
+exit 0
+=== diff/count_p42.awk
+base 0: 0 of 258 non-empty lists have last(chain_digests_over) != chain_digest_over
+base 1: 258 of 258 non-empty lists have last(chain_digests_over) != chain_digest_over
+base 2: 258 of 258 non-empty lists have last(chain_digests_over) != chain_digest_over
+base 3: 258 of 258 non-empty lists have last(chain_digests_over) != chain_digest_over
+base 4: 258 of 258 non-empty lists have last(chain_digests_over) != chain_digest_over
+base 5: 258 of 258 non-empty lists have last(chain_digests_over) != chain_digest_over
+1554 C cases; 0 with a length mismatch
+=== diff/run_scale.sh
+real over_1000: 18595 ms
+real digests_1000: 12485 ms
+real over_4000: 11381 ms
+real digests_4000: 9107 ms
+real over_16000: 8833 ms
+real digests_16000: 10202 ms
+over 1000 sha256:19695deb9b120cdf770b25bc8a04a141eac9a89ed9680dad828fa7aa61830dd7
+digests 1000 1000
+over 4000 sha256:755004c067c9f38d81e92a81b63175a8c9ee39ba23ae93bd272661fc3adc7a37
+digests 4000 4000
+over 16000 sha256:018fe8cdbeba825a3c2ee29c4387a95be8026e1d243e0d8442d2b52ad18eb36f
+digests 16000 16000
+scale: 6 lines, 0 mismatches
+exit 0
+=== repro/p4_1.sh
+lhs: sha256:258b1f42532aed520cf6ca8e07460c2e3f19d59e37368abd09ff43dcb6718731,sha256:410a45c705b46ebeb100a5a0f1829b86eafa58ca15ae0393ea0427b822260b5d
+rhs: sha256:258b1f42532aed520cf6ca8e07460c2e3f19d59e37368abd09ff43dcb6718731,sha256:258b1f42532aed520cf6ca8e07460c2e3f19d59e37368abd09ff43dcb6718731
+P4.1 VIOLATED
+exit 1
+=== repro/p4_2.sh
+length(digests) = 1, length(ms) = 1
+last(digests)   = sha256:258b1f42532aed520cf6ca8e07460c2e3f19d59e37368abd09ff43dcb6718731
+digest_over     = sha256:29f522940a3cce68cee4019fe9b9a055ee497ce90555e8b647d412a7c8321975
+P4.2 VIOLATED
+exit 1
+=== repro/x1.sh
+chain_digest_base(seed)                    = sha256:3a6afc31465f37e09774d714a80742b0b7bf18732a2a2b2c989b3ce0ac36f26d
+chain_digest_over(chain_empty_base(), seed) = sha256:258b1f42532aed520cf6ca8e07460c2e3f19d59e37368abd09ff43dcb6718731
+X-1 differ
+comment: journal.ail:225-226 still says chain_digest_base is the history_seeded digest
+exit 1
+=== repro/x2.sh
+chain_digest_after("", m1)                          = sha256:db9ce534a553d7e4ccee59746a08261b9b3c39cc8f294a9b724966e9a0618c3a
+chain_digest_after("m{role:4:user;content:24:", m2) = sha256:db9ce534a553d7e4ccee59746a08261b9b3c39cc8f294a9b724966e9a0618c3a
+chain_digest_over, same inputs: sha256:db9ce534a553d7e4ccee59746a08261b9b3c39cc8f294a9b724966e9a0618c3a / sha256:db9ce534a553d7e4ccee59746a08261b9b3c39cc8f294a9b724966e9a0618c3a
+X-2 collide
+exit 1
+=== repro/check_on_fixed_copy.sh
+--- the fix:
+293c293
+<   List.foldl(chain_prefix_step, { last: chain_empty_base(), out: [] }, ms).out
+---
+>   List.foldl(chain_prefix_step, { last: base, out: [] }, ms).out
+p4_1.sh: exit 1 on the tree, exit 0 on the fixed copy
+p4_2.sh: exit 1 on the tree, exit 0 on the fixed copy
+exit 0

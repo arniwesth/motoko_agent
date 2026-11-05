@@ -1,0 +1,71 @@
+-- collide_chain.ail — X-10: for a FIXED base, distinct message lists get distinct chain values.
+-- Prints one line per (base, list) for every list of length 0..4 over enumerate_chain's
+-- 8-message alphabet and each of its 6 bases:
+--
+--   <base index> \t O <chain_digest_over(b, ms)>
+--   <base index> \t D <join(" ", chain_digests_over(b, ms))>
+--
+-- Duplicates within one base index are collisions (check: sort | uniq -d). From the tree root:
+--
+--   ailang run --relax-modules --caps IO --chdir ../out/pkg --entry main t4/collide_chain.ail \
+--     | grep -P '^\d\t' | sort | uniq -d | wc -l       # expect 0
+module collide_chain
+
+import std/io (println)
+import std/ai (Message, ToolCall, ImagePart)
+import std/string as Str (join, intToStr, repeat)
+import std/list as List (length, map, range, flatMap, nth)
+import std/option (Option, Some, None)
+import src/core/journal (chain_digest_over, chain_digests_over, chain_empty_base)
+
+pure func msg(role: string, content: string, calls: [ToolCall], tcid: string, images: [ImagePart]) -> Message {
+  { role: role, content: content, tool_calls: calls, tool_call_id: tcid, images: images }
+}
+
+-- Same alphabet and bases as enumerate_chain.ail.
+pure func alphabet() -> [Message] {
+  [ msg("user", "", [], "", []),
+    msg("user", "a", [], "", []),
+    msg("assistant", "", [{ id: "c1", name: "bash", arguments: "{}" }], "", []),
+    msg("tool", "ok", [], "c1", []),
+    msg("system", "you are motoko", [], "", []),
+    msg("user", "é😀", [], "", [{ source: "data:image/png;base64,AAAA", mime: "image/png" }]),
+    msg("user", "m{role:4:user;content:1:a;tool_call_id:0:;tool_calls_len:1:0;tc-end;im-end;}", [], "", []),
+    msg("assistant", "a", [], "", []) ]
+}
+
+pure func bases() -> [string] {
+  [ chain_empty_base(), "", "x", "sha256:${repeat("0", 64)}",
+    chain_digest_over(chain_empty_base(), [msg("user", "a", [], "", [])]), "ü;m{" ]
+}
+
+pure func at(xs: [Message], i: int) -> Message {
+  match nth(xs, i) { Some(m) => m, None => msg("?", "", [], "", []) }
+}
+
+pure func seqs(n: int, k: int) -> [[int]] {
+  if n == 0 then [[]] else flatMap(\s. map(\i. s ++ [i], range(0, k)), seqs(n - 1, k))
+}
+
+func emit(bi: int, b: string, ss: [[int]]) -> () ! {IO} {
+  match ss {
+    [] => (),
+    s :: rest => {
+      let a = alphabet();
+      let ms = map(\i. at(a, i), s);
+      println("${intToStr(bi)}\tO ${chain_digest_over(b, ms)}");
+      println("${intToStr(bi)}\tD ${join(" ", chain_digests_over(b, ms))}");
+      emit(bi, b, rest)
+    }
+  }
+}
+
+func emitBases(bi: int, bs: [string], ss: [[int]]) -> () ! {IO} {
+  match bs { [] => (), b :: rest => { emit(bi, b, ss); emitBases(bi + 1, rest, ss) } }
+}
+
+export func main() -> () ! {IO} {
+  let ss = flatMap(\n. seqs(n, 8), range(0, 5));
+  println("lists per base: ${intToStr(length(ss))}");
+  emitBases(0, bases(), ss)
+}

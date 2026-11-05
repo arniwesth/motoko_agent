@@ -1,0 +1,61 @@
+-- repro.ail — T6 counterexamples run on the REAL, UNMODIFIED code.
+--
+-- `truncate_utf8_by_bytes` (packages/motoko-ext-compose/store.ail:20-30) is not exported;
+-- its only caller, `store_stdout_and_elide` (store.ail:32-49, exported), returns
+--   stdout = "${clipped}\n[stdout elided; full output at ${raw_path}]"
+-- whenever the output's byte length exceeds the cap, with `clipped` the function's result.
+-- So every witness below has byte length > cap, and the part before the notice IS the real
+-- function's return value. Ports: the conformance package's `canned_ports()`, whose
+-- filesystem ports do nothing (the writes do not reach `stdout` or `truncated`).
+--
+-- Each entry prints one line, which verdict.py judges:
+--   <input bytes>|<cap>|<truncated 0/1>|<returned stdout bytes>|<raw_path>
+-- From this directory:  ailang run --caps IO,FS --entry <entry> repro.ail
+
+module t6/repro/repro
+
+import std/io (println)
+import std/bytes (fromString, toString, fromInts, toInts)
+import std/string as Str (join, concat, intToStr)
+import pkg/sunholo/motoko_ext_abi/types (empty_ext_world)
+import pkg/sunholo/motoko_ext_conformance/harness (canned_ports)
+import pkg/sunholo/motoko_ext_compose/store (store_stdout_and_elide)
+
+pure func ints_text(xs: [int]) -> [string] {
+  match xs { [] => [], x :: rest => intToStr(x) :: ints_text(rest) }
+}
+
+pure func show_bytes(xs: [int]) -> string { join(".", ints_text(xs)) }
+
+pure func repeat_bytes(xs: [int], k: int) -> [int] {
+  if k <= 0 then [] else xs ++ repeat_bytes(xs, k - 1)
+}
+
+func report(bs: [int], cap: int) -> () ! {IO, FS} {
+  let s = toString(fromInts(bs));
+  let r = store_stdout_and_elide(canned_ports(), empty_ext_world(), "W", "C", s, cap);
+  println(concat([
+    show_bytes(toInts(fromString(s))), "|", intToStr(cap), "|",
+    if r.truncated then "1" else "0", "|",
+    show_bytes(toInts(fromString(r.stdout))), "|", r.raw_path
+  ]))
+}
+
+-- P6.1: "é" (U+00E9 = C3 A9: 1 rune, 2 bytes), cap 1.
+export func p6_1() -> () ! {IO, FS} { report([195, 169], 1) }
+
+-- P6.3: "éa" (C3 A9 61, valid UTF-8), cap 1.
+export func p6_3() -> () ! {IO, FS} { report([195, 169, 97], 1) }
+
+-- X-1: compose's default cap, 4000 (compose.ail:851, `clamp_positive(..., 4000)`), and
+-- 2001 copies of "é": 4002 bytes, 2001 runes.
+export func x1_default_cap() -> () ! {IO, FS} { report(repeat_bytes([195, 169], 2001), 4000) }
+
+-- Control: ASCII input over the cap, where P6.1 and P6.3 hold. Must judge "absent".
+export func control_ascii() -> () ! {IO, FS} { report([97, 98, 99, 100], 2) }
+
+-- P6.3 at compose's default cap: 3999 x 'a' then 2 x "é" = 4003 bytes, 4001 runes > 4000,
+-- so the slice is taken, and byte 4000 is the lead byte of the first "é".
+export func p6_3_default_cap() -> () ! {IO, FS} {
+  report(repeat_bytes([97], 3999) ++ repeat_bytes([195, 169], 2), 4000)
+}

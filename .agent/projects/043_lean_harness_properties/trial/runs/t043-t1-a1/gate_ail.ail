@@ -1,0 +1,76 @@
+-- gate_ail.ail — the AILANG half of the P1.1 differential (MOT-118).
+--
+-- Calls the REAL `herdr_env_ready` (packages/motoko-ext-herdr/types.ail:1425),
+-- imported through this directory's ailang.toml/ailang.lock, which point at
+-- ../tree/packages/motoko-ext-herdr by path. Nothing here restates the rule.
+--
+-- Input: a file of JSON lines, one case per line, `[HERDR_ENV, HERDR_BIN_PATH,
+-- HERDR_PANE_ID]`, each a JSON string or `null` for "unset". As P1.1 says,
+-- unset is passed to the AILANG side as "" (`str_or_empty`).
+--
+-- Output: one line per non-empty input line:
+--
+--   <0-based line index>|<1 if herdr_env_ready else 0>|<the three strings it was called with, JSON>
+--
+-- The echo lets the TypeScript driver check that the strings reached
+-- `herdr_env_ready` unchanged, so a JSON transport artefact is never mistaken
+-- for a gate disagreement.
+--
+-- From the tree root:
+--
+--   ailang run --relax-modules --caps IO,FS,Env --entry main \
+--     /home/motoko/trial-043/s/t043-t1-a1/out/gate_ail.ail -- <cases.jsonl>
+module gate_ail
+
+import std/io (println)
+import std/fs (readFile)
+import std/env (getArgs)
+import std/string as Str (split, concat, intToStr)
+import std/json (Json, decode, encode, asArray, asString, js, ja)
+import std/option (Option, Some, None)
+import std/result (Ok, Err)
+import pkg/sunholo/motoko_ext_herdr/types (herdr_env_ready)
+
+-- P1.1: unset (JSON null) is passed to the AILANG side as "".
+pure func str_or_empty(j: Json) -> string {
+  match asString(j) { Some(s) => s, None => "" }
+}
+
+pure func verdict(e: string, b: string, p: string) -> string {
+  if herdr_env_ready(e, b, p) then "1" else "0"
+}
+
+pure func line_for(i: int, l: string) -> string {
+  match decode(l) {
+    Err(msg) => concat([intToStr(i), "|E|decode: ", msg]),
+    Ok(j) => match asArray(j) {
+      None => concat([intToStr(i), "|E|not an array"]),
+      Some(xs) => match xs {
+        [a, b, c] => {
+          let e = str_or_empty(a);
+          let bp = str_or_empty(b);
+          let p = str_or_empty(c);
+          concat([intToStr(i), "|", verdict(e, bp, p), "|", encode(ja([js(e), js(bp), js(p)]))])
+        },
+        _ => concat([intToStr(i), "|E|not a triple"])
+      }
+    }
+  }
+}
+
+func run_lines(ls: [string], i: int) -> () ! {IO} {
+  match ls {
+    [] => (),
+    l :: rest => {
+      if l == "" then () else println(line_for(i, l));
+      run_lines(rest, i + 1)
+    }
+  }
+}
+
+export func main() -> () ! {IO, FS, Env} {
+  match getArgs() {
+    [path] => run_lines(split(readFile(path), "\n"), 0),
+    _ => println("usage: gate_ail.ail -- <cases.jsonl>")
+  }
+}

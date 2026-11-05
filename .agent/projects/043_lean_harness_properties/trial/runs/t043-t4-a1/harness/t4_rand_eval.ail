@@ -1,0 +1,91 @@
+-- t4_rand_eval.ail -- the AILANG half of t4_rand.ts. Reads the cases t4_rand.ts wrote
+-- (`t4_rand_cases.json` in the current directory), decodes each message list with the REAL
+-- `journal.messages_of_json`, and prints, per case, one JSON line with the REAL functions'
+-- outputs. It decides nothing: t4_rand.ts states the properties and compares.
+--
+--   ailang run --relax-modules --caps IO,FS --entry main t4_rand_eval.ail
+--
+-- A case is { id, base: { kind, value }, xs: [Message json], ys: [Message json] }.
+-- kind = "empty"     -> base is chain_empty_base()
+--        "seed"      -> base is chain_digest_base(xs)          (a whole-list digest)
+--        "chain"     -> base is chain_digest_over(empty, xs)   (a mid-chain digest)
+--        "literal"   -> base is `value`, verbatim
+
+module t4_rand_eval
+
+import std/io (println)
+import std/fs (readFile)
+import std/ai (Message)
+import std/json (Json, jo, ja, kv, js, jint, encode, decode, get, asArray, asString, asObject, getString)
+import std/list as List (length, map, take, range, forEachE)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/string as Str (intToStr)
+import src/core/journal (chain_digest_over, chain_digests_over, chain_digest_base, chain_empty_base,
+                         chain_digest_after, chain_digests_json, messages_of_json)
+import src/eval/journal/digests (eval_chain_digest_over)
+
+pure func strs(ds: [string]) -> Json { ja(List.map(js, ds)) }
+
+pure func field(j: Json, k: string) -> Json {
+  match get(j, k) { Some(v) => v, None => ja([]) }
+}
+
+pure func str_field(j: Json, k: string) -> string {
+  match get(j, k) { Some(v) => match asString(v) { Some(s) => s, None => "" }, None => "" }
+}
+
+pure func eval_case(c: Json) -> string {
+  let id = str_field(c, "id");
+  let b = field(c, "base");
+  match messages_of_json(field(c, "xs")) {
+    Err(e) => encode(jo([kv("id", js(id)), kv("error", js("xs: ${e}"))])),
+    Ok(xs) => match messages_of_json(field(c, "ys")) {
+      Err(e) => encode(jo([kv("id", js(id)), kv("error", js("ys: ${e}"))])),
+      Ok(ys) => {
+        let e = chain_empty_base();
+        let kind = str_field(b, "kind");
+        let base = if kind == "empty" then e
+                   else if kind == "seed" then chain_digest_base(xs)
+                   else if kind == "chain" then chain_digest_over(e, xs)
+                   else str_field(b, "value");
+        let ms = xs ++ ys;
+        let cxs = chain_digest_over(base, xs);
+        encode(jo([
+          kv("id", js(id)),
+          kv("base", js(base)),
+          kv("n_xs", jint(List.length(xs))),
+          kv("n_ys", jint(List.length(ys))),
+          -- P4.1's two sides, as parts
+          kv("digests_ms", strs(chain_digests_over(base, ms))),
+          kv("digests_xs", strs(chain_digests_over(base, xs))),
+          kv("over_xs", js(cxs)),
+          kv("digests_ys_from_over_xs", strs(chain_digests_over(cxs, ys))),
+          -- P4.2
+          kv("over_ms", js(chain_digest_over(base, ms))),
+          -- X-1: chain_digest_over at every non-empty prefix of ms
+          kv("over_prefixes", strs(List.map(\i. chain_digest_over(base, take(i + 1, ms)), range(0, List.length(ms))))),
+          -- X-2: the evaluator's pinned twin
+          kv("twin_over_ms", js(eval_chain_digest_over(base, ms))),
+          -- X-4 (diagnostic): the same list from the empty base
+          kv("digests_ms_from_empty", strs(chain_digests_over(e, ms))),
+          -- X-3: one step from the empty base for each message, and the whole list from it
+          kv("after_each_from_empty", strs(List.map(\m. chain_digest_after(e, m), ms))),
+          kv("over_ms_from_empty", js(chain_digest_over(e, ms))),
+          -- the wire form the child emits (chain_digests_json), for the host's read
+          kv("digests_json", js(encode(chain_digests_json(chain_digests_over(base, ms)))))
+        ]))
+      }
+    }
+  }
+}
+
+export func main() -> () ! {IO, FS} {
+  match decode(readFile("t4_rand_cases.json")) {
+    Err(e) => println("{\"fatal\":\"decode cases: ${e}\"}"),
+    Ok(j) => match asArray(j) {
+      None => println("{\"fatal\":\"cases is not an array\"}"),
+      Some(cs) => forEachE(\c. println(eval_case(c)), cs)
+    }
+  }
+}

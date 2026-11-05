@@ -1,0 +1,127 @@
+cases: 30941
+  host=accept twin=accept                  10990
+  host=accept twin=digest                  189
+  host=digest twin=accept                  139
+  host=digest twin=digest                  1466
+  host=digest twin=pairing                 73
+  host=pairing twin=digest                 93
+  host=pairing twin=pairing                17991
+P3.1 accept/accept dangling differs [emittable,session]: 8
+    270 A0,R1,RS host=[a](1) twin=[](0)
+    2467 A0,A0,R1,RS host=[a](1) twin=[](0)
+    3520 A0,R1,RS,RS host=[a](1) twin=[](0)
+    3522 A0,R1,RS,SU host=[a](1) twin=[](0)
+    13452 U,A0,R1,RS host=[a](1) twin=[](0)
+    20043 FU,A0,R1,RS host=[a](1) twin=[](0)
+    22240 RS,A0,R1,RS host=[a](1) twin=[](0)
+    26634 SU,A0,R1,RS host=[a](1) twin=[](0)
+P3.1 accept/accept dangling differs [outside-grammar,session]: 96
+    101 R1,RS host=[a](1) twin=[](0)
+    777 TA,R1,RS host=[a](1) twin=[](0)
+    946 TB,R1,RS host=[a](1) twin=[](0)
+    1115 U,R1,RS host=[a](1) twin=[](0)
+    1284 R1,R1,RS host=[a](1) twin=[](0)
+    1323 R1,RS,RS host=[a](1) twin=[](0)
+    1325 R1,RS,SU host=[a](1) twin=[](0)
+    1349 R1,SU,RS host=[a](1) twin=[](0)
+P3.1 verdict host=accept twin=digest [emittable,session]: 100
+    1483 CP,RS,A0
+    1484 CP,RS,A1
+    1485 CP,RS,A2
+    1488 CP,RS,U
+    1491 CP,RS,FU
+    3680 A0,CP,RS,A0
+    3681 A0,CP,RS,A1
+    3682 A0,CP,RS,A2
+P3.1 verdict host=accept twin=digest [outside-grammar,session]: 89
+    1320 R1,RS,R1
+    1495 CP,RS,H1
+    3517 A0,R1,RS,R1
+    3692 A0,CP,RS,H1
+    5877 A1,CP,RS,A0
+    5878 A1,CP,RS,A1
+    5879 A1,CP,RS,A2
+    5882 A1,CP,RS,U
+P3.1 verdict host=digest twin=accept [emittable,session]: 5
+    3511 A0,R1,RS,A0
+    3512 A0,R1,RS,A1
+    3513 A0,R1,RS,A2
+    3516 A0,R1,RS,U
+    3519 A0,R1,RS,FU
+P3.1 verdict host=digest twin=accept [outside-grammar,session]: 134
+    1314 R1,RS,A0
+    1315 R1,RS,A1
+    1316 R1,RS,A2
+    1319 R1,RS,U
+    1322 R1,RS,FU
+    1326 R1,RS,H1
+    3523 A0,R1,RS,H1
+    10102 TA,R1,RS,A0
+P3.1 verdict host=digest twin=pairing [outside-grammar,session]: 73
+    1317 R1,RS,TA
+    1318 R1,RS,TB
+    3514 A0,R1,RS,TA
+    3515 A0,R1,RS,TB
+    10105 TA,R1,RS,TA
+    10106 TA,R1,RS,TB
+    12302 TB,R1,RS,TA
+    12303 TB,R1,RS,TB
+P3.1 verdict host=pairing twin=digest [outside-grammar,session]: 93
+    1486 CP,RS,TA
+    1487 CP,RS,TB
+    3683 A0,CP,RS,TA
+    3684 A0,CP,RS,TB
+    5880 A1,CP,RS,TA
+    5881 A1,CP,RS,TB
+    8077 A2,CP,RS,TA
+    8078 A2,CP,RS,TB
+P3.2 twin refuses (digest) [emittable,session]: 365
+    113 CP,FU
+    282 A0,CP,FU
+    1127 U,CP,FU
+    1374 CP,A0,FU
+    1439 CP,U,FU
+    1465 CP,CP,FU
+    1470 CP,FU,A0
+    1471 CP,FU,A1
+X-3 host pendingToolCalls != fold dangling [emittable,session]: 47
+    270 A0,R1,RS pending=[] dangling=[a](1)
+    1541 FU,A0,R1 pending=[] dangling=[a](1)
+    1710 RS,A0,R1 pending=[] dangling=[a](1)
+    1879 PS,A0,R1 pending=[] dangling=[a](1)
+    2467 A0,A0,R1,RS pending=[] dangling=[a](1)
+    3520 A0,R1,RS,RS pending=[] dangling=[a](1)
+    3522 A0,R1,RS,SU pending=[] dangling=[a](1)
+    3738 A0,FU,A0,R1 pending=[] dangling=[a](1)
+X-3 host pendingToolCalls != fold dangling [emittable]: 22
+    20 A0,R1 pending=[] dangling=[a](1)
+    189 A0,A0,R1 pending=[] dangling=[a](1)
+    1034 U,A0,R1 pending=[] dangling=[a](1)
+    1372 CP,A0,R1 pending=[] dangling=[a](1)
+    2048 SU,A0,R1 pending=[] dangling=[a](1)
+    2386 A0,A0,A0,R1 pending=[] dangling=[a](1)
+    3231 A0,U,A0,R1 pending=[] dangling=[a](1)
+    3569 A0,CP,A0,R1 pending=[] dangling=[a](1)
+X-3 host pendingToolCalls != fold dangling [outside-grammar,session]: 1177
+    101 R1,RS pending=[] dangling=[a](1)
+    124 FU,R1 pending=[] dangling=[a](1)
+    130 FU,H1 pending=["a"] dangling=[a,](2)
+    137 RS,R1 pending=[] dangling=[a](1)
+    143 RS,H1 pending=["a"] dangling=[a,](2)
+    156 PS,H1 pending=["a"] dangling=[a,](2)
+    293 A0,FU,R1 pending=[] dangling=[a](1)
+    299 A0,FU,H1 pending=["a"] dangling=[a,](2)
+X-3 host pendingToolCalls != fold dangling [outside-grammar]: 729
+    7 R1 pending=[] dangling=[a](1)
+    13 H1 pending=["a"] dangling=[a,](2)
+    26 A0,H1 pending=["a"] dangling=[a,](2)
+    46 A2,R1 pending=["a","b"] dangling=[a](1)
+    59 TA,R1 pending=[] dangling=[a](1)
+    72 TB,R1 pending=[] dangling=[a](1)
+    85 U,R1 pending=[] dangling=[a](1)
+    91 U,H1 pending=["a"] dangling=[a,](2)
+P3.1: 30941 cases compared, 598 violations
+P3.2: 4925 run-emittable cases, 365 violations
+X-3: 1975 cases where the host's pendingToolCalls differ from the fold's dangling on the host journal
+X-1: 0 cases where both accept with equal history/dangling but the rest of the state differs
+exit=1

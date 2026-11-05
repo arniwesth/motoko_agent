@@ -1,0 +1,16 @@
+/-
+Appended to HerdrFailureModel.lean and gen/Corpus.lean by run_diff.sh. One line per case, in
+the order of corpus.json and enumerate_herdr.ail:
+
+  <stderr index>|<exit code>|<tsFailureCode>|<tsMeansAgentGone>|<failureCode>|<meansAgentGone>
+
+The TS half is compared with fields 1-4, the AILANG half with fields 1, 2, 5, 6.
+-/
+
+#eval show IO Unit from do
+  let mut i := 0
+  for s in corpusStderr do
+    for e in corpusExits do
+      let r : HerdrResult := ⟨e, s.toList, false⟩
+      IO.println s!"{i}|{e}|{String.ofList (tsFailureCode r)}|{tsMeansAgentGone r}|{String.ofList (failureCode e s.toList)}|{meansAgentGone e s.toList}"
+    i := i + 1

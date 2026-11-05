@@ -1,0 +1,39 @@
+== fixA
+22c22
+<   let n = Str.length(s);
+---
+>   let n = length(b);
+== fixAB
+3c3
+< import std/bytes (fromString, length, slice, toString)
+---
+> import std/bytes (fromString, length, slice, toString, byteAt)
+19a20,27
+> func rune_cut(b: bytes, k: int) -> int {
+>   if k <= 0 then 0
+>   else match byteAt(b, k) {
+>     Some(c) => if c >= 128 && c < 192 then rune_cut(b, k - 1) else k,
+>     None => k
+>   }
+> }
+> 
+22c30
+<   let n = Str.length(s);
+---
+>   let n = length(b);
+25c33
+<     match slice(b, 0, max_bytes) {
+---
+>     match slice(b, 0, rune_cut(b, max_bytes)) {
+== fixA vs T6.truncateFix
+real function: 11 lines, sha256 cadcb13dc70878fa
+ail:  23315 lines, sha256 b20dc3c621738138
+lean: 23315 lines, sha256 b20dc3c621738138
+differential: 23315 cases, 0 mismatches
+== fixAB vs T6.truncateFix2
+real function: 19 lines, sha256 0316a0d76fdb9d53
+ail:  23315 lines, sha256 789ba580437337b0
+lean: 23315 lines, sha256 789ba580437337b0
+differential: 23315 cases, 0 mismatches
+fix_diff: both fixes match their models
+exit=0

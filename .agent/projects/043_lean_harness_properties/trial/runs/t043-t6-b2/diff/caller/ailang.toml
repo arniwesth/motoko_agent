@@ -1,0 +1,16 @@
+[package]
+name = "t6/diffcaller"
+version = "0.1.0"
+edition = "1"
+ailang = ">=0.21.0"
+
+[dependencies]
+"sunholo/motoko_ext_compose" = { path = "../../../tree/packages/motoko-ext-compose" }
+"sunholo/motoko_ext_abi" = { path = "../../../tree/packages/motoko-ext-abi" }
+"sunholo/motoko_ext_conformance" = { path = "../../../tree/packages/motoko_ext_conformance" }
+
+[effects]
+max = ["IO", "FS", "AI", "Clock", "Env", "Process", "Trace"]
+
+[exports]
+modules = ["t6/diffcaller/harness"]

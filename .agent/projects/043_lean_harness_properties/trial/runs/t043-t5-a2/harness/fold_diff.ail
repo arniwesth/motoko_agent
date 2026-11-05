@@ -1,0 +1,206 @@
+-- fold_diff.ail — exhaustive fold-level differential: the REAL fold_journal against the REAL eval
+-- twin eval_fold_journal, over every single-parent_id redirection of a host-shaped journal.
+-- (Fixtures and helpers below are fold_cycle.ail's; only main differs.)
+--
+-- J is the 7-entry journal of fold_cycle.ail. For every entry t, every new parent p (each of J's
+-- ids, "" and an absent id) and every leaf l (each of J's ids): fold J[t.parent := p] at l with
+-- both folds. One line per case:  <t>|<p>|<l>|core:<verdict>|eval:<verdict>|<SAME|DIFF>
+-- and a final `END|<cases>|<diffs>`.
+--
+-- ORIGINAL HEADER OF fold_cycle.ail FOLLOWS.
+-- fold_cycle.ail — what path_up's cycle arm does to the REAL, UNMODIFIED fold.
+--
+-- No copies here: `fold_journal` (src/core/journal.ail:1677, path_up's only caller) and the
+-- eval twin `eval_fold_journal` (src/eval/journal/reader.ail:1924, which runs `ev_path_up`) are
+-- exported and called as they are.
+--
+-- A well-formed journal J is written by the module's own writer twin `journal_lines_of_records`
+-- (the fixtures are journal.ail's private `t_*` builders, copied as enumerate_fold.ail copies
+-- them). Then ONE parent_id is redirected so the parent chain closes a cycle, and J' is folded
+-- at the same leaf.
+--
+-- The metamorphic statement checked (ADR-003 D4 rule 1, "From `leaf` to the root by
+-- `parent_id`, stopping at the first repeated id; reversed. The first entry must be the
+-- `header`"): when the HEADER's parent_id is pointed at an id that is already on J's path
+-- (the leaf, a middle entry, or the header itself), the walk from the leaf meets exactly J's
+-- path and then a repeated id, so the path - and hence the fold - must be J's. The control
+-- variants put the cycle below the header, where rule 1's path does not start at the header
+-- and the fold must refuse with `header`.
+--
+-- One line per variant:  <variant>|core:<verdict>|eval:<verdict>|expect:<verdict>|<OK|BAD>
+-- where <verdict> is `accept:<history length>:<dangling>` or the refusal's id. Exit is not set
+-- here; repro_fold.sh greps for BAD.
+--
+-- From out/:  ailang run --relax-modules --caps IO --entry main harness/fold_cycle.ail
+
+module harness/fold_diff
+
+import std/io (println)
+import std/ai (Message, ToolCall)
+import std/json (Json, jo, js, kv, asObject, getString)
+import std/string as Str (join, concat, intToStr)
+import std/list as List (length, map)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import src/core/phase_vocab (
+  RuntimeStatusCounts,
+  LedgerRecord, WireRecord,
+  HistorySeeded, HistoryAppended, StateDelta, SessionStart, RunSummary
+)
+import src/core/journal (
+  SessionState, Refusal, refusal_id,
+  fold_journal, journal_lines_of_records, journal_leaf, harness_header, default_run_identity,
+  chain_digest_after, chain_digest_over, chain_digests_over, chain_digests_json, chain_empty_base,
+  messages_json, message_json
+)
+import src/eval/journal/reader (EvSessionState, EvRefusal, eval_fold_journal, eval_refusal_label)
+
+-- journal.ail's fixtures, copied (as enumerate_fold.ail does).
+
+pure func t_sys() -> Message { { role: "system", content: "you are motoko", tool_calls: [], tool_call_id: "", images: [] } }
+pure func t_user() -> Message { { role: "user", content: "list the files", tool_calls: [], tool_call_id: "", images: [] } }
+pure func t_asst() -> Message { { role: "assistant", content: "done", tool_calls: [], tool_call_id: "", images: [] } }
+pure func t_seed() -> [Message] { [t_sys(), t_user()] }
+pure func t_seed_digest() -> string { chain_digest_over(chain_empty_base(), t_seed()) }
+pure func t_run_id() -> string { "sess_1.r0.0" }
+
+pure func t_counts() -> RuntimeStatusCounts {
+  { provider_calls_started: 2, provider_calls_completed: 2, stage_applied_total: 0,
+    stage_rejected_total: 0, compaction_ai_applied: 0 }
+}
+
+pure func t_seeded() -> LedgerRecord {
+  WireRecord(HistorySeeded({
+    run_id: t_run_id(),
+    messages: messages_json(t_seed()),
+    digest: t_seed_digest(),
+    digests: chain_digests_json(chain_digests_over(chain_empty_base(), t_seed()))
+  }))
+}
+
+pure func t_start() -> LedgerRecord {
+  WireRecord(SessionStart({ task: "list the files", model: "m", mode: "v2", run_id: t_run_id() }))
+}
+
+pure func t_append(step: int, m: Message, replaces: bool, digest: string) -> LedgerRecord {
+  WireRecord(HistoryAppended({
+    run_id: t_run_id(), step: step, message: message_json(m),
+    replaces_previous: replaces, digest_after: digest
+  }))
+}
+
+pure func t_delta() -> LedgerRecord {
+  WireRecord(StateDelta({
+    run_id: t_run_id(), step: 1, cumulative: t_counts(),
+    telemetry: { last_input_tokens: 120, last_output_tokens: 40, last_estimated_input_tokens: 100 },
+    ext_artifacts_digest: "sha256:ext", ext_artifacts: None
+  }))
+}
+
+pure func t_summary() -> LedgerRecord {
+  WireRecord(RunSummary({
+    model: "m", motoko_commit: "abc", finish_reason: "stop", steps_executed: 1,
+    input_tokens: 10, output_tokens: 2, cache_read_input_tokens: 0,
+    cache_creation_input_tokens: 0, total_cost_usd: 0.0, total_cost_millicents: 0,
+    duration_ms: 5, error: "", cumulative: t_counts(), world_ordinal: 4
+  }))
+}
+
+pure func base_lines() -> [Json] {
+  let d = chain_digest_after(t_seed_digest(), t_asst());
+  let records = [t_start(), t_seeded(), t_append(1, t_asst(), false, d), t_delta(), t_summary()];
+  journal_lines_of_records(harness_header(default_run_identity("sess_1"), "m"), records)
+}
+
+-- Rewrite one line's parent_id (the line whose id is `target`), keeping every other key.
+
+pure func set_parent_kv(p: string, x: {key: string, value: Json}) -> {key: string, value: Json} {
+  if x.key == "parent_id" then kv("parent_id", js(p)) else x
+}
+
+pure func set_parent(j: Json, p: string) -> Json {
+  match asObject(j) {
+    None => j,
+    Some(kvs) => jo(List.map(\x. set_parent_kv(p, x), kvs))
+  }
+}
+
+pure func redirect(lines: [Json], target: string, p: string) -> [Json] {
+  match lines {
+    [] => [],
+    l :: rest => {
+      let id = match getString(l, "id") { None => "", Some(s) => s };
+      (if id == target then set_parent(l, p) else l) :: redirect(rest, target, p)
+    }
+  }
+}
+
+pure func nth_id(lines: [Json], k: int) -> string {
+  match lines {
+    [] => "",
+    l :: rest => if k == 0 then (match getString(l, "id") { None => "", Some(s) => s }) else nth_id(rest, k - 1)
+  }
+}
+
+pure func core_verdict(r: Result[SessionState, Refusal]) -> string {
+  match r {
+    Ok(s) => concat(["accept:", intToStr(List.length(s.history)), ":", join(",", s.dangling)]),
+    Err(e) => refusal_id(e)
+  }
+}
+
+pure func eval_verdict(r: Result[EvSessionState, EvRefusal]) -> string {
+  match r {
+    Ok(s) => concat(["accept:", intToStr(List.length(s.history)), ":", join(",", s.dangling)]),
+    Err(e) => eval_refusal_label(e)
+  }
+}
+
+pure func row(name: string, lines: [Json], leaf: string, expect: string) -> string {
+  let c = core_verdict(fold_journal(lines, leaf));
+  let e = eval_verdict(eval_fold_journal(lines, leaf));
+  let ok = if c == expect then "OK" else "BAD";
+  concat([name, "|core:", c, "|eval:", e, "|expect:", expect, "|", ok])
+}
+
+pure func ids_of(lines: [Json]) -> [string] {
+  List.map(\l. match getString(l, "id") { None => "", Some(s) => s }, lines)
+}
+
+pure func one(j: [Json], t: string, p: string, l: string) -> (string, bool) {
+  let lines = redirect(j, t, p);
+  let c = core_verdict(fold_journal(lines, l));
+  let e = eval_verdict(eval_fold_journal(lines, l));
+  -- eval_refusal_label carries position detail (`header:-1:`); compare the family only
+  let ef = match Str.split(e, ":") { [] => e, x :: _ => if x == "accept" then e else x };
+  let same = c == ef;
+  (concat([t, "|", (if p == "" then "<root>" else p), "|", l, "|core:", c, "|eval:", e, "|", if same then "SAME" else "DIFF"]), same)
+}
+
+func each_l(j: [Json], t: string, p: string, ls: [string], acc: (int, int)) -> (int, int) ! {IO} {
+  match ls {
+    [] => acc,
+    l :: rest => {
+      let r = one(j, t, p, l);
+      match r { (line, same) => {
+        println(line);
+        match acc { (n, d) => each_l(j, t, p, rest, (n + 1, if same then d else d + 1)) }
+      } }
+    }
+  }
+}
+
+func each_p(j: [Json], t: string, ps: [string], ls: [string], acc: (int, int)) -> (int, int) ! {IO} {
+  match ps { [] => acc, p :: rest => each_p(j, t, rest, ls, each_l(j, t, p, ls, acc)) }
+}
+
+func each_t(j: [Json], ts: [string], ps: [string], ls: [string], acc: (int, int)) -> (int, int) ! {IO} {
+  match ts { [] => acc, t :: rest => each_t(j, rest, ps, ls, each_p(j, t, ps, ls, acc)) }
+}
+
+export func main() -> () ! {IO} {
+  let j = base_lines();
+  let ids = ids_of(j);
+  let r = each_t(j, ids, ids ++ ["", "absent"], ids, (0, 0));
+  match r { (n, d) => println(concat(["END|", intToStr(n), "|", intToStr(d)])) }
+}

@@ -1,0 +1,27 @@
+-- foldfile.ail — the REAL resume read path over a journal FILE: `parse_journal_text` (the
+-- reader D6 step 2 uses, journal.ail:2348) then `fold_journal` at the given leaf.
+--   ailang run --relax-modules --caps IO,FS --entry main --args-json '"<path>|<leaf>"' repro/foldfile.ail
+module foldfile
+
+import std/io (println)
+import std/fs (readFile)
+import std/ai (Message)
+import std/string as Str (join, concat, intToStr, split)
+import std/list as List (length, map)
+import std/result (Result, Ok, Err)
+import src/core/journal (SessionState, Refusal, refusal_id, refusal_message, fold_journal, parse_journal_text)
+
+pure func content_of(m: Message) -> string { m.content }
+
+export func main(arg: string) -> () ! {IO, FS} {
+  match split(arg, "|") {
+    [path, leaf] => match parse_journal_text(readFile(path)) {
+      Err(r) => println(concat(["R;", refusal_id(r), ";", refusal_message(r)])),
+      Ok(lines) => match fold_journal(lines, leaf) {
+        Ok(s) => println(concat(["A;", join(",", List.map(content_of, s.history))])),
+        Err(r) => println(concat(["R;", refusal_id(r), ";", refusal_message(r)]))
+      }
+    },
+    _ => println("usage: <path>|<leaf>")
+  }
+}

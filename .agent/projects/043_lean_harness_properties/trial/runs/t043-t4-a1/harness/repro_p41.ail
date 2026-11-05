@@ -1,0 +1,27 @@
+-- repro_p41.ail -- A1-T4-1. P4.1 on the REAL functions, at the production base.
+--   b = chain_empty_base(), xs = [system "you are motoko"], ys = [user "list the files"]
+-- (the seed journal.ail's own fixtures use, t_seed(), split after its first message).
+-- Prints DEFECT and exits 1 when
+--   chain_digests_over(b, xs ++ ys) != chain_digests_over(b, xs) ++ chain_digests_over(chain_digest_over(b, xs), ys)
+-- prints OK and exits 0 otherwise.
+module repro_p41
+
+import std/io (println, exit)
+import std/ai (Message)
+import std/string as Str (join)
+import src/core/journal (chain_digest_over, chain_digests_over, chain_empty_base)
+
+pure func sys() -> Message { { role: "system", content: "you are motoko", tool_calls: [], tool_call_id: "", images: [] } }
+pure func usr() -> Message { { role: "user", content: "list the files", tool_calls: [], tool_call_id: "", images: [] } }
+
+export func main() -> () ! {IO} {
+  let b = chain_empty_base();
+  let xs = [sys()];
+  let ys = [usr()];
+  let lhs = chain_digests_over(b, xs ++ ys);
+  let rhs = chain_digests_over(b, xs) ++ chain_digests_over(chain_digest_over(b, xs), ys);
+  println("b   = ${b}");
+  println("lhs = chain_digests_over(b, xs ++ ys) = [${join(", ", lhs)}]");
+  println("rhs = chain_digests_over(b, xs) ++ chain_digests_over(chain_digest_over(b, xs), ys) = [${join(", ", rhs)}]");
+  if lhs == rhs then println("OK: P4.1 holds on this input") else { println("DEFECT: P4.1 violated"); exit(1) }
+}

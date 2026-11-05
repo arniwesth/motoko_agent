@@ -1,0 +1,13 @@
+== bash /home/motoko/trial-043/s/t043-t6-b1/out/repro/repro_p61.sh
+w1: input 2 bytes, cap 1: clipped = 2 bytes [c3 a9]; P6.1 VIOLATED (2 > 1)
+w2: input 6000 bytes, cap 4000: clipped = 6000 bytes [e6 97 a5 e6 97 a5 ... e6 97 a5 e6 97 a5]; P6.1 VIOLATED (6000 > 4000)
+exit=1
+== bash /home/motoko/trial-043/s/t043-t6-b1/out/repro/repro_p63.sh
+w1: input 4 bytes, cap 1: clipped = 1 bytes [c3]; input valid=True, clipped valid=False; P6.3 VIOLATED
+w2: input 4005 bytes, cap 4000: clipped = 4000 bytes [61 61 61 61 61 61 ... 61 61 61 61 61 e6]; input valid=True, clipped valid=False; P6.3 VIOLATED
+exit=1
+== bash /home/motoko/trial-043/s/t043-t6-b1/out/repro/repro_p62.sh
+a: input 2 bytes, cap 1: clipped = 2 bytes [c3 a9]; P6.2 holds
+b: input 4 bytes, cap 1: clipped = 1 bytes [c3]; P6.2 holds
+c: input 6 bytes, cap 3: clipped = 3 bytes [ff 80 c3]; P6.2 holds
+exit=0

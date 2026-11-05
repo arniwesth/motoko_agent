@@ -1,0 +1,101 @@
+-- run_cases.ail — the AILANG half of the random test: runs the REAL `path_up`
+-- (src/core/journal.ail, via the export-only copy gen/journal_t5.ail), its twin `ev_path_up`
+-- (src/eval/journal/reader.ail, via gen/reader_t5.ail) and the reader's exported `strict_path`
+-- on every case of a JSONL file written by gen_cases.ts, and prints one JSON line per case:
+--
+--   {"i": <case index>, "core": [<seq>...], "twin": [<seq>...], "strict_ok": bool,
+--    "strict": [<seq>...], "strict_err": "<refusal family>"}
+--
+-- An entry's `seq` is its position in the case's `es`, so the checker (check_cases.ts) knows
+-- WHICH entry was returned, not only its id, which matters when ids repeat. Nothing is checked
+-- here: the properties are stated, independently, in check_cases.ts.
+--
+--   cd out && ailang run --relax-modules --caps IO,FS --entry main \
+--     --args-json '{"path":"runs/cases.jsonl"}' run_cases.ail
+
+module run_cases
+
+import std/io (println)
+import std/fs (readFile)
+import std/json (Json, jo, ja, kv, js, jb, jint, encode, decode, getArray, getString, asArray, asString)
+import std/string as Str (split)
+import std/list as List (map, foldl)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import gen/journal_t5 (path_up, JournalEntry)
+import gen/reader_t5 (ev_path_up, strict_path, EvJournalEntry, source_refusal_family)
+
+type Spec = { id: string, parent: string, kind: string }
+
+pure func str_at(xs: [Json], i: int) -> string {
+  match xs {
+    [] => "",
+    x :: rest => if i == 0 then (match asString(x) { None => "", Some(s) => s }) else str_at(rest, i - 1)
+  }
+}
+
+pure func spec_of(j: Json) -> Spec {
+  match asArray(j) {
+    None => { id: "", parent: "", kind: "" },
+    Some(xs) => { id: str_at(xs, 0), parent: str_at(xs, 1), kind: str_at(xs, 2) }
+  }
+}
+
+pure func core_es(ss: [Spec], i: int, acc: [JournalEntry]) -> [JournalEntry] {
+  match ss {
+    [] => rev_c(acc),
+    s :: rest => core_es(rest, i + 1, { id: s.id, parent_id: s.parent, seq: i, at_ms: 0, kind: s.kind, raw: jo([]) } :: acc)
+  }
+}
+
+pure func twin_es(ss: [Spec], i: int, acc: [EvJournalEntry]) -> [EvJournalEntry] {
+  match ss {
+    [] => rev_t(acc),
+    s :: rest => twin_es(rest, i + 1, { id: s.id, parent_id: s.parent, seq: i, at_ms: 0, kind: s.kind, raw: jo([]) } :: acc)
+  }
+}
+
+pure func rev_c(xs: [JournalEntry]) -> [JournalEntry] { List.foldl(\acc x. x :: acc, [], xs) }
+pure func rev_t(xs: [EvJournalEntry]) -> [EvJournalEntry] { List.foldl(\acc x. x :: acc, [], xs) }
+
+pure func c_seq(e: JournalEntry) -> Json { jint(e.seq) }
+pure func t_seq(e: EvJournalEntry) -> Json { jint(e.seq) }
+
+pure func run_one(i: int, j: Json) -> string {
+  let ss = match getArray(j, "es") { None => [], Some(xs) => List.map(spec_of, xs) };
+  let start = match getString(j, "start") { None => "", Some(s) => s };
+  let es = core_es(ss, 0, []);
+  let tes = twin_es(ss, 0, []);
+  let r = path_up(es, start, [], []);
+  let tr = ev_path_up(tes, start, [], []);
+  let strict = strict_path(tes, start);
+  encode(jo([
+    kv("i", jint(i)),
+    kv("core", ja(List.map(c_seq, r))),
+    kv("twin", ja(List.map(t_seq, tr))),
+    kv("strict_ok", jb(match strict { Ok(_) => true, Err(_) => false })),
+    kv("strict", ja(match strict { Ok(p) => List.map(t_seq, p), Err(_) => [] })),
+    kv("strict_err", js(match strict { Ok(_) => "", Err(e) => source_refusal_family(e) }))
+  ]))
+}
+
+func run_lines(i: int, ls: [string]) -> () ! {IO} {
+  match ls {
+    [] => (),
+    l :: rest =>
+      if l == "" then run_lines(i, rest)
+      else {
+        match decode(l) {
+          Err(e) => println("{\"i\": ${show(i)}, \"decode_error\": true}"),
+          Ok(j) => println(run_one(i, j))
+        };
+        run_lines(i + 1, rest)
+      }
+  }
+}
+
+type RunArgs = { path: string }
+
+export func main(args: RunArgs) -> () ! {IO, FS} {
+  run_lines(0, split(readFile(args.path), "\n"))
+}

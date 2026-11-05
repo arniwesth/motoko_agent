@@ -1,0 +1,20 @@
+module probe_deep
+import std/io (println)
+import std/json (Json, jo)
+import std/string as Str (intToStr)
+import std/list as List (length, map, range)
+import gen/journal_t5 (path_up, find_entry, JournalEntry)
+import std/option (Option, Some, None)
+pure func ent(i: int) -> JournalEntry { { id: intToStr(i), parent_id: if i == 0 then "" else intToStr(i - 1), seq: i, at_ms: 0, kind: "x", raw: jo([]) } }
+export func build(n: int) -> () ! {IO} {
+  let es = List.map(ent, List.range(0, n));
+  println(intToStr(List.length(es)))
+}
+export func find(n: int) -> () ! {IO} {
+  let es = List.map(ent, List.range(0, n));
+  println(match find_entry(es, intToStr(n - 1)) { None => "none", Some(e) => e.id })
+}
+export func run(n: int) -> () ! {IO} {
+  let es = List.map(ent, List.range(0, n));
+  println(intToStr(List.length(path_up(es, intToStr(n - 1), [], []))))
+}

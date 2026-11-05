@@ -1,0 +1,58 @@
+-- foldhost.ail — the REAL fold over the journals the REAL TypeScript host wrote (host.ts).
+-- Reads host.out (`H\t<ix>\t<JSON array of entries>` per line) and prints
+--   F\t<ix>\t<verdict>
+-- in gen.ail's verdict format. The leaf is the last entry's id: the host's leaf after its
+-- last append (session-journal.ts:384).
+--
+--   ailang run --relax-modules --caps IO,FS --entry main --args-json '"<host.out>"' diff/foldhost.ail
+
+module foldhost
+
+import std/io (println)
+import std/fs (readFile)
+import std/ai (Message, ToolCall)
+import std/json (Json, decode, asArray)
+import std/string as Str (join, concat, intToStr, split)
+import std/list as List (length, map, foldl)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import src/core/journal (SessionState, Refusal, refusal_id, fold_journal, journal_leaf)
+
+pure func ids_of(cs: [ToolCall]) -> [string] {
+  match cs { [] => [], c :: rest => c.id :: ids_of(rest) }
+}
+pure func render_msg(m: Message) -> string {
+  if List.length(m.tool_calls) == 0 then m.content
+  else concat([m.content, "[", join("+", ids_of(m.tool_calls)), "]"])
+}
+pure func render_verdict(r: Result[SessionState, Refusal]) -> string {
+  match r {
+    Ok(s) => concat(["A;", join(",", List.map(render_msg, s.history)), ";", join("+", s.dangling), ";", intToStr(List.length(s.dangling))]),
+    Err(e) => concat(["R;", refusal_id(e)])
+  }
+}
+
+pure func verdict_of(arr: string) -> string {
+  match decode(arr) {
+    Err(e) => concat(["X;json:", e]),
+    Ok(j) => match asArray(j) {
+      None => "X;not-array",
+      Some(lines) => render_verdict(fold_journal(lines, journal_leaf(lines)))
+    }
+  }
+}
+
+pure func line_step(acc: [string], l: string) -> [string] {
+  match split(l, "\t") {
+    [tag, key, arr] => if tag == "H" then concat(["F\t", key, "\t", verdict_of(arr)]) :: acc else acc,
+    _ => acc
+  }
+}
+
+pure func cons_s(acc: [string], s: string) -> [string] { s :: acc }
+
+export func main(file: string) -> () ! {IO, FS} {
+  let raw = readFile(file);
+  let outs = List.foldl(line_step, [], split(raw, "\n"));
+  println(join("\n", List.foldl(cons_s, [], outs)))
+}

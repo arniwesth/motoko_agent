@@ -1,0 +1,36 @@
+
+/-
+enumerate.lean.tail — appended to ../PathUpModel.lean by run_diff.sh (the case path is
+substituted). Reads the case file written by gen_cases.py and prints, per case,
+
+  <entries>|<start id>|<variant>|<seqs of pathUp's result, comma-joined>|<length>
+
+the same line harness_driver.ail prints for the real `path_up`.
+-/
+
+def parseEntry (spec : String) (seq : Int) : Entry :=
+  match spec.splitOn ">" with
+  | [i, p] => ⟨i, p, seq⟩
+  | _ => ⟨"?bad", "?bad", seq⟩
+
+def parseEntries : List String → Int → List Entry
+  | [], _ => []
+  | s :: rest, n => parseEntry s n :: parseEntries rest (n + 1)
+
+def parseList (enc : String) : List Entry :=
+  if enc = "" then [] else parseEntries (enc.splitOn ";") 0
+
+def lineOf (line : String) : String :=
+  match line.splitOn "|" with
+  | [enc, start, v] =>
+    let es := parseList enc
+    let seen := if v = "1" then ["a"] else []
+    let acc : List Entry := if v = "2" then [⟨"q", "a", 99⟩] else []
+    let r := pathUp es start seen acc
+    s!"{line}|{",".intercalate (r.map (fun e => toString e.seq))}|{r.length}"
+  | _ => s!"{line}|PARSE-ERROR|"
+
+#eval show IO Unit from do
+  let txt ← IO.FS.readFile "CASES_PATH"
+  for l in txt.splitOn "\n" do
+    if l ≠ "" then IO.println (lineOf l)

@@ -1,0 +1,38 @@
+-- path_up_direct.ail — the counterexamples of PathUpModel.lean's `bug_` theorems, on the REAL
+-- `path_up` and `find_entry` (src/core/journal.ail:1392-1410), reached through the
+-- export-only shim (../diff/make_root.sh ... shim). One line per input:
+--
+--   <name>|<what find_entry returns for the start id>|path_up=[<seqs of the result>]
+--
+-- `control_chain` is the non-vacuity witness `witness_chain`: if it is not [0,1,2], the
+-- harness, not the code, is broken.
+
+module path_up_direct
+
+import std/io (println)
+import std/json (Json, jo)
+import std/string as Str (join, concat, intToStr)
+import std/list as List (map)
+import std/option (Option, Some, None)
+import src/core/journal (JournalEntry, path_up, find_entry)
+
+pure func ent(seq: int, id: string, parent: string) -> JournalEntry {
+  { id: id, parent_id: parent, seq: seq, at_ms: 0, kind: "x", raw: jo([]) }
+}
+
+pure func seq_str(e: JournalEntry) -> string { intToStr(e.seq) }
+
+pure func found(es: [JournalEntry], id: string) -> string {
+  match find_entry(es, id) { Some(e) => concat(["found seq ", intToStr(e.seq)]), None => "not found" }
+}
+
+pure func line(name: string, es: [JournalEntry], start: string) -> string {
+  concat([name, "|", found(es, start), "|path_up=[", join(",", map(seq_str, path_up(es, start, [], []))), "]"])
+}
+
+export func main() -> () ! {IO} {
+  println(line("control_chain", [ent(0, "r", ""), ent(1, "m", "r"), ent(2, "l", "m")], "l"));
+  println(line("self_loop", [ent(0, "a", "a")], "a"));
+  println(line("cycle_through_root", [ent(0, "h", "c"), ent(1, "b", "h"), ent(2, "c", "b")], "c"));
+  println(line("empty_id", [ent(0, "", "")], ""))
+}

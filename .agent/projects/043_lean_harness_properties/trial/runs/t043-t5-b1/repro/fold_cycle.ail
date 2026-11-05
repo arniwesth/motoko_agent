@@ -1,0 +1,134 @@
+-- fold_cycle.ail — the cycle defect through the PUBLIC API, on the real, UNMODIFIED
+-- journal.ail (root built by ../diff/make_root.sh ... real: src/ is a symlink to the tree's).
+--
+-- A well-formed journal, written by the module's own writer twin `journal_lines_of_records`
+-- the way journal.ail's tests write theirs, folds at its leaf. Then the same journal with ONE
+-- change: the header's `parent_id`, `""` as written, is set to an id already on the path,
+-- so the parent chain is a cycle through the root. D4 rule 1 ("From `leaf` to the root by
+-- `parent_id`, stopping at the first repeated id; reversed. The first entry must be the
+-- header") gives the same path as before, header first, and the fold should be unchanged.
+--
+--   control|<verdict>                      the unchanged journal
+--   cycle_to_leaf|<verdict>                header.parent_id := the leaf's id
+--   cycle_to_self|<verdict>                header.parent_id := the header's own id
+--
+-- <verdict> is `accept|<history length>` or the refusal's id.
+
+module fold_cycle
+
+import std/io (println)
+import std/ai (Message)
+import std/json (Json, encode, decode)
+import std/string as Str (concat, intToStr, replace)
+import std/list as List (length)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import src/core/phase_vocab (
+  RuntimeStatusCounts, LedgerRecord, WireRecord,
+  HistorySeeded, HistoryAppended, StateDelta, SessionStart, RunSummary
+)
+import src/core/journal (
+  SessionState, Refusal, refusal_id, JournalEntry, journal_entry_of_json,
+  fold_journal, journal_lines_of_records, journal_leaf, harness_header, default_run_identity,
+  chain_digest_after, chain_digest_over, chain_digests_over, chain_digests_json, chain_empty_base,
+  messages_json, message_json
+)
+
+-- journal.ail's private test fixtures, copied as ../../tree/.agent/projects/
+-- 043_lean_harness_properties/evidence/diff/enumerate_fold.ail copies them.
+pure func t_sys() -> Message { { role: "system", content: "you are motoko", tool_calls: [], tool_call_id: "", images: [] } }
+pure func t_user() -> Message { { role: "user", content: "list the files", tool_calls: [], tool_call_id: "", images: [] } }
+pure func t_asst() -> Message { { role: "assistant", content: "done", tool_calls: [], tool_call_id: "", images: [] } }
+pure func t_seed() -> [Message] { [t_sys(), t_user()] }
+pure func t_seed_digest() -> string { chain_digest_over(chain_empty_base(), t_seed()) }
+pure func t_run_id() -> string { "sess_1.r0.0" }
+
+pure func t_counts() -> RuntimeStatusCounts {
+  { provider_calls_started: 2, provider_calls_completed: 2, stage_applied_total: 0,
+    stage_rejected_total: 0, compaction_ai_applied: 0 }
+}
+
+pure func t_seeded() -> LedgerRecord {
+  WireRecord(HistorySeeded({
+    run_id: t_run_id(),
+    messages: messages_json(t_seed()),
+    digest: t_seed_digest(),
+    digests: chain_digests_json(chain_digests_over(chain_empty_base(), t_seed()))
+  }))
+}
+
+pure func t_start() -> LedgerRecord {
+  WireRecord(SessionStart({ task: "list the files", model: "m", mode: "v2", run_id: t_run_id() }))
+}
+
+pure func t_append(m: Message, digest: string) -> LedgerRecord {
+  WireRecord(HistoryAppended({
+    run_id: t_run_id(), step: 1, message: message_json(m),
+    replaces_previous: false, digest_after: digest
+  }))
+}
+
+pure func t_delta() -> LedgerRecord {
+  WireRecord(StateDelta({
+    run_id: t_run_id(), step: 1, cumulative: t_counts(),
+    telemetry: { last_input_tokens: 120, last_output_tokens: 40, last_estimated_input_tokens: 100 },
+    ext_artifacts_digest: "sha256:ext", ext_artifacts: None
+  }))
+}
+
+pure func t_summary() -> LedgerRecord {
+  WireRecord(RunSummary({
+    model: "m", motoko_commit: "abc", finish_reason: "stop", steps_executed: 1,
+    input_tokens: 10, output_tokens: 2, cache_read_input_tokens: 0,
+    cache_creation_input_tokens: 0, total_cost_usd: 0.0, total_cost_millicents: 0,
+    duration_ms: 5, error: "", cumulative: t_counts(), world_ordinal: 4
+  }))
+}
+
+pure func journal() -> [Json] {
+  let records = [t_start(), t_seeded(), t_append(t_asst(), chain_digest_after(t_seed_digest(), t_asst())),
+                 t_delta(), t_summary()];
+  journal_lines_of_records(harness_header(default_run_identity("sess_1"), "m"), records)
+}
+
+-- The header line with its `parent_id` set to `p`. The writer emits the root's parent as
+-- `"parent_id":""` (journal.ail:1957, :1968); the change is made on the encoded text and
+-- decoded back, so nothing else in the line moves. Returns the line unchanged if the text is
+-- not found, which the script detects (the control and the changed journal would agree).
+pure func with_parent(j: Json, p: string) -> Json {
+  let t = replace(encode(j), "\"parent_id\":\"\"", concat(["\"parent_id\":\"", p, "\""]));
+  match decode(t) { Ok(k) => k, Err(_) => j }
+}
+
+pure func header_id(j: Json) -> string {
+  match journal_entry_of_json(j) { Ok(e) => e.id, Err(_) => "?" }
+}
+
+pure func header_parent(j: Json) -> string {
+  match journal_entry_of_json(j) { Ok(e) => e.parent_id, Err(_) => "?" }
+}
+
+pure func verdict(lines: [Json], leaf: string) -> string {
+  match fold_journal(lines, leaf) {
+    Ok(s) => concat(["accept|", intToStr(length(s.history))]),
+    Err(r) => refusal_id(r)
+  }
+}
+
+export func main() -> () ! {IO} {
+  let lines = journal();
+  let leaf = journal_leaf(lines);
+  match lines {
+    [] => println("no lines"),
+    h :: rest => {
+      let to_leaf = with_parent(h, leaf) :: rest;
+      let to_self = with_parent(h, header_id(h)) :: rest;
+      println(concat(["entries|", intToStr(length(lines)), "|leaf=", leaf, "|header=", header_id(h)]));
+      println(concat(["control|", verdict(lines, leaf)]));
+      println(concat(["cycle_to_leaf|", verdict(to_leaf, leaf), "|header.parent_id=",
+                      header_parent(match to_leaf { [] => h, x :: _ => x })]));
+      println(concat(["cycle_to_self|", verdict(to_self, leaf), "|header.parent_id=",
+                      header_parent(match to_self { [] => h, x :: _ => x })]))
+    }
+  }
+}

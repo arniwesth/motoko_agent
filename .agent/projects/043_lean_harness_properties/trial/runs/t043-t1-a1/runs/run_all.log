@@ -1,0 +1,136 @@
+== p11-all
+P1.1: 42524 cases (exhaustive=21952 env-order=344 bin=114 pane=114 random=20000), 14914 mismatches
+  ts-accepts-empty-HERDR_BIN_PATH: 186   e.g. HERDR_ENV="1" HERDR_BIN_PATH="" HERDR_PANE_ID="1"
+  ail-accepts-HERDR_ENV-not-1: 14728   e.g. HERDR_ENV="2" HERDR_BIN_PATH="1" HERDR_PANE_ID="1"
+  against the documented intent: TS differs on 186, AILANG differs on 14728
+  mismatch list: /home/motoko/trial-043/s/t043-t1-a1/out/runs/p11-all/mismatches.tsv
+exit=1
+== p11-env-order
+P1.1: 344 cases (env-order=344), 227 mismatches
+  ail-accepts-HERDR_ENV-not-1: 227   e.g. HERDR_ENV="2" HERDR_BIN_PATH="/usr/local/bin/herdr" HERDR_PANE_ID="w1:p7"
+  against the documented intent: TS differs on 0, AILANG differs on 227
+  mismatch list: /home/motoko/trial-043/s/t043-t1-a1/out/runs/p11-env-order/mismatches.tsv
+exit=1
+== p11-bin
+P1.1: 114 cases (bin=114), 1 mismatches
+  ts-accepts-empty-HERDR_BIN_PATH: 1   e.g. HERDR_ENV="1" HERDR_BIN_PATH="" HERDR_PANE_ID="w1:p7"
+  against the documented intent: TS differs on 1, AILANG differs on 0
+  mismatch list: /home/motoko/trial-043/s/t043-t1-a1/out/runs/p11-bin/mismatches.tsv
+exit=1
+== p11-pane
+P1.1: 114 cases (pane=114), 0 mismatches
+  against the documented intent: TS differs on 0, AILANG differs on 0
+  mismatch list: /home/motoko/trial-043/s/t043-t1-a1/out/runs/p11-pane/mismatches.tsv
+exit=0
+== p11-random-s1
+P1.1: 200000 cases (random=200000), 44158 mismatches
+  ail-accepts-HERDR_ENV-not-1: 42474   e.g. HERDR_ENV="26񍃟󇸬" HERDR_BIN_PATH="/usr/local/bin/herdr" HERDR_PANE_ID="󁕹󥧉𭘾88x"
+  ts-accepts-empty-HERDR_BIN_PATH: 1684   e.g. HERDR_ENV="1" HERDR_BIN_PATH="" HERDR_PANE_ID="M𹣮DyH󩆶"
+  against the documented intent: TS differs on 1684, AILANG differs on 42474
+  mismatch list: /home/motoko/trial-043/s/t043-t1-a1/out/runs/p11-random-s1/mismatches.tsv
+exit=1
+== p11-random-s2
+P1.1: 200000 cases (random=200000), 44454 mismatches
+  ail-accepts-HERDR_ENV-not-1: 42757   e.g. HERDR_ENV="992\u0000" HERDR_BIN_PATH="𢍬﫣ꑫ" HERDR_PANE_ID="w1:p7貁9򂚷0񠍺"
+  ts-accepts-empty-HERDR_BIN_PATH: 1697   e.g. HERDR_ENV="1" HERDR_BIN_PATH="" HERDR_PANE_ID="\"P𴰶"
+  against the documented intent: TS differs on 1697, AILANG differs on 42757
+  mismatch list: /home/motoko/trial-043/s/t043-t1-a1/out/runs/p11-random-s2/mismatches.tsv
+exit=1
+== register
+X1: 512 environments, 138 where the TUI gate and the extension's gate disagree
+  HERDR_ENV="1" HERDR_BIN_PATH=<unset> HERDR_PANE_ID=" "  TUI=inert extension=open
+  HERDR_ENV="1" HERDR_BIN_PATH=<unset> HERDR_PANE_ID="1"  TUI=inert extension=open
+  HERDR_ENV="1" HERDR_BIN_PATH=<unset> HERDR_PANE_ID="2"  TUI=inert extension=open
+  HERDR_ENV="1" HERDR_BIN_PATH=<unset> HERDR_PANE_ID="true"  TUI=inert extension=open
+  HERDR_ENV="1" HERDR_BIN_PATH=<unset> HERDR_PANE_ID="/usr/local/bin/herdr"  TUI=inert extension=open
+  HERDR_ENV="1" HERDR_BIN_PATH=<unset> HERDR_PANE_ID="w1:p7"  TUI=inert extension=open
+  HERDR_ENV="1" HERDR_BIN_PATH="" HERDR_PANE_ID=" "  TUI=reports extension=closed
+  HERDR_ENV="1" HERDR_BIN_PATH="" HERDR_PANE_ID="1"  TUI=reports extension=closed
+  HERDR_ENV="1" HERDR_BIN_PATH="" HERDR_PANE_ID="2"  TUI=reports extension=closed
+  HERDR_ENV="1" HERDR_BIN_PATH="" HERDR_PANE_ID="true"  TUI=reports extension=closed
+  HERDR_ENV="1" HERDR_BIN_PATH="" HERDR_PANE_ID="/usr/local/bin/herdr"  TUI=reports extension=closed
+  HERDR_ENV="1" HERDR_BIN_PATH="" HERDR_PANE_ID="w1:p7"  TUI=reports extension=closed
+  HERDR_ENV="2" HERDR_BIN_PATH=<unset> HERDR_PANE_ID=" "  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH=<unset> HERDR_PANE_ID="1"  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH=<unset> HERDR_PANE_ID="2"  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH=<unset> HERDR_PANE_ID="true"  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH=<unset> HERDR_PANE_ID="/usr/local/bin/herdr"  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH=<unset> HERDR_PANE_ID="w1:p7"  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH=" " HERDR_PANE_ID=" "  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH=" " HERDR_PANE_ID="1"  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH=" " HERDR_PANE_ID="2"  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH=" " HERDR_PANE_ID="true"  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH=" " HERDR_PANE_ID="/usr/local/bin/herdr"  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH=" " HERDR_PANE_ID="w1:p7"  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH="1" HERDR_PANE_ID=" "  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH="1" HERDR_PANE_ID="1"  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH="1" HERDR_PANE_ID="2"  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH="1" HERDR_PANE_ID="true"  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH="1" HERDR_PANE_ID="/usr/local/bin/herdr"  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH="1" HERDR_PANE_ID="w1:p7"  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH="2" HERDR_PANE_ID=" "  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH="2" HERDR_PANE_ID="1"  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH="2" HERDR_PANE_ID="2"  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH="2" HERDR_PANE_ID="true"  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH="2" HERDR_PANE_ID="/usr/local/bin/herdr"  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH="2" HERDR_PANE_ID="w1:p7"  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH="true" HERDR_PANE_ID=" "  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH="true" HERDR_PANE_ID="1"  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH="true" HERDR_PANE_ID="2"  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH="true" HERDR_PANE_ID="true"  TUI=inert extension=open
+  ... 98 more
+X2: 512 environments, 132 where the TUI gate and the extension's gate disagree
+  HERDR_ENV="1" HERDR_BIN_PATH=<unset> HERDR_PANE_ID="1"  child sees ["1",<unset>,"1"]  TUI=inert extension=open
+  HERDR_ENV="1" HERDR_BIN_PATH=<unset> HERDR_PANE_ID="2"  child sees ["1",<unset>,"2"]  TUI=inert extension=open
+  HERDR_ENV="1" HERDR_BIN_PATH=<unset> HERDR_PANE_ID="true"  child sees ["1",<unset>,"true"]  TUI=inert extension=open
+  HERDR_ENV="1" HERDR_BIN_PATH=<unset> HERDR_PANE_ID="/usr/local/bin/herdr"  child sees ["1",<unset>,"/usr/local/bin/herdr"]  TUI=inert extension=open
+  HERDR_ENV="1" HERDR_BIN_PATH=<unset> HERDR_PANE_ID="w1:p7"  child sees ["1",<unset>,"w1:p7"]  TUI=inert extension=open
+  HERDR_ENV="1" HERDR_BIN_PATH="" HERDR_PANE_ID=" "  child sees ["1",<unset>,<unset>]  TUI=reports extension=closed
+  HERDR_ENV="1" HERDR_BIN_PATH=" " HERDR_PANE_ID=" "  child sees ["1",<unset>,<unset>]  TUI=reports extension=closed
+  HERDR_ENV="1" HERDR_BIN_PATH="1" HERDR_PANE_ID=" "  child sees ["1","1",<unset>]  TUI=reports extension=closed
+  HERDR_ENV="1" HERDR_BIN_PATH="2" HERDR_PANE_ID=" "  child sees ["1","2",<unset>]  TUI=reports extension=closed
+  HERDR_ENV="1" HERDR_BIN_PATH="true" HERDR_PANE_ID=" "  child sees ["1","true",<unset>]  TUI=reports extension=closed
+  HERDR_ENV="1" HERDR_BIN_PATH="/usr/local/bin/herdr" HERDR_PANE_ID=" "  child sees ["1","/usr/local/bin/herdr",<unset>]  TUI=reports extension=closed
+  HERDR_ENV="1" HERDR_BIN_PATH="w1:p7" HERDR_PANE_ID=" "  child sees ["1","w1:p7",<unset>]  TUI=reports extension=closed
+  HERDR_ENV="2" HERDR_BIN_PATH=<unset> HERDR_PANE_ID="1"  child sees ["2",<unset>,"1"]  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH=<unset> HERDR_PANE_ID="2"  child sees ["2",<unset>,"2"]  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH=<unset> HERDR_PANE_ID="true"  child sees ["2",<unset>,"true"]  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH=<unset> HERDR_PANE_ID="/usr/local/bin/herdr"  child sees ["2",<unset>,"/usr/local/bin/herdr"]  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH=<unset> HERDR_PANE_ID="w1:p7"  child sees ["2",<unset>,"w1:p7"]  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH="" HERDR_PANE_ID="1"  child sees ["2",<unset>,"1"]  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH="" HERDR_PANE_ID="2"  child sees ["2",<unset>,"2"]  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH="" HERDR_PANE_ID="true"  child sees ["2",<unset>,"true"]  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH="" HERDR_PANE_ID="/usr/local/bin/herdr"  child sees ["2",<unset>,"/usr/local/bin/herdr"]  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH="" HERDR_PANE_ID="w1:p7"  child sees ["2",<unset>,"w1:p7"]  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH=" " HERDR_PANE_ID="1"  child sees ["2",<unset>,"1"]  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH=" " HERDR_PANE_ID="2"  child sees ["2",<unset>,"2"]  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH=" " HERDR_PANE_ID="true"  child sees ["2",<unset>,"true"]  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH=" " HERDR_PANE_ID="/usr/local/bin/herdr"  child sees ["2",<unset>,"/usr/local/bin/herdr"]  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH=" " HERDR_PANE_ID="w1:p7"  child sees ["2",<unset>,"w1:p7"]  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH="1" HERDR_PANE_ID="1"  child sees ["2","1","1"]  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH="1" HERDR_PANE_ID="2"  child sees ["2","1","2"]  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH="1" HERDR_PANE_ID="true"  child sees ["2","1","true"]  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH="1" HERDR_PANE_ID="/usr/local/bin/herdr"  child sees ["2","1","/usr/local/bin/herdr"]  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH="1" HERDR_PANE_ID="w1:p7"  child sees ["2","1","w1:p7"]  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH="2" HERDR_PANE_ID="1"  child sees ["2","2","1"]  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH="2" HERDR_PANE_ID="2"  child sees ["2","2","2"]  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH="2" HERDR_PANE_ID="true"  child sees ["2","2","true"]  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH="2" HERDR_PANE_ID="/usr/local/bin/herdr"  child sees ["2","2","/usr/local/bin/herdr"]  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH="2" HERDR_PANE_ID="w1:p7"  child sees ["2","2","w1:p7"]  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH="true" HERDR_PANE_ID="1"  child sees ["2","true","1"]  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH="true" HERDR_PANE_ID="2"  child sees ["2","true","2"]  TUI=inert extension=open
+  HERDR_ENV="2" HERDR_BIN_PATH="true" HERDR_PANE_ID="true"  child sees ["2","true","true"]  TUI=inert extension=open
+  ... 92 more
+exit=1
+== mutants
+unmutated              env bin x1 x2 all pane = 1 1 1 1 1 0   (expected 1 1 1 1 1 0)  ok
+fix-ail-env            env bin x1 x2 all pane = 0 1 1 1 1 0   (expected 0 1 1 1 1 0)  ok
+fix-ts-bin             env bin x1 x2 all pane = 1 0 1 1 1 0   (expected 1 0 1 1 1 0)  ok
+fix-ail-env+ts-bin     env bin x1 x2 all pane = 0 0 1 1 0 0   (expected 0 0 1 1 0 0)  ok
+fix-register-bin       env bin x1 x2 all pane = 1 1 0 1 1 0   (expected 1 1 0 1 1 0)  ok
+fix-ts-pane-blank      env bin x1 x2 all pane = 1 1 1 0 1 1   (expected 1 1 1 0 1 1)  ok
+fix-forward-verbatim   env bin x1 x2 all pane = 1 1 1 0 1 0   (expected 1 1 1 0 1 0)  ok
+break-ts-pane          env bin x1 x2 all pane = 1 1 1 1 1 1   (expected 1 1 1 1 1 1)  ok
+break-ail-pane         env bin x1 x2 all pane = 1 1 1 0 1 1   (expected 1 1 1 0 1 1)  ok
+exit=0
+run_all exit=0

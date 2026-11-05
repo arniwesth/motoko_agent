@@ -1,0 +1,78 @@
+/-
+Appended to PathUpModel.lean by run_diff.sh. The same inputs, in the same order, as
+enumerate_pathup.ail; see that file's header for the two families and the line format.
+-/
+
+def idsA : List String := ["", "a", "b", "c"]
+def parsA : List String := ["", "a", "b", "c", "z"]
+def startsA : List String := ["", "a", "b", "c", "z"]
+
+def alphaE (k seq : Nat) : Entry :=
+  { id := idsA.getD (k / 5) "?", parentId := parsA.getD (k % 5) "?", seq := seq }
+
+def entriesOf (s : List Nat) : List Entry :=
+  (s.zip (List.range s.length)).map (fun (k, p) => alphaE k p)
+
+def seqsOfLen : Nat → List (List Nat)
+  | 0 => [[]]
+  | n + 1 => (seqsOfLen n).flatMap (fun s => (List.range 20).map (fun i => s ++ [i]))
+
+def varSeen (v : Nat) : List String :=
+  if v = 1 then ["a"] else if v = 3 then ["c", "a"] else []
+
+def varAcc (v : Nat) : List Entry :=
+  if v ≥ 2 then [{ id := "q", parentId := "q", seq := 9 }] else []
+
+def joinC (xs : List String) : String := String.intercalate "," xs
+
+def showResult (r : List Entry) : String :=
+  s!"{joinC (r.map (fun e => toString e.seq))}|{r.length}"
+
+def eid (i : Nat) : String := s!"e{i}"
+
+def ring (n k : Nat) : List Entry :=
+  (List.range n).map (fun i =>
+    { id := eid i, seq := i,
+      parentId := if i = 0 then (if k = n then "" else eid k) else eid (i - 1) })
+
+def ids2 : List String := ["", "a", "b", "c", "d", "e", "f"]
+def pars2 : List String := ["", "a", "b", "c", "d", "e", "f", "z"]
+def lcg (s : Nat) : Nat := (s * 1103515245 + 12345) % 2147483648
+def pick (s m : Nat) : Nat := (s / 65536) % m
+
+/-- `gen_entries(s, i, n)`, with the count of entries still to draw as the recursion. -/
+def genEntries : Nat → Nat → Nat → Nat × List Entry
+  | s, _, 0 => (s, [])
+  | s, i, k + 1 =>
+    let s1 := lcg s
+    let s2 := lcg s1
+    let e : Entry := { id := ids2.getD (pick s1 7) "?", parentId := pars2.getD (pick s2 8) "?", seq := i }
+    let (s', es) := genEntries s2 (i + 1) k
+    (s', e :: es)
+
+def enc (e : Entry) : String := s!"{e.id}>{e.parentId}"
+
+#eval show IO Unit from do
+  for len in [0, 1, 2, 3] do
+    for s in seqsOfLen len do
+      let es := entriesOf s
+      for st in List.range 5 do
+        let nv := if s.length ≤ 2 then 4 else 1
+        for v in List.range nv do
+          let r := pathUp es (startsA.getD st "?") (varSeen v) (varAcc v)
+          IO.println s!"B|{joinC (s.map toString)}|{st}|{v}|{showResult r}"
+  for n in (List.range 9).drop 1 do
+    for k in List.range (n + 1) do
+      for j in List.range (n + 1) do
+        let r := pathUp (ring n k) (eid j) [] []
+        IO.println s!"R|{n}|{k}|{j}|{showResult r}"
+  let mut s := 42
+  for t in List.range 2000 do
+    let s1 := lcg s
+    let n := 4 + pick s1 7
+    let (gs, es) := genEntries s1 0 n
+    let s2 := lcg gs
+    let start := pars2.getD (pick s2 8) "?"
+    let r := pathUp es start [] []
+    IO.println s!"X|{t}|{String.intercalate ";" (es.map enc)}|{start}|{showResult r}"
+    s := s2

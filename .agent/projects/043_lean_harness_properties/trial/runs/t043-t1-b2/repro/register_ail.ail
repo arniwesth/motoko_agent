@@ -1,0 +1,19 @@
+-- register_ail.ail — runs the REAL `register_with_config`
+-- (packages/motoko-ext-herdr/register.ail:43), the only caller of `herdr_env_ready`, in
+-- whatever environment it is given, and prints the tools it advertises, comma-separated
+-- (`tools=` alone: the gate is shut), and the bin it configured. Run under `env -i` with HERDR_ORCHESTRATOR=off, so no
+-- dagr file is read.
+module register_ail
+
+import std/io (println)
+import std/string (join)
+import pkg/sunholo/motoko_ext_herdr/register (register_with_config)
+import pkg/sunholo/motoko_ext_herdr/herdr (herdr_tools_of, herdr_cfg_of)
+
+export func main() -> () ! {Clock, Env, FS, IO, Process} {
+  let reg = register_with_config(());
+  let tools = herdr_tools_of(reg.config);
+  let cfg = herdr_cfg_of(reg.config);
+  println("tools=${join(",", tools)}");
+  println("bin=${cfg.bin}")
+}

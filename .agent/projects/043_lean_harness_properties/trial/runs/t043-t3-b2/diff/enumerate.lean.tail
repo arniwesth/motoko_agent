@@ -1,0 +1,67 @@
+/-
+Appended to ../JournalTwinModel.lean by run_diff.sh. Enumerates every action sequence of
+length 0..MAXLEN over the nine child actions of `Child.step`, in a fixed order, and prints one
+line per sequence:
+
+  <actions>|<host verdict>|<host history>|<host dangling>#<n>|<twin verdict>|<twin history>|<twin dangling>#<n>|<valid>|<spec history>|<spec dangling>#<n>|<host-across verdict>|<history>|<dangling>#<n>
+
+The last three are the host when every `session_resumed` reaches a freshly adopted
+`SessionJournal` (a new host process after a kill -9 or a quit).
+
+The first seven fields are compared with the real halves (gen_events.ail + host.ts +
+fold_host.ail). The last three are the model's own: whether a run can emit the sequence, and
+the history/dangling rule 3 (+ rule 4) defines for it.
+-/
+
+def roleCh : Role → String
+  | .system => "s" | .user => "u" | .assistant => "a" | .tool => "t"
+
+def joinWith (sep : String) (xs : List String) : String := String.intercalate sep xs
+
+def msgStr (m : Msg) : String := s!"{roleCh m.role}:{m.content}:{joinWith "+" m.calls}:{m.callId}"
+
+def histStr (ms : List Msg) : String := joinWith ";" (ms.map msgStr)
+
+def danglingStr (ds : List String) : String := s!"{joinWith "," ds}#{ds.length}"
+
+def verdictStr : Verdict → String
+  | .ok (h, d) => s!"accept|{histStr h}|{danglingStr d}"
+  | .error r => s!"{r.id}||"
+
+def seqsOfLen : Nat → List (List Nat)
+  | 0 => [[]]
+  | n + 1 => (seqsOfLen n).flatMap (fun s => (List.range 9).map (fun i => s ++ [i]))
+
+def allSeqs : List (List Nat) := (List.range 5).flatMap seqsOfLen
+
+#eval show IO Unit from do
+  for s in allSeqs do
+    let evs := eventsOf s
+    let sp := specOf s
+    IO.println s!"{joinWith "," (s.map toString)}|{verdictStr (foldJournal (hostJournal evs))}|{verdictStr (foldJournal (twinJournal evs))}|{validRun s}|{histStr sp.1}|{danglingStr sp.2}|{verdictStr (foldJournal (hostJournalAcross evs))}"
+
+-- BOUNDED CHECK OF THE FIXES (a computation, not a proof): over the sequences a run can emit,
+-- how many still violate P3.1 (fixed host vs fixed twin, one process and across processes)
+-- or P3.2 (fixed twin vs spec). Printed with a `#` so run_diff.sh keeps it out of lean.out.
+#eval show IO Unit from do
+  let mut n := 0
+  let mut p31 := 0
+  let mut p31a := 0
+  let mut p32 := 0
+  let mut ex : List String := []
+  for s in allSeqs do
+    if validRun s then
+      n := n + 1
+      let evs := eventsOf s
+      let t := verdictStr (foldJournal (twinJournalFixed evs))
+      let sp := specOf s
+      if verdictStr (foldJournal (hostJournalFixed evs)) != t then
+        p31 := p31 + 1
+        if ex.length < 6 then ex := ex ++ [s!"p31:{joinWith "," (s.map toString)}"]
+      if verdictStr (foldJournal (hostJournalAcrossFixed evs)) != t then
+        p31a := p31a + 1
+        if ex.length < 6 then ex := ex ++ [s!"p31a:{joinWith "," (s.map toString)}"]
+      if t != s!"accept|{histStr sp.1}|{danglingStr sp.2}" then
+        p32 := p32 + 1
+        if ex.length < 12 then ex := ex ++ [s!"p32:{joinWith "," (s.map toString)}"]
+  IO.println s!"# fixed model, {n} valid sequences: P3.1 {p31} disagree, P3.1 across {p31a}, P3.2 {p32}; e.g. {ex}"

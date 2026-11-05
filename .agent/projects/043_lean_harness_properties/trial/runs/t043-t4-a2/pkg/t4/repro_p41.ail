@@ -1,0 +1,25 @@
+-- repro_p41.ail — P4.1 on the smallest witness. Exit 1 iff the split law fails.
+--   b = chain_empty_base(), xs = [user "a"], ys = [user "b"]
+--   chain_digests_over(b, xs ++ ys) =?= chain_digests_over(b, xs) ++ chain_digests_over(chain_digest_over(b, xs), ys)
+--
+--   ailang run --relax-modules --caps IO --chdir ../out/pkg --entry main t4/repro_p41.ail
+module repro_p41
+
+import std/io (println, exit)
+import std/ai (Message)
+import std/string as Str (join)
+import src/core/journal (chain_digest_over, chain_digests_over, chain_empty_base)
+
+pure func u(c: string) -> Message { { role: "user", content: c, tool_calls: [], tool_call_id: "", images: [] } }
+
+export func main() -> () ! {IO} {
+  let b = chain_empty_base();
+  let xs = [u("a")];
+  let ys = [u("b")];
+  let lhs = chain_digests_over(b, xs ++ ys);
+  let rhs = chain_digests_over(b, xs) ++ chain_digests_over(chain_digest_over(b, xs), ys);
+  println("lhs = [${join(", ", lhs)}]");
+  println("rhs = [${join(", ", rhs)}]");
+  if join("|", lhs) == join("|", rhs) then println("P4.1 holds on this witness")
+  else { println("P4.1 VIOLATED"); exit(1) }
+}

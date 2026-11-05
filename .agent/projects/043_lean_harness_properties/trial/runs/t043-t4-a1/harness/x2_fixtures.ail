@@ -1,0 +1,33 @@
+-- x2_fixtures.ail -- X-2b. The REAL chain functions against the `raw` (R) digests that the
+-- evaluator's fixtures pin (src/eval/journal/testdata/digest_fixtures.ail, written by the
+-- independent Python generator gen_fixtures.py). R is "the append chain from the empty
+-- history's digest", i.e. chain_digest_over(chain_empty_base(), msgs).
+-- For each fixture: chain_digest_over(empty, msgs) == raw, and for a non-empty one
+-- last(chain_digests_over(empty, msgs)) == raw. Exits 1 on any disagreement.
+--   ailang run --relax-modules --caps IO --entry main x2_fixtures.ail
+module x2_fixtures
+
+import std/io (println, exit)
+import std/list as List (length, last_or, filter, map, forEachE)
+import std/string as Str (intToStr)
+import src/core/journal (chain_digest_over, chain_digests_over, chain_empty_base)
+import src/eval/journal/testdata/digest_fixtures (MessageFixture, fx_message_fixtures)
+
+pure func check(f: MessageFixture) -> (string, bool) {
+  let e = chain_empty_base();
+  let over = chain_digest_over(e, f.msgs);
+  let ds = chain_digests_over(e, f.msgs);
+  let ok_over = over == f.raw;
+  let ok_last = List.length(f.msgs) == 0 || last_or(ds, "") == f.raw;
+  let ok_len = List.length(ds) == List.length(f.msgs);
+  ("${f.name} n=${intToStr(List.length(f.msgs))} over==raw:${show(ok_over)} last(digests)==raw:${show(ok_last)} len:${show(ok_len)}",
+   ok_over && ok_last && ok_len)
+}
+
+export func main() -> () ! {IO} {
+  let rs = List.map(check, fx_message_fixtures());
+  forEachE(\r. match r { (l, _) => println(l) }, rs);
+  let bad = List.length(List.filter(\r. match r { (_, ok) => !ok }, rs));
+  println("fixtures=${intToStr(List.length(rs))} disagree=${intToStr(bad)}");
+  if bad > 0 then exit(1) else ()
+}

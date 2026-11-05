@@ -1,0 +1,20 @@
+-- harness_path_up.ail is ASSEMBLED by build_harness.sh; this is its head.
+--
+-- The REAL `contains_string`, `find_entry` and `path_up` are not exported by
+-- src/core/journal.ail, so `ailang run --entry` cannot reach them and no module can import
+-- them. build_harness.sh therefore copies their text VERBATIM out of
+-- src/core/journal.ail at run time (by `pure func <name>(` up to the next `}` in column 0),
+-- prints the sha256 of each copied body, and appends it below this head, then appends
+-- harness_driver.ail. `JournalEntry` itself is imported from the real module, so the
+-- copied functions run on the real record type. Nothing in src/ is modified.
+
+module harness_path_up
+
+import std/io (println)
+import std/fs (readFile)
+import std/string (split, join, intToStr)
+import std/list as List (length, map, foldl)
+import std/option (Option, Some, None)
+import std/json (Json, js)
+import src/core/journal (JournalEntry)
+

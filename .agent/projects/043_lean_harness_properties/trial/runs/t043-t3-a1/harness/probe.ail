@@ -1,0 +1,15 @@
+module probe
+
+import std/io (println)
+import std/fs (readFile)
+import std/env (getEnv)
+import std/json (Json, encode)
+import src/core/phase_vocab (LedgerEvent, SessionStart, to_schema_v1)
+import src/core/journal (chain_empty_base)
+
+export func main() -> () ! {IO, FS, Env} {
+  let p = getEnv("PROBE_FILE");
+  println("env=${p}");
+  println(encode(to_schema_v1(SessionStart({ task: "t", model: "m", mode: "v2", run_id: "r" }))));
+  println(chain_empty_base())
+}

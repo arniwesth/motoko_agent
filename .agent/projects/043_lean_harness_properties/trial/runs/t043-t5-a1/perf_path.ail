@@ -1,0 +1,107 @@
+-- perf_path.ail — how the cost of the REAL `path_up` (gen/journal_t5.ail, the export-only copy
+-- of src/core/journal.ail) and of the unmodified `fold_journal` grows with the path length.
+--
+-- Input: the host writer's shape, a linear chain "0000" <- "0001" <- ... <- leaf, header first,
+-- in file order, walked from the leaf (what `fold_journal(lines, journal_leaf(lines))` does).
+-- Each step of the walk calls `find_entry`, a linear scan from the head of the list, and
+-- `contains_string` over `seen`, so a path of n entries costs about n*n/2 + n*n/2 comparisons.
+--
+--   main          the repro: times path_up at n = 400 and n = 1600 in-process (std/clock) and
+--                 prints DEFECT PRESENT and exits 1 when the 4x longer path costs more than 8x
+--                 the time (linear would be ~4x; quadratic ~16x), else DEFECT ABSENT
+--   walk(n)       time path_up alone at n
+--   fold(n)       time the unmodified fold_journal on a writer-built journal of n messages
+--
+--   cd out && ailang run --relax-modules --caps IO,Clock --entry main perf_path.ail
+
+module perf_path
+
+import std/io (println, exit)
+import std/clock (now)
+import std/ai (Message)
+import std/json (Json, jo)
+import std/string as Str (intToStr)
+import std/list as List (length, map, range)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import gen/journal_t5 (path_up, JournalEntry)
+import src/core/phase_vocab (
+  RuntimeStatusCounts, LedgerRecord, WireRecord, HistorySeeded, HistoryAppended, SessionStart
+)
+import src/core/journal (
+  fold_journal, refusal_id, journal_lines_of_records, journal_leaf, harness_header, default_run_identity,
+  chain_digest_after, chain_digest_over, chain_digests_over, chain_digests_json, chain_empty_base,
+  messages_json, message_json
+)
+
+pure func pad4(i: int) -> string {
+  let s = intToStr(i);
+  if i < 10 then "000${s}" else if i < 100 then "00${s}" else if i < 1000 then "0${s}" else s
+}
+
+pure func ent(i: int) -> JournalEntry {
+  { id: pad4(i), parent_id: if i == 0 then "" else pad4(i - 1), seq: i, at_ms: 0,
+    kind: if i == 0 then "header" else "x", raw: jo([]) }
+}
+
+func time_walk(n: int) -> int ! {IO, Clock} {
+  let es = List.map(ent, List.range(0, n));
+  let t0 = now(());
+  let r = path_up(es, pad4(n - 1), [], []);
+  let len = List.length(r);
+  let t1 = now(());
+  println("path_up    n=${show(n)}  path length ${show(len)}  ${show(t1 - t0)} ms");
+  t1 - t0
+}
+
+export func walk(n: int) -> () ! {IO, Clock} { let _ = time_walk(n); () }
+
+export func main() -> () ! {IO, Clock} {
+  let a = time_walk(400);
+  let b = time_walk(1600);
+  let ratio10 = if a <= 0 then 1000 else (b * 10) / a;
+  println("ratio t(1600)/t(400) = ${show(ratio10 / 10)}.${show(ratio10 % 10)}  (linear ~4, quadratic ~16; defect threshold 8)");
+  println(if ratio10 > 80 then "DEFECT PRESENT" else "DEFECT ABSENT");
+  if ratio10 > 80 then exit(1) else ()
+}
+
+-- The fold over a writer-built journal (enumerate_fold.ail's fixtures, trimmed).
+
+pure func t_sys() -> Message { { role: "system", content: "you are motoko", tool_calls: [], tool_call_id: "", images: [] } }
+pure func t_user() -> Message { { role: "user", content: "list the files", tool_calls: [], tool_call_id: "", images: [] } }
+pure func t_seed() -> [Message] { [t_sys(), t_user()] }
+pure func t_run_id() -> string { "sess_1.r0.0" }
+
+pure func msg(i: int) -> Message {
+  { role: if i % 2 == 0 then "assistant" else "user", content: "m ${show(i)}", tool_calls: [], tool_call_id: "", images: [] }
+}
+
+pure func appends(i: int, k: int, prev: string) -> [LedgerRecord] {
+  if i >= k then []
+  else {
+    let m = msg(i);
+    let d = chain_digest_after(prev, m);
+    WireRecord(HistoryAppended({ run_id: t_run_id(), step: 1, message: message_json(m), replaces_previous: false, digest_after: d }))
+      :: appends(i + 1, k, d)
+  }
+}
+
+export func fold(n: int) -> () ! {IO, Clock} {
+  let seeded = WireRecord(HistorySeeded({
+    run_id: t_run_id(), messages: messages_json(t_seed()),
+    digest: chain_digest_over(chain_empty_base(), t_seed()),
+    digests: chain_digests_json(chain_digests_over(chain_empty_base(), t_seed()))
+  }));
+  let start = WireRecord(SessionStart({ task: "list the files", model: "m", mode: "v2", run_id: t_run_id() }));
+  let records = [start, seeded] ++ appends(0, n, chain_digest_over(chain_empty_base(), t_seed()));
+  let lines = journal_lines_of_records(harness_header(default_run_identity("sess_1"), "m"), records);
+  let leaf = journal_leaf(lines);
+  let t0 = now(());
+  let v = match fold_journal(lines, leaf) {
+    Ok(s) => "accept, history ${show(List.length(s.history))}",
+    Err(r) => "refuse ${refusal_id(r)}"
+  };
+  let t1 = now(());
+  println("fold_journal  ${show(List.length(lines))} lines  ${v}  ${show(t1 - t0)} ms");
+  ()
+}

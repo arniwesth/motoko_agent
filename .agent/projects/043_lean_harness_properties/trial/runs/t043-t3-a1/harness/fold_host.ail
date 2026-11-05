@@ -1,0 +1,74 @@
+-- fold_host.ail — stage 3 of the T3 harness: the REAL `fold_journal` over the journal
+-- the REAL TypeScript host wrote (stage 2), at the host's own leaf. Reads the file
+-- named by T3_HOST; for every `H` line prints
+--
+--   F <id> <verdict> <dangling> <#dangling> <history> <rest of state>
+--
+-- in the same format as stage 1's twin columns, so the two compare as strings.
+module fold_host
+
+import std/io (println)
+import std/env (getEnv)
+import std/fs (readFile)
+import std/json (Json, encode, decode, asArray)
+import std/string as Str (join, concat, intToStr, split, startsWith)
+import std/list as List (length)
+import std/result (Result, Ok, Err)
+import std/option (Option, Some, None)
+import src/core/journal (
+  fold_journal, refusal_id, messages_json, SessionState, Boundary, BoundaryRunFinished,
+  BoundarySuspended, BoundaryExit, BoundaryOpen, BoundaryParked
+)
+
+-- The same projection as gen_twin.ail's, for the exploratory X-1.
+pure func show_last(b: Boundary) -> string {
+  match b {
+    BoundaryRunFinished(r, o) => "run_finished(${r},${show(o)})",
+    BoundarySuspended(r, st) => "suspended(${r},${show(st)})",
+    BoundaryExit(x) => "exit(${x})",
+    BoundaryOpen(k) => "open(${k})",
+    BoundaryParked(_, _) => "parked"
+  }
+}
+
+pure func rest_of(s: SessionState) -> string {
+  "last=${show_last(s.last)};ord=${show(s.world_ordinal)};model=${s.model};profile=${s.profile}"
+}
+
+pure func nth(xs: [string], i: int) -> string {
+  match xs { [] => "", x :: rest => if i == 0 then x else nth(rest, i - 1) }
+}
+
+pure func fold_line(l: string) -> string {
+  let cols = split(l, "\t");
+  let id = nth(cols, 1);
+  let leaf = nth(cols, 2);
+  let verdict = match decode(nth(cols, 3)) {
+    Err(_) => "json\t\t0\t\t",
+    Ok(j) => match asArray(j) {
+      None => "json\t\t0\t\t",
+      Some(lines) => match fold_journal(lines, leaf) {
+        Ok(s) => concat(["accept\t", join(",", s.dangling), "\t", intToStr(List.length(s.dangling)), "\t", encode(messages_json(s.history)), "\t", rest_of(s)]),
+        Err(r) => concat([refusal_id(r), "\t\t0\t\t"])
+      }
+    }
+  };
+  concat(["F\t", id, "\t", verdict])
+}
+
+func each(ls: [string]) -> () ! {IO} {
+  match ls {
+    [] => (),
+    l :: rest => {
+      if startsWith(l, "H\t") then println(fold_line(l)) else ();
+      each(rest)
+    }
+  }
+}
+
+export func main() -> () ! {IO, FS, Env} {
+  match getEnv("T3_HOST") {
+    Err(_) => println("T3_HOST not set"),
+    Ok(p) => each(split(readFile(p), "\n"))
+  }
+}

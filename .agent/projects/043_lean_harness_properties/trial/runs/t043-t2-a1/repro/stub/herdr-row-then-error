@@ -1,0 +1,12 @@
+#!/bin/sh
+# A stand-in `herdr` for the wake waiter's claude/codex path:
+#   agent get <target>        -> the row exists: herdr's agent_info on stdout, exit 0
+#                                (the ROW fixture of src/tui/src/wake-waiter.test.ts)
+#   agent wait <target> ...   -> herdr's JSON error on stderr, exit 1, with
+#                                error.code = $HERDR_STUB_CODE (default pane_not_found)
+if [ "$2" = "get" ]; then
+  printf '%s\n' '{"id":"cli:agent:get","result":{"agent":{"agent_status":"working","pane_id":"w1:p1"},"type":"agent_info"}}'
+  exit 0
+fi
+printf '{"error":{"code":"%s","message":"x"},"id":"cli:agent:wait"}\n' "${HERDR_STUB_CODE:-pane_not_found}" >&2
+exit 1

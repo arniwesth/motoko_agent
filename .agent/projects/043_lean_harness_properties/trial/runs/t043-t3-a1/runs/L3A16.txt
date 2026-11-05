@@ -1,0 +1,174 @@
+cases: 4369
+  host=accept twin=accept                  1995
+  host=accept twin=digest                  13
+  host=accept twin=head-prefix             411
+  host=accept twin=pairing                 123
+  host=digest twin=accept                  6
+  host=digest twin=digest                  169
+  host=digest twin=pairing                 2
+  host=pairing twin=digest                 4
+  host=pairing twin=head-prefix            5
+  host=pairing twin=pairing                1641
+P3.1 accept/accept dangling differs [emittable,session]: 1
+    378 A0,R1,RS host=[a](1) twin=[](0)
+P3.1 accept/accept dangling differs [outside-grammar,session]: 16
+    122 R1,RS host=[a](1) twin=[](0)
+    1146 TA,R1,RS host=[a](1) twin=[](0)
+    1402 TB,R1,RS host=[a](1) twin=[](0)
+    1658 U,R1,RS host=[a](1) twin=[](0)
+    1914 R1,R1,RS host=[a](1) twin=[](0)
+    1962 R1,RS,RS host=[a](1) twin=[](0)
+    1964 R1,RS,SU host=[a](1) twin=[](0)
+    1966 R1,RS,SB host=[a](1) twin=[](0)
+P3.1 accept/accept history differs [outside-grammar,session]: 14
+    2560 FU,KN,KL host=[](0) twin=[](0)
+    2576 FU,KL,KL host=[](0) twin=[](0)
+    2816 RS,KN,KL host=[](0) twin=[](0)
+    2832 RS,KL,KL host=[](0) twin=[](0)
+    3072 PS,KN,KL host=[](0) twin=[](0)
+    3088 PS,KL,KL host=[](0) twin=[](0)
+    3840 SB,KN,KL host=[](0) twin=[](0)
+    3856 SB,KL,KL host=[](0) twin=[](0)
+P3.1 accept/accept history differs [outside-grammar]: 50
+    256 KN,KL host=[](0) twin=[](0)
+    272 KL,KL host=[](0) twin=[](0)
+    512 A0,KN,KL host=[](0) twin=[](0)
+    528 A0,KL,KL host=[](0) twin=[](0)
+    768 A1,KN,KL host=[](0) twin=[a](1)
+    784 A1,KL,KL host=[](0) twin=[a](1)
+    1024 A2,KN,KL host=[](0) twin=[a,b](2)
+    1040 A2,KL,KL host=[](0) twin=[a,b](2)
+P3.1 verdict host=accept twin=digest [emittable,session]: 5
+    2209 CP,RS,A0
+    2210 CP,RS,A1
+    2211 CP,RS,A2
+    2214 CP,RS,U
+    2217 CP,RS,FU
+P3.1 verdict host=accept twin=digest [outside-grammar,session]: 8
+    1959 R1,RS,R1
+    2221 CP,RS,H1
+    4257 KL,RS,A0
+    4258 KL,RS,A1
+    4259 KL,RS,A2
+    4262 KL,RS,U
+    4265 KL,RS,FU
+    4269 KL,RS,H1
+P3.1 verdict host=accept twin=head-prefix [outside-grammar,session]: 216
+    159 FU,KN
+    175 RS,KN
+    191 PS,KN
+    239 SB,KN
+    250 KN,RS[resume refused]
+    251 KN,PS[resume refused]
+    254 KN,SB
+    415 A0,FU,KN
+P3.1 verdict host=accept twin=head-prefix [outside-grammar]: 195
+    15 KN
+    31 A0,KN
+    47 A1,KN
+    63 A2,KN
+    111 U,KN
+    127 R1,KN
+    143 CP,KN
+    207 SU,KN
+P3.1 verdict host=accept twin=pairing [outside-grammar,session]: 26
+    671 A1,FU,KN
+    927 A2,FU,KN
+    1183 TA,FU,KN
+    1199 TA,RS,KN[resume refused]
+    1215 TA,PS,KN[resume refused]
+    1263 TA,SB,KN
+    1274 TA,KN,RS[resume refused]
+    1275 TA,KN,PS[resume refused]
+P3.1 verdict host=accept twin=pairing [outside-grammar]: 97
+    79 TA,KN
+    95 TB,KN
+    335 A0,TA,KN
+    351 A0,TB,KN
+    543 A1,A0,KN
+    559 A1,A1,KN
+    575 A1,A2,KN
+    607 A1,TB,KN
+P3.1 verdict host=digest twin=accept [outside-grammar,session]: 6
+    1953 R1,RS,A0
+    1954 R1,RS,A1
+    1955 R1,RS,A2
+    1958 R1,RS,U
+    1961 R1,RS,FU
+    1965 R1,RS,H1
+P3.1 verdict host=digest twin=pairing [outside-grammar,session]: 2
+    1956 R1,RS,TA
+    1957 R1,RS,TB
+P3.1 verdict host=pairing twin=digest [outside-grammar,session]: 4
+    2212 CP,RS,TA
+    2213 CP,RS,TB
+    4260 KL,RS,TA
+    4261 KL,RS,TB
+P3.1 verdict host=pairing twin=head-prefix [outside-grammar]: 5
+    756 A1,KN,TA
+    1012 A2,KN,TA
+    1013 A2,KN,TB
+    2036 R1,KN,TA
+    3572 H1,KN,TA
+P3.2 twin refuses (digest) [emittable,session]: 28
+    137 CP,FU
+    393 A0,CP,FU
+    1673 U,CP,FU
+    2073 CP,A0,FU
+    2153 CP,U,FU
+    2185 CP,CP,FU
+    2193 CP,FU,A0
+    2194 CP,FU,A1
+X-1 rest of SessionState differs [emittable,session]: 44
+    14 SB host{last=open(state_delta);ord=0;model=m;profile=} twin{last=open(run_started);ord=0;model=m;profile=}
+    30 A0,SB host{last=open(history_appended);ord=0;model=m;profile=} twin{last=open(run_started);ord=0;model=m;profile=}
+    110 U,SB host{last=open(history_appended);ord=0;model=m;profile=} twin{last=open(run_started);ord=0;model=m;profile=}
+    142 CP,SB host{last=open(state_delta);ord=0;model=m;profile=} twin{last=open(run_started);ord=0;model=m;profile=}
+    206 SU,SB host{last=suspended(sess_1.r0.0,0);ord=0;model=m;profile=} twin{last=open(run_started);ord=0;model=m;profile=}
+    238 SB,SB host{last=open(state_delta);ord=0;model=m;profile=} twin{last=open(run_started);ord=0;model=m;profile=}
+    286 A0,A0,SB host{last=open(history_appended);ord=0;model=m;profile=} twin{last=open(run_started);ord=0;model=m;profile=}
+    366 A0,U,SB host{last=open(history_appended);ord=0;model=m;profile=} twin{last=open(run_started);ord=0;model=m;profile=}
+X-1 rest of SessionState differs [outside-grammar,session]: 82
+    46 A1,SB host{last=open(history_appended);ord=0;model=m;profile=} twin{last=open(run_started);ord=0;model=m;profile=}
+    62 A2,SB host{last=open(history_appended);ord=0;model=m;profile=} twin{last=open(run_started);ord=0;model=m;profile=}
+    126 R1,SB host{last=open(history_appended);ord=0;model=m;profile=} twin{last=open(run_started);ord=0;model=m;profile=}
+    222 H1,SB host{last=open(history_appended);ord=0;model=m;profile=} twin{last=open(run_started);ord=0;model=m;profile=}
+    270 KL,SB host{last=open(state_delta);ord=0;model=m;profile=} twin{last=open(run_started);ord=0;model=m;profile=}
+    302 A0,A1,SB host{last=open(history_appended);ord=0;model=m;profile=} twin{last=open(run_started);ord=0;model=m;profile=}
+    318 A0,A2,SB host{last=open(history_appended);ord=0;model=m;profile=} twin{last=open(run_started);ord=0;model=m;profile=}
+    382 A0,R1,SB host{last=open(history_appended);ord=0;model=m;profile=} twin{last=open(run_started);ord=0;model=m;profile=}
+X-3 host pendingToolCalls != fold dangling [emittable,session]: 5
+    378 A0,R1,RS pending=[] dangling=[a](1)
+    2327 FU,A0,R1 pending=[] dangling=[a](1)
+    2583 RS,A0,R1 pending=[] dangling=[a](1)
+    2839 PS,A0,R1 pending=[] dangling=[a](1)
+    3607 SB,A0,R1 pending=[] dangling=[a](1)
+X-3 host pendingToolCalls != fold dangling [emittable]: 5
+    23 A0,R1 pending=[] dangling=[a](1)
+    279 A0,A0,R1 pending=[] dangling=[a](1)
+    1559 U,A0,R1 pending=[] dangling=[a](1)
+    2071 CP,A0,R1 pending=[] dangling=[a](1)
+    3095 SU,A0,R1 pending=[] dangling=[a](1)
+X-3 host pendingToolCalls != fold dangling [outside-grammar,session]: 229
+    122 R1,RS pending=[] dangling=[a](1)
+    126 R1,SB pending=[] dangling=[a](1)
+    151 FU,R1 pending=[] dangling=[a](1)
+    157 FU,H1 pending=["a"] dangling=[a,](2)
+    167 RS,R1 pending=[] dangling=[a](1)
+    173 RS,H1 pending=["a"] dangling=[a,](2)
+    189 PS,H1 pending=["a"] dangling=[a,](2)
+    222 H1,SB pending=["a"] dangling=[a,](2)
+X-3 host pendingToolCalls != fold dangling [outside-grammar]: 235
+    7 R1 pending=[] dangling=[a](1)
+    13 H1 pending=["a"] dangling=[a,](2)
+    29 A0,H1 pending=["a"] dangling=[a,](2)
+    48 A1,KL pending=[] dangling=[a](1)
+    55 A2,R1 pending=["a","b"] dangling=[a](1)
+    64 A2,KL pending=[] dangling=[a,b](2)
+    71 TA,R1 pending=[] dangling=[a](1)
+    87 TB,R1 pending=[] dangling=[a](1)
+P3.1: 4369 cases compared, 645 violations
+P3.2: 862 run-emittable cases, 28 violations
+X-3: 474 cases where the host's pendingToolCalls differ from the fold's dangling on the host journal
+X-1: 126 cases where both accept with equal history/dangling but the rest of the state differs
+exit=1

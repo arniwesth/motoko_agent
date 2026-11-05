@@ -1,0 +1,58 @@
+-- unicode_probe.ail — X-3 probe: message text that crosses the wire (AILANG encode -> the host's
+-- JSON.parse/JSON.stringify -> the fold's decode) against the twin's in-process path.
+-- Each case: seed [system, user(text)], then one appended assistant(text). Prints W lines for
+-- the REAL host and `T\t<case>\t<verdict with every message's content as base64 bytes>`.
+module unicode_probe
+
+import std/io (println)
+import std/ai (Message)
+import std/json (Json, encode)
+import std/bytes as B (fromString, toString, fromBase64, toBase64)
+import std/string as Str (join, concat, intToStr)
+import std/list as List (length, map)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import src/core/phase_vocab (LedgerRecord, LedgerEvent, WireRecord, HistorySeeded, HistoryAppended, SessionStart, to_schema_v1)
+import src/core/journal (SessionState, Refusal, refusal_id, fold_journal, journal_lines_of_records, journal_leaf,
+  harness_header, default_run_identity, chain_digest_after, chain_digest_over, chain_digests_over, chain_digests_json,
+  chain_empty_base, messages_json, message_json)
+
+pure func msg(role: string, content: string) -> Message {
+  { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
+}
+pure func b64(s: string) -> string { match fromBase64(s) { Some(b) => toString(b), None => "?" } }
+pure func content_b64(m: Message) -> string { toBase64(fromString(m.content)) }
+pure func render(r: Result[SessionState, Refusal]) -> string {
+  match r { Ok(s) => concat(["A;", join(",", List.map(content_b64, s.history))]), Err(e) => concat(["R;", refusal_id(e)]) }
+}
+pure func wrap(e: LedgerEvent) -> LedgerRecord { WireRecord(e) }
+
+func one(name: string, text: string) -> () ! {IO} {
+  let rid = "sess_1.r0.0";
+  let seed = [msg("system", "s"), msg("user", text)];
+  let d = chain_digest_over(chain_empty_base(), seed);
+  let a = msg("assistant", text);
+  let evs = [SessionStart({ task: "t", model: "m", mode: "v2", run_id: rid }),
+             HistorySeeded({ run_id: rid, messages: messages_json(seed), digest: d,
+                             digests: chain_digests_json(chain_digests_over(chain_empty_base(), seed)) }),
+             HistoryAppended({ run_id: rid, step: 1, message: message_json(a), replaces_previous: false,
+                               digest_after: chain_digest_after(d, a) })];
+  let lines = journal_lines_of_records(harness_header(default_run_identity("sess_1"), "m"), List.map(wrap, evs));
+  print_events(name, evs);
+  println(concat(["T\t", name, "\t", render(fold_journal(lines, journal_leaf(lines)))]))
+}
+
+func print_events(name: string, evs: [LedgerEvent]) -> () ! {IO} {
+  match evs { [] => (), e :: rest => { println(concat(["W\t", name, "\t", encode(to_schema_v1(e))])); print_events(name, rest) } }
+}
+
+export func main() -> () ! {IO} {
+  one("ascii", "hello");
+  one("html", "<a href='x'>&amp;</a>");
+  one("emoji", b64("8J+YgA=="));            -- U+1F600
+  one("lsep", b64("4oCo"));                 -- U+2028
+  one("nul_ctrl", b64("AAEfIH8="));         -- 00 01 1F 20 7F
+  one("bad_utf8", b64("YWL/YmM="));         -- 'a' 'b' 0xFF 'b' 'c'  (invalid UTF-8)
+  one("cesu_surrogate", b64("7aCA"));       -- ED A0 80 (an encoded lone surrogate, invalid UTF-8)
+  one("bom", b64("77u/eA=="))               -- U+FEFF 'x'
+}

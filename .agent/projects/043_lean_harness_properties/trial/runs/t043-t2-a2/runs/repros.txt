@@ -1,0 +1,51 @@
+witness: {"exit": 1, "stderr": "{\"error\":{\"code\":\"pane_not_found\",\"message\":\"x\"}}"}
+TS : herdrFailureCode="pane_not_found" herdrMeansAgentGone=1
+AIL: failure_shape=herdr_json failure_code="pane_not_found" means_agent_gone=0
+P2.1 FAILS
+witness: {"exit": -1, "stderr": "{\"error\":{\"code\":\"agent_not_found\",\"message\":\"x\"}}"}
+TS : herdrFailureCode="" herdrMeansAgentGone=0
+AIL: failure_shape=herdr_json failure_code="agent_not_found" means_agent_gone=1
+P2.1 FAILS
+witness: {"exit": 1, "stderr": "{\"id\":\"cli:agent:get\",\"error\":{\"code\":\"agent_not_found\",\"message\":\"x\"}}"}
+TS : herdrFailureCode="agent_not_found" herdrMeansAgentGone=1
+AIL: failure_shape=plain_text failure_code="herdr_cli_rejected" means_agent_gone=0
+P2.1 FAILS
+witness: {"exit": 1, "stderr": "{\"error\":{\"code\":\"agent_not_found\",\"message\":\"x\"}}\nhint: see herdr --help"}
+TS : herdrFailureCode="herdr_cli_rejected" herdrMeansAgentGone=0
+AIL: failure_shape=herdr_json failure_code="agent_not_found" means_agent_gone=1
+P2.1 FAILS
+witness: {"exit": 1, "stderr": "{\"error\":{\"code\":\"agent_not_found\",\"message\":\"nested herdr is disabled\"}}"}
+TS : herdrFailureCode="agent_not_found" herdrMeansAgentGone=1
+AIL: failure_shape=nested_herdr failure_code="nested_herdr" means_agent_gone=0
+P2.1 FAILS
+witness: {"exit": 1, "stderr": "\ufeff{\"error\":{\"code\":\"agent_not_found\",\"message\":\"x\"}}"}
+TS : herdrFailureCode="agent_not_found" herdrMeansAgentGone=1
+AIL: failure_shape=herdr_json failure_code="herdr_json_undecodable" means_agent_gone=0
+P2.1 FAILS
+witness: {"exit": 1, "stderr": "{\"error\":{\"code\":\"timeout\",\"code\":\"agent_not_found\"}}"}
+TS : herdrFailureCode="agent_not_found" herdrMeansAgentGone=1
+AIL: failure_shape=herdr_json failure_code="timeout" means_agent_gone=0
+P2.1 FAILS
+witness: {"exit": 1, "stderr": "{\"error\":{\"code\":\"agent_not_found\",\"message\":\"x\",\"n\":1e400}}"}
+TS : herdrFailureCode="agent_not_found" herdrMeansAgentGone=1
+AIL: failure_shape=herdr_json failure_code="herdr_json_undecodable" means_agent_gone=0
+P2.1 FAILS
+ok   motoko agent_not_found      -> lost (contract: lost)
+BAD  motoko pane_not_found       -> lost (contract: host_error): herdr reports agent_not_found for w1:p1 and no answer file was written to /nonexistent/answer.md
+BAD  motoko workspace_not_found  -> lost (contract: host_error): herdr reports agent_not_found for w1:p1 and no answer file was written to /nonexistent/answer.md
+BAD  motoko session_not_found    -> lost (contract: host_error): herdr reports agent_not_found for w1:p1 and no answer file was written to /nonexistent/answer.md
+ok   motoko server_not_running   -> host_error (contract: host_error)
+ok   claude agent_not_found      -> lost (contract: lost)
+BAD  claude pane_not_found       -> lost (contract: host_error): herdr reports agent_not_found for w1:p1 and no answer file was written to /nonexistent/answer.md
+BAD  claude workspace_not_found  -> lost (contract: host_error): herdr reports agent_not_found for w1:p1 and no answer file was written to /nonexistent/answer.md
+BAD  claude session_not_found    -> lost (contract: host_error): herdr reports agent_not_found for w1:p1 and no answer file was written to /nonexistent/answer.md
+ok   claude server_not_running   -> host_error (contract: host_error)
+witness: {"exit": 1, "stderr": "{\"id\":\"cli:agent:wait\",\"error\":{\"code\":\"timeout\",\"message\":\"x\"}}"}
+TS : herdrFailureCode="timeout" herdrMeansAgentGone=0
+AIL: failure_shape=plain_text failure_code="herdr_cli_rejected" means_agent_gone=0
+P2.2 FAILS
+killed, no output: runner -> {"code":-1,"stdout":"","stderr":"killed by SIGTERM"}; herdrFailureCode="" herdrMeansAgentGone=false
+  DEFECT: a failed call (exit -1) is given the success code ""
+agent_not_found printed, then killed: runner -> {"code":-1,"stdout":"","stderr":"{\"error\":{\"code\":\"agent_not_found\",\"message\":\"x\"}}\nkilled by SIGTERM"}; herdrFailureCode="" herdrMeansAgentGone=false
+  DEFECT: a failed call (exit -1) is given the success code ""
+agent_not_found printed, exit 1 (control): runner -> {"code":1,"stdout":"","stderr":"{\"error\":{\"code\":\"agent_not_found\",\"message\":\"x\"}}\n"}; herdrFailureCode="agent_not_found" herdrMeansAgentGone=true

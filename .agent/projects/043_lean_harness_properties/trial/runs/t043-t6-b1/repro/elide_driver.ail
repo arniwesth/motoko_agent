@@ -1,0 +1,43 @@
+-- elide_driver.ail — calls the REAL, UNMODIFIED exported `store_stdout_and_elide`
+-- (packages/motoko-ext-compose/store.ail), which is the only caller of the private
+-- `truncate_utf8_by_bytes`, with the conformance package's `canned_ports()` (every FS port a
+-- no-op that touches nothing) and `empty_ext_world()`.
+--
+-- Input: env T6_INPUT names a file holding the stdout's bytes as decimal CSV; env T6_CAP is
+-- `max_stdout_bytes`. Output, one field per line:
+--   truncated|<bool>   raw_path|<path>   input|<bytes>   stdout|<bytes of the returned stdout>
+module elide_driver
+
+import std/io (println)
+import std/fs (readFile)
+import std/env (getEnvOr)
+import std/option (Option, Some, None)
+import std/string as Str
+import std/bytes as B
+import pkg/sunholo/motoko_ext_compose/store (store_stdout_and_elide)
+import pkg/sunholo/motoko_ext_conformance/harness (canned_ports)
+import pkg/sunholo/motoko_ext_abi/types (empty_ext_world)
+
+func ints_of(xs: [string]) -> [int] {
+  match xs {
+    [] => [],
+    x :: rest => match Str.stringToInt(Str.trim(x)) { Some(v) => v :: ints_of(rest), None => ints_of(rest) }
+  }
+}
+
+func map_show(xs: [int]) -> [string] {
+  match xs { [] => [], x :: rest => Str.intToStr(x) :: map_show(rest) }
+}
+
+func show_bytes(s: string) -> string { Str.join(",", map_show(B.toInts(B.fromString(s)))) }
+
+export func main() -> () ! {IO, FS, Env} {
+  let cap = match Str.stringToInt(getEnvOr("T6_CAP", "1")) { Some(v) => v, None => 1 };
+  let csv = Str.trim(readFile(getEnvOr("T6_INPUT", "input.csv")));
+  let s = B.toString(B.fromInts(if csv == "" then [] else ints_of(Str.split(csv, ","))));
+  let r = store_stdout_and_elide(canned_ports(), empty_ext_world(), "/t6-workdir", "t6", s, cap);
+  println("truncated|${if r.truncated then "true" else "false"}");
+  println("raw_path|${r.raw_path}");
+  println("input|${show_bytes(s)}");
+  println("stdout|${show_bytes(r.stdout)}")
+}

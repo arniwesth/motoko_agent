@@ -1,0 +1,30 @@
+-- check_chain_digests.ail — X-2. `chain_digests_over(base, ms)` (journal.ail:292) is the
+-- prefix chain the child reports as `HistorySeeded.digests` and the host copies, one per
+-- entry, into the seed's `history_appended` entries (session-journal.ts:604-613). Its
+-- statement: element i is the chain from `base` through ms[0..i], so its last element is
+-- `chain_digest_over(base, ms)`. Prints OK when that holds for a non-empty base and for
+-- the empty base, DEFECT otherwise.
+module check_chain_digests
+
+import std/io (println)
+import std/ai (Message)
+import std/list as List (foldl)
+import src/core/journal (chain_digest_after, chain_digest_over, chain_digests_over, chain_empty_base)
+
+pure func m(role: string, c: string) -> Message { { role: role, content: c, tool_calls: [], tool_call_id: "", images: [] } }
+
+pure func last_of(acc: string, s: string) -> string { s }
+
+pure func holds(base: string, ms: [Message]) -> bool {
+  List.foldl(last_of, base, chain_digests_over(base, ms)) == chain_digest_over(base, ms)
+}
+
+export func main() -> () ! {IO} {
+  let sys = m("system", "you are motoko");
+  let user = m("user", "list the files");
+  let base = chain_digest_after(chain_empty_base(), sys);
+  let empty_ok = holds(chain_empty_base(), [sys, user]);
+  let based_ok = holds(base, [user]);
+  println("empty base: ${if empty_ok then "holds" else "fails"}; non-empty base: ${if based_ok then "holds" else "fails"}");
+  println(if empty_ok && based_ok then "OK" else "DEFECT")
+}

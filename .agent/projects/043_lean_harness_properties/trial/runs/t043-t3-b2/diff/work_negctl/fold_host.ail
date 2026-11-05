@@ -1,0 +1,59 @@
+-- fold_host.ail — the REAL `fold_journal` over the journals the REAL host wrote (host.ts).
+--
+-- Reads HOST_JOURNALS_PATH (substituted by run_diff.sh): one line per sequence,
+-- `<actions>\t<JSON array of the journal's lines>`, and prints
+--
+--   H|<actions>|<verdict>|<history>|<dangling>#<n>
+--
+-- folding each journal at `journal_leaf`, the last line, which is the host's leaf for a
+-- journal it wrote linearly.
+
+module fold_host
+
+import std/io (println)
+import std/fs (readFile)
+import std/ai (Message, ToolCall)
+import std/json (Json, decode, asArray)
+import std/string as Str (join, concat, intToStr, split)
+import std/list as List (length, map, filter)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import t3tmp_WZy1pa/journal_fixed (SessionState, Refusal, refusal_id, fold_journal, journal_leaf)
+
+pure func ids_of(cs: [ToolCall]) -> [string] {
+  match cs { [] => [], c :: rest => c.id :: ids_of(rest) }
+}
+pure func role_ch(r: string) -> string {
+  if r == "system" then "s" else if r == "user" then "u" else if r == "assistant" then "a" else "t"
+}
+pure func msg_str(m: Message) -> string {
+  concat([role_ch(m.role), ":", m.content, ":", join("+", ids_of(m.tool_calls)), ":", m.tool_call_id])
+}
+pure func hist_str(ms: [Message]) -> string { join(";", List.map(msg_str, ms)) }
+
+pure func verdict_str(r: Result[SessionState, Refusal]) -> string {
+  match r {
+    Ok(s) => concat(["accept|", hist_str(s.history), "|", join(",", s.dangling), "#", intToStr(List.length(s.dangling))]),
+    Err(e) => concat([refusal_id(e), "||"])
+  }
+}
+
+func line_of(l: string) -> string {
+  match split(l, "\t") {
+    [acts, arr] => match decode(arr) {
+      Ok(j) => match asArray(j) {
+        Some(lines) => concat(["H|", acts, "|", verdict_str(fold_journal(lines, journal_leaf(lines)))]),
+        None => concat(["H|", acts, "|NOT-AN-ARRAY||"])
+      },
+      Err(_) => concat(["H|", acts, "|UNDECODABLE||"])
+    },
+    _ => concat(["H|?|BAD-LINE||"])
+  }
+}
+
+pure func is_line(x: string) -> bool { x != "" }
+
+export func main() -> () ! {IO, FS} {
+  let raw = readFile("HOST_JOURNALS_PATH");
+  println(join("\n", List.map(line_of, List.filter(is_line, split(raw, "\n")))))
+}

@@ -1,0 +1,7 @@
+-- depth_probe.ail — depth_check.sh's control: a NON-tail recursion of depth 500, which must fail
+-- with RT_REC_003 under --max-recursion-depth 50, showing the flag is in force.
+module harness/depth_probe
+import std/io (println)
+import std/string (intToStr)
+pure func nt(n: int) -> int { if n == 0 then 0 else 1 + nt(n - 1) }
+export func main() -> () ! {IO} { println(intToStr(nt(500))) }

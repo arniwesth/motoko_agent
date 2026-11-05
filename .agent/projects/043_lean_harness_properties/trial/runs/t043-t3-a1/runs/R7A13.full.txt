@@ -1,0 +1,247 @@
+cases: 3000
+  host=accept twin=accept                  622
+  host=accept twin=digest                  33
+  host=digest twin=accept                  12
+  host=digest twin=digest                  347
+  host=digest twin=pairing                 18
+  host=pairing twin=digest                 40
+  host=pairing twin=pairing                1928
+P3.1 verdict host=accept twin=digest [emittable,session]: 5
+    504 CP,U,RS,U,PS,PS,A2[resume refused][resume refused]
+    825 U,CP,CP,U,RS,SU,FU
+    1036 A2,RS,U,CP,CP,RS,A0
+    2222 U,U,PS,CP,RS,FU,A1
+    2788 U,SU,FU,CP,RS,RS,U
+P3.1 verdict host=accept twin=digest [outside-grammar,session]: 28
+    194 FU,CP,RS,SU,U,CP,H1
+    263 FU,A1,TB,CP,A0,RS,A1
+    469 RS,A1,SU,CP,RS,TA,CP
+    689 A1,CP,RS,A0,RS,PS,FU[resume refused][resume refused]
+    766 R1,CP,CP,RS,A0,PS,SU[resume refused]
+    919 TA,CP,RS,A0,PS,U,FU[resume refused]
+    973 A0,RS,U,TB,CP,RS,U
+    1033 A1,CP,U,A0,RS,A2,R1
+    1143 PS,H1,PS,CP,RS,TB,CP
+    1204 TB,CP,A1,TA,RS,A2,RS[resume refused]
+    1224 U,CP,U,RS,TB,TB,CP
+    1256 CP,A2,SU,H1,CP,RS,A1
+    1308 A2,U,CP,RS,U,PS,A1[resume refused]
+    2081 RS,A0,CP,RS,H1,TA,CP
+    2114 H1,A0,RS,CP,RS,A0,PS[resume refused][resume refused]
+    2203 R1,CP,CP,RS,H1,SU,SU
+    2236 RS,H1,A1,CP,RS,FU,RS[resume refused]
+    2295 TA,CP,A0,RS,TB,RS,R1[resume refused]
+    2344 PS,H1,PS,CP,RS,FU,U
+    2386 TB,A1,TA,U,CP,RS,H1
+    2557 A2,A1,H1,FU,CP,RS,A2
+    2566 A1,U,SU,CP,RS,U,SU
+    2600 SU,CP,RS,U,TB,CP,PS[resume refused]
+    2663 A0,CP,RS,A0,TA,CP,U
+    2740 A0,FU,CP,RS,A2,CP,A2
+    2742 A0,A2,H1,TA,CP,RS,A0
+    2746 TA,A2,CP,RS,SU,FU,PS[resume refused]
+    2754 RS,RS,R1,RS,R1,CP,SU
+P3.1 verdict host=digest twin=accept [emittable,session]: 1
+    381 RS,FU,A0,R1,RS,U,A2
+P3.1 verdict host=digest twin=accept [outside-grammar,session]: 11
+    171 R1,RS,SU,H1,TB,SU,CP
+    498 RS,R1,RS,A0,R1,FU,CP
+    1253 SU,A0,SU,R1,RS,A1,CP
+    1470 R1,RS,FU,A0,H1,A1,CP
+    1822 H1,TA,RS,H1,CP,PS,U
+    1948 R1,RS,TB,SU,SU,RS,CP[resume refused]
+    2049 FU,U,PS,U,RS,SU,R1
+    2505 H1,SU,TA,TA,RS,A2,RS
+    2568 RS,U,TA,R1,RS,A2,TB
+    2595 R1,SU,RS,H1,R1,PS,SU
+    2697 RS,RS,R1,SU,SU,RS,H1
+P3.1 verdict host=digest twin=pairing [outside-grammar,session]: 18
+    35 R1,RS,FU,CP,TB,SU,H1
+    237 TB,R1,R1,RS,A1,U,FU
+    747 R1,RS,A0,PS,TA,A0,RS[resume refused]
+    868 RS,R1,RS,TA,U,RS,SU[resume refused]
+    1035 RS,R1,RS,H1,A1,TB,SU
+    1098 R1,R1,RS,A2,A0,TB,R1
+    1413 R1,RS,FU,PS,FU,TA,TA
+    1549 R1,RS,SU,A2,A2,TB,A2
+    1646 A0,R1,RS,FU,RS,R1,TB
+    1704 U,FU,U,R1,SU,RS,TB
+    2182 R1,RS,A0,TA,SU,TB,H1
+    2299 SU,R1,RS,A2,FU,FU,TB
+    2349 R1,RS,A1,A0,CP,A0,TA
+    2472 TB,R1,RS,H1,A0,U,SU
+    2524 H1,RS,U,RS,R1,H1,TB
+    2693 R1,RS,A2,U,R1,RS,RS[resume refused][resume refused]
+    2750 R1,RS,SU,A2,A2,FU,A0
+    2927 R1,RS,CP,SU,R1,TB,R1
+P3.1 verdict host=pairing twin=digest [emittable,session]: 1
+    137 RS,CP,RS,A1,RS,RS,A0[resume refused][resume refused]
+P3.1 verdict host=pairing twin=digest [outside-grammar,session]: 39
+    21 SU,CP,RS,A1,U,PS,TB[resume refused]
+    27 FU,A2,RS,CP,RS,H1,H1
+    55 CP,RS,SU,H1,A0,H1,TA
+    78 PS,CP,RS,TB,A1,RS,FU[resume refused]
+    289 CP,RS,A2,U,H1,H1,FU
+    371 RS,A2,U,CP,RS,TB,PS[resume refused]
+    456 CP,RS,FU,A2,FU,FU,A0
+    467 A1,A1,CP,A0,RS,A1,A2
+    642 CP,A0,SU,RS,A1,A0,A2
+    690 CP,RS,TB,FU,FU,A2,PS[resume refused]
+    1091 CP,RS,A1,A2,TA,PS,R1[resume refused]
+    1169 A1,CP,RS,U,FU,A2,A0
+    1270 A2,TA,A1,U,CP,RS,TB
+    1285 H1,CP,RS,U,H1,A1,RS[resume refused]
+    1377 PS,CP,CP,U,RS,H1,TB
+    1399 SU,CP,RS,U,TB,TA,H1
+    1515 RS,CP,RS,TB,A0,RS,TA[resume refused]
+    1544 PS,H1,CP,RS,U,CP,TA
+    1660 FU,H1,CP,RS,A1,R1,H1
+    1667 CP,RS,TA,A1,SU,A0,TA
+    1843 CP,R1,TA,U,RS,TB,A0
+    1851 H1,A0,CP,RS,TB,FU,A0
+    1859 U,CP,SU,RS,A0,R1,A1
+    1871 U,RS,U,A2,CP,RS,TB
+    1891 CP,RS,TB,FU,A2,SU,TA
+    1892 A0,H1,H1,CP,RS,TA,H1
+    2014 TB,R1,H1,CP,RS,TB,TA
+    2068 CP,RS,H1,TA,R1,FU,A0
+    2087 CP,CP,CP,RS,TA,TB,TA
+    2125 CP,RS,A0,A1,A2,R1,H1
+    2235 CP,RS,U,A0,A2,TA,A0
+    2292 CP,RS,A0,PS,SU,A1,H1[resume refused]
+    2444 U,SU,CP,CP,RS,TB,H1
+    2508 FU,FU,A2,PS,CP,RS,TA
+    2657 PS,CP,RS,FU,H1,U,PS[resume refused]
+    2720 H1,CP,RS,SU,H1,U,TB
+    2789 CP,RS,TB,R1,A2,R1,R1
+    2830 FU,CP,RS,U,H1,A2,U
+    2893 PS,CP,RS,A0,SU,A2,H1
+P3.2 twin refuses (digest) [emittable,session]: 17
+    1 RS,CP,SU,FU,PS,FU,U[resume refused]
+    25 A0,CP,U,FU,RS,PS,CP[resume refused][resume refused]
+    137 RS,CP,RS,A1,RS,RS,A0[resume refused][resume refused]
+    175 RS,RS,CP,U,FU,SU,RS[resume refused]
+    504 CP,U,RS,U,PS,PS,A2[resume refused][resume refused]
+    554 CP,FU,A1,TA,FU,A2,PS[resume refused]
+    825 U,CP,CP,U,RS,SU,FU
+    827 A0,CP,SU,A0,A0,FU,A0
+    1036 A2,RS,U,CP,CP,RS,A0
+    1218 CP,A0,U,FU,RS,A2,TB[resume refused]
+    1572 RS,CP,PS,CP,FU,A0,CP
+    2222 U,U,PS,CP,RS,FU,A1
+    2333 CP,FU,SU,A1,TA,A2,TA
+    2390 CP,FU,SU,SU,SU,A0,A2
+    2567 CP,FU,CP,CP,A2,PS,CP[resume refused]
+    2606 FU,CP,FU,SU,CP,FU,A0
+    2788 U,SU,FU,CP,RS,RS,U
+X-3 host pendingToolCalls != fold dangling [emittable,session]: 2
+    132 A0,PS,PS,FU,SU,A0,R1 pending=[] dangling=[a](1)
+    1527 U,RS,RS,PS,CP,A0,R1 pending=[] dangling=[a](1)
+X-3 host pendingToolCalls != fold dangling [outside-grammar,session]: 84
+    9 A2,A1,PS,FU,U,CP,R1[resume refused] pending=[] dangling=[a](1)
+    13 U,A0,U,A2,RS,H1,TA pending=[] dangling=[](1)
+    82 U,CP,U,PS,U,FU,R1 pending=[] dangling=[a](1)
+    121 R1,R1,R1,A1,PS,CP,H1[resume refused] pending=["a"] dangling=[a,](2)
+    140 U,TB,RS,CP,CP,TA,R1[resume refused] pending=[] dangling=[a](1)
+    194 FU,CP,RS,SU,U,CP,H1 pending=["a"] dangling=[a,](2)
+    338 A1,A2,H1,FU,H1,CP,H1 pending=["a"] dangling=[a,](2)
+    380 FU,SU,U,R1,PS,A0,R1 pending=[] dangling=[a](1)
+    390 RS,U,FU,U,SU,A0,H1 pending=["a"] dangling=[a,](2)
+    411 TA,TA,CP,PS,CP,CP,H1 pending=["a"] dangling=[a,](2)
+    474 A0,PS,A2,A0,H1,CP,R1 pending=[] dangling=[a](1)
+    539 PS,U,CP,TA,SU,RS,R1[resume refused] pending=[] dangling=[a](1)
+    541 U,TB,R1,PS,A2,R1,TA pending=["b"] dangling=[](0)
+    568 SU,A2,A0,FU,FU,CP,R1 pending=[] dangling=[a](1)
+    586 RS,SU,H1,R1,SU,CP,H1 pending=["a"] dangling=[a,](2)
+    688 H1,RS,A0,A1,TA,U,H1 pending=["a"] dangling=[a,](2)
+    738 CP,A0,U,SU,PS,PS,H1 pending=["a"] dangling=[a,](2)
+    785 R1,R1,PS,A2,PS,CP,R1 pending=[] dangling=[a](1)
+    847 A1,TA,PS,PS,TA,PS,H1 pending=["a"] dangling=[a,](2)
+    968 RS,H1,R1,SU,PS,U,R1 pending=[] dangling=[a](1)
+    975 FU,RS,RS,TA,CP,H1,SU pending=["a"] dangling=[a,](2)
+    981 R1,TA,RS,TA,TA,A0,R1 pending=[] dangling=[a](1)
+    1028 U,PS,A1,CP,H1,PS,H1 pending=["a"] dangling=[a,](2)
+    1033 A1,CP,U,A0,RS,A2,R1 pending=["a","b"] dangling=[a](1)
+    1041 CP,A1,RS,A0,U,R1,R1 pending=[] dangling=[a](1)
+    1048 SU,PS,H1,U,CP,H1,SU pending=["a"] dangling=[a,](2)
+    1051 H1,FU,H1,H1,A0,CP,H1 pending=["a"] dangling=[a,](2)
+    1083 A1,A2,PS,PS,FU,CP,R1[resume refused][resume refused] pending=[] dangling=[a](1)
+    1093 A2,RS,U,RS,TA,CP,H1 pending=["a"] dangling=[a,](2)
+    1127 SU,SU,A2,CP,PS,A2,R1 pending=["a","b"] dangling=[a](1)
+    1129 R1,R1,CP,CP,PS,H1,SU pending=["a"] dangling=[a,](2)
+    1187 H1,FU,TA,TB,H1,CP,H1 pending=["a"] dangling=[a,](2)
+    1250 RS,A2,TA,CP,TA,CP,R1 pending=[] dangling=[a](1)
+    1258 A2,PS,A2,CP,CP,R1,R1 pending=[] dangling=[a](1)
+    1268 CP,TA,PS,R1,CP,CP,H1[resume refused] pending=["a"] dangling=[a,](2)
+    1302 TB,R1,CP,TB,PS,RS,R1[resume refused][resume refused] pending=[] dangling=[a](1)
+    1331 TB,TA,U,RS,CP,R1,R1[resume refused] pending=[] dangling=[a](1)
+    1333 H1,SU,RS,FU,R1,RS,H1 pending=["a"] dangling=[a,](2)
+    1341 U,U,A0,FU,A2,CP,H1 pending=["a"] dangling=[a,](2)
+    1396 A1,PS,RS,SU,SU,FU,R1 pending=[] dangling=[a](1)
+    1417 RS,FU,TA,TA,CP,A2,R1 pending=["a","b"] dangling=[a](1)
+    1485 A2,H1,TA,A0,RS,CP,H1[resume refused] pending=["a"] dangling=[a,](2)
+    1490 CP,RS,CP,U,CP,TA,R1 pending=[] dangling=[a](1)
+    1513 A1,CP,U,PS,FU,H1,SU pending=["a"] dangling=[a,](2)
+    1548 A0,H1,TA,FU,RS,CP,R1[resume refused] pending=[] dangling=[a](1)
+    1600 FU,A2,H1,H1,CP,A0,R1 pending=[] dangling=[a](1)
+    1621 A2,A0,R1,U,RS,CP,R1[resume refused] pending=[] dangling=[a](1)
+    1652 PS,U,FU,RS,U,CP,H1 pending=["a"] dangling=[a,](2)
+    1733 R1,A0,SU,SU,FU,CP,H1 pending=["a"] dangling=[a,](2)
+    1806 FU,A1,R1,A0,FU,CP,H1 pending=["a"] dangling=[a,](2)
+    1819 PS,U,RS,U,A1,TA,H1 pending=["a"] dangling=[a,](2)
+    1869 R1,A1,A1,TA,FU,CP,H1 pending=["a"] dangling=[a,](2)
+    1885 RS,A2,RS,CP,H1,PS,H1 pending=["a"] dangling=[a,](2)
+    1932 FU,FU,A1,SU,CP,CP,R1 pending=[] dangling=[a](1)
+    1950 A1,RS,FU,U,SU,CP,H1 pending=["a"] dangling=[a,](2)
+    2015 SU,TA,FU,CP,A2,RS,H1 pending=["a"] dangling=[a,](2)
+    2023 TB,PS,H1,CP,PS,CP,H1[resume refused] pending=["a"] dangling=[a,](2)
+    2086 R1,PS,H1,A2,PS,CP,R1[resume refused] pending=[] dangling=[a](1)
+    2095 A0,A1,R1,RS,H1,TA,TA pending=[] dangling=[](1)
+    2107 A0,FU,R1,CP,SU,R1,R1 pending=[] dangling=[a](1)
+    2117 A1,A2,RS,A1,CP,CP,H1[resume refused] pending=["a"] dangling=[a,](2)
+    2180 SU,RS,RS,RS,R1,CP,R1 pending=[] dangling=[a](1)
+    2198 RS,PS,TA,TA,PS,CP,H1[resume refused] pending=["a"] dangling=[a,](2)
+    2203 R1,CP,CP,RS,H1,SU,SU pending=["a"] dangling=[a,](2)
+    2245 FU,TA,FU,CP,PS,TB,R1 pending=[] dangling=[a](1)
+    2248 RS,A0,FU,U,FU,SU,H1 pending=["a"] dangling=[a,](2)
+    2274 FU,FU,R1,TB,CP,A2,R1 pending=["a","b"] dangling=[a](1)
+    2276 TA,FU,SU,SU,CP,H1,SU pending=["a"] dangling=[a,](2)
+    2282 R1,TA,PS,TA,TA,A0,R1 pending=[] dangling=[a](1)
+    2295 TA,CP,A0,RS,TB,RS,R1[resume refused] pending=[] dangling=[a](1)
+    2334 RS,R1,CP,A0,RS,CP,H1 pending=["a"] dangling=[a,](2)
+    2386 TB,A1,TA,U,CP,RS,H1 pending=["a"] dangling=[a,](2)
+    2464 SU,H1,PS,A0,TB,R1,SU pending=[] dangling=[a](1)
+    2499 A1,SU,TA,PS,U,A0,R1 pending=[] dangling=[a](1)
+    2552 PS,TB,FU,CP,PS,H1,TA pending=[] dangling=[](1)
+    2629 TA,U,CP,PS,RS,TB,R1 pending=[] dangling=[a](1)
+    2681 R1,FU,TA,CP,CP,R1,SU pending=[] dangling=[a](1)
+    2695 A1,RS,CP,H1,R1,CP,R1 pending=[] dangling=[a](1)
+    2705 A2,TA,PS,SU,A1,CP,H1 pending=["a"] dangling=[a,](2)
+    2768 H1,PS,PS,A1,R1,CP,R1 pending=[] dangling=[a](1)
+    2828 A0,A0,U,PS,CP,A0,H1 pending=["a"] dangling=[a,](2)
+    2872 A2,RS,A2,CP,PS,FU,H1 pending=["a"] dangling=[a,](2)
+    2880 FU,TA,A1,CP,U,CP,H1 pending=["a"] dangling=[a,](2)
+    2929 A1,RS,SU,U,R1,R1,SU pending=[] dangling=[a](1)
+X-3 host pendingToolCalls != fold dangling [outside-grammar]: 18
+    103 H1,U,H1,TA,R1,CP,R1 pending=[] dangling=[a](1)
+    252 A1,U,U,A0,CP,SU,H1 pending=["a"] dangling=[a,](2)
+    299 A0,TA,SU,TB,CP,A0,R1 pending=[] dangling=[a](1)
+    521 H1,TB,CP,TB,CP,U,H1 pending=["a"] dangling=[a,](2)
+    597 TA,CP,SU,A0,U,A0,R1 pending=[] dangling=[a](1)
+    803 TB,CP,TB,A0,A1,CP,H1 pending=["a"] dangling=[a,](2)
+    999 TB,TB,TA,A2,CP,A0,H1 pending=["a"] dangling=[a,](2)
+    1156 H1,TA,A0,A0,A2,CP,R1 pending=[] dangling=[a](1)
+    1558 A0,A1,R1,A2,TB,CP,H1 pending=["a"] dangling=[a,](2)
+    1715 A0,H1,TA,H1,U,CP,R1 pending=[] dangling=[a](1)
+    2013 TA,TA,TA,A0,A2,CP,R1 pending=[] dangling=[a](1)
+    2036 R1,A1,CP,H1,TA,TA,SU pending=[] dangling=[](1)
+    2209 TA,A1,CP,A1,TA,A0,R1 pending=[] dangling=[a](1)
+    2397 SU,U,A2,TA,A1,CP,R1 pending=[] dangling=[a](1)
+    2415 TB,R1,A1,A2,TB,CP,H1 pending=["a"] dangling=[a,](2)
+    2488 CP,CP,TB,TB,H1,CP,H1 pending=["a"] dangling=[a,](2)
+    2608 TA,A2,A0,U,CP,R1,SU pending=[] dangling=[a](1)
+    2799 H1,A2,CP,U,A2,CP,H1 pending=["a"] dangling=[a,](2)
+P3.1: 3000 cases compared, 103 violations
+P3.2: 101 run-emittable cases, 17 violations
+X-3: 104 cases where the host's pendingToolCalls differ from the fold's dangling on the host journal
+X-1: 0 cases where both accept with equal history/dangling but the rest of the state differs

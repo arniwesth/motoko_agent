@@ -1,0 +1,612 @@
+/-
+ChainModel.lean — target T4, the digest chain.
+
+SOURCE: src/core/journal.ail, lines 242-300 of the snapshot at
+/home/motoko/trial-043/s/t043-t4-b2/tree, function by function:
+
+  chain_digest_base    :242-244   `digest_messages(seed)`
+  chain_digest_after   :253-255   `"sha256:${sha256Hex("${previous}${canonical_message_frame(m)}")}"`
+  chain_step           :260-262   `chain_digest_after(previous, m)`
+  chain_digest_over    :264-266   `List.foldl(chain_digest_after, base, ms)`
+  chain_prefix_step    :287-290   `let d = chain_digest_after(acc.last, m); { last: d, out: acc.out ++ [d] }`
+  chain_digests_over   :292-294   `List.foldl(chain_prefix_step, { last: chain_empty_base(), out: [] }, ms).out`
+  chain_digests_json   :298-300   `ja(List.map(js, ds))`
+
+and the two functions outside that span that it calls:
+
+  chain_empty_base     journal.ail:322-324      `chain_digest_base([])`
+  digest_messages      phase_vocab.ail:361-363  `"sha256:${sha256Hex(canonical_messages(msgs))}"`
+  canonical_messages   phase_vocab.ail:301-303  `concat(List.map(canonical_message, msgs) ++ ["m-end;"])`
+
+WHAT IS ABSTRACTED. Everything the chain treats as a black box is a field of `Env`:
+`sha256Hex` (`Env.h`), `phase_vocab.canonical_message_frame` (`Env.frame`) and
+`phase_vocab.canonical_message` (`Env.canon`). No theorem assumes anything about them except,
+for the `bug_` theorems, that `Env.h` is injective — the target's stated treatment of
+`sha256Hex`. So every theorem holds for every message type and every frame. AILANG `string`
+is Lean `String`, `++` on strings is string append, `List.foldl` is `List.foldl` with the
+accumulator first (both confirmed by the differential test, ../diff/), and a record
+`{ last, out }` is `PrefixAcc`. `Json` is cut down to the two constructors the target uses.
+
+THE DIFFERENTIAL TEST (../diff/run_diff.sh) instantiates `Env` with an executable SHA-256
+(Sha256.lean) and a transcription of phase_vocab's frame (Enumerate.lean.tail) and compares
+with the real functions on 1,554 (base, list) cases. See ../SUMMARY.md for the run and for how
+many times it changed this file.
+
+Lean 4.28.0, core only: no Mathlib, no Lake. `lean ChainModel.lean`. No `sorry`, no
+`native_decide`; the `#print axioms` lines at the end are the axiom report.
+-/
+
+namespace T4
+
+/-- `std/json.Json`, only the constructors `chain_digests_json` builds. -/
+inductive Json where
+  | str : String → Json
+  | arr : List Json → Json
+  deriving Repr
+
+/-- The black boxes the chain calls. -/
+structure Env (M : Type) where
+  h     : String → String   -- std/crypto.sha256Hex
+  frame : M → String        -- phase_vocab.canonical_message_frame
+  canon : M → String        -- phase_vocab.canonical_message
+
+/-- Injectivity, written out so nothing outside core is needed. -/
+def Injective (f : String → String) : Prop := ∀ a b, f a = f b → a = b
+
+section Model
+variable {M : Type} (e : Env M)
+
+/-- phase_vocab.ail:301-303 `canonical_messages`. -/
+def canonicalMessages (ms : List M) : String :=
+  String.join (ms.map e.canon ++ ["m-end;"])
+
+/-- phase_vocab.ail:361-363 `digest_messages`. -/
+def digestMessages (ms : List M) : String :=
+  "sha256:" ++ e.h (canonicalMessages e ms)
+
+/-- journal.ail:242-244. -/
+def chainDigestBase (seed : List M) : String :=
+  digestMessages e seed
+
+/-- journal.ail:253-255. -/
+def chainDigestAfter (previous : String) (m : M) : String :=
+  "sha256:" ++ e.h (previous ++ e.frame m)
+
+/-- journal.ail:260-262. Unused by `chain_digest_over` in this snapshot (see SUMMARY.md). -/
+def chainStep (previous : String) (m : M) : String :=
+  chainDigestAfter e previous m
+
+/-- journal.ail:264-266. -/
+def chainDigestOver (base : String) (ms : List M) : String :=
+  ms.foldl (chainDigestAfter e) base
+
+/-- The record `{ last: string, out: [string] }`. -/
+structure PrefixAcc where
+  last : String
+  out  : List String
+  deriving Repr, DecidableEq
+
+/-- journal.ail:287-290. -/
+def chainPrefixStep (acc : PrefixAcc) (m : M) : PrefixAcc :=
+  let d := chainDigestAfter e acc.last m
+  { last := d, out := acc.out ++ [d] }
+
+/-- journal.ail:322-324. -/
+def chainEmptyBase : String :=
+  chainDigestBase e []
+
+/-- journal.ail:292-294, AS WRITTEN: the fold starts from `chain_empty_base()`, and `base`
+    is never read. -/
+def chainDigestsOver (_base : String) (ms : List M) : List String :=
+  (ms.foldl (chainPrefixStep e) { last := chainEmptyBase e, out := [] }).out
+
+/-- journal.ail:298-300. -/
+def chainDigestsJson (ds : List String) : Json :=
+  .arr (ds.map .str)
+
+/-- The one-token fix: start the fold from `base`. -/
+def chainDigestsOverFixed (base : String) (ms : List M) : List String :=
+  (ms.foldl (chainPrefixStep e) { last := base, out := [] }).out
+
+/-- The intended list, by recursion: the chain value after each message. -/
+def prefixDigests : String → List M → List String
+  | _, [] => []
+  | b, m :: ms => chainDigestAfter e b m :: prefixDigests (chainDigestAfter e b m) ms
+
+end Model
+
+/-! ## String facts (core has no cancellation lemmas for `String`) -/
+
+theorem str_cancel_left {a b c : String} (h : a ++ b = a ++ c) : b = c := by
+  apply String.ext
+  have := congrArg String.toList h
+  simpa [String.toList_append] using this
+
+theorem str_cancel_right {a b c : String} (h : a ++ c = b ++ c) : a = b := by
+  apply String.ext
+  have := congrArg String.toList h
+  simpa [String.toList_append] using this
+
+theorem canonicalMessages_nil {M : Type} (e : Env M) :
+    canonicalMessages e ([] : List M) = "m-end;" := by
+  simp [canonicalMessages, String.join]
+
+theorem chainEmptyBase_eq {M : Type} (e : Env M) :
+    chainEmptyBase e = "sha256:" ++ e.h "m-end;" := by
+  simp [chainEmptyBase, chainDigestBase, digestMessages, canonicalMessages_nil]
+
+theorem chainEmptyBase_length {M : Type} (e : Env M) : 7 ≤ (chainEmptyBase e).length := by
+  rw [chainEmptyBase_eq, String.length_append]
+  have : ("sha256:" : String).length = 7 := by decide
+  omega
+
+/-- Under injectivity, one chain step determines its previous value. -/
+theorem after_inj_prev {M : Type} (e : Env M) (hi : Injective e.h) {p q : String} {m : M}
+    (h : chainDigestAfter e p m = chainDigestAfter e q m) : p = q := by
+  unfold chainDigestAfter at h
+  exact str_cancel_right (hi _ _ (str_cancel_left h))
+
+/-- A chain step never lands back on the empty-history base: `E ++ frame ≠ "m-end;"`, by
+    length, because `E` starts with `"sha256:"`. -/
+theorem after_ne_empty_base {M : Type} (e : Env M) (hi : Injective e.h) (p : String) (m : M)
+    (hp : 7 ≤ p.length) : chainDigestAfter e p m ≠ chainEmptyBase e := by
+  intro h
+  rw [chainEmptyBase_eq] at h
+  unfold chainDigestAfter at h
+  have h2 := congrArg String.length (hi _ _ (str_cancel_left h))
+  rw [String.length_append] at h2
+  have : ("m-end;" : String).length = 6 := by decide
+  omega
+
+/-! ## The fold invariant -/
+
+theorem fold_prefix {M : Type} (e : Env M) (ms : List M) (acc : PrefixAcc) :
+    ms.foldl (chainPrefixStep e) acc
+      = { last := chainDigestOver e acc.last ms, out := acc.out ++ prefixDigests e acc.last ms } := by
+  induction ms generalizing acc with
+  | nil => simp [chainDigestOver, prefixDigests]
+  | cons m ms ih =>
+    simp only [List.foldl_cons]
+    rw [ih]
+    simp [chainPrefixStep, chainDigestOver, prefixDigests, List.foldl_cons]
+
+theorem fixed_eq_prefix {M : Type} (e : Env M) (b : String) (ms : List M) :
+    chainDigestsOverFixed e b ms = prefixDigests e b ms := by
+  simp [chainDigestsOverFixed, fold_prefix]
+
+/-- The function as written computes the intended list FROM THE EMPTY BASE, whatever `base`. -/
+theorem real_eq_prefix_from_empty {M : Type} (e : Env M) (b : String) (ms : List M) :
+    chainDigestsOver e b ms = prefixDigests e (chainEmptyBase e) ms := by
+  simp [chainDigestsOver, fold_prefix]
+
+/-- So it ignores `base`. -/
+theorem real_ignores_base {M : Type} (e : Env M) (b b' : String) (ms : List M) :
+    chainDigestsOver e b ms = chainDigestsOver e b' ms := by
+  rw [real_eq_prefix_from_empty, real_eq_prefix_from_empty]
+
+/-- REACHABILITY: at `chain_empty_base()` — the base every caller in the snapshot passes — the
+    function as written and the fixed one agree, so the defect changes no current output. -/
+theorem real_eq_fixed_at_empty_base {M : Type} (e : Env M) (ms : List M) :
+    chainDigestsOver e (chainEmptyBase e) ms = chainDigestsOverFixed e (chainEmptyBase e) ms := by
+  rw [real_eq_prefix_from_empty, fixed_eq_prefix]
+
+theorem prefixDigests_append {M : Type} (e : Env M) (b : String) (xs ys : List M) :
+    prefixDigests e b (xs ++ ys) = prefixDigests e b xs ++ prefixDigests e (chainDigestOver e b xs) ys := by
+  induction xs generalizing b with
+  | nil => simp [prefixDigests, chainDigestOver]
+  | cons x xs ih => simp [prefixDigests, ih, chainDigestOver, List.foldl_cons]
+
+theorem prefixDigests_length {M : Type} (e : Env M) (b : String) (ms : List M) :
+    (prefixDigests e b ms).length = ms.length := by
+  induction ms generalizing b with
+  | nil => rfl
+  | cons m ms ih => simp [prefixDigests, ih]
+
+theorem prefixDigests_last {M : Type} (e : Env M) (b : String) (ms : List M) (hne : ms ≠ []) :
+    (prefixDigests e b ms).getLast? = some (chainDigestOver e b ms) := by
+  induction ms generalizing b with
+  | nil => exact absurd rfl hne
+  | cons m ms ih =>
+    cases ms with
+    | nil => simp [prefixDigests, chainDigestOver]
+    | cons m' ms' =>
+      have := ih (chainDigestAfter e b m) (by simp)
+      simp only [prefixDigests] at this ⊢
+      rw [List.getLast?_cons_cons, this]
+      simp [chainDigestOver, List.foldl_cons]
+
+/-! ## P4.1 and P4.2 on the function AS WRITTEN -/
+
+/-- P4.2, first half: HOLDS. -/
+theorem P4_2_length {M : Type} (e : Env M) (b : String) (ms : List M) :
+    (chainDigestsOver e b ms).length = ms.length := by
+  rw [real_eq_prefix_from_empty, prefixDigests_length]
+
+/-- P4.2, second half, holds at the empty-history base (every current caller). -/
+theorem P4_2_last_at_empty_base {M : Type} (e : Env M) (ms : List M) (hne : ms ≠ []) :
+    (chainDigestsOver e (chainEmptyBase e) ms).getLast? = some (chainDigestOver e (chainEmptyBase e) ms) := by
+  rw [real_eq_prefix_from_empty, prefixDigests_last e _ ms hne]
+
+/-- RESEARCH §5.B's weaker "chain prefix" statement HOLDS of the function as written: it is
+    blind to the defect, because both sides make the same mistake. -/
+theorem weak_prefix_holds {M : Type} (e : Env M) (b : String) (xs ys : List M) :
+    ∃ zs, chainDigestsOver e b (xs ++ ys) = chainDigestsOver e b xs ++ zs := by
+  refine ⟨prefixDigests e (chainDigestOver e (chainEmptyBase e) xs) ys, ?_⟩
+  rw [real_eq_prefix_from_empty, real_eq_prefix_from_empty, prefixDigests_append]
+
+/-- P4.2, second half, is FALSE: for any injective hash and any message `m`, at base `""`
+    (or any base other than `chain_empty_base()`) the last digest is not
+    `chain_digest_over(b, [m])`. -/
+theorem bug_P4_2_last_ne {M : Type} (e : Env M) (hi : Injective e.h) (b : String) (m : M)
+    (hb : b ≠ chainEmptyBase e) :
+    (chainDigestsOver e b [m]).getLast? ≠ some (chainDigestOver e b [m]) := by
+  intro h
+  simp [chainDigestsOver, chainPrefixStep, chainDigestOver] at h
+  exact hb (after_inj_prev e hi h).symm
+
+/-- The concrete counterexample: `b = ""`, `ms = [m]`. -/
+theorem bug_P4_2 {M : Type} (e : Env M) (hi : Injective e.h) (m : M) :
+    (chainDigestsOver e "" [m]).getLast? ≠ some (chainDigestOver e "" [m]) := by
+  apply bug_P4_2_last_ne e hi "" m
+  intro h
+  have := chainEmptyBase_length e
+  rw [← h] at this
+  simp at this
+
+/-- P4.1 is FALSE, for EVERY base `b` — including `chain_empty_base()` — once `xs` and `ys`
+    are both non-empty: concrete counterexample `xs = [x]`, `ys = [y]`. -/
+theorem bug_P4_1 {M : Type} (e : Env M) (hi : Injective e.h) (b : String) (x y : M) :
+    chainDigestsOver e b ([x] ++ [y])
+      ≠ chainDigestsOver e b [x] ++ chainDigestsOver e (chainDigestOver e b [x]) [y] := by
+  intro h
+  simp [chainDigestsOver, chainPrefixStep] at h
+  exact after_ne_empty_base e hi _ x (chainEmptyBase_length e) (after_inj_prev e hi h)
+
+/-- The same, at the base every caller uses. -/
+theorem bug_P4_1_at_empty_base {M : Type} (e : Env M) (hi : Injective e.h) (x y : M) :
+    chainDigestsOver e (chainEmptyBase e) ([x] ++ [y])
+      ≠ chainDigestsOver e (chainEmptyBase e) [x]
+        ++ chainDigestsOver e (chainDigestOver e (chainEmptyBase e) [x]) [y] :=
+  bug_P4_1 e hi _ x y
+
+/-! ## The fix: P4.1 and P4.2 hold for every base, and nothing changes for current callers -/
+
+theorem P4_1_fixed {M : Type} (e : Env M) (b : String) (xs ys : List M) :
+    chainDigestsOverFixed e b (xs ++ ys)
+      = chainDigestsOverFixed e b xs ++ chainDigestsOverFixed e (chainDigestOver e b xs) ys := by
+  simp only [fixed_eq_prefix, prefixDigests_append]
+
+theorem P4_2_fixed {M : Type} (e : Env M) (b : String) (ms : List M) :
+    (chainDigestsOverFixed e b ms).length = ms.length
+      ∧ (ms ≠ [] → (chainDigestsOverFixed e b ms).getLast? = some (chainDigestOver e b ms)) := by
+  rw [fixed_eq_prefix]
+  exact ⟨prefixDigests_length e b ms, prefixDigests_last e b ms⟩
+
+/-! ## The other functions in the span -/
+
+/-- `chain_step` is `chain_digest_after`, so `chain_digest_over` folding either is the same. -/
+theorem chainStep_eq {M : Type} (e : Env M) : chainStep e = chainDigestAfter e := rfl
+
+theorem chainDigestOver_append {M : Type} (e : Env M) (b : String) (xs ys : List M) :
+    chainDigestOver e b (xs ++ ys) = chainDigestOver e (chainDigestOver e b xs) ys := by
+  simp [chainDigestOver, List.foldl_append]
+
+theorem map_str_inj : ∀ (ds ds' : List String), ds.map Json.str = ds'.map Json.str → ds = ds'
+  | [], [], _ => rfl
+  | [], _ :: _, h => by simp at h
+  | _ :: _, [], h => by simp at h
+  | a :: as, b :: bs, h => by
+      simp only [List.map_cons, List.cons.injEq] at h
+      obtain ⟨h1, h2⟩ := h
+      injection h1 with h1
+      rw [h1, map_str_inj as bs h2]
+
+/-- `chain_digests_json` keeps every digest, in order. -/
+theorem chainDigestsJson_inj (ds ds' : List String) (h : chainDigestsJson ds = chainDigestsJson ds') :
+    ds = ds' := by
+  unfold chainDigestsJson at h
+  injection h with h
+  exact map_str_inj ds ds' h
+
+/-! ## Witnesses: every hypothesis above is satisfiable -/
+
+/-- An injective hash exists, so the `bug_` theorems are not vacuous. -/
+def idEnv : Env String := { h := id, frame := id, canon := id }
+
+theorem idEnv_injective : Injective idEnv.h := fun _ _ h => h
+
+/-- `bug_P4_2`'s hypotheses, instantiated: the two sides really differ. -/
+theorem witness_bug_P4_2 :
+    (chainDigestsOver idEnv "" ["hi"]).getLast? ≠ some (chainDigestOver idEnv "" ["hi"]) :=
+  bug_P4_2 idEnv idEnv_injective "hi"
+
+theorem witness_bug_P4_1 :
+    chainDigestsOver idEnv (chainEmptyBase idEnv) (["hi"] ++ ["hi"])
+      ≠ chainDigestsOver idEnv (chainEmptyBase idEnv) ["hi"]
+        ++ chainDigestsOver idEnv (chainDigestOver idEnv (chainEmptyBase idEnv) ["hi"]) ["hi"] :=
+  bug_P4_1_at_empty_base idEnv idEnv_injective "hi" "hi"
+
+/-- `P4_2_last_at_empty_base` and `P4_2_fixed`'s second half need `ms ≠ []`: satisfiable. -/
+theorem witness_nonempty : (["hi"] : List String) ≠ [] := by simp
+
+end T4
+
+/-! ## Axiom report -/
+#print axioms T4.str_cancel_left
+#print axioms T4.str_cancel_right
+#print axioms T4.canonicalMessages_nil
+#print axioms T4.chainEmptyBase_eq
+#print axioms T4.chainEmptyBase_length
+#print axioms T4.after_inj_prev
+#print axioms T4.after_ne_empty_base
+#print axioms T4.fold_prefix
+#print axioms T4.fixed_eq_prefix
+#print axioms T4.real_eq_prefix_from_empty
+#print axioms T4.real_ignores_base
+#print axioms T4.real_eq_fixed_at_empty_base
+#print axioms T4.prefixDigests_append
+#print axioms T4.prefixDigests_length
+#print axioms T4.prefixDigests_last
+#print axioms T4.P4_2_length
+#print axioms T4.P4_2_last_at_empty_base
+#print axioms T4.weak_prefix_holds
+#print axioms T4.bug_P4_2_last_ne
+#print axioms T4.bug_P4_2
+#print axioms T4.bug_P4_1
+#print axioms T4.bug_P4_1_at_empty_base
+#print axioms T4.P4_1_fixed
+#print axioms T4.P4_2_fixed
+#print axioms T4.chainStep_eq
+#print axioms T4.chainDigestOver_append
+#print axioms T4.map_str_inj
+#print axioms T4.chainDigestsJson_inj
+#print axioms T4.idEnv_injective
+#print axioms T4.witness_bug_P4_2
+#print axioms T4.witness_bug_P4_1
+#print axioms T4.witness_nonempty
+/-
+FrameModel.lean — phase_vocab's message frame, the black box `T4.Env.frame` that the chain
+hashes, transcribed so the differential test can instantiate the model and so X-2 can be
+stated. Appended after ChainModel.lean (it uses `T4.chainDigestAfter`); check both with
+`cat ChainModel.lean FrameModel.lean > /tmp/F.lean && lean /tmp/F.lean`.
+
+SOURCE: src/core/phase_vocab.ail, the snapshot at /home/motoko/trial-043/s/t043-t4-b2/tree:
+
+  frame                    :271-273   `"${label}:${show(Str.length(value))}:${value};"`
+  canonical_tool_calls     :286-292
+  canonical_message        :294-296   (with `digest_content`, :275-284, as the identity)
+  canonical_message_body   :321-323
+  canonical_images         :325-331
+  canonical_message_frame  :357-359   `"m{${canonical_message_body(m)}${canonical_images(m.images)}}"`
+
+`digest_content` rewrites only `make[1]`..`make[20]`; the model takes it as the identity and
+the differential test's alphabet avoids `make[`. `Str.length` is AILANG's rune count, modelled
+as `String.length` (Unicode scalar values); equal on valid UTF-8, which is all Lean strings.
+Nothing in ChainModel.lean depends on this file: its theorems hold for every frame.
+-/
+
+open T4
+
+structure TC where
+  id : String
+  name : String
+  arguments : String
+
+structure Img where
+  source : String
+  mime : String
+
+structure Message where
+  role : String
+  content : String
+  toolCalls : List TC
+  toolCallId : String
+  images : List Img
+
+def pframe (label value : String) : String :=
+  label ++ ":" ++ toString value.utf8ByteSize ++ ":" ++ value ++ ";"
+
+def canonicalToolCalls : List TC → String
+  | [] => "tc-end;"
+  | c :: rest => "tc{" ++ pframe "id" c.id ++ pframe "name" c.name ++ pframe "args" c.arguments ++ "}" ++ canonicalToolCalls rest
+
+def canonicalImages : List Img → String
+  | [] => "im-end;"
+  | i :: rest => "im{" ++ pframe "source" i.source ++ pframe "mime" i.mime ++ "}" ++ canonicalImages rest
+
+def canonicalMessageBody (m : Message) : String :=
+  pframe "role" m.role ++ pframe "content" m.content ++ pframe "tool_call_id" m.toolCallId
+    ++ pframe "tool_calls_len" (toString m.toolCalls.length) ++ canonicalToolCalls m.toolCalls
+
+def canonicalMessageFrame (m : Message) : String :=
+  "m{" ++ canonicalMessageBody m ++ canonicalImages m.images ++ "}"
+
+/-- `canonical_message` with `digest_content` as the identity (see the header). -/
+def canonicalMessage (m : Message) : String :=
+  "m{" ++ pframe "role" m.role ++ pframe "content" m.content ++ pframe "tool_call_id" m.toolCallId
+    ++ pframe "tool_calls_len" (toString m.toolCalls.length) ++ canonicalToolCalls m.toolCalls ++ "}"
+
+/-! ## X-2 (an observation, not a reported defect)
+
+`chain_digest_after` hashes `previous ++ frame` with no separator. The frame's own comment
+(phase_vocab.ail:351-356) says the length-prefixed framing keeps that concatenation injective
+because "a frame is concatenated onto a previous digest" — i.e. onto a fixed-length string.
+`chain_digest_over` and `chain_digests_over` take `base : string`, though, and for a base that is
+not digest-shaped the step is not injective, FOR EVERY HASH: one frame can be a proper suffix
+of another. -/
+
+def x2m1 : Message := { role := "user", content := "m{role:4:user;content:0:", toolCalls := [], toolCallId := "", images := [] }
+def x2m2 : Message := { role := "user", content := "", toolCalls := [], toolCallId := "", images := [] }
+
+theorem x2_frames_overlap :
+    canonicalMessageFrame x2m1 = "m{role:4:user;content:24:" ++ canonicalMessageFrame x2m2 := by
+  simp [canonicalMessageFrame, canonicalMessageBody, canonicalImages, canonicalToolCalls, pframe, x2m1, x2m2]
+  decide
+
+theorem x2_messages_differ : canonicalMessageFrame x2m1 ≠ canonicalMessageFrame x2m2 := by
+  rw [x2_frames_overlap]
+  intro h
+  have := congrArg String.length h
+  rw [String.length_append] at this
+  have : ("m{role:4:user;content:24:" : String).length = 25 := by decide
+  omega
+
+/-- The collision: whatever `sha256Hex` is. -/
+theorem obs_X2_after_collides (h : String → String) (canon : Message → String) :
+    chainDigestAfter { h := h, frame := canonicalMessageFrame, canon := canon } "" x2m1
+      = chainDigestAfter { h := h, frame := canonicalMessageFrame, canon := canon }
+          "m{role:4:user;content:24:" x2m2 := by
+  simp only [chainDigestAfter, x2_frames_overlap]
+  rw [String.empty_append]
+
+#print axioms x2_frames_overlap
+#print axioms x2_messages_differ
+#print axioms obs_X2_after_collides
+/-
+Sha256.lean — an executable SHA-256 (FIPS 180-4), Lean 4 core only, for the differential test
+ONLY. It instantiates `T4.Env.h` so the model's digests can be compared byte for byte with the
+real `std/crypto.sha256Hex`. No theorem uses it: the theorems in ChainModel.lean hold for every
+hash, and the `bug_` ones for every injective one. Appended after ChainModel.lean by
+../diff/run_diff.sh. Self-check: `sha256Hex "abc"` must be
+ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad (FIPS 180-4 example).
+-/
+
+namespace Sha256
+
+def K : Array UInt32 := #[
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2 ]
+
+def H0 : Array UInt32 := #[
+  0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19 ]
+
+def rotr (x n : UInt32) : UInt32 := (x >>> n) ||| (x <<< (32 - n))
+
+def pad (msg : ByteArray) : ByteArray := Id.run do
+  let bitLen : UInt64 := msg.size.toUInt64 * 8
+  let mut m := msg.push 0x80
+  while m.size % 64 != 56 do
+    m := m.push 0
+  for i in [0:8] do
+    m := m.push (bitLen >>> (8 * (7 - i)).toUInt64).toUInt8
+  return m
+
+def compress (hs : Array UInt32) (m : ByteArray) (off : Nat) : Array UInt32 := Id.run do
+  let mut w : Array UInt32 := #[]
+  for i in [0:16] do
+    let b := fun j => (m.get! (off + 4 * i + j)).toUInt32
+    w := w.push ((b 0 <<< 24) ||| (b 1 <<< 16) ||| (b 2 <<< 8) ||| b 3)
+  for i in [16:64] do
+    let s0 := rotr w[i-15]! 7 ^^^ rotr w[i-15]! 18 ^^^ (w[i-15]! >>> 3)
+    let s1 := rotr w[i-2]! 17 ^^^ rotr w[i-2]! 19 ^^^ (w[i-2]! >>> 10)
+    w := w.push (w[i-16]! + s0 + w[i-7]! + s1)
+  let mut a := hs[0]!
+  let mut b := hs[1]!
+  let mut c := hs[2]!
+  let mut d := hs[3]!
+  let mut e := hs[4]!
+  let mut f := hs[5]!
+  let mut g := hs[6]!
+  let mut h := hs[7]!
+  for i in [0:64] do
+    let S1 := rotr e 6 ^^^ rotr e 11 ^^^ rotr e 25
+    let ch := (e &&& f) ^^^ ((~~~e) &&& g)
+    let t1 := h + S1 + ch + K[i]! + w[i]!
+    let S0 := rotr a 2 ^^^ rotr a 13 ^^^ rotr a 22
+    let maj := (a &&& b) ^^^ (a &&& c) ^^^ (b &&& c)
+    let t2 := S0 + maj
+    h := g
+    g := f
+    f := e
+    e := d + t1
+    d := c
+    c := b
+    b := a
+    a := t1 + t2
+  return #[hs[0]! + a, hs[1]! + b, hs[2]! + c, hs[3]! + d,
+           hs[4]! + e, hs[5]! + f, hs[6]! + g, hs[7]! + h]
+
+def hexDigit (n : UInt32) : Char := "0123456789abcdef".toList[n.toNat]!
+
+def hex32 (x : UInt32) : String :=
+  String.ofList ((List.range 8).map (fun i => hexDigit ((x >>> (28 - 4 * i).toUInt32) &&& 0xf)))
+
+def sha256Hex (s : String) : String := Id.run do
+  let m := pad s.toUTF8
+  let mut hs := H0
+  for blk in [0:m.size / 64] do
+    hs := compress hs m (64 * blk)
+  return String.join (hs.toList.map hex32)
+
+end Sha256
+/-
+Enumerate.lean.tail — the Lean half of the differential test. Appended after ChainModel.lean,
+FrameModel.lean and Sha256.lean by ../diff/run_diff.sh. Prints, from the MODEL, the same lines
+../diff/enumerate_chain.ail prints from the real code, in the same order:
+
+  E|<chain_empty_base()>
+  F|<i>|<chain_digest_after(chain_empty_base(), alphabet[i])>
+  B|<ix>|<chain_digest_base(ms)>
+  C|<bi>|<ix>|<chain_digest_over(b, ms)>|<chain_digests_over(b, ms) joined by ",">|<n>|<encode(chain_digests_json(...))>
+
+`Env` is instantiated with Sha256.sha256Hex and FrameModel.lean's transcription of
+phase_vocab's frame. No message in the alphabet contains `make[`, the only text
+`digest_content` rewrites, and the alphabet has multi-byte text, newlines, `;` and frame-like
+content to exercise the rune-counted length prefixes.
+-/
+
+open T4
+
+def realEnv : Env Message :=
+  { h := Sha256.sha256Hex, frame := canonicalMessageFrame, canon := canonicalMessage }
+
+def alphabet : List Message :=
+  [ { role := "user", content := "hi", toolCalls := [], toolCallId := "", images := [] },
+    { role := "assistant", content := "", toolCalls := [{ id := "a", name := "bash", arguments := "{\"cmd\":\"ls\"}" }], toolCallId := "", images := [] },
+    { role := "tool", content := "out\nline;2", toolCalls := [], toolCallId := "a", images := [] },
+    { role := "system", content := "é∅ ✓ 日本", toolCalls := [], toolCallId := "", images := [] },
+    { role := "user", content := "look", toolCalls := [], toolCallId := "", images := [{ source := "data:x", mime := "image/png" }, { source := "", mime := "" }] },
+    { role := "assistant", content := "m{role:4:user;", toolCalls := [{ id := "", name := "", arguments := "" }, { id := "b", name := "é", arguments := "{}" }], toolCallId := "x", images := [] } ]
+
+instance : Inhabited Message := ⟨{ role := "", content := "", toolCalls := [], toolCallId := "", images := [] }⟩
+
+def bases : List String :=
+  [ chainEmptyBase realEnv,
+    "",
+    "x",
+    "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    chainDigestOver realEnv (chainEmptyBase realEnv) [alphabet[0]!],
+    "é" ]
+
+/-- `std/json.encode` on what `chain_digests_json` builds. No escaping: every string it is
+    given here is `sha256:` and hex. -/
+def encodeJson : Json → String
+  | .str s => "\"" ++ s ++ "\""
+  | .arr xs => "[" ++ ",".intercalate (xs.map fun | .str s => "\"" ++ s ++ "\"" | .arr _ => "?") ++ "]"
+
+def seqsOfLen : Nat → List (List Nat)
+  | 0 => [[]]
+  | n + 1 => (seqsOfLen n).flatMap (fun s => (List.range alphabet.length).map (fun i => s ++ [i]))
+
+def joinIds (xs : List Nat) : String := ",".intercalate (xs.map toString)
+
+#eval show IO Unit from do
+  if Sha256.sha256Hex "abc" != "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" then
+    throw (IO.userError "Sha256 self-check failed")
+  IO.println s!"E|{chainEmptyBase realEnv}"
+  for i in List.range alphabet.length do
+    IO.println s!"F|{i}|{chainDigestAfter realEnv (chainEmptyBase realEnv) alphabet[i]!}"
+  for n in List.range 4 do
+    for ix in seqsOfLen n do
+      let ms := ix.map (fun i => alphabet[i]!)
+      IO.println s!"B|{joinIds ix}|{chainDigestBase realEnv ms}"
+      for bi in List.range bases.length do
+        let b := bases[bi]!
+        let ds := chainDigestsOver realEnv b ms
+        IO.println s!"C|{bi}|{joinIds ix}|{chainDigestOver realEnv b ms}|{",".intercalate ds}|{ds.length}|{encodeJson (chainDigestsJson ds)}"
