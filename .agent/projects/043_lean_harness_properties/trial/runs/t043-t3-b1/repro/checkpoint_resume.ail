@@ -1,0 +1,116 @@
+-- checkpoint_resume.ail — reproduction of bug_twin_forgets_checkpoint_at_resume on the REAL
+-- code, through the REAL resumer (`journal.plan_resume`), the way journal.ail's own
+-- `test_crash_resume_replacement_folds` (:3486) builds its two frames, with a checkpoint where
+-- that test has a crash.
+--
+-- Frame 1 (run r0.0): session_start, the seed [system, user], one assistant message, then the
+-- checkpoint exactly as session.ail:3109-3116 emits it (messages = [summary], digest_after =
+-- digest_messages(prefix ++ [summary])), then a state_delta. The process dies here.
+-- The resumer folds that journal and plans a resume with the SAME profile and prompt.
+-- Frame 2 (run r1.0): SessionResumed(plan.info), HistorySeeded(plan.history) with the child's
+-- chain from the empty base (session.ail:3868-3872, c2_seed_digest :501), and one appended
+-- user message chained from the seed's digest (c2_append_step :840).
+--
+-- Prints the wire events (W lines, for the REAL TypeScript host) and the REAL twin's verdict:
+--   T\t<key>\t<verdict>      `A;<history>;<dangling>;<n>` or `R;<refusal id>`
+module checkpoint_resume
+
+import std/io (println)
+import std/ai (Message, ToolCall)
+import std/json (Json, encode)
+import std/string as Str (join, concat, intToStr)
+import std/list as List (length, map)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import src/core/phase_vocab (
+  RuntimeStatusCounts, LedgerRecord, LedgerEvent, WireRecord,
+  HistorySeeded, HistoryAppended, HistoryReplaced, StateDelta, SessionStart, SessionResumed,
+  to_schema_v1, system_prefix_digest_for
+)
+import src/core/journal (
+  SessionState, Refusal, refusal_id, HeaderEntry, BootInputs, ResumeInvocation, plan_resume, empty_boot,
+  fold_journal, journal_lines_of_records, journal_leaf,
+  chain_digest_after, chain_digest_over, chain_digest_base, chain_digests_over, chain_digests_json,
+  chain_empty_base, messages_json, message_json
+)
+
+pure func msg(role: string, content: string) -> Message {
+  { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
+}
+pure func sys() -> Message { msg("system", "you are motoko") }
+pure func user() -> Message { msg("user", "list the files") }
+pure func asst() -> Message { msg("assistant", "running ls") }
+pure func summary() -> Message { msg("user", "summary: the files were listed") }
+pure func user2() -> Message { msg("user", "and now the hidden ones") }
+pure func boot() -> BootInputs { { empty_boot() | task: "list the files", step_budget: 3 } }
+pure func counts() -> RuntimeStatusCounts {
+  { provider_calls_started: 1, provider_calls_completed: 1, stage_applied_total: 0,
+    stage_rejected_total: 0, compaction_ai_applied: 0 }
+}
+pure func header() -> HeaderEntry {
+  { schema_version: 1, session_id: "sess_1", workdir: "/w", profile: "dogfood",
+    ext_set_digest: "sha256:ext", model: "m",
+    system_prefix_digest: system_prefix_digest_for([sys()]), boot: boot() }
+}
+pure func invocation() -> ResumeInvocation {
+  { workdir: "/w", ext_set_digest: "sha256:ext", profile: "dogfood", system: sys(),
+    boot: boot(), model: "m", resume_count: 1, from_id: "0006", leased: false, force: false }
+}
+
+pure func seed_event(rid: string, ms: [Message]) -> LedgerEvent {
+  HistorySeeded({ run_id: rid, messages: messages_json(ms), digest: chain_digest_over(chain_empty_base(), ms),
+                  digests: chain_digests_json(chain_digests_over(chain_empty_base(), ms)) })
+}
+
+pure func frame1() -> [LedgerEvent] {
+  let rid = "sess_1.r0.0";
+  let d_seed = chain_digest_over(chain_empty_base(), [sys(), user()]);
+  let d_asst = chain_digest_after(d_seed, asst());
+  [ SessionStart({ task: "list the files", model: "m", mode: "v2", run_id: rid }),
+    seed_event(rid, [sys(), user()]),
+    HistoryAppended({ run_id: rid, step: 1, message: message_json(asst()), replaces_previous: false, digest_after: d_asst }),
+    HistoryReplaced({ run_id: rid, step: 1, reason: "checkpoint", first_kept: None,
+                      messages: messages_json([summary()]), digest_after: chain_digest_base([sys(), summary()]) }),
+    StateDelta({ run_id: rid, step: 1, cumulative: counts(),
+                 telemetry: { last_input_tokens: 1, last_output_tokens: 1, last_estimated_input_tokens: 1 },
+                 ext_artifacts_digest: "sha256:ext", ext_artifacts: None }) ]
+}
+
+pure func wrap(e: LedgerEvent) -> LedgerRecord { WireRecord(e) }
+pure func lines_of(evs: [LedgerEvent]) -> [Json] { journal_lines_of_records(header(), List.map(wrap, evs)) }
+
+pure func ids_of(cs: [ToolCall]) -> [string] { match cs { [] => [], c :: rest => c.id :: ids_of(rest) } }
+pure func render_msg(m: Message) -> string {
+  if List.length(m.tool_calls) == 0 then m.content else concat([m.content, "[", join("+", ids_of(m.tool_calls)), "]"])
+}
+pure func render(r: Result[SessionState, Refusal]) -> string {
+  match r {
+    Ok(s) => concat(["A;", join(",", List.map(render_msg, s.history)), ";", join("+", s.dangling), ";", intToStr(List.length(s.dangling))]),
+    Err(e) => concat(["R;", refusal_id(e)])
+  }
+}
+
+func print_events(evs: [LedgerEvent]) -> () ! {IO} {
+  match evs { [] => (), e :: rest => { println(concat(["W\tcheckpoint_resume\t", encode(to_schema_v1(e))])); print_events(rest) } }
+}
+
+export func main() -> () ! {IO} {
+  let l1 = lines_of(frame1());
+  match fold_journal(l1, journal_leaf(l1)) {
+    Err(r) => println("X\tframe 1 does not fold: ${refusal_id(r)}"),
+    Ok(s) => match plan_resume(s, invocation()) {
+      Err(r) => println("X\tplan_resume refused: ${refusal_id(r)}"),
+      Ok(p) => {
+        let rid2 = "sess_1.r1.0";
+        let seed_digest = chain_digest_over(chain_empty_base(), p.history);
+        let frame2 = [SessionResumed(p.info), seed_event(rid2, p.history),
+                      HistoryAppended({ run_id: rid2, step: 0, message: message_json(user2()), replaces_previous: false,
+                                        digest_after: chain_digest_after(seed_digest, user2()) })];
+        let evs = frame1() ++ frame2;
+        println("I\tplan: prompt_digest_from == prompt_digest_to: ${if p.info.prompt_digest_from == p.info.prompt_digest_to then "true" else "false"}; folded dangling: ${intToStr(List.length(p.dangling))}; resumed history: ${join(",", List.map(render_msg, p.history))}");
+        print_events(evs);
+        println(concat(["T\tcheckpoint_resume\t", render(fold_journal(lines_of(evs), journal_leaf(lines_of(evs))))]))
+      }
+    }
+  }
+}

@@ -1,0 +1,18 @@
+/-
+Appended to T3Model.lean by run_diff_runnable.sh: the model over the sequences listed in
+`keys.txt` (one comma-separated step list per line, read from the working directory).
+Same output format as enumerate.lean.tail.
+-/
+def renderMsg (m : Msg) : String :=
+  if m.calls.length = 0 then s!"m{m.tag}" else s!"m{m.tag}[{"+".intercalate m.calls}]"
+def renderVerdict : Except Refusal State → String
+  | .ok s => s!"A;{",".intercalate (s.history.map renderMsg)};{"+".intercalate s.dangling};{s.dangling.length}"
+  | .error r => s!"R;{r.id}"
+
+#eval show IO Unit from do
+  let raw ← IO.FS.readFile "keys.txt"
+  for line in raw.splitOn "\n" do
+    if line ≠ "" then
+      let s := (line.splitOn ",").map String.toNat!
+      let evs := eventsOf s
+      IO.println s!"M\t{line}\t{renderVerdict (fold (twinLines evs))}\t{renderVerdict (fold (hostLines evs))}"

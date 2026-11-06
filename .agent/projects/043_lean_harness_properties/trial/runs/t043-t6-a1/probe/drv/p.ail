@@ -1,0 +1,33 @@
+module p
+
+import std/io (println)
+import std/bytes (fromString, toString, length, fromInts, toInts)
+import std/string as Str
+import pkg/sunholo/motoko_ext_compose/store (truncate_utf8_by_bytes)
+
+pure func ints(xs: [int]) -> string {
+  match xs { [] => "", x :: rest => "${show(x)},${ints(rest)}" }
+}
+
+func one(s: string, m: int) -> () ! {IO} {
+  let r = truncate_utf8_by_bytes(s, m);
+  println("in=[${ints(toInts(fromString(s)))}] runes=${show(Str.length(s))} bytes=${show(length(fromString(s)))} max=${show(m)} -> out=[${ints(toInts(fromString(r)))}] bytes=${show(length(fromString(r)))}")
+}
+
+export func main() -> () ! {IO} {
+  one("héllo", 2);
+  one("héllo", 3);
+  one("éé", 2);
+  one("éé", 3);
+  one("€", 1);
+  one("€€", 2);
+  one("€€", 3);
+  one("abc", 0);
+  one("abc", -1);
+  one("", 0);
+  one("", -1);
+  one(toString(fromInts([255, 97])), 1);
+  one(toString(fromInts([195])), 1);
+  one(toString(fromInts([195])), 0);
+  one(toString(fromInts([226, 130])), 1)
+}

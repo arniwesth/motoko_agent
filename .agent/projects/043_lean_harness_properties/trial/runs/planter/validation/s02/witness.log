@@ -1,0 +1,21 @@
+# s02: P1.1 witness check. Each line: tree | case | TS gate | AILANG gate | P1.1
+B0             | s01-witness ENV=1 BIN=<set,empty> PANE=a | TS closed | AIL closed | holds
+B0             | s02-witness ENV=2 BIN=a PANE=a           | TS closed | AIL closed | holds
+B0             | s02-witness' ENV=a BIN=a PANE=a          | TS closed | AIL closed | holds
+B0             | control ENV=1 BIN=a PANE=a               | TS ready  | AIL ready  | holds
+B0             | control ENV=<unset> BIN=a PANE=a         | TS closed | AIL closed | holds
+only-s02       | s01-witness ENV=1 BIN=<set,empty> PANE=a | TS closed | AIL closed | holds
+only-s02       | s02-witness ENV=2 BIN=a PANE=a           | TS closed | AIL ready  | VIOLATED
+only-s02       | s02-witness' ENV=a BIN=a PANE=a          | TS closed | AIL ready  | VIOLATED
+only-s02       | control ENV=1 BIN=a PANE=a               | TS ready  | AIL ready  | holds
+only-s02       | control ENV=<unset> BIN=a PANE=a         | TS closed | AIL closed | holds
+T              | s01-witness ENV=1 BIN=<set,empty> PANE=a | TS ready  | AIL closed | VIOLATED
+T              | s02-witness ENV=2 BIN=a PANE=a           | TS closed | AIL ready  | VIOLATED
+T              | s02-witness' ENV=a BIN=a PANE=a          | TS closed | AIL ready  | VIOLATED
+T              | control ENV=1 BIN=a PANE=a               | TS ready  | AIL ready  | holds
+T              | control ENV=<unset> BIN=a PANE=a         | TS closed | AIL closed | holds
+minus-s02      | s01-witness ENV=1 BIN=<set,empty> PANE=a | TS ready  | AIL closed | VIOLATED
+minus-s02      | s02-witness ENV=2 BIN=a PANE=a           | TS closed | AIL closed | holds
+minus-s02      | s02-witness' ENV=a BIN=a PANE=a          | TS closed | AIL closed | holds
+minus-s02      | control ENV=1 BIN=a PANE=a               | TS ready  | AIL ready  | holds
+minus-s02      | control ENV=<unset> BIN=a PANE=a         | TS closed | AIL closed | holds

@@ -1,0 +1,52 @@
+-- p31_twin.ail — P3.1, the AILANG half: every action sequence up to a length,
+-- its wire events (for the host, `p31_host.ts`) and the fold of the TWIN's
+-- journal (`journal_lines_of_records`).
+--
+--   W\t<ix>\t<wire events as a JSON array>
+--   V\t<ix>\t<verdict>\t<dangling>\t<count>\t<history json>
+--
+-- args: {"maxlen": n, "seqs": [[..], ..]}
+
+module p31_twin
+
+import std/io (println)
+import std/list as List (length, map, foldl)
+import src/core/phase_vocab (LedgerEvent)
+import scratchpad/t3/t3gen (run_actions, events_of, twin_fold, verdict_of, wire_line, ints_text, range_from)
+
+func one(ix: [int]) -> () ! {IO} {
+  let es = events_of(run_actions(ix));
+  println("W\t${ints_text(ix)}\t${wire_line(es)}");
+  println("V\t${ints_text(ix)}\t${verdict_of(twin_fold(es))}")
+}
+
+func walk(prefix: [int], left: int, is: [int], alpha: int) -> () ! {IO} {
+  match is {
+    [] => (),
+    i :: rest => {
+      let p = prefix ++ [i];
+      if left == 1 then one(p) else walk(p, left - 1, range_from(0, alpha), alpha);
+      walk(prefix, left, rest, alpha)
+    }
+  }
+}
+
+func emit_len(n: int, alpha: int) -> () ! {IO} {
+  if n == 0 then one([]) else walk([], n, range_from(0, alpha), alpha)
+}
+
+func emit_upto(i: int, n: int, alpha: int) -> () ! {IO} {
+  if i > n then () else { emit_len(i, alpha); emit_upto(i + 1, n, alpha) }
+}
+
+func each_seq(ss: [[int]]) -> () ! {IO} {
+  match ss { [] => (), s :: rest => { one(s); each_seq(rest) } }
+}
+
+-- {"maxlen": n, "seqs": []}: every sequence up to n; with seqs, exactly those.
+export func main(args: { maxlen: int, seqs: [[int]] }) -> () ! {IO} {
+  match args.seqs {
+    [] => emit_upto(0, args.maxlen, 14),
+    _ => each_seq(args.seqs)
+  }
+}

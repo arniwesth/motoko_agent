@@ -1,0 +1,66 @@
+gen: random 200000 3 -> 200000 cases, sha256 4619129cb31b9f0e (scratch /home/motoko/trial-043/s/t043-t2-a2/out/runs/random_s3)
+cases: 200000
+P2.1 (means agent gone) mismatches: 5359
+P2.1 groups: 205 groups
+P2.2 (failure code) mismatches: 106118 (35953 where AILANG's shape is herdr_json)
+P2.2 groups: 284 groups
+P2.1 mismatches by cause (0 unexplained):
+  [1037] A:ts-suffix-rule + B:ail-literal-{"error"-gate
+  [681] A:ts-suffix-rule + B:ail-literal-{"error"-gate + F:duplicate-keys
+  [543] A:ts-suffix-rule
+  [510] B:ail-literal-{"error"-gate
+  [482] C:ail-decode-ignores-trailing
+  [392] A:ts-suffix-rule + F:duplicate-keys
+  [384] C:ail-decode-ignores-trailing + F:duplicate-keys
+  [362] B:ail-literal-{"error"-gate + F:duplicate-keys
+  [277] H:negative-exit
+  [214] H:negative-exit + F:duplicate-keys
+  [149] F:duplicate-keys
+  [68] A:ts-suffix-rule + E:nested-herdr-before-json + F:duplicate-keys
+  [46] A:ts-suffix-rule + B:ail-literal-{"error"-gate + D:ts-trim-strips-non-json-ws
+  [36] B:ail-literal-{"error"-gate + D:ts-trim-strips-non-json-ws
+  [35] A:ts-suffix-rule + B:ail-literal-{"error"-gate + D:ts-trim-strips-non-json-ws + F:duplicate-keys
+  [33] A:ts-suffix-rule + D:ts-trim-strips-non-json-ws
+  [31] E:nested-herdr-before-json + F:duplicate-keys
+  [26] A:ts-suffix-rule + E:nested-herdr-before-json
+  [13] A:ts-suffix-rule + D:ts-trim-strips-non-json-ws + F:duplicate-keys
+  [13] B:ail-literal-{"error"-gate + D:ts-trim-strips-non-json-ws + F:duplicate-keys
+  [11] D:ts-trim-strips-non-json-ws
+  [5] E:nested-herdr-before-json
+  [5] D:ts-trim-strips-non-json-ws + F:duplicate-keys
+  [2] H:negative-exit + D:ts-trim-strips-non-json-ws
+  [2] E:nested-herdr-before-json + D:ts-trim-strips-non-json-ws
+  [2] H:negative-exit + D:ts-trim-strips-non-json-ws + F:duplicate-keys
+P2.2 mismatches inside herdr's JSON: 13278 (0 unexplained by causes B-H)
+  [2733] B:ail-literal-{"error"-gate
+  [2568] C:ail-decode-ignores-trailing
+  [1965] C:ail-decode-ignores-trailing + F:duplicate-keys
+  [1776] B:ail-literal-{"error"-gate + F:duplicate-keys
+  [1495] H:negative-exit
+  [1186] H:negative-exit + F:duplicate-keys
+  [645] F:duplicate-keys
+  [299] E:nested-herdr-before-json + F:duplicate-keys
+  [252] E:nested-herdr-before-json
+  [132] B:ail-literal-{"error"-gate + D:ts-trim-strips-non-json-ws
+  [91] B:ail-literal-{"error"-gate + D:ts-trim-strips-non-json-ws + F:duplicate-keys
+  [43] D:ts-trim-strips-non-json-ws + F:duplicate-keys
+  [40] D:ts-trim-strips-non-json-ws
+  [17] H:negative-exit + D:ts-trim-strips-non-json-ws
+  [14] H:negative-exit + D:ts-trim-strips-non-json-ws + F:duplicate-keys
+  [11] E:nested-herdr-before-json + D:ts-trim-strips-non-json-ws
+  [11] E:nested-herdr-before-json + D:ts-trim-strips-non-json-ws + F:duplicate-keys
+P2.2 mismatches outside herdr's JSON (K6): 92840
+  [28433] ts="" ail="herdr_cli_rejected"
+      e.g. exit=-2147483648 stderr="warning\n\n{\r\n\"error\"\r\n:{\r\n\"code\" :  \"pane_not_found\"}}killed by SIGTERM" ts_code="" ail_code="herdr_cli_rejected" ts_gone=0 ail_gone=0
+  [21893] ts="herdr_cli_rejected" ail="nested_herdr"
+      e.g. exit=256 stderr="nested herdr  {\"Error\": \"xagent_not_found\",\"result\":\"server_not_running\"\t,\"c\\u006fde\"  : {\"rr\\u006fr\":\r\\\n[\n\"server_not_running\"\n]\r\n} } \n" ts_code="herdr_cli_rejected" ail_code="nested_herdr" ts_gone=0 ail_gone=0
+  [20138] ts="herdr_cli_rejected" ail="herdr_json_undecodable"
+      e.g. exit=143 stderr="\r\n{\"error\":{\"code\"  :\"tab_not_found\"\t} ,\r\n\"c\\u006fde\":\"timeout\"\r\n}\r\n\n" ts_code="herdr_cli_rejected" ail_code="herdr_json_undecodable" ts_gone=0 ail_gone=0
+  [8165] ts="" ail="nested_herdr"
+      e.g. exit=-256 stderr="nested herdr \r\n{\"error\":\n{\t\"code\"\t:\n\" agent_not_found\"\r\n}\t}killed by SIGTERM" ts_code="" ail_code="nested_herdr" ts_gone=0 ail_gone=0
+  [7842] ts="" ail="herdr_json_undecodable"
+      e.g. exit=-2 stderr="x{\"error\" :\n{\n\"code\"\n:\r\n\"timeout\"  }\t}\n" ts_code="" ail_code="herdr_json_undecodable" ts_gone=0 ail_gone=0
+  [5947] ts="herdr_json_undecodable" ail="herdr_cli_rejected"
+      e.g. exit=143 stderr="\n  {\t\"eRror\"\t:\n\n{\"code\" :\n\" agent_nt_found\"  }}  " ts_code="herdr_json_undecodable" ail_code="herdr_cli_rejected" ts_gone=0 ail_gone=0
+  [422] ts="herdr_json_undecodable" ail="nested_herdr"
+      e.g. exit=255 stderr="\t{\"result\"\r\n:\n\"nested herdr\",\"result\"\r\n:\r\n\"pane_not_found\"\t,\"Error\"\n:  { \"result\"  :{}\t}}\r\n\n" ts_code="herdr_json_undecodable" ail_code="nested_herdr" ts_gone=0 ail_gone=0

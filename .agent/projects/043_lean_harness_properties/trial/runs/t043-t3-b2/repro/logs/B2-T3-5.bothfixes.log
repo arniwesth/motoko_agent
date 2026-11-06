@@ -1,0 +1,7 @@
+actions: 5,8
+  twin   (journal_lines_of_records -> fold_journal): digest||
+  host   (SessionJournal, one process -> fold_journal): digest||
+  across (SessionJournal, adopted per resume -> fold_journal): digest||
+  host's journal: header history_appended history_appended history_replaced history_appended 
+  expected (rule 3, then rule 4): accept|s:you are motoko::;a:[CHECKPOINT] s::;u:next::|#0
+P3.2 VIOLATED: the twin's journal does not fold to rule 3's history

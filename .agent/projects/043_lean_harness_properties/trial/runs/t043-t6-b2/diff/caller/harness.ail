@@ -1,0 +1,138 @@
+-- harness.ail — the AILANG half of T6's differential test, through the REAL,
+-- UNMODIFIED `store_stdout_and_elide` (packages/motoko-ext-compose/store.ail:32-49),
+-- the only caller of `truncate_utf8_by_bytes` (store.ail:20-30), which is not exported.
+--
+-- Same cases, same order, as ../enumerate.lean.tail:
+--   E: every concatenation of 0..3 atoms from the 14-atom alphabet below, each with
+--      max_stdout_bytes = -1 .. len+1;
+--   R: 3000 pseudo-random byte strings (LCG, seed 20261104), length 0..12, each byte a
+--      raw random byte or the first byte of an atom, with max in -2 .. len+2.
+--
+-- One line per case:
+--   <tag>|<input bytes as realized>|<max>|<truncated 0/1>|<returned stdout bytes>
+-- Bytes are decimal, '.'-joined. The input is built as toString(fromInts(...)), and printed
+-- back through toInts(fromString(...)) so that any repair by toString would show.
+--
+-- From this directory:  ailang run --caps IO,FS --entry main harness.ail
+
+module t6/diffcaller/harness
+
+import std/io (println)
+import std/bytes (fromString, toString, fromInts, toInts)
+import std/string as Str (join, concat, intToStr)
+import pkg/sunholo/motoko_ext_abi/types (ExtPorts, ExtWorld, empty_ext_world)
+import pkg/sunholo/motoko_ext_conformance/harness (canned_ports)
+import pkg/sunholo/motoko_ext_compose/store (store_stdout_and_elide)
+
+pure func atoms() -> [[int]] {
+  [ [97],                  -- 0  'a'
+    [195, 169],            -- 1  e-acute, 2 bytes
+    [226, 130, 172],       -- 2  euro sign, 3 bytes
+    [240, 159, 152, 128],  -- 3  emoji, 4 bytes
+    [128],                 -- 4  lone continuation
+    [195],                 -- 5  lone 2-byte lead
+    [226, 130],            -- 6  3-byte sequence cut short
+    [255],                 -- 7  never valid
+    [192, 175],            -- 8  overlong
+    [237, 160, 128],       -- 9  surrogate
+    [244, 144, 128, 128],  -- 10 above U+10FFFF
+    [224, 128, 128],       -- 11 overlong 3-byte
+    [240, 159],            -- 12 4-byte sequence cut short
+    [10] ]                 -- 13 newline
+}
+
+pure func nth_atom(xs: [[int]], i: int) -> [int] {
+  match xs { [] => [], x :: rest => if i == 0 then x else nth_atom(rest, i - 1) }
+}
+
+pure func len_ints(xs: [int]) -> int {
+  match xs { [] => 0, _ :: rest => 1 + len_ints(rest) }
+}
+
+pure func ints_text(xs: [int]) -> [string] {
+  match xs { [] => [], x :: rest => intToStr(x) :: ints_text(rest) }
+}
+
+pure func show_bytes(xs: [int]) -> string { join(".", ints_text(xs)) }
+
+func run_case(tag: string, bs: [int], m: int) -> () ! {IO, FS} {
+  let s = toString(fromInts(bs));
+  let r = store_stdout_and_elide(canned_ports(), empty_ext_world(), "W", "C", s, m);
+  println(concat([
+    tag, "|", show_bytes(toInts(fromString(s))), "|", intToStr(m), "|",
+    if r.truncated then "1" else "0", "|", show_bytes(toInts(fromString(r.stdout)))
+  ]))
+}
+
+func run_maxes(tag: string, bs: [int], m: int, hi: int) -> () ! {IO, FS} {
+  if m > hi then () else {
+    run_case(tag, bs, m);
+    run_maxes(tag, bs, m + 1, hi)
+  }
+}
+
+pure func concat_atoms(ix: [int]) -> [int] {
+  match ix { [] => [], i :: rest => nth_atom(atoms(), i) ++ concat_atoms(rest) }
+}
+
+func emit_seq(ix: [int]) -> () ! {IO, FS} {
+  let bs = concat_atoms(ix);
+  run_maxes("E", bs, -1, len_ints(bs) + 1)
+}
+
+pure func range_from(i: int, n: int) -> [int] {
+  if i >= n then [] else i :: range_from(i + 1, n)
+}
+
+func walk(prefix: [int], left: int, is: [int]) -> () ! {IO, FS} {
+  match is {
+    [] => (),
+    i :: rest => {
+      let p = prefix ++ [i];
+      if left == 1 then emit_seq(p) else walk(p, left - 1, range_from(0, 14));
+      walk(prefix, left, rest)
+    }
+  }
+}
+
+func emit_len(n: int) -> () ! {IO, FS} {
+  if n == 0 then emit_seq([]) else walk([], n, range_from(0, 14))
+}
+
+-- LCG, identical in enumerate.lean.tail.
+pure func lcg(x: int) -> int { (x * 1103515245 + 12345) % 2147483648 }
+
+-- Draw `k` bytes; returns the bytes and the final state.
+pure func draw(x: int, k: int) -> { bytes: [int], seed: int } {
+  if k <= 0 then { bytes: [], seed: x } else {
+    let x1 = lcg(x);
+    let x2 = lcg(x1);
+    let b = if (x1 / 65536) % 2 == 0 then (x2 / 65536) % 256
+            else {
+              let a = nth_atom(atoms(), (x2 / 65536) % 14);
+              match a { [] => 0, h :: _ => h }
+            };
+    let rest = draw(x2, k - 1);
+    { bytes: b :: rest.bytes, seed: rest.seed }
+  }
+}
+
+func emit_random(i: int, n: int, x: int) -> () ! {IO, FS} {
+  if i >= n then () else {
+    let x1 = lcg(x);
+    let k = (x1 / 65536) % 13;
+    let d = draw(x1, k);
+    let x2 = lcg(d.seed);
+    let m = (x2 / 65536) % (k + 5) - 2;
+    run_case("R", d.bytes, m);
+    emit_random(i + 1, n, x2)
+  }
+}
+
+export func main() -> () ! {IO, FS} {
+  emit_len(0);
+  emit_len(1);
+  emit_len(2);
+  emit_len(3);
+  emit_random(0, 3000, 20261104)
+}

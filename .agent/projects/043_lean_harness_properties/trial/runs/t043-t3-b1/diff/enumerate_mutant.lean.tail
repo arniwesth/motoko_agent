@@ -1,0 +1,25 @@
+/-
+NEGATIVE CONTROL (diff/negative_control.sh): enumerate.lean.tail with the model's twin and host
+replaced by `twinLinesFix` and `hostLinesFix`, each one changed rule. Appended to T3Model.lean. Runs the model's child simulator (`eventsOf`,
+the Lean copy of gen.ail's) over every step sequence of length 0..3 over its 13 steps (2,380 sequences), in the
+order gen.ail walks them. One line per sequence:
+
+  M\t<ix>\t<model twin verdict>\t<model host verdict>
+-/
+
+def renderMsg (m : Msg) : String :=
+  if m.calls.length = 0 then s!"m{m.tag}" else s!"m{m.tag}[{"+".intercalate m.calls}]"
+def renderVerdict : Except Refusal State → String
+  | .ok s => s!"A;{",".intercalate (s.history.map renderMsg)};{"+".intercalate s.dangling};{s.dangling.length}"
+  | .error r => s!"R;{r.id}"
+
+def nSteps : Nat := 13
+def seqsOfLen : Nat → List (List Nat)
+  | 0 => [[]]
+  | n + 1 => (seqsOfLen n).flatMap (fun s => (List.range nSteps).map (fun i => s ++ [i]))
+
+#eval show IO Unit from do
+  for n in [0, 1, 2, 3] do
+    for s in seqsOfLen n do
+      let evs := eventsOf s
+      IO.println s!"M\t{",".intercalate (s.map toString)}\t{renderVerdict (fold (twinLinesFix evs))}\t{renderVerdict (fold (hostLinesFix evs))}"

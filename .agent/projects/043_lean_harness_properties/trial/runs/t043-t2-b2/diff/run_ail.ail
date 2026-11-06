@@ -1,0 +1,28 @@
+-- run_ail.ail — the AILANG half of the T2 differential test (out/diff/run_diff.sh).
+-- Calls the REAL `failure_code` and `means_agent_gone` from packages/motoko-ext-herdr/types.ail
+-- on every case of cases.json (passed with --args-file), one line per case:
+--   <index>\t<JSON string of failure_code>\t<T|F for means_agent_gone>
+module run_ail
+
+import std/io (println)
+import std/string (intToStr)
+import std/json (encode, js)
+import pkg/sunholo/motoko_ext_herdr/types (failure_code, means_agent_gone)
+
+type Case = { code: int, err: string }
+
+func b(x: bool) -> string { if x then "T" else "F" }
+
+func go(i: int, cs: [Case]) -> () ! {IO} {
+  match cs {
+    [] => (),
+    c :: rest => {
+      println("${intToStr(i)}\t${encode(js(failure_code(c.code, c.err)))}\t${b(means_agent_gone(c.code, c.err))}");
+      go(i + 1, rest)
+    }
+  }
+}
+
+export func main(p: { cases: [Case] }) -> () ! {IO} {
+  go(0, p.cases)
+}

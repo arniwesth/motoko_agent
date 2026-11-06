@@ -1,0 +1,30 @@
+# s11 (S1): T4. The same search with only s11 applied, for the witness size: every failing case and the smallest.
+== only-s11
+base=chain_empty_base function-outputs-sha256=0f52775f36858cd995424eac07db3c299a51741eb32142067a9284272522cccc
+base=chain_empty_base sequences=16105 property-checks=95020 hold=48314 fail=46706 verdicts-sha256=38bd5915d0b9ffa21f2c624b41c257ddb285b0bc6dd11a103f8456d79356e85c
+  failing (seq:verdicts P4.2,P4.1@k=0..n), first 12: [0,0]:1101 [0,1]:1101 [0,2]:1101 [0,3]:1101 [0,4]:1101 [0,5]:1101 [0,6]:1101 [0,7]:1101 [0,8]:1101 [0,9]:1101 [0,10]:1101 [1,0]:1101
+base=sha256:b function-outputs-sha256=301148fba6d855933c9185b67389bbd19e553a68e2d1e2c095d29c2d5e084fbe
+base=sha256:b sequences=16105 property-checks=95020 hold=32210 fail=62810 verdicts-sha256=776cd27499f17964af84114b61fa1cb7d698a57dcd0e703231b604497703c299
+  failing (seq:verdicts P4.2,P4.1@k=0..n), first 12: [0]:011 [1]:011 [2]:011 [3]:011 [4]:011 [5]:011 [6]:011 [7]:011 [8]:011 [9]:011 [10]:011 [0,0]:0101
+s11-witness P4.2 base=sha256:b ms=[0]: VIOLATED
+s11-witness P4.1 base=chain_empty_base xs=[0] ys=[0]: VIOLATED
+== T (all seeds)
+base=chain_empty_base function-outputs-sha256=0f52775f36858cd995424eac07db3c299a51741eb32142067a9284272522cccc
+base=chain_empty_base sequences=16105 property-checks=95020 hold=48314 fail=46706 verdicts-sha256=38bd5915d0b9ffa21f2c624b41c257ddb285b0bc6dd11a103f8456d79356e85c
+  failing (seq:verdicts P4.2,P4.1@k=0..n), first 12: [0,0]:1101 [0,1]:1101 [0,2]:1101 [0,3]:1101 [0,4]:1101 [0,5]:1101 [0,6]:1101 [0,7]:1101 [0,8]:1101 [0,9]:1101 [0,10]:1101 [1,0]:1101
+base=sha256:b function-outputs-sha256=301148fba6d855933c9185b67389bbd19e553a68e2d1e2c095d29c2d5e084fbe
+base=sha256:b sequences=16105 property-checks=95020 hold=32210 fail=62810 verdicts-sha256=776cd27499f17964af84114b61fa1cb7d698a57dcd0e703231b604497703c299
+  failing (seq:verdicts P4.2,P4.1@k=0..n), first 12: [0]:011 [1]:011 [2]:011 [3]:011 [4]:011 [5]:011 [6]:011 [7]:011 [8]:011 [9]:011 [10]:011 [0,0]:0101
+s11-witness P4.2 base=sha256:b ms=[0]: VIOLATED
+s11-witness P4.1 base=chain_empty_base xs=[0] ys=[0]: VIOLATED
+== B0, for comparison
+base=chain_empty_base function-outputs-sha256=0f52775f36858cd995424eac07db3c299a51741eb32142067a9284272522cccc
+base=chain_empty_base sequences=16105 property-checks=95020 hold=95020 fail=0 verdicts-sha256=8d40e6c4726c296efdc404c3fb7906009ffebf824405bba6e61b1ef5654e017d
+  failing (seq:verdicts P4.2,P4.1@k=0..n), first 12: 
+base=sha256:b function-outputs-sha256=de70724a42561ef15c5a9141b1e96b0a5de3e59045a67ed3cda8da80f37fc49a
+base=sha256:b sequences=16105 property-checks=95020 hold=95020 fail=0 verdicts-sha256=8d40e6c4726c296efdc404c3fb7906009ffebf824405bba6e61b1ef5654e017d
+  failing (seq:verdicts P4.2,P4.1@k=0..n), first 12: 
+s11-witness P4.2 base=sha256:b ms=[0]: holds
+s11-witness P4.1 base=chain_empty_base xs=[0] ys=[0]: holds
+# Smallest violations: P4.1 at xs = ys = [one message] (2 messages, verdict string 1101 at k = 1) under either base;
+# P4.2 at a single message under any base other than chain_empty_base() (see witness.log).

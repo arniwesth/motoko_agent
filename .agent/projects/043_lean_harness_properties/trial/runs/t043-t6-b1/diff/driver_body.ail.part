@@ -1,0 +1,47 @@
+-- ===== driver (appended by run_diff.sh after the function extracted verbatim from store.ail) =====
+-- Reads cases from the file named in env T6_CASES. One case per line: `<max_bytes>;<b1>,<b2>,...`
+-- (decimal bytes 0..255, empty after `;` for the empty string). Prints, per case:
+--   <index>|<input bytes as seen by AILANG>|<Str.length(input)>|<result bytes>
+
+func ints_of(xs: [string]) -> [int] {
+  match xs {
+    [] => [],
+    x :: rest => match Str.stringToInt(x) { Some(v) => v :: ints_of(rest), None => ints_of(rest) }
+  }
+}
+
+func show_bytes(s: string) -> string {
+  Str.join(",", map_show(B.toInts(B.fromString(s))))
+}
+
+func map_show(xs: [int]) -> [string] {
+  match xs { [] => [], x :: rest => Str.intToStr(x) :: map_show(rest) }
+}
+
+func run_lines(lines: [string], i: int) -> () ! {IO} {
+  match lines {
+    [] => (),
+    line :: rest => {
+      if Str.trim(line) == "" then run_lines(rest, i)
+      else {
+        let parts = Str.split(line, ";");
+        match parts {
+          [ms, bs] => {
+            let m = match Str.stringToInt(ms) { Some(v) => v, None => 0 };
+            let bytes_list = if bs == "" then [] else ints_of(Str.split(bs, ","));
+            let s = B.toString(B.fromInts(bytes_list));
+            let r = truncate_utf8_by_bytes(s, m);
+            println("${Str.intToStr(i)}|${show_bytes(s)}|${Str.intToStr(Str.length(s))}|${show_bytes(r)}");
+            run_lines(rest, i + 1)
+          },
+          _ => { println("${Str.intToStr(i)}|BADLINE"); run_lines(rest, i + 1) }
+        }
+      }
+    }
+  }
+}
+
+export func main() -> () ! {IO, FS, Env} {
+  let path = getEnvOr("T6_CASES", "cases.txt");
+  run_lines(Str.split(readFile(path), "\n"), 0)
+}

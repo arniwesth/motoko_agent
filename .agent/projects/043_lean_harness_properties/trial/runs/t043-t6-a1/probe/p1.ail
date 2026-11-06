@@ -1,0 +1,11 @@
+module probe1
+
+import std/io (println)
+import std/bytes (fromString, length)
+import pkg/sunholo/motoko_ext_compose/store (truncate_utf8_by_bytes)
+
+export func main() -> () ! {IO} {
+  let r = truncate_utf8_by_bytes("héllo", 2);
+  println(r);
+  println(show(length(fromString(r))))
+}

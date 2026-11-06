@@ -1,0 +1,32 @@
+-- p4_2.ail — reproduces bug_P4_2 (../lean/ChainModel.lean) on the REAL chain_digests_over.
+--
+-- P4.2: length(chain_digests_over(b, ms)) == length(ms), and for non-empty ms the last
+--       element is chain_digest_over(b, ms).
+-- Witness: b = "", ms = [user "hi"]. The length half holds (P4_2_length is proved); the
+-- last-element half does not. Prints "P4.2 VIOLATED" or "P4.2 holds". Run by p4_2.sh.
+module p4_2
+
+import std/io (println)
+import std/ai (Message)
+import std/string as Str (join, concat, intToStr)
+import std/list as List (length)
+import src/core/journal (chain_digest_over, chain_digests_over)
+
+pure func hi() -> Message { { role: "user", content: "hi", tool_calls: [], tool_call_id: "", images: [] } }
+
+pure func last_of(xs: [string]) -> string {
+  match xs { [] => "<empty>", [x] => x, _ :: rest => last_of(rest) }
+}
+
+export func main() -> () ! {IO} {
+  let b = "";
+  let ms = [hi()];
+  let ds = chain_digests_over(b, ms);
+  let over = chain_digest_over(b, ms);
+  let len_ok = List.length(ds) == List.length(ms);
+  let last_ok = last_of(ds) == over;
+  println(concat(["length(digests) = ", intToStr(List.length(ds)), ", length(ms) = ", intToStr(List.length(ms))]));
+  println(concat(["last(digests)   = ", last_of(ds)]));
+  println(concat(["digest_over     = ", over]));
+  if len_ok && last_ok then println("P4.2 holds") else println("P4.2 VIOLATED")
+}

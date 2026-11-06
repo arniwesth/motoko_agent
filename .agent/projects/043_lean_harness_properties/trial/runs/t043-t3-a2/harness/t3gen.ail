@@ -1,0 +1,365 @@
+-- t3gen.ail — the shared generator for the T3 harnesses.
+--
+-- A tiny CHILD (an input generator, not a model of the functions under test):
+-- it holds the history a run holds and the chain digest pair the conversation
+-- loop threads (`session.ail` HistoryDigest {at, prev}), and turns one action
+-- symbol into the journal-class LedgerEvents the real child emits for it, with
+-- the digests computed by the REAL `journal.chain_digest_after` /
+-- `chain_digest_over` / `chain_digests_over` / `phase_vocab.digest_messages`,
+-- exactly as the emit sites in `session.ail` compute them:
+--
+--   * seed (`session.ail:3868`): digest = chain over the seed from empty,
+--     digests = the prefix chain;
+--   * one HistoryAppended per message (`c2_append_step`, `:841`), the hybrid
+--     batch's first entry `replaces_previous` chaining from `prev`;
+--   * checkpoint (`:3109`): messages = [summary], digest_after =
+--     digest_messages(prefix ++ [summary]); the child's pair becomes
+--     {at: that, prev: old at} (`:3141`);
+--   * follow-up turn (`:4350-4392`): SessionStart, HistoryAppended(user) whose
+--     digest is recomputed from the turn history from empty, then the run's
+--     HistorySeeded(history ++ [user]);
+--   * resume (`:4805`): SessionResumed, then HistorySeeded(folded history),
+--     the dangling calls stripped as the fold strips them;
+--   * profile switch resume: SessionResumed with differing digests and
+--     profiles, then HistorySeeded(new head ++ rest).
+--
+-- Action alphabet (an int each):
+--   0 A   assistant, text only
+--   1 C1  assistant with one call
+--   2 C2  assistant with two calls
+--   3 T   the tool result for the first open call (nothing when none is open)
+--   4 HP  hybrid: the plain assistant the extraction step journals
+--   5 HR  hybrid: the batch's augmented assistant, replaces_previous (only right after HP)
+--   6 K   checkpoint (HistoryReplaced + StateDelta), only with no open call
+--   7 D   StateDelta
+--   8 F   follow-up turn (RunSummary, SessionStart, HistoryAppended(user), HistorySeeded), only with no open call
+--   9 R   crash + resume, same profile (SessionResumed, HistorySeeded(folded))
+--  10 P   resume with a profile switch (SessionResumed, settings, HistorySeeded(new head))
+--  11 S   RunSuspended
+--  12 PK  ParkEntered
+--  13 WK  WakeReceived for the last park
+--  14 AX  assistant with odd content (quotes, controls, NUL, U+2028/9, BOM, emoji) and an image
+
+module t3gen
+
+import std/ai (Message, ToolCall)
+import std/json (Json, jo, ja, kv, js, jb, jint, encode)
+import std/string as Str (join, concat, intToStr)
+import std/list as List (length, map, foldl)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import src/core/phase_vocab (
+  RuntimeStatusCounts,
+  LedgerRecord, WireRecord, LedgerEvent,
+  HistorySeeded, HistoryAppended, HistoryReplaced, StateDelta, SessionStart, RunSummary,
+  RunSuspended, SessionResumed, ParkEntered, WakeReceived, OperatorWait,
+  digest_messages, to_schema_v1
+)
+import src/core/journal (
+  SessionState, Refusal, refusal_id, refusal_message,
+  fold_journal, journal_lines_of_records, journal_leaf, harness_header, default_run_identity,
+  chain_digest_after, chain_digest_over, chain_digests_over, chain_digests_json, chain_empty_base,
+  messages_json, message_json
+)
+
+-- ---------------------------------------------------------------------------
+-- Messages
+-- ---------------------------------------------------------------------------
+
+export pure func mkmsg(role: string, content: string, ids: [string], tcid: string) -> Message {
+  { role: role, content: content, tool_calls: calls_of(ids), tool_call_id: tcid, images: [] }
+}
+
+pure func calls_of(ids: [string]) -> [ToolCall] {
+  match ids { [] => [], i :: rest => { id: i, name: "bash", arguments: "{}" } :: calls_of(rest) }
+}
+
+-- ---------------------------------------------------------------------------
+-- The child
+-- ---------------------------------------------------------------------------
+
+export type Child = {
+  msgs: [Message],
+  at: string,
+  prev: string,
+  k: int,
+  run: int,
+  rid: string,
+  open: [string],
+  hybrid: bool,
+  profile: string,
+  prompt: string,
+  resumes: int,
+  park: int,
+  parked: bool,
+  rev: [LedgerEvent]
+}
+
+pure func rid_of(run: int) -> string { "sess_1.r0.${intToStr(run)}" }
+
+pure func emit(c: Child, e: LedgerEvent) -> Child { { c | rev: e :: c.rev } }
+
+pure func counts(n: int) -> RuntimeStatusCounts {
+  { provider_calls_started: n, provider_calls_completed: n, stage_applied_total: 0,
+    stage_rejected_total: 0, compaction_ai_applied: 0 }
+}
+
+export pure func ev_seed(rid: string, ms: [Message]) -> LedgerEvent {
+  HistorySeeded({
+    run_id: rid,
+    messages: messages_json(ms),
+    digest: chain_digest_over(chain_empty_base(), ms),
+    digests: chain_digests_json(chain_digests_over(chain_empty_base(), ms))
+  })
+}
+
+export pure func ev_append(rid: string, m: Message, replaces: bool, d: string) -> LedgerEvent {
+  HistoryAppended({ run_id: rid, step: 1, message: message_json(m), replaces_previous: replaces, digest_after: d })
+}
+
+pure func ev_delta(rid: string, n: int) -> LedgerEvent {
+  StateDelta({
+    run_id: rid, step: n, cumulative: counts(n),
+    telemetry: { last_input_tokens: 120, last_output_tokens: 40, last_estimated_input_tokens: 100 },
+    ext_artifacts_digest: "sha256:ext", ext_artifacts: None
+  })
+}
+
+export pure func ev_summary(n: int) -> LedgerEvent {
+  RunSummary({
+    model: "m", motoko_commit: "abc", finish_reason: "stop", steps_executed: n,
+    input_tokens: 10, output_tokens: 2, cache_read_input_tokens: 0,
+    cache_creation_input_tokens: 0, total_cost_usd: 0.0, total_cost_millicents: 0,
+    duration_ms: 5, error: "", cumulative: counts(n), world_ordinal: n
+  })
+}
+
+-- One message entering the history the ordinary way.
+pure func append_msg(c: Child, m: Message) -> Child {
+  let d = chain_digest_after(c.at, m);
+  emit({ c | msgs: c.msgs ++ [m], at: d, prev: c.at, k: c.k + 1 }, ev_append(c.rid, m, false, d))
+}
+
+pure func drop_last(ms: [Message]) -> [Message] {
+  match ms { [] => [], [_] => [], m :: rest => m :: drop_last(rest) }
+}
+
+pure func take_sys(ms: [Message]) -> [Message] {
+  match ms { [] => [], m :: rest => if m.role == "system" then m :: take_sys(rest) else [] }
+}
+
+pure func drop_sys(ms: [Message]) -> [Message] {
+  match ms { [] => [], m :: rest => if m.role == "system" then drop_sys(rest) else ms }
+}
+
+pure func contains(xs: [string], t: string) -> bool {
+  match xs { [] => false, x :: rest => if x == t then true else contains(rest, t) }
+}
+
+pure func without(xs: [string], t: string) -> [string] {
+  match xs { [] => [], x :: rest => if x == t then without(rest, t) else x :: without(rest, t) }
+}
+
+pure func keep_calls(open: [string], cs: [ToolCall]) -> [ToolCall] {
+  match cs { [] => [], c :: rest => if contains(open, c.id) then keep_calls(open, rest) else c :: keep_calls(open, rest) }
+}
+
+-- The folded history a resume seeds: the open calls removed from the assistant
+-- that made them (the last assistant with calls), as D4 rule 4 strips them.
+pure func strip_last_calls(open: [string], ms: [Message]) -> [Message] {
+  match open {
+    [] => ms,
+    _ => strip_rev(open, rev_msgs(ms), [])
+  }
+}
+
+pure func rev_msgs(ms: [Message]) -> [Message] { List.foldl(\acc m. m :: acc, [], ms) }
+
+pure func strip_rev(open: [string], rev: [Message], tail: [Message]) -> [Message] {
+  match rev {
+    [] => tail,
+    m :: rest =>
+      if List.length(m.tool_calls) > 0
+      then rev_msgs(rest) ++ ({ m | tool_calls: keep_calls(open, m.tool_calls) } :: tail)
+      else strip_rev(open, rest, m :: tail)
+  }
+}
+
+pure func k_str(c: Child) -> string { intToStr(c.k) }
+
+-- A run never makes a new assistant turn while calls are open: the next history
+-- message after an assistant with calls is its results (A, C1, C2, HP need no open call).
+export pure func step(c: Child, a: int) -> Child {
+  let c2 = step0(c, a);
+  -- A run journals nothing between a park and the wake that answers it (`ParkEntered`, then
+  -- the port's reply, then `WakeReceived`), so any other emitting action ends the wait.
+  if a == 12 || a == 13 then c2
+  else if List.length(c2.rev) != List.length(c.rev) then { c2 | parked: false }
+  else c2
+}
+
+pure func step0(c: Child, a: int) -> Child {
+  if a <= 2 && List.length(c.open) > 0 then c
+  else if a == 0 then append_msg(c, mkmsg("assistant", "answer ${k_str(c)}", [], ""))
+  else if a == 1 then {
+    let id = "c${k_str(c)}";
+    let c2 = append_msg(c, mkmsg("assistant", "call ${k_str(c)}", [id], ""));
+    { c2 | open: [id], hybrid: false }
+  }
+  else if a == 2 then {
+    let i1 = "c${k_str(c)}a";
+    let i2 = "c${k_str(c)}b";
+    let c2 = append_msg(c, mkmsg("assistant", "calls ${k_str(c)}", [i1, i2], ""));
+    { c2 | open: [i1, i2], hybrid: false }
+  }
+  else if a == 3 then match c.open {
+    [] => c,
+    id :: rest => {
+      let c2 = append_msg(c, mkmsg("tool", "result ${k_str(c)}", [], id));
+      { c2 | open: rest, hybrid: false }
+    }
+  }
+  else if a == 4 then {
+    if List.length(c.open) > 0 then c
+    else {
+      let c2 = append_msg(c, mkmsg("assistant", "plan ${k_str(c)}", [], ""));
+      { c2 | hybrid: true }
+    }
+  }
+  else if a == 5 then {
+    if not c.hybrid then c
+    else {
+      let id = "h${k_str(c)}";
+      let m = mkmsg("assistant", "plan+bash ${k_str(c)}", [id], "");
+      let d = chain_digest_after(c.prev, m);
+      emit({ c | msgs: drop_last(c.msgs) ++ [m], at: d, prev: c.prev, k: c.k + 1, open: [id], hybrid: false },
+           ev_append(c.rid, m, true, d))
+    }
+  }
+  else if a == 6 then {
+    if List.length(c.open) > 0 then c
+    else {
+      let summary = mkmsg("user", "summary ${k_str(c)}", [], "");
+      let cp = take_sys(c.msgs) ++ [summary];
+      let d = digest_messages(cp);
+      let c2 = emit(c, HistoryReplaced({ run_id: c.rid, step: c.k, reason: "checkpoint", first_kept: None,
+                                         messages: messages_json([summary]), digest_after: d }));
+      -- `hybrid` survives: `TakeCheckpoint` keeps the pending batch (`session.ail:3128-3131`), so the
+      -- batch's replacement can follow a checkpoint, chaining from the checkpoint's `prev`.
+      emit({ c2 | msgs: cp, at: d, prev: c.at, k: c.k + 1 }, ev_delta(c.rid, c.k))
+    }
+  }
+  else if a == 7 then emit(c, ev_delta(c.rid, c.k))
+  else if a == 8 then {
+    if List.length(c.open) > 0 then c
+    else {
+      let run = c.run + 1;
+      let rid = rid_of(run);
+      let user = mkmsg("user", "follow-up ${k_str(c)}", [], "");
+      let hist = c.msgs ++ [user];
+      let d = chain_digest_after(chain_digest_over(chain_empty_base(), c.msgs), user);
+      let c1 = emit(c, ev_summary(c.k));
+      let c2 = emit(c1, SessionStart({ task: "t", model: "m", mode: "v2", run_id: rid }));
+      let c3 = emit(c2, ev_append(rid, user, false, d));
+      let c4 = emit(c3, ev_seed(rid, hist));
+      { c4 | msgs: hist, at: chain_digest_over(chain_empty_base(), hist),
+             prev: chain_digest_over(chain_empty_base(), c.msgs), k: c.k + 1, run: run, rid: rid, hybrid: false, parked: false }
+    }
+  }
+  else if a == 9 || a == 10 then {
+    let switch = a == 10;
+    let run = c.run + 1;
+    let rid = rid_of(run);
+    let folded = strip_last_calls(c.open, c.msgs);
+    let new_profile = if switch then "${c.profile}x" else c.profile;
+    let new_prompt = if switch then "sha256:p${k_str(c)}" else c.prompt;
+    let hist = if switch then [mkmsg("system", "head ${new_profile}", [], "")] ++ drop_sys(folded) else folded;
+    let c1 = emit(c, SessionResumed({
+      resume_count: c.resumes + 1, from_id: "0001", from_ordinal: 0,
+      profile_from: c.profile, profile_to: new_profile,
+      prompt_digest_from: c.prompt, prompt_digest_to: new_prompt, forced: false
+    }));
+    let c2 = emit(c1, ev_seed(rid, hist));
+    { c2 | msgs: hist, at: chain_digest_over(chain_empty_base(), hist),
+           prev: chain_digest_over(chain_empty_base(), drop_last(hist)), k: c.k + 1, run: run, rid: rid,
+           open: [], hybrid: false, profile: new_profile, prompt: new_prompt, resumes: c.resumes + 1 }
+  }
+  else if a == 11 then emit(c, RunSuspended({ session_id: "sess_1", run_id: c.rid, reason: "budget", step: c.k }))
+  else if a == 12 then {
+    let req = "${c.rid}.p${intToStr(c.park)}";
+    let c2 = emit(c, ParkEntered({ request_id: req, step: c.k, waits: [OperatorWait({ id: "w${intToStr(c.park)}" })] }));
+    { c2 | parked: true }
+  }
+  else if a == 14 then {
+    -- AX: an assistant whose content and image exercise both codecs on the host path
+    -- (AILANG encode -> TS JSON.parse/JSON.stringify -> AILANG decode -> re-digest).
+    if List.length(c.open) > 0 then c
+    else append_msg(c, { role: "assistant",
+      content: "q\"b\\s\n\t\r \u{0} \u{1} \u{1f} \u{7f} é 😀 \u{2028}\u{2029} \u{feff} </script> ${k_str(c)}",
+      tool_calls: [], tool_call_id: "", images: [{ source: "shot\u{0}.png", mime: "image/png" }] })
+  }
+  else if a == 13 then {
+    if not c.parked then c
+    else {
+      let req = "${c.rid}.p${intToStr(c.park)}";
+      let c2 = emit(c, WakeReceived({ request_id: req, wait_id: "w${intToStr(c.park)}", outcome: "operator_input", detail: "" }));
+      { c2 | parked: false, park: c.park + 1 }
+    }
+  }
+  else c
+}
+
+pure func t_sys() -> Message { mkmsg("system", "you are motoko", [], "") }
+pure func t_user() -> Message { mkmsg("user", "list the files", [], "") }
+
+-- A fresh session's first run: SessionStart, then the seed [system, user].
+export pure func child0() -> Child {
+  let seed = [t_sys(), t_user()];
+  let c0: Child = {
+    msgs: seed, at: chain_digest_over(chain_empty_base(), seed),
+    prev: chain_digest_over(chain_empty_base(), [t_sys()]),
+    k: 0, run: 0, rid: rid_of(0), open: [], hybrid: false, profile: "dogfood",
+    prompt: "sha256:p", resumes: 0, park: 0, parked: false, rev: []
+  };
+  emit(emit(c0, SessionStart({ task: "list the files", model: "m", mode: "v2", run_id: rid_of(0) })), ev_seed(rid_of(0), seed))
+}
+
+export pure func events_of(c: Child) -> [LedgerEvent] { rev_events(c.rev) }
+
+pure func rev_events(xs: [LedgerEvent]) -> [LedgerEvent] { List.foldl(\acc e. e :: acc, [], xs) }
+
+export pure func run_actions(acts: [int]) -> Child { List.foldl(step, child0(), acts) }
+
+export pure func records_of(es: [LedgerEvent]) -> [LedgerRecord] { List.map(\e. WireRecord(e), es) }
+
+-- ---------------------------------------------------------------------------
+-- Reporting a fold
+-- ---------------------------------------------------------------------------
+
+export pure func history_text(ms: [Message]) -> string { encode(messages_json(ms)) }
+
+export pure func verdict_of(r: Result[SessionState, Refusal]) -> string {
+  match r {
+    Ok(s) => concat(["accept\t", join(",", s.dangling), "\t", intToStr(List.length(s.dangling)), "\t", history_text(s.history)]),
+    Err(x) => concat(["refuse:", refusal_id(x), "\t\t\t", refusal_message(x)])
+  }
+}
+
+export pure func twin_lines(es: [LedgerEvent]) -> [Json] {
+  journal_lines_of_records(harness_header(default_run_identity("sess_1"), "m"), records_of(es))
+}
+
+export pure func twin_fold(es: [LedgerEvent]) -> Result[SessionState, Refusal] {
+  let lines = twin_lines(es);
+  fold_journal(lines, journal_leaf(lines))
+}
+
+export func wire_line(es: [LedgerEvent]) -> string {
+  concat(["[", join(",", List.map(\e. encode(to_schema_v1(e)), es)), "]"])
+}
+
+export pure func ints_text(xs: [int]) -> string { join(",", List.map(intToStr, xs)) }
+
+export pure func range_from(i: int, n: int) -> [int] {
+  if i >= n then [] else i :: range_from(i + 1, n)
+}

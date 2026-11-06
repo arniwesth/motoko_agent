@@ -1,0 +1,21 @@
+def twinLinesFixAll (evs : List Ev) : List Ent := (evs.foldl twinEventFix {}).out
+#eval show IO Unit from do
+  let raw ← IO.FS.readFile "p31_runnable_keys.txt"
+  let mut counts : List (String × Nat) := []
+  for line in raw.splitOn "\n" do
+    if line ≠ "" then
+      let s := (line.splitOn ",").map String.toNat!
+      let evs := eventsOf s
+      let h := verdict (fold (hostLines evs)); let t := verdict (fold (twinLines evs))
+      let hF := verdict (fold (hostLinesFix evs)); let tF := verdict (fold (twinLinesFix evs))
+      let cls :=
+        if h = tF then "V1 (twin replaced_since_seed)"
+        else if hF = t then "V2 (host hybrid pending)"
+        else if hF = tF then "V1+V2"
+        else if s.contains 12 then "H1 (empty call id)"
+        else if (s.filter (· == 11)).length ≥ 2 then "V3 (first_kept)"
+        else s!"other {line}"
+      counts := match counts.find? (·.1 == cls) with
+        | some _ => counts.map (fun p => if p.1 == cls then (p.1, p.2 + 1) else p)
+        | none => counts ++ [(cls, 1)]
+  for (c, n) in counts do IO.println s!"{n}\t{c}"

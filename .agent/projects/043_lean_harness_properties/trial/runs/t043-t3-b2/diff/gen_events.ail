@@ -1,0 +1,262 @@
+-- gen_events.ail — the AILANG half of the T3 differential test (../JournalTwinModel.lean).
+--
+-- For every action sequence of length 0..4 over the nine child actions of the model's
+-- `Child.step`, in the model's order, it builds the wire events a child emits (the chain
+-- digests computed with the REAL `chain_digest_after` / `chain_digest_base` /
+-- `chain_digests_over`), and prints two lines:
+--
+--   T|<actions>|<twin verdict>|<history>|<dangling>#<n>
+--       the REAL `fold_journal` over the REAL `journal_lines_of_records` of those events,
+--       folded at `journal_leaf`;
+--   E|<actions>|<event json>\t<event json>...
+--       the same events as wire JSON (`phase_vocab.to_schema_v1_kvs`), for host.ts.
+--
+-- Run from the repository root (copied into the tree by run_diff.sh, because package
+-- imports resolve only inside it):
+--   ailang run --relax-modules --caps IO --entry main <copy>/gen_events.ail
+
+module gen_events
+
+import std/io (println)
+import std/ai (Message, ToolCall)
+import std/json (Json, jo, encode)
+import std/string as Str (join, concat, intToStr)
+import std/list as List (length, map, foldl)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import src/core/phase_vocab (
+  LedgerRecord, WireRecord, LedgerEvent,
+  HistorySeeded, HistoryAppended, HistoryReplaced, SessionResumed, to_schema_v1_kvs
+)
+import src/core/journal (
+  SessionState, Refusal, refusal_id,
+  fold_journal, journal_lines_of_records, journal_leaf, harness_header, default_run_identity,
+  chain_digest_after, chain_digest_over, chain_digests_over, chain_digests_json, chain_empty_base,
+  chain_digest_base, messages_json, message_json
+)
+
+-- Messages: the model's `sysMsg`, `sys2Msg`, `usrMsg`, `a0`, `a1`, `a1h`, `t1`, `u2`, `summaryMsg`.
+
+pure func call(id: string) -> ToolCall { { id: id, name: "bash", arguments: "{}" } }
+
+pure func calls_of(ids: [string]) -> [ToolCall] {
+  match ids { [] => [], i :: rest => call(i) :: calls_of(rest) }
+}
+
+pure func mk(role: string, content: string, ids: [string], tcid: string) -> Message {
+  { role: role, content: content, tool_calls: calls_of(ids), tool_call_id: tcid, images: [] }
+}
+
+pure func m_sys() -> Message { mk("system", "you are motoko", [], "") }
+pure func m_sys2() -> Message { mk("system", "you are motoko, switched", [], "") }
+pure func m_usr() -> Message { mk("user", "list the files", [], "") }
+pure func m_a0() -> Message { mk("assistant", "plain", [], "") }
+pure func m_a1() -> Message { mk("assistant", "calls", ["c1"], "") }
+pure func m_a1h() -> Message { mk("assistant", "plain", ["c1"], "") }
+pure func m_t1() -> Message { mk("tool", "result", [], "c1") }
+pure func m_u2() -> Message { mk("user", "next", [], "") }
+pure func m_summary() -> Message { mk("assistant", "[CHECKPOINT] s", [], "") }
+
+pure func run_id() -> string { "sess_1.r0.0" }
+
+-- The child's pairing view (a copy of the fold's `pair_step` / `strip_dangling`, which are
+-- private): what a resume's plan.history is.
+
+type HM = { seq: int, m: Message }
+type PA = { err: bool, open_ids: [string], cur_ids: [string], cur_seq: int }
+
+pure func contains_s(xs: [string], t: string) -> bool {
+  match xs { [] => false, x :: rest => if x == t then true else contains_s(rest, t) }
+}
+pure func without_s(xs: [string], t: string) -> [string] {
+  match xs { [] => [], x :: rest => if x == t then without_s(rest, t) else x :: without_s(rest, t) }
+}
+pure func ids_of(cs: [ToolCall]) -> [string] {
+  match cs { [] => [], c :: rest => c.id :: ids_of(rest) }
+}
+pure func pstep(acc: PA, h: HM) -> PA {
+  if acc.err then acc
+  else if h.m.role == "tool" then
+    if contains_s(acc.cur_ids, h.m.tool_call_id) then { acc | open_ids: without_s(acc.open_ids, h.m.tool_call_id) }
+    else { acc | err: true }
+  else if List.length(acc.open_ids) > 0 then { acc | err: true }
+  else if List.length(h.m.tool_calls) > 0 then
+    { acc | open_ids: ids_of(h.m.tool_calls), cur_ids: ids_of(h.m.tool_calls), cur_seq: h.seq }
+  else acc
+}
+pure func tag(n: int, ms: [Message]) -> [HM] {
+  match ms { [] => [], m :: rest => { seq: n, m: m } :: tag(n + 1, rest) }
+}
+pure func keep(d: [string], cs: [ToolCall]) -> [ToolCall] {
+  match cs { [] => [], c :: rest => if contains_s(d, c.id) then keep(d, rest) else c :: keep(d, rest) }
+}
+pure func strip(d: [string], cur: int, xs: [HM]) -> [Message] {
+  match xs {
+    [] => [],
+    h :: rest =>
+      if h.seq == cur && List.length(h.m.tool_calls) > 0
+      then { h.m | tool_calls: keep(d, h.m.tool_calls) } :: strip(d, cur, rest)
+      else h.m :: strip(d, cur, rest)
+  }
+}
+pure func plan_of(ms: [Message]) -> [Message] {
+  let tagged = tag(0, ms);
+  let p = List.foldl(pstep, { err: false, open_ids: [], cur_ids: [], cur_seq: -1 }, tagged);
+  if p.err || List.length(p.open_ids) == 0 then ms else strip(p.open_ids, p.cur_seq, tagged)
+}
+
+pure func take_system(ms: [Message]) -> [Message] {
+  match ms { [] => [], m :: rest => if m.role == "system" then m :: take_system(rest) else [] }
+}
+pure func drop_system(ms: [Message]) -> [Message] {
+  match ms { [] => [], m :: rest => if m.role == "system" then drop_system(rest) else ms }
+}
+pure func drop_last(ms: [Message]) -> [Message] {
+  match ms { [] => [], m :: rest => match rest { [] => [], _ :: _ => m :: drop_last(rest) } }
+}
+pure func init_chain(ms: [Message]) -> string { chain_digest_over(chain_empty_base(), drop_last(ms)) }
+
+-- The child: its history and its chain pair (session.ail's `HistoryDigest`).
+type Child = { hist: [Message], at: string, prev: string }
+type Stepped = { c: Child, evs: [LedgerEvent] }
+
+pure func reseed(ms: [Message]) -> Child {
+  { hist: ms, at: chain_digest_over(chain_empty_base(), ms),
+    prev: match ms { [] => chain_empty_base(), _ :: _ => init_chain(ms) } }
+}
+
+pure func seed_ev(ms: [Message]) -> LedgerEvent {
+  HistorySeeded({
+    run_id: run_id(),
+    messages: messages_json(ms),
+    digest: chain_digest_over(chain_empty_base(), ms),
+    digests: chain_digests_json(chain_digests_over(chain_empty_base(), ms))
+  })
+}
+
+pure func app(c: Child, m: Message) -> Stepped {
+  let d = chain_digest_after(c.at, m);
+  { c: { hist: c.hist ++ [m], at: d, prev: c.at },
+    evs: [HistoryAppended({ run_id: run_id(), step: 1, message: message_json(m), replaces_previous: false, digest_after: d })] }
+}
+
+pure func resumed_ev(prompt_to: string, profile_to: string) -> LedgerEvent {
+  SessionResumed({ resume_count: 1, from_id: "0001", from_ordinal: 0, profile_from: "prof",
+                   profile_to: profile_to, prompt_digest_from: "p0", prompt_digest_to: prompt_to,
+                   forced: false })
+}
+
+pure func step(c: Child, a: int) -> Stepped {
+  if a == 0 then app(c, m_a0())
+  else if a == 1 then app(c, m_a1())
+  else if a == 2 then app(c, m_t1())
+  else if a == 3 then app(c, m_u2())
+  else if a == 4 then {
+    let d = chain_digest_after(c.prev, m_a1h());
+    { c: { hist: drop_last(c.hist) ++ [m_a1h()], at: d, prev: c.prev },
+      evs: [HistoryAppended({ run_id: run_id(), step: 1, message: message_json(m_a1h()), replaces_previous: true, digest_after: d })] }
+  }
+  else if a == 5 then {
+    let cp = take_system(c.hist) ++ [m_summary()];
+    { c: { hist: cp, at: chain_digest_base(cp), prev: c.at },
+      evs: [HistoryReplaced({ run_id: run_id(), step: 1, reason: "checkpoint", first_kept: None,
+                              messages: messages_json([m_summary()]), digest_after: chain_digest_base(cp) })] }
+  }
+  else if a == 6 then {
+    let plan = plan_of(c.hist);
+    { c: reseed(plan), evs: [resumed_ev("p0", "prof"), seed_ev(plan)] }
+  }
+  else if a == 7 then {
+    let plan = m_sys2() :: drop_system(plan_of(c.hist));
+    { c: reseed(plan), evs: [resumed_ev("p1", "prof2"), seed_ev(plan)] }
+  }
+  else {
+    -- 8: a follow-up turn (session.ail:4387-4393): the operator's message chained from the
+    -- turn history's seed digest, then the run's seed of the history with it.
+    let h = c.hist ++ [m_u2()];
+    { c: reseed(h),
+      evs: [HistoryAppended({ run_id: run_id(), step: 0, message: message_json(m_u2()), replaces_previous: false,
+                              digest_after: chain_digest_after(chain_digest_over(chain_empty_base(), c.hist), m_u2()) }),
+            seed_ev(h)] }
+  }
+}
+
+pure func run_step(acc: Stepped, a: int) -> Stepped {
+  let r = step(acc.c, a);
+  { c: r.c, evs: acc.evs ++ r.evs }
+}
+
+pure func events_of(acts: [int]) -> [LedgerEvent] {
+  let s0 = [m_sys(), m_usr()];
+  List.foldl(run_step, { c: reseed(s0), evs: [seed_ev(s0)] }, acts).evs
+}
+
+-- Printing.
+
+pure func role_ch(r: string) -> string {
+  if r == "system" then "s" else if r == "user" then "u" else if r == "assistant" then "a" else "t"
+}
+pure func msg_str(m: Message) -> string {
+  concat([role_ch(m.role), ":", m.content, ":", join("+", ids_of(m.tool_calls)), ":", m.tool_call_id])
+}
+pure func hist_str(ms: [Message]) -> string { join(";", List.map(msg_str, ms)) }
+
+pure func verdict_str(r: Result[SessionState, Refusal]) -> string {
+  match r {
+    Ok(s) => concat(["accept|", hist_str(s.history), "|", join(",", s.dangling), "#", intToStr(List.length(s.dangling))]),
+    Err(e) => concat([refusal_id(e), "||"])
+  }
+}
+
+pure func ints_text(xs: [int]) -> [string] {
+  match xs { [] => [], x :: rest => intToStr(x) :: ints_text(rest) }
+}
+
+pure func wrap(e: LedgerEvent) -> LedgerRecord { WireRecord(e) }
+
+func event_json(e: LedgerEvent) -> string { encode(jo(to_schema_v1_kvs(e))) }
+
+func lines_of_events(label: string, evs: [LedgerEvent]) -> string {
+  let lines = journal_lines_of_records(harness_header(default_run_identity("sess_1"), "m"), List.map(wrap, evs));
+  concat(["T|", label, "|", verdict_str(fold_journal(lines, journal_leaf(lines))), "\n",
+          "E|", label, "|", join("\t", List.map(event_json, evs))])
+}
+
+func lines_of(acts: [int]) -> string { lines_of_events(join(",", ints_text(acts)), events_of(acts)) }
+
+-- X-1 (exploratory, ../JournalTwinModel.lean `x1Events`): a checkpoint, an append, then a second
+-- checkpoint with `first_kept: Some(3)`, over a two-message system prefix. `first_kept` is
+-- `None` at HEAD (session.ail:3109-3116), so no run emits this; the wire type admits it.
+pure func m_sysB() -> Message { mk("system", "project rules", [], "") }
+
+pure func x1_events() -> [LedgerEvent] {
+  let s = [m_sys(), m_sysB(), m_usr()];
+  let d1 = chain_digest_after(chain_digest_over(chain_empty_base(), s), m_a0());
+  let cp = [m_sys(), m_sysB(), m_summary()];
+  let d2 = chain_digest_after(chain_digest_base(cp), m_u2());
+  [seed_ev(s),
+   HistoryAppended({ run_id: run_id(), step: 1, message: message_json(m_a0()), replaces_previous: false, digest_after: d1 }),
+   HistoryReplaced({ run_id: run_id(), step: 1, reason: "checkpoint", first_kept: None,
+                     messages: messages_json([m_summary()]), digest_after: chain_digest_base(cp) }),
+   HistoryAppended({ run_id: run_id(), step: 2, message: message_json(m_u2()), replaces_previous: false, digest_after: d2 }),
+   HistoryReplaced({ run_id: run_id(), step: 2, reason: "checkpoint", first_kept: Some(3),
+                     messages: messages_json([m_summary()]), digest_after: chain_digest_base(cp) })]
+}
+
+export func main_x1() -> () ! {IO} { println(lines_of_events("x1", x1_events())) }
+
+-- Every sequence of length 0..4 over 0..8, in the model's `seqsOfLen` order.
+pure func range_from(i: int, n: int) -> [int] { if i >= n then [] else i :: range_from(i + 1, n) }
+
+pure func extend(s: [int], is: [int]) -> [[int]] {
+  match is { [] => [], i :: rest => (s ++ [i]) :: extend(s, rest) }
+}
+pure func extend_all(ss: [[int]]) -> [[int]] {
+  match ss { [] => [], s :: rest => extend(s, range_from(0, 9)) ++ extend_all(rest) }
+}
+pure func seqs_of_len(n: int) -> [[int]] { if n == 0 then [[]] else extend_all(seqs_of_len(n - 1)) }
+
+export func main() -> () ! {IO} {
+  let all = seqs_of_len(0) ++ seqs_of_len(1) ++ seqs_of_len(2) ++ seqs_of_len(3) ++ seqs_of_len(4);
+  println(join("\n", List.map(lines_of, all)))
+}

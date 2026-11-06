@@ -1,0 +1,35 @@
+-- register_gate.ail — the AILANG call site of the gate, run for real.
+--
+-- Calls the REAL `register_with_config` (packages/motoko-ext-herdr/register.ail), which reads
+-- HERDR_ENV / HERDR_BIN_PATH / HERDR_PANE_ID from the process environment through std/env and
+-- feeds them to `herdr_env_ready`. Prints one line:
+--
+--   gate=<T|F> tools=<n> bin=<the bin the extension will invoke>
+--
+-- gate is T when the registration carries a non-empty ToolProvider list, which is exactly
+-- `gate_open` (register.ail:206-207). Set HERDR_ORCHESTRATOR=off when running it so that no
+-- run file is read (orchestrator_mode only scans when the switch is not off).
+module register_gate
+
+import std/io (println)
+import std/list as L (length)
+import std/json (encode)
+import std/string (contains, join)
+import pkg/sunholo/motoko_ext_abi/types (ExtRegistration, Capability, ToolProvider)
+import pkg/sunholo/motoko_ext_herdr/register (register_with_config)
+
+pure func provided(caps: [Capability]) -> [string] {
+  match caps {
+    [] => [],
+    ToolProvider(names, _) :: rest => names ++ provided(rest),
+    _ :: rest => provided(rest)
+  }
+}
+
+export func main() -> () ! {Clock, Env, FS, IO, Process} {
+  let reg = register_with_config(());
+  let tools = provided(reg.caps);
+  let n = L.length(tools);
+  let g = if n > 0 then "T" else "F";
+  println(join(" ", ["gate=${g}", "tools=${show(n)}"]))
+}

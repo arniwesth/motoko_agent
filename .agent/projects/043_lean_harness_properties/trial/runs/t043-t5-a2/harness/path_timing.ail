@@ -1,0 +1,92 @@
+-- path_timing.ail — X-3: how path_up's running time grows with the journal. The REAL path_up
+-- (via gen/core_journal_exposed, see expose.sh) on a linear, host-shaped chain (root first, leaf
+-- last, entry k's parent is entry k-1: exactly the order the host's writer appends) of N and
+-- then F*N entries, started at the leaf, each timed in-process with std/clock (so the ~5 s of
+-- compilation is not in the numbers). Repeated R times each, interleaved, minimum kept.
+--
+-- A walk of a path of length L in a list of N entries calls find_entry L times, each a linear
+-- scan from the head, and contains_string L times over a `seen` of length up to L; on the
+-- host's journals L = N, so the expected growth is quadratic: t(F*N)/t(N) near F*F, where a
+-- linear walk would give near F. The machine is shared, so F = 4 (16 against 4) is used to keep
+-- the two apart under timing noise.
+--
+-- Input: one line `<N> <R> <F> [linear]`. Output: `N=<N> F=<F> tN=<ms> tFN=<ms> ratio_x100=<100*tFN/tN>`.
+-- With `linear`, the timed operation is instead the REAL find_entry looking up an absent id
+-- (one full scan) N times on a list of N and then of F*N entries: work linear in the list per
+-- call and the same call count, so its ratio is the threshold's control: near F.
+--
+-- From out/:  echo "200 3 4" | ailang run --relax-modules --caps IO,Clock --entry main harness/path_timing.ail
+
+module harness/path_timing
+
+import std/io (println, readLine)
+import std/json (Json, jo)
+import std/string as Str (concat, intToStr, split, stringToInt)
+import std/option (Option, Some, None)
+import std/list as List (map, range, length)
+import std/clock (now)
+import gen/core_journal_exposed (JournalEntry, path_up, find_entry)
+
+pure func mk(k: int) -> JournalEntry {
+  let parent = if k == 0 then "" else intToStr(k - 1);
+  { id: intToStr(k), parent_id: parent, seq: k, at_ms: 0, kind: "x", raw: jo([]) }
+}
+
+pure func chain(n: int) -> [JournalEntry] { List.map(mk, List.range(0, n)) }
+
+pure func to_int(s: string) -> int { match stringToInt(s) { None => 0, Some(n) => n } }
+
+func time_once(es: [JournalEntry], n: int) -> int ! {Clock} {
+  let t0 = now(());
+  let p = path_up(es, intToStr(n - 1), [], []);
+  let t1 = now(());
+  -- the length is read so the walk cannot be skipped; a wrong length is a harness failure
+  if List.length(p) == n then t1 - t0 else 0 - 1
+}
+
+pure func scan_k(es: [JournalEntry], k: int, hits: int) -> int {
+  if k == 0 then hits
+  else scan_k(es, k - 1, match find_entry(es, "absent") { None => hits, Some(_) => hits + 1 })
+}
+
+func time_linear(es: [JournalEntry], k: int) -> int ! {Clock} {
+  let t0 = now(());
+  let h = scan_k(es, k, 0);
+  let t1 = now(());
+  if h == 0 then t1 - t0 else 0 - 1
+}
+
+func best_linear(a: [JournalEntry], b: [JournalEntry], k: int, r: int, ba: int, bb: int) -> (int, int) ! {Clock} {
+  if r == 0 then (ba, bb)
+  else {
+    let ta = time_linear(a, k);
+    let tb = time_linear(b, k);
+    best_linear(a, b, k, r - 1, min2(ba, ta), min2(bb, tb))
+  }
+}
+
+pure func min2(a: int, b: int) -> int { if a < 0 then a else if b < 0 then b else if a < b then a else b }
+
+func best(a: [JournalEntry], na: int, b: [JournalEntry], nb: int, r: int, ba: int, bb: int) -> (int, int) ! {Clock} {
+  if r == 0 then (ba, bb)
+  else {
+    let ta = time_once(a, na);
+    let tb = time_once(b, nb);
+    best(a, na, b, nb, r - 1, min2(ba, ta), min2(bb, tb))
+  }
+}
+
+export func main() -> () ! {IO, Clock} {
+  let parts = split(readLine(()), " ");
+  let n = match parts { [] => 0, x :: _ => to_int(x) };
+  let r = match parts { [] => 1, _ :: rest => match rest { [] => 1, x :: _ => to_int(x) } };
+  let a = chain(n);
+  let f = match parts { [] => 2, _ :: rest => match rest { [] => 2, _ :: more => match more { [] => 2, x :: _ => to_int(x) } } };
+  let b = chain(f * n);
+  let linear = match parts { [] => false, _ :: rest => match rest { [] => false, _ :: more => match more { [] => false, _ :: more2 => match more2 { [] => false, m :: _ => m == "linear" } } } };
+  let res = if linear then best_linear(a, b, n, r, 999999999, 999999999) else best(a, n, b, f * n, r, 999999999, 999999999);
+  match res {
+    (ta, tb) => println(concat(["N=", intToStr(n), " F=", intToStr(f), " tN=", intToStr(ta), " tFN=", intToStr(tb),
+                                " ratio_x100=", intToStr(if ta > 0 then (100 * tb) / ta else 0 - 1)]))
+  }
+}

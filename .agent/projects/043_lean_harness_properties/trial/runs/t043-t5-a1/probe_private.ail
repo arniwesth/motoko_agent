@@ -1,0 +1,18 @@
+-- probe_private.ail — why gen_exports.sh exists: importing the module-private path_up from the
+-- unmodified src/core/journal is accepted, but the name is undefined at the call site.
+--   cd out && ailang run --relax-modules --caps IO --entry main probe_private.ail
+--   -> type error ... undefined variable: path_up
+module probe_private
+import std/io (println)
+import std/json (Json, jo)
+import std/string as Str (join)
+import std/list as List (map)
+import src/core/journal (path_up, find_entry, JournalEntry)
+pure func ent(id: string, p: string) -> JournalEntry { { id: id, parent_id: p, seq: 0, at_ms: 0, kind: "x", raw: jo([]) } }
+pure func eid(e: JournalEntry) -> string { e.id }
+export func main() -> () ! {IO} {
+  let es = [ent("a", "b"), ent("b", "a")];
+  println(join(",", List.map(eid, path_up(es, "a", [], []))));
+  let es2 = [ent("a", ""), ent("b", "a")];
+  println(join(",", List.map(eid, path_up(es2, "b", [], []))))
+}

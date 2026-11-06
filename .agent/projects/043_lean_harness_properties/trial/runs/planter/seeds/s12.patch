@@ -1,0 +1,11 @@
+--- a/src/core/journal.ail
++++ b/src/core/journal.ail
+@@ -262,7 +262,7 @@
+ }
+ 
+ export pure func chain_digest_over(base: string, ms: [Message]) -> string {
+-  List.foldl(chain_step, base, ms)
++  List.foldl(chain_digest_after, base, ms)
+ }
+ 
+ -- THE CHAIN'S INTERMEDIATE VALUES, one per message — the prefix chain, not just

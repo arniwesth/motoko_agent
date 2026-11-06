@@ -1,0 +1,35 @@
+/-
+Appended to PairingModel.lean by run_diff.sh. Enumerates every history of length 0..4 over
+the eleven messages below, in a fixed order, and prints one line per history:
+
+  <message indices>|<hostPending>|<fold accepts>|<fold open ids>|<how many open ids>
+
+The TypeScript side prints the first two fields from the real `updatePending`; the diff
+compares those. The last three fields are the model's own fold: the bounded check in
+run_diff.sh reads them, and compare_fold.awk compares them with the real fold
+(enumerate_fold.ail). The count is there because joining [""] and [] both give "".
+-/
+
+instance : Inhabited Msg := ⟨asst []⟩
+
+def alphabet : List Msg :=
+  [ asst [], asst ["a"], asst ["a", "b"], asst ["b"],
+    result "a", result "b", result "", user,
+    { role := .tool, calls := ["b"], callId := "a" },      -- 8: violates (H2)
+    { role := .assistant, calls := [], callId := "a" },    -- 9: a non-tool message with an id
+    asst ["a", ""] ]                                       -- 10: violates (H1)
+
+def seqsOfLen : Nat → List (List Nat)
+  | 0 => [[]]
+  | n + 1 => (seqsOfLen n).flatMap (fun s => (List.range alphabet.length).map (fun i => s ++ [i]))
+
+def allSeqs : List (List Nat) := (List.range 5).flatMap seqsOfLen
+
+def joinIds (xs : List String) : String := String.intercalate "," xs
+
+#eval show IO Unit from do
+  for s in allSeqs do
+    let ms := s.map (fun i => alphabet[i]!)
+    let p := pairing ms
+    let ok := if p.err.isNone then "accept" else "refuse"
+    IO.println s!"{joinIds (s.map toString)}|{joinIds (hostPending ms)}|{ok}|{joinIds p.openIds}|{p.openIds.length}"

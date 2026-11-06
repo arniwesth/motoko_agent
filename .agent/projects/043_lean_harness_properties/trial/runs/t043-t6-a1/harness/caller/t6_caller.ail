@@ -1,0 +1,61 @@
+-- t6_caller.ail — `truncate_utf8_by_bytes` through its only caller, the REAL exported
+-- `store_stdout_and_elide` (packages/motoko-ext-compose/store.ail), unmodified, imported from
+-- the real compose package. No shim: this is the reachability half.
+--
+-- Ports are the conformance package's `canned_ports()` (every FS port a no-op that threads
+-- the world), so the only thing observed is the returned record. One line per case:
+--
+--   <input bytes CSV>|<max_stdout_bytes>|<truncated>|<returned stdout bytes CSV>
+--
+-- When `truncated` is true the returned stdout is
+-- `${clipped}\n[stdout elided; full output at ${raw_path}]`; check.ts strips that notice to
+-- recover `clipped`, which is truncate_utf8_by_bytes's result.
+
+module t6_caller
+
+import std/io (println)
+import std/fs (readFile)
+import std/bytes (fromString, toString, fromInts, toInts)
+import std/string as Str (split, join, stringToInt, foldSlices)
+import std/list as List (reverse)
+import std/option (Option, Some, None)
+import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, ExtPorts, ExtWorld)
+import pkg/sunholo/motoko_ext_conformance/harness (canned_ports)
+import pkg/sunholo/motoko_ext_compose/store (store_stdout_and_elide)
+
+pure func ints_of(csv: string) -> [int] {
+  if csv == "" then []
+  else reverse(foldSlices(csv, ",", [], \acc p. match stringToInt(p) { Some(v) => v :: acc, None => acc }))
+}
+
+pure func show_all(xs: [int], acc: [string]) -> [string] {
+  match xs { [] => reverse(acc), x :: rest => show_all(rest, show(x) :: acc) }
+}
+
+pure func csv_of(xs: [int]) -> string { join(",", show_all(xs, [])) }
+
+func run_line(p: ExtPorts, line: string) -> string ! {FS} {
+  match split(line, "|") {
+    [csv, m] => match stringToInt(m) {
+      Some(max) => {
+        let s = toString(fromInts(ints_of(csv)));
+        let r = store_stdout_and_elide(p, empty_ext_world(), "/t6w", "t6", s, max);
+        "${csv}|${m}|${if r.truncated then "true" else "false"}|${csv_of(toInts(fromString(r.stdout)))}"
+      },
+      None => "BADMAX|${line}"
+    },
+    _ => "BADLINE|${line}"
+  }
+}
+
+func run_all(p: ExtPorts, lines: [string], acc: [string]) -> [string] ! {FS} {
+  match lines {
+    [] => reverse(acc),
+    l :: rest => if l == "" then run_all(p, rest, acc) else run_all(p, rest, run_line(p, l) :: acc)
+  }
+}
+
+export func main(path: string) -> () ! {IO, FS} {
+  let outs = run_all(canned_ports(), split(readFile(path), "\n"), []);
+  println(join("\n", outs))
+}

@@ -1,0 +1,51 @@
+/-
+Enumerate.lean.tail — the Lean half of the differential test. Appended after ChainModel.lean,
+FrameModel.lean and Sha256.lean by ../diff/run_diff.sh. Prints, from the MODEL, the same lines
+../diff/enumerate_chain.ail prints from the real code, in the same order:
+
+  E|<chain_empty_base()>
+  F|<i>|<chain_digest_after(chain_empty_base(), alphabet[i])>
+  B|<ix>|<chain_digest_base(ms)>
+  C|<bi>|<ix>|<chain_digest_over(b, ms)>|<chain_digests_over(b, ms) joined by ",">|<n>|<encode(chain_digests_json(...))>
+
+`Env` is instantiated with Sha256.sha256Hex and FrameModel.lean's transcription of
+phase_vocab's frame. No message in the alphabet contains `make[`, the only text
+`digest_content` rewrites, and the alphabet has multi-byte text, newlines, `;` and frame-like
+content to exercise the rune-counted length prefixes.
+-/
+
+open T4
+
+def realEnv : Env Message :=
+  { h := Sha256.sha256Hex, frame := canonicalMessageFrame, canon := canonicalMessage }
+
+def alphabet : List Message :=
+  [ { role := "user", content := "hi", toolCalls := [], toolCallId := "", images := [] },
+    { role := "assistant", content := "", toolCalls := [{ id := "a", name := "bash", arguments := "{\"cmd\":\"ls\"}" }], toolCallId := "", images := [] },
+    { role := "tool", content := "out\nline;2", toolCalls := [], toolCallId := "a", images := [] },
+    { role := "system", content := "é∅ ✓ 日本", toolCalls := [], toolCallId := "", images := [] },
+    { role := "user", content := "look", toolCalls := [], toolCallId := "", images := [{ source := "data:x", mime := "image/png" }, { source := "", mime := "" }] },
+    { role := "assistant", content := "m{role:4:user;", toolCalls := [{ id := "", name := "", arguments := "" }, { id := "b", name := "é", arguments := "{}" }], toolCallId := "x", images := [] } ]
+
+instance : Inhabited Message := ⟨{ role := "", content := "", toolCalls := [], toolCallId := "", images := [] }⟩
+
+def bases : List String :=
+  [ chainEmptyBase realEnv,
+    "",
+    "x",
+    "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    chainDigestOver realEnv (chainEmptyBase realEnv) [alphabet[0]!],
+    "é" ]
+
+/-- `std/json.encode` on what `chain_digests_json` builds. No escaping: every string it is
+    given here is `sha256:` and hex. -/
+def encodeJson : Json → String
+  | .str s => "\"" ++ s ++ "\""
+  | .arr xs => "[" ++ ",".intercalate (xs.map fun | .str s => "\"" ++ s ++ "\"" | .arr _ => "?") ++ "]"
+
+def seqsOfLen : Nat → List (List Nat)
+  | 0 => [[]]
+  | n + 1 => (seqsOfLen n).flatMap (fun s => (List.range alphabet.length).map (fun i => s ++ [i]))
+
+def joinIds (xs : List Nat) : String := ",".intercalate (xs.map toString)
+

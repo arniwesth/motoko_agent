@@ -1,0 +1,59 @@
+-- p31_crafted.ail — hand-built wire sequences for the P3.1 pipeline (same W/V output as
+-- p31_twin.ail; run with T3_GEN=p31_crafted.ail). These are NOT sequences a HEAD run emits:
+-- they carry `history_replaced.first_kept`, which `session.ail:3113` always sends as None.
+-- They are the exploratory X-2 cases: the twin copies `first_kept` verbatim
+-- (`journal.ail` twin_event HistoryReplaced) while the host range-checks it against its own
+-- message count (`session-journal.ts:704-713`), a count that omits the checkpoint's kept head
+-- prefix (`:722`).
+--
+--   x2a  seed [sys, user], A, checkpoint with first_kept = -1
+--   x2b  seed [sys1, sys2, user], A, checkpoint, A, A, checkpoint with first_kept = 4 (the fold's
+--        index of the last A: [sys1, sys2, summary, A, A])
+
+module p31_crafted
+
+import std/io (println)
+import std/ai (Message)
+import std/option (Option, Some, None)
+import src/core/phase_vocab (LedgerEvent, HistoryReplaced, StateDelta, SessionStart, digest_messages)
+import src/core/journal (messages_json, chain_digest_after, chain_digest_over, chain_empty_base)
+import scratchpad/t3/t3gen (Child, mkmsg, step, events_of, twin_fold, verdict_of, wire_line, ev_seed)
+
+pure func base(seed: [Message]) -> Child {
+  let c0: Child = {
+    msgs: seed, at: chain_digest_over(chain_empty_base(), seed), prev: "", k: 0, run: 0,
+    rid: "sess_1.r0.0", open: [], hybrid: false, profile: "dogfood", prompt: "sha256:p",
+    resumes: 0, park: 0, parked: false, rev: []
+  };
+  { c0 | rev: [ev_seed("sess_1.r0.0", seed), SessionStart({ task: "t", model: "m", mode: "v2", run_id: "sess_1.r0.0" })] }
+}
+
+pure func take_sys(ms: [Message]) -> [Message] {
+  match ms { [] => [], m :: rest => if m.role == "system" then m :: take_sys(rest) else [] }
+}
+
+-- A checkpoint whose `first_kept` is `k`; the child's digest is the fold's rule for it,
+-- `digest_messages(prefix ++ [summary])` (`fold_replace`), so only `first_kept` can differ.
+pure func checkpoint_kept(c: Child, k: Option[int]) -> Child {
+  let summary = mkmsg("user", "summary ${show(c.k)}", [], "");
+  let cp = take_sys(c.msgs) ++ [summary];
+  let d = digest_messages(cp);
+  { c | msgs: cp, at: d, prev: c.at, k: c.k + 1,
+        rev: HistoryReplaced({ run_id: c.rid, step: c.k, reason: "checkpoint", first_kept: k,
+                               messages: messages_json([summary]), digest_after: d }) :: c.rev }
+}
+
+func case(name: string, c: Child) -> () ! {IO} {
+  let es = events_of(c);
+  println("W\t${name}\t${wire_line(es)}");
+  println("V\t${name}\t${verdict_of(twin_fold(es))}")
+}
+
+export func main(args: { maxlen: int, seqs: [[int]] }) -> () ! {IO} {
+  let s1 = mkmsg("system", "you are motoko", [], "");
+  let s2 = mkmsg("system", "project rules", [], "");
+  let u = mkmsg("user", "list the files", [], "");
+  case("x2a", checkpoint_kept(step(base([s1, u]), 0), Some(-1)));
+  let b = step(checkpoint_kept(step(base([s1, s2, u]), 0), None), 0);
+  case("x2b", checkpoint_kept(step(b, 0), Some(4)))
+}

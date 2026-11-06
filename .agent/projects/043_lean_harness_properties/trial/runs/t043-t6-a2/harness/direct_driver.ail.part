@@ -1,0 +1,36 @@
+
+-- ===== appended by direct.sh: driver for the REAL truncate_utf8_by_bytes above =====
+-- Everything above this line is packages/motoko-ext-compose/store.ail verbatim, except the
+-- extra import lines direct.sh inserts after its last import. Same module, so the private
+-- function is called as written, with its own imports.
+-- Input: lines `<max_bytes>,<base64 of input bytes>`. Output, one line per case:
+--   <index>|<base64 of result bytes>|<Str.length(input)>|<std/bytes.length(input bytes)>
+-- The two counts are the runtime's own, printed so a checker can explain a result without
+-- re-implementing either count.
+
+func t6_run_case(i: int, line: string) -> () ! {IO, FS} {
+  match T6S.split(line, ",") {
+    [ns, b64] => {
+      match (T6S.stringToInt(ns), T6B.fromBase64(b64)) {
+        (Some(n), Some(b)) => {
+          let s = toString(b);
+          println(T6S.concat([T6S.intToStr(i), "|", T6B.toBase64(fromString(truncate_utf8_by_bytes(s, n))), "|",
+            T6S.intToStr(Str.length(s)), "|", T6S.intToStr(length(fromString(s)))]))
+        },
+        _ => println(T6S.concat([T6S.intToStr(i), "|BADCASE"]))
+      }
+    },
+    _ => if line == "" then () else println(T6S.concat([T6S.intToStr(i), "|BADCASE"]))
+  }
+}
+
+func t6_run_all(i: int, lines: [string]) -> () ! {IO, FS} {
+  match lines {
+    [] => (),
+    l :: rest => { t6_run_case(i, l); t6_run_all(i + 1, rest) }
+  }
+}
+
+export func t6_main(path: string) -> () ! {IO, FS} {
+  t6_run_all(0, T6S.split(readFile(path), "\n"))
+}

@@ -1,0 +1,17 @@
+module t2_witness
+-- P2.1 witnesses, the AILANG side. One line per case: name -> gone|kept, with failure_code.
+import std/io (println)
+import pkg/sunholo/motoko_ext_herdr/types (means_agent_gone, failure_code)
+
+func line(name: string, code: int, stderr: string) -> () ! {IO} {
+  let g = if means_agent_gone(code, stderr) then "gone" else "kept";
+  println("${name} -> ${g} (${failure_code(code, stderr)})")
+}
+
+export func main() -> () ! {IO} {
+  line("s05-witness exit=-1 compact-json agent_not_found", -1, "{\"error\":{\"code\":\"agent_not_found\",\"message\":\"x\"}}");
+  line("s06-witness exit=1 compact-json pane_not_found", 1, "{\"error\":{\"code\":\"pane_not_found\",\"message\":\"x\"}}");
+  line("s07-witness exit=1 spaced-json agent_not_found", 1, "{ \"error\": {\"code\": \"agent_not_found\", \"message\": \"x\"}}");
+  line("control exit=1 compact-json agent_not_found", 1, "{\"error\":{\"code\":\"agent_not_found\",\"message\":\"x\"}}");
+  line("control exit=1 compact-json server_not_running", 1, "{\"error\":{\"code\":\"server_not_running\",\"message\":\"x\"}}")
+}

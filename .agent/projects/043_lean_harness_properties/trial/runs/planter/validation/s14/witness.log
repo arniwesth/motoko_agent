@@ -1,0 +1,26 @@
+# s14: P6.1/P6.2 witness check on B0, only-s14, T, T-s14. truncate_utf8_by_bytes is module-private: each run uses a copy of the tree with one exported wrapper appended to store.ail:
+
+-- planter probe (validation copy only)
+export func zz_probe_truncate(s: string, n: int) -> string { truncate_utf8_by_bytes(s, n) }
+== B0
+input="é" (2 bytes) n=1 -> "�" (1 bytes) P6.1 holds P6.2 holds
+input="a€" (4 bytes) n=3 -> "a�" (3 bytes) P6.1 holds P6.2 holds
+input="aa" (2 bytes) n=1 -> "a" (1 bytes) P6.1 holds P6.2 holds
+input="é" (2 bytes) n=2 -> "é" (2 bytes) P6.1 holds P6.2 holds
+== only-s14
+input="é" (2 bytes) n=1 -> "é" (2 bytes) P6.1 VIOLATED P6.2 holds
+input="a€" (4 bytes) n=3 -> "a€" (4 bytes) P6.1 VIOLATED P6.2 holds
+input="aa" (2 bytes) n=1 -> "a" (1 bytes) P6.1 holds P6.2 holds
+input="é" (2 bytes) n=2 -> "é" (2 bytes) P6.1 holds P6.2 holds
+== T
+input="é" (2 bytes) n=1 -> "é" (2 bytes) P6.1 VIOLATED P6.2 holds
+input="a€" (4 bytes) n=3 -> "a€" (4 bytes) P6.1 VIOLATED P6.2 holds
+input="aa" (2 bytes) n=1 -> "a" (1 bytes) P6.1 holds P6.2 holds
+input="é" (2 bytes) n=2 -> "é" (2 bytes) P6.1 holds P6.2 holds
+== minus-s14
+input="é" (2 bytes) n=1 -> "�" (1 bytes) P6.1 holds P6.2 holds
+input="a€" (4 bytes) n=3 -> "a�" (3 bytes) P6.1 holds P6.2 holds
+input="aa" (2 bytes) n=1 -> "a" (1 bytes) P6.1 holds P6.2 holds
+input="é" (2 bytes) n=2 -> "é" (2 bytes) P6.1 holds P6.2 holds
+
+# witness: input "é" (2 bytes), n = 1. Size 2 bytes. A 1-byte input cannot violate P6.1 (one rune is one byte for every 1-byte string).

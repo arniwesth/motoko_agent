@@ -1,0 +1,58 @@
+-- ail_eval.ail — the AILANG half of the T2 differential test.
+--
+-- Calls the REAL `failure_shape`, `failure_code` and `means_agent_gone` from
+-- packages/motoko-ext-herdr/types.ail (through the package import; ../ailang.toml
+-- points the dependency at ../tree/packages/motoko-ext-herdr).
+--
+-- Reads cases from stdin, one per line:
+--
+--   <id> TAB <exit_code as decimal> TAB <base64 of the stderr's UTF-8 bytes>
+--
+-- and prints one line per case:
+--
+--   <id> TAB <failure_shape> TAB <base64 of failure_code's UTF-8> TAB <means_agent_gone: 1|0>
+--
+-- base64 on both sides so no byte of stderr or of the decoded code is lost to quoting.
+-- A line that cannot be parsed prints `<line> TAB PARSE_ERROR`.
+--
+-- From the tree root:
+--   ailang run --relax-modules --caps IO --entry main ../out/harness/ail_eval.ail < cases.tsv
+
+module ail_eval
+
+import std/io (println, readLineOpt)
+import std/string (split, stringToInt, intToStr, concat)
+import std/bytes (fromString, toString, toBase64, fromBase64)
+import std/option (Option, Some, None)
+import pkg/sunholo/motoko_ext_herdr/types (failure_shape, failure_code, means_agent_gone)
+
+pure func b64(s: string) -> string { toBase64(fromString(s)) }
+
+pure func eval_line(line: string) -> string {
+  match split(line, "\t") {
+    [id, ec, e64] => match stringToInt(ec) {
+      None => concat([line, "\tPARSE_ERROR"]),
+      Some(code) => match fromBase64(e64) {
+        None => concat([line, "\tPARSE_ERROR"]),
+        Some(bs) => {
+          let stderr = toString(bs);
+          let gone = if means_agent_gone(code, stderr) then "1" else "0";
+          concat([id, "\t", failure_shape(code, stderr), "\t", b64(failure_code(code, stderr)), "\t", gone])
+        }
+      }
+    },
+    _ => concat([line, "\tPARSE_ERROR"])
+  }
+}
+
+func loop() -> () ! {IO} {
+  match readLineOpt(()) {
+    None => (),
+    Some(line) => {
+      if line == "" then () else println(eval_line(line));
+      loop()
+    }
+  }
+}
+
+export func main() -> () ! {IO} { loop() }

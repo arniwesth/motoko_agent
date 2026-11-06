@@ -1,0 +1,11 @@
+--- a/src/tui/src/wake-waiter.ts
++++ b/src/tui/src/wake-waiter.ts
+@@ -140,7 +140,7 @@
+ }
+ 
+ export function herdrMeansAgentGone(r: HerdrResult): boolean {
+-  return herdrFailureCode(r) === "agent_not_found";
++  return herdrFailureCode(r).endsWith("_not_found");
+ }
+ 
+ /** `agent get`'s `agent_status`, "" when it is absent or the output is not agent_info. */

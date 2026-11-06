@@ -1,0 +1,14 @@
+== unmutated
+real function vs model                                     differential: 23315 cases, 0 mismatches
+== real-side mutants (cut copy only)
+Str.length(s) -> length(b)   (the P6.1 fix)                differential: MISMATCH (3205 cases differ)
+n <= max_bytes -> n < max_bytes                            differential: MISMATCH (726 cases differ)
+slice(b,0,max_bytes) -> slice(b,0,max_bytes-1)             differential: MISMATCH (5457 cases differ)
+None => "" -> None => s                                    differential: MISMATCH (4283 cases differ)
+== model-side mutants
+model: 0xED accept range 80-9F -> 80-BF (surrogates)       differential: MISMATCH (2073 cases differ)
+model: toString repairs non-ASCII bytes                    differential: MISMATCH (4916 cases differ)
+model: fits test on byte length                            differential: MISMATCH (3205 cases differ)
+model: rune count = byte count                             differential: MISMATCH (15335 cases differ)
+controls: all caught
+exit=0

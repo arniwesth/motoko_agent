@@ -1,0 +1,20 @@
+-- repro/empty_id.ail — A1-T5-2. The REAL path_up on an entry whose id is "" (which
+-- journal_entry_of_json accepts: `at_string` takes any string), started from "" (which
+-- journal_leaf returns when the last line's id is ""). The start id names an entry, so P5.3
+-- wants a non-empty result ending in it; path_up's `id == ""` test returns before the lookup.
+-- The reader's strict_path, on the same input, returns that entry.
+--   es = [""<""] (a header with id "" and no parent)   start ""
+-- Prints DEFECT PRESENT or DEFECT ABSENT.
+module empty_id
+import std/io (println)
+import std/json (jo)
+import std/string as Str (join)
+import std/list as List (length, map)
+import gen/journal_t5 (path_up, JournalEntry)
+
+export func main() -> () ! {IO} {
+  let es: [JournalEntry] = [{ id: "", parent_id: "", seq: 0, at_ms: 0, kind: "header", raw: jo([]) }];
+  let r = path_up(es, "", [], []);
+  println("path_up([\"\"<\"\"], \"\") has ${show(List.length(r))} entries");
+  println(if List.length(r) == 1 then "DEFECT ABSENT" else "DEFECT PRESENT")
+}

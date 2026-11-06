@@ -1,0 +1,33 @@
+-- repro_p42.ail — P4.2 (last element) on the smallest witness. Exit 1 iff it fails.
+--   b = chain_digest_over(chain_empty_base(), [user "a"])  -- a real chain value, i.e. "continue the chain"
+--   ms = [user "b"]
+--   last(chain_digests_over(b, ms)) =?= chain_digest_over(b, ms)
+-- Also prints whether chain_digests_over(b, ms) == chain_digests_over(chain_empty_base(), ms),
+-- which is the root cause: the `base` argument is not used.
+--
+--   ailang run --relax-modules --caps IO --chdir ../out/pkg --entry main t4/repro_p42.ail
+module repro_p42
+
+import std/io (println, exit)
+import std/ai (Message)
+import std/string as Str (join, intToStr)
+import std/list as List (length, last)
+import std/option (Option, Some, None)
+import src/core/journal (chain_digest_over, chain_digests_over, chain_empty_base)
+
+pure func u(c: string) -> Message { { role: "user", content: c, tool_calls: [], tool_call_id: "", images: [] } }
+
+export func main() -> () ! {IO} {
+  let b = chain_digest_over(chain_empty_base(), [u("a")]);
+  let ms = [u("b")];
+  let ds = chain_digests_over(b, ms);
+  let o = chain_digest_over(b, ms);
+  let lenOk = length(ds) == length(ms);
+  let lastOk = last(ds) == Some(o);
+  println("base                     = ${b}");
+  println("chain_digests_over(b,ms) = [${join(", ", ds)}]");
+  println("chain_digest_over(b,ms)  = ${o}");
+  println("same as from chain_empty_base(): ${show(join("|", ds) == join("|", chain_digests_over(chain_empty_base(), ms)))}");
+  if lenOk && lastOk then println("P4.2 holds on this witness")
+  else { println("P4.2 VIOLATED (length ok: ${show(lenOk)}, last ok: ${show(lastOk)})"); exit(1) }
+}

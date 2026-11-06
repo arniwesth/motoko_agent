@@ -1,0 +1,49 @@
+# s09 (S2): T3. Pipeline: t3_gen.ail (wire events via to_schema_v1 + the AILANG twin folded by fold_journal),
+# t3_host.ts (the real SessionJournal writes each journal from those events), t3_fold.ail (fold_journal on the host's
+# journals). P3.1 holds on a case iff both folds refuse with the same refusal id, or both accept with equal history
+# and dangling. P3.2 (rule 3) is checked on accepted appended-only cases with no dangling call.
+
+## 1. Exhaustive search over Appendix C's T3 alphabet, ONLY s09 applied (trees/only-s09)
+## 16,105 histories (0..4 appended messages over the eleven messages, enumerate_fold.ail's prologue and epilogue)
+     P3.1 VIOLATED W09  twin=accept||0  host=accept|call_1|1
+   only-s09: 16107 cases; twin accepts 752; P3.1 violated in 1; P3.2 rule-3 history differs in 0
+   Appendix-C cases whose outcome differs from B0 (twin or host): 0 twin, 0 host
+   RESULT: no P3.1 or P3.2 violation among the 16,105 Appendix C histories (the only violation listed is the named witness W09).
+
+## 2. Richer record alphabet (t3_rich.ail): every sequence of 1..5 records, the first seed counted, over seven
+## record-producing actions (append plain / call / result / user, hybrid replacement, checkpoint, resume = 2 records).
+## 'ne' marks sequences no run emits (a resume of a journal the fold refuses; a hybrid replacement not after its plain assistant).
+   -- B0
+   B0: 1677 cases; twin accepts 530; P3.1 violated in 4; P3.2 rule-3 history differs in 0
+      emittable sequences of 1 record(s): 1, P3.1 violations: 0
+      emittable sequences of 2 record(s): 5, P3.1 violations: 0
+      emittable sequences of 3 record(s): 27, P3.1 violations: 0
+      emittable sequences of 4 record(s): 144, P3.1 violations: 0
+      emittable sequences of 5 record(s): 763, P3.1 violations: 0
+   -- only-s09
+     P3.1 VIOLATED R5:phr  twin=accept||0  host=accept|call_1|1
+   only-s09: 1677 cases; twin accepts 530; P3.1 violated in 7; P3.2 rule-3 history differs in 0
+      emittable sequences of 1 record(s): 1, P3.1 violations: 0
+      emittable sequences of 2 record(s): 5, P3.1 violations: 0
+      emittable sequences of 3 record(s): 27, P3.1 violations: 0
+      emittable sequences of 4 record(s): 144, P3.1 violations: 0
+      emittable sequences of 5 record(s): 763, P3.1 violations: 1
+   Per-case outcomes that differ from B0 (emittable sequences only), by size:
+      1 record(s): twin 0, host 0
+      2 record(s): twin 0, host 0
+      3 record(s): twin 0, host 0
+      4 record(s): twin 0, host 0
+      5 record(s): twin 0, host 1
+
+## 3. The witness W09 (also a case of the richer alphabet), on B0, only-s09, T and T-s09
+   B0         twin: accept||0|bf98b87a2ffc50d4faef11cfdfd5c0705bef7c73d9701b579bc9e9c7227e50b9|n/a             host: accept||0|bf98b87a2ffc50d4faef11cfdfd5c0705bef7c73d9701b579bc9e9c7227e50b9
+   only-s09   twin: accept||0|bf98b87a2ffc50d4faef11cfdfd5c0705bef7c73d9701b579bc9e9c7227e50b9|n/a             host: accept|call_1|1|bf98b87a2ffc50d4faef11cfdfd5c0705bef7c73d9701b579bc9e9c7227e50b9
+   T          twin: accept||0|bf98b87a2ffc50d4faef11cfdfd5c0705bef7c73d9701b579bc9e9c7227e50b9|n/a             host: accept|call_1|1|bf98b87a2ffc50d4faef11cfdfd5c0705bef7c73d9701b579bc9e9c7227e50b9
+   minus-s09  twin: accept||0|bf98b87a2ffc50d4faef11cfdfd5c0705bef7c73d9701b579bc9e9c7227e50b9|n/a             host: accept||0|bf98b87a2ffc50d4faef11cfdfd5c0705bef7c73d9701b579bc9e9c7227e50b9
+   (fields: verdict | dangling ids | how many | sha256 of the folded history | rule-3 check)
+   Its wire events, in order:
+     {"type":"history_seeded","run_id":"sess_1.r0.0","messages":[{"role":"system","content":"you are motoko","tool_calls":[],"tool_call_id":"","images":[]},{"role":"user","content":"list the files","tool_calls":[],"tool_call_id":"","images":[]}],"digest":"sha256:fc15f0bf14033e3d5bfcd6930241244eadd9070cd4f47bd1a62461b3c13eb3af","digests":["sha256:963eedc56744a00b3a7177ded4d6912fb44dc8c8e4583f120abb77a1d55d551f","sha256:fc15f0bf14033e3d5bfcd6930241244eadd9070cd4f47bd1a62461b3c13eb3af"]}
+     {"type":"history_appended","run_id":"sess_1.r0.0","step":1,"message":{"role":"assistant","content":"running ls","tool_calls":[],"tool_call_id":"","images":[]},"replaces_previous":false,"digest_after":"sha256:2565aa94c61f4a9d374d75691065d2b82c75e98b881012a3e44ef4a754999bae"}
+     {"type":"history_appended","run_id":"sess_1.r0.0","step":1,"message":{"role":"assistant","content":"running ls","tool_calls":[{"id":"call_1","name":"bash","arguments":"{}"}],"tool_call_id":"","images":[]},"replaces_previous":true,"digest_after":"sha256:93fcd1ca06578f1b80f22d6221d1360ab1abe47f607d09068b73f24c0a39b320"}
+     {"type":"session_resumed","resume_count":1,"from_id":"0004","from_ordinal":0,"profile_from":"p","profile_to":"p","prompt_digest_from":"sha256:p","prompt_digest_to":"sha256:p","forced":false}
+     {"type":"history_seeded","run_id":"sess_1.r1.0","messages":[{"role":"system","content":"you are motoko","tool_calls":[],"tool_call_id":"","images":[]},{"role":"user","content":"list the files","tool_calls":[],"tool_call_id":"","images":[]},{"role":"assistant","content":"running ls","tool_calls":[],"tool_call_id":"","images":[]}],"digest":"sha256:2565aa94c61f4a9d374d75691065d2b82c75e98b881012a3e44ef4a754999bae","digests":["sha256:963eedc56744a00b3a7177ded4d6912fb44dc8c8e4583f120abb77a1d55d551f","sha256:fc15f0bf14033e3d5bfcd6930241244eadd9070cd4f47bd1a62461b3c13eb3af","sha256:2565aa94c61f4a9d374d75691065d2b82c75e98b881012a3e44ef4a754999bae"]}

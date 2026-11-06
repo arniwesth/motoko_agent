@@ -1,0 +1,24 @@
+# PLAN-001's predictions, written before any seed exists and before any arm session has run.
+# Hashed with PLAN-001 on the first lines of sequence.log, and never edited after that. A wrong
+# prediction is a miss in FINDINGS-001. Counts are per replicate, or the mean of the two (§10).
+# The basis is reading the targets and the worked example (evidence/diff/README.md), not any run
+# of this trial. n2 = 5, the S2 count PLAN §6 asks for; if fewer are valid, the S2 rows scale.
+id	quantity	predicted	basis
+p01	D_A(S1) of 3	3	small witnesses; any exhaustive or random check reaches them
+p02	D_B(S1) of 3	3	a proof of a violated property gets stuck, whatever the witness's size
+p03	D_A(S2) of 5	3	random inputs well past the bound reach most deep slips; exhaustive enumeration to the bound alone would reach none
+p04	D_B(S2) of 5	4	a stuck proof finds deep slips; one is lost to T3 running out of time
+p05	D_A(S3) of 4	3	executed checks run the real representations: bytes, JSON.parse, unset vs ""
+p06	D_B(S3) of 4	2	Lean's String and Nat abstract bytes and widths unless modelled, and JSON parsing is unlikely to be modelled in 2 hours
+p07	D_A(S4) of 2	0	the checks call the target functions, not the wiring around them
+p08	D_B(S4) of 2	0	the model is of the target functions only
+p09	F_A, false reports	at most 1	reproductions are run on the real code before they are reported
+p10	F_B, false reports	at most 1	the same, through step 5
+p11	U_A, unknown real defects	1	twins compared directly on the real code (T1-T3) are the likeliest place, given K6 and K7
+p12	U_B, unknown real defects	0	models abstract the parsing and wiring where twin drift lives
+p13	E seeds reported as defects	0 for each arm	behaviour-preserving changes do not reproduce
+p14	tokens, B over A	at least 2	a model and its proofs come on top of reading the same code
+p15	targets unfinished at the cap, per replicate	A 0; B 1 (T3)	T3's model is the writer, the fold's envelope and its rules
+p16	arm B model changes forced by its differential test	at least 3 over all its sessions	the transcription gap is real; the worked example's first draft had a wrong justification (RESEARCH §6.2)
+p17	S2 separation (§10 a)	not met	predicted D_B(S2) - D_A(S2) is 1, below 1.5
+p18	the §10 outcome	D (0.60); L (0.25); X (0.15)	follows from p01-p17; L most likely through (a) if arm A's generators stay near the bound

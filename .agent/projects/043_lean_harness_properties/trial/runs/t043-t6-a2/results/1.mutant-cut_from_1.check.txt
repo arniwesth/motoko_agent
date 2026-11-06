@@ -1,0 +1,68 @@
+cases: 229831; missing outputs: 0; twin runs: 78280
+FAIL P6.2a: 229831 checked, 90702 violated {"units":4896,"bytes":9528,"bytes1":63360,"random":12916,"big":2}
+FAIL P6.3: 104747 checked, 15591 violated {"units":4568,"bytes":36,"random":10985,"big":2}
+ok   n<0 => empty: 6672 checked, 0 violated 
+ok   X-route: 229831 checked, 0 violated 
+ok   P6.2a via store: 206086 checked, 0 violated 
+FAIL P6.3 via store: 91352 checked, 10911 violated {"units":3248,"bytes":18,"random":7644,"big":1}
+FAIL P6.1: 223159 checked, 30716 violated {"units":9558,"bytes":264,"bytes1":1920,"random":18965,"big":9}
+ok   P6.2b: 23745 checked, 0 violated 
+ok   cut==b[0:n]: 168698 checked, 0 violated 
+FAIL P6.1 via store: 199414 checked, 30716 violated {"units":9558,"bytes":264,"bytes1":1920,"random":18965,"big":9}
+ok   P6.1-explained: 30716 checked, 0 violated 
+FAIL X-twin P6.1: 78280 checked, 26042 violated {"units":7965,"bytes":96,"bytes1":1920,"random":16055,"big":6}
+FAIL X-twin P6.2a: 78280 checked, 29913 violated {"units":9558,"bytes":96,"bytes1":1920,"random":18332,"big":7}
+ok   X-twin P6.2b: 13316 checked, 0 violated 
+ok   X-twin P6.3: 78280 checked, 0 violated 
+FAIL X-twin == AILANG: 78280 checked, 64589 violated {"units":14454,"bytes":180,"bytes1":18176,"random":31768,"big":11}
+ok   X-twin flag: 78280 checked, 0 violated 
+FAIL X-twin omittedBytes: 64964 checked, 3015 violated {"units":341,"bytes":24,"bytes1":1920,"random":729,"big":1}
+FAIL cut!=b[0:n]: 90702 {"units":4896,"bytes":9528,"bytes1":63360,"random":12916,"big":2}
+FAIL X-route: clip != direct: 90702 {"units":4896,"bytes":9528,"bytes1":63360,"random":12916,"big":2}
+--- P6.1: largest overshoot |out|-n = 4000 (n=2000, |out|=6000, big); largest |out|/n = 4.00 (n=1, |out|=4, units)
+--- P6.1 via store: largest overshoot |out|-n = 4000 (n=2000, |out|=6000, big); largest |out|/n = 4.00 (n=1, |out|=4, units)
+--- X-twin P6.1: largest overshoot |out|-n = 2 (n=1, |out|=3, units); largest |out|/n = 3.00 (n=1, |out|=3, units)
+--- P6.1: shortest witnesses
+    [9 units] n=1 in=c3a9 out=c3a9 (|in|=2 |out|=2) Str.length=1 bytes=2
+    [20708 bytes] n=1 in=c280 out=c280 (|in|=2 |out|=2) Str.length=1 bytes=2
+    [20713 bytes] n=1 in=c28f out=c28f (|in|=2 |out|=2) Str.length=1 bytes=2
+--- P6.1 via store: shortest witnesses
+    [9 units] n=1 in=c3a9 out=c3a9 (|in|=2 |out|=2) Str.length=1 bytes=2
+    [20708 bytes] n=1 in=c280 out=c280 (|in|=2 |out|=2) Str.length=1 bytes=2
+    [20713 bytes] n=1 in=c28f out=c28f (|in|=2 |out|=2) Str.length=1 bytes=2
+--- P6.2a: shortest witnesses
+    [20103 bytes] n=1 in=0041 out=41 (|in|=2 |out|=1) Str.length=2 bytes=2
+    [20108 bytes] n=1 in=007f out=7f (|in|=2 |out|=1) Str.length=2 bytes=2
+    [20113 bytes] n=1 in=0080 out=80 (|in|=2 |out|=1) Str.length=2 bytes=2
+--- P6.3: shortest witnesses
+    [32 units] n=1 in=61c3a9 out=c3 (|in|=3 |out|=1) Str.length=2 bytes=3
+    [53 units] n=1 in=c3a961 out=a9 (|in|=3 |out|=1) Str.length=2 bytes=3
+    [22275 bytes] n=1 in=00c280 out=c2 (|in|=3 |out|=1) Str.length=2 bytes=3
+--- cut!=b[0:n]: shortest witnesses
+    [20103 bytes] n=1 in=0041 out=41 (|in|=2 |out|=1) Str.length=2 bytes=2
+    [20108 bytes] n=1 in=007f out=7f (|in|=2 |out|=1) Str.length=2 bytes=2
+    [20113 bytes] n=1 in=0080 out=80 (|in|=2 |out|=1) Str.length=2 bytes=2
+--- X-route: clip != direct: shortest witnesses
+    [20103 bytes] n=1 in=0041 out=00 (|in|=2 |out|=1) Str.length=2 bytes=2
+    [20108 bytes] n=1 in=007f out=00 (|in|=2 |out|=1) Str.length=2 bytes=2
+    [20113 bytes] n=1 in=0080 out=00 (|in|=2 |out|=1) Str.length=2 bytes=2
+--- P6.3 via store: shortest witnesses
+    [53 units] n=1 in=c3a961 out=c3 (|in|=3 |out|=1) Str.length=2 bytes=3
+    [33987 bytes] n=1 in=c28000 out=c2 (|in|=3 |out|=1) Str.length=2 bytes=3
+    [33993 bytes] n=1 in=c28041 out=c2 (|in|=3 |out|=1) Str.length=2 bytes=3
+--- X-twin P6.1: shortest witnesses
+    [9 units] n=1 in=c3a9 out=efbfbd (|in|=2 |out|=3) truncated=true omittedBytes=0; ailang=c3a9
+    [20708 bytes] n=1 in=c280 out=efbfbd (|in|=2 |out|=3) truncated=true omittedBytes=0; ailang=c280
+    [20713 bytes] n=1 in=c28f out=efbfbd (|in|=2 |out|=3) truncated=true omittedBytes=0; ailang=c28f
+--- X-twin P6.2a: shortest witnesses
+    [9 units] n=1 in=c3a9 out=efbfbd (|in|=2 |out|=3) truncated=true omittedBytes=0; ailang=c3a9
+    [20708 bytes] n=1 in=c280 out=efbfbd (|in|=2 |out|=3) truncated=true omittedBytes=0; ailang=c280
+    [20713 bytes] n=1 in=c28f out=efbfbd (|in|=2 |out|=3) truncated=true omittedBytes=0; ailang=c28f
+--- X-twin == AILANG: shortest witnesses
+    [9 units] n=1 in=c3a9 out=efbfbd (|in|=2 |out|=3) truncated=true omittedBytes=0; ailang=c3a9
+    [20103 bytes] n=1 in=0041 out=00 (|in|=2 |out|=1) truncated=true omittedBytes=1; ailang=41
+    [20108 bytes] n=1 in=007f out=00 (|in|=2 |out|=1) truncated=true omittedBytes=1; ailang=7f
+--- X-twin omittedBytes: shortest witnesses
+    [9 units] n=1 in=c3a9 out=efbfbd (|in|=2 |out|=3) truncated=true omittedBytes=0; ailang=c3a9
+    [20708 bytes] n=1 in=c280 out=efbfbd (|in|=2 |out|=3) truncated=true omittedBytes=0; ailang=c280
+    [20713 bytes] n=1 in=c28f out=efbfbd (|in|=2 |out|=3) truncated=true omittedBytes=0; ailang=c28f

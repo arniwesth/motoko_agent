@@ -1,0 +1,31 @@
+-- repro/cycle.ail — A1-T5-1. The REAL path_up (gen/journal_t5.ail, export-only copy of
+-- src/core/journal.ail) on two parent cycles, checked against P5.3's last clause: the start id
+-- names an entry, so the result must be non-empty and end with that id. D4 rule 1 ("stopping
+-- at the first repeated id") and the twin ev_path_up give [a] and [0000, 0001, 0002].
+--   w1  es = [a<a]                          start a      (a self-parent)
+--   w2  es = [0000<0002 0001<0000 0002<0001] start 0002  (the writer's shape, header's parent = leaf)
+-- Prints DEFECT PRESENT or DEFECT ABSENT.
+module cycle
+import std/io (println)
+import std/json (jo)
+import std/string as Str (join)
+import std/list as List (map)
+import gen/journal_t5 (path_up, JournalEntry)
+
+pure func ent(i: int, id: string, p: string) -> JournalEntry {
+  { id: id, parent_id: p, seq: i, at_ms: 0, kind: if i == 0 then "header" else "x", raw: jo([]) }
+}
+pure func eid(e: JournalEntry) -> string { e.id }
+pure func last_is(r: [JournalEntry], id: string) -> bool {
+  match r { [] => false, x :: rest => match rest { [] => x.id == id, _ => last_is(rest, id) } }
+}
+
+export func main() -> () ! {IO} {
+  let w1 = [ent(0, "a", "a")];
+  let w2 = [ent(0, "0000", "0002"), ent(1, "0001", "0000"), ent(2, "0002", "0001")];
+  let r1 = path_up(w1, "a", [], []);
+  let r2 = path_up(w2, "0002", [], []);
+  println("w1 path_up([a<a], a)             = [${join(",", List.map(eid, r1))}]");
+  println("w2 path_up([0000<0002 ...], 0002) = [${join(",", List.map(eid, r2))}]");
+  println(if last_is(r1, "a") && last_is(r2, "0002") then "DEFECT ABSENT" else "DEFECT PRESENT")
+}

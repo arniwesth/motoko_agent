@@ -1,0 +1,275 @@
+-- gen.ail — the AILANG half of T3's differential test.
+--
+-- A CHILD SIMULATOR turns a list of step indices into the journal-class wire events a run
+-- (or a session of several frames) emits, with the child's REAL digests
+-- (`chain_digest_after`, `chain_digest_base`), the way `session.ail` computes them:
+--   c2_append_step (:840), the checkpoint emit (:3099-3116), the seed emit (:3868-3872),
+--   c2_seed_digest (:501), and the resume frame (SessionResumed then HistorySeeded, :4804).
+-- The same simulator is written in Lean (enumerate.lean.tail) over symbolic digests.
+--
+-- For every sequence it prints
+--   W\t<ix>\t<wire event JSON>      one per event, for the REAL TypeScript host (host.ts)
+--   T\t<ix>\t<verdict>              the REAL fold_journal over the REAL journal_lines_of_records
+-- where <verdict> is `A;<history>;<dangling>;<n dangling>` or `R;<refusal id>`.
+--
+-- From the repository root:
+--   ailang run --relax-modules --caps IO --entry main <out>/diff/gen.ail
+
+module gen
+
+import std/io (println)
+import std/ai (Message, ToolCall)
+import std/json (Json, encode)
+import std/string as Str (join, concat, intToStr)
+import std/list as List (length, map, foldl)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import src/core/phase_vocab (
+  RuntimeStatusCounts, LedgerRecord, LedgerEvent, WireRecord,
+  HistorySeeded, HistoryAppended, HistoryReplaced, StateDelta, SessionStart, RunSummary,
+  SessionResumed, to_schema_v1
+)
+import src/core/journal (
+  SessionState, Refusal, refusal_id,
+  fold_journal, journal_lines_of_records, journal_leaf, harness_header, default_run_identity,
+  chain_digest_after, chain_digest_over, chain_digest_base, chain_digests_over, chain_digests_json,
+  chain_empty_base, messages_json, message_json
+)
+
+-- ---------------------------------------------------------------- messages
+
+pure func call(id: string) -> ToolCall { { id: id, name: "bash", arguments: "{}" } }
+pure func calls_of(ids: [string]) -> [ToolCall] {
+  match ids { [] => [], i :: rest => call(i) :: calls_of(rest) }
+}
+pure func mk(role: string, tag: int, ids: [string], tcid: string) -> Message {
+  { role: role, content: "m${intToStr(tag)}", tool_calls: calls_of(ids), tool_call_id: tcid, images: [] }
+}
+
+pure func m_sys() -> Message { mk("system", 0, [], "") }
+pure func m_user() -> Message { mk("user", 1, [], "") }
+pure func m_a() -> Message { mk("assistant", 2, [], "") }
+pure func m_ca() -> Message { mk("assistant", 3, ["a"], "") }
+pure func m_cab() -> Message { mk("assistant", 4, ["a", "b"], "") }
+pure func m_ra() -> Message { mk("tool", 5, [], "a") }
+pure func m_rb() -> Message { mk("tool", 6, [], "b") }
+pure func m_u2() -> Message { mk("user", 7, [], "") }
+pure func m_sum() -> Message { mk("user", 8, [], "") }
+pure func m_sys2() -> Message { mk("system", 9, [], "") }
+pure func m_ce() -> Message { mk("assistant", 10, ["a", ""], "") }
+
+-- ---------------------------------------------------------------- list helpers
+
+pure func init_of(ms: [Message]) -> [Message] {
+  match ms { [] => [], [_] => [], m :: rest => m :: init_of(rest) }
+}
+pure func last_of(ms: [Message]) -> [Message] {
+  match ms { [] => [], [m] => [m], _ :: rest => last_of(rest) }
+}
+pure func take_system(ms: [Message]) -> [Message] {
+  match ms { [] => [], m :: rest => if m.role == "system" then m :: take_system(rest) else [] }
+}
+pure func drop_system(ms: [Message]) -> [Message] {
+  match ms { [] => [], m :: rest => if m.role == "system" then drop_system(rest) else ms }
+}
+pure func drop_n(n: int, ms: [Message]) -> [Message] {
+  if n <= 0 then ms else match ms { [] => [], _ :: rest => drop_n(n - 1, rest) }
+}
+pure func mem(xs: [string], t: string) -> bool {
+  match xs { [] => false, x :: rest => if x == t then true else mem(rest, t) }
+}
+pure func ids_of(cs: [ToolCall]) -> [string] {
+  match cs { [] => [], c :: rest => c.id :: ids_of(rest) }
+}
+
+-- The child's view of its history at a resume: the last assistant with calls loses the
+-- calls no later tool message answers (what the fold's rule 4 hands back).
+pure func answered_after(ms: [Message]) -> [string] {
+  match ms { [] => [], m :: rest => if m.role == "tool" then m.tool_call_id :: answered_after(rest) else answered_after(rest) }
+}
+pure func last_call_index(ms: [Message], i: int, best: int) -> int {
+  match ms { [] => best, m :: rest => last_call_index(rest, i + 1, if List.length(m.tool_calls) > 0 then i else best) }
+}
+pure func keep_answered(cs: [ToolCall], ans: [string]) -> [ToolCall] {
+  match cs { [] => [], c :: rest => if mem(ans, c.id) then c :: keep_answered(rest, ans) else keep_answered(rest, ans) }
+}
+pure func view_at(ms: [Message], i: int, k: int, ans: [string]) -> [Message] {
+  match ms {
+    [] => [],
+    m :: rest => if i == k then { m | tool_calls: keep_answered(m.tool_calls, ans) } :: view_at(rest, i + 1, k, ans)
+                 else m :: view_at(rest, i + 1, k, ans)
+  }
+}
+pure func view(ms: [Message]) -> [Message] {
+  let k = last_call_index(ms, 0, -1);
+  if k < 0 then ms else view_at(ms, 0, k, answered_after(drop_n(k + 1, ms)))
+}
+
+-- ---------------------------------------------------------------- the simulator
+
+type Sim = { hist: [Message], at: string, prev: string, rev: [LedgerEvent], frame: int }
+
+pure func counts0() -> RuntimeStatusCounts {
+  { provider_calls_started: 1, provider_calls_completed: 1, stage_applied_total: 0,
+    stage_rejected_total: 0, compaction_ai_applied: 0 }
+}
+pure func rid(s: Sim) -> string { "sess_1.r${intToStr(s.frame)}.0" }
+
+pure func emit(s: Sim, e: LedgerEvent) -> Sim { { s | rev: e :: s.rev } }
+
+pure func seed_event(run_id: string, ms: [Message]) -> LedgerEvent {
+  HistorySeeded({ run_id: run_id, messages: messages_json(ms),
+                  digest: chain_digest_over(chain_empty_base(), ms),
+                  digests: chain_digests_json(chain_digests_over(chain_empty_base(), ms)) })
+}
+
+-- c2_seed_digest: { at: chain over ms, prev: chain over init(ms) }
+pure func seeded_with(s: Sim, ms: [Message]) -> Sim {
+  { s | hist: ms, at: chain_digest_over(chain_empty_base(), ms),
+        prev: if List.length(ms) == 0 then chain_empty_base() else chain_digest_over(chain_empty_base(), init_of(ms)) }
+}
+
+pure func app(s: Sim, m: Message) -> Sim {
+  let d = chain_digest_after(s.at, m);
+  let e = HistoryAppended({ run_id: rid(s), step: 1, message: message_json(m), replaces_previous: false, digest_after: d });
+  { emit(s, e) | hist: s.hist ++ [m], at: d, prev: s.at }
+}
+
+pure func hyb(s: Sim, m: Message) -> Sim {
+  let d = chain_digest_after(s.prev, m);
+  let e = HistoryAppended({ run_id: rid(s), step: 1, message: message_json(m), replaces_previous: true, digest_after: d });
+  { emit(s, e) | hist: init_of(s.hist) ++ [m], at: d }
+}
+
+pure func checkpoint(s: Sim, keep_last: bool) -> Sim {
+  let pre = take_system(s.hist);
+  let k = List.length(s.hist) - 1;
+  let kept = if keep_last then drop_n(k, s.hist) else [];
+  let d = chain_digest_base(pre ++ [m_sum()]);
+  let e = HistoryReplaced({ run_id: rid(s), step: 1, reason: "checkpoint",
+                            first_kept: if keep_last then Some(k) else None,
+                            messages: messages_json([m_sum()]), digest_after: d });
+  { emit(s, e) | hist: pre ++ [m_sum()] ++ kept, at: d, prev: s.at }
+}
+
+pure func resumed_info(n: int, df: string, dt: string, pt: string) -> LedgerEvent {
+  SessionResumed({ resume_count: n, from_id: "0001", from_ordinal: 0, profile_from: "dogfood",
+                   profile_to: pt, prompt_digest_from: df, prompt_digest_to: dt, forced: false })
+}
+
+pure func resume(s: Sim, switch: bool) -> Sim {
+  let s1 = { s | frame: s.frame + 1 };
+  let v = view(s.hist);
+  let ms = if switch then [m_sys2()] ++ drop_system(v) else v;
+  let s2 = emit(s1, if switch then resumed_info(s1.frame, "sha256:p0", "sha256:p1", "other")
+                    else resumed_info(s1.frame, "sha256:p0", "sha256:p0", "dogfood"));
+  seeded_with(emit(s2, seed_event(rid(s2), ms)), ms)
+}
+
+pure func follow(s: Sim) -> Sim {
+  let d = StateDelta({ run_id: rid(s), step: 1, cumulative: counts0(),
+                       telemetry: { last_input_tokens: 1, last_output_tokens: 1, last_estimated_input_tokens: 1 },
+                       ext_artifacts_digest: "sha256:ext", ext_artifacts: None });
+  let sm = RunSummary({ model: "m", motoko_commit: "abc", finish_reason: "stop", steps_executed: 1,
+                        input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0,
+                        cache_creation_input_tokens: 0, total_cost_usd: 0.0, total_cost_millicents: 0,
+                        duration_ms: 1, error: "", cumulative: counts0(), world_ordinal: 1 });
+  let s1 = emit(emit(s, d), sm);
+  let s2 = { s1 | frame: s1.frame + 1 };
+  let s3 = emit(s2, SessionStart({ task: "t", model: "m", mode: "v2", run_id: rid(s2) }));
+  seeded_with(emit(s3, seed_event(rid(s3), s.hist)), s.hist)
+}
+
+pure func step(s: Sim, i: int) -> Sim {
+  if i == 0 then app(s, m_a())
+  else if i == 1 then app(s, m_ca())
+  else if i == 2 then app(s, m_cab())
+  else if i == 3 then app(s, m_ra())
+  else if i == 4 then app(s, m_rb())
+  else if i == 5 then app(s, m_u2())
+  else if i == 6 then hyb(s, m_ca())
+  else if i == 7 then checkpoint(s, false)
+  else if i == 8 then resume(s, false)
+  else if i == 9 then resume(s, true)
+  else if i == 10 then follow(s)
+  else if i == 11 then checkpoint(s, true)
+  else app(s, m_ce())
+}
+
+pure func nsteps() -> int { 13 }
+
+pure func cons_ev(acc: [LedgerEvent], e: LedgerEvent) -> [LedgerEvent] { e :: acc }
+
+pure func events_of(ix: [int]) -> [LedgerEvent] {
+  let s0: Sim = { hist: [], at: chain_empty_base(), prev: chain_empty_base(), rev: [], frame: 0 };
+  let s1 = emit(s0, SessionStart({ task: "t", model: "m", mode: "v2", run_id: "sess_1.r0.0" }));
+  let s2 = seeded_with(emit(s1, seed_event("sess_1.r0.0", [m_sys(), m_user()])), [m_sys(), m_user()]);
+  let s = List.foldl(step, s2, ix);
+  List.foldl(cons_ev, [], s.rev)
+}
+
+-- ---------------------------------------------------------------- rendering
+
+pure func render_msg(m: Message) -> string {
+  if List.length(m.tool_calls) == 0 then m.content
+  else concat([m.content, "[", join("+", ids_of(m.tool_calls)), "]"])
+}
+pure func render_verdict(r: Result[SessionState, Refusal]) -> string {
+  match r {
+    Ok(s) => concat(["A;", join(",", List.map(render_msg, s.history)), ";", join("+", s.dangling), ";", intToStr(List.length(s.dangling))]),
+    Err(e) => concat(["R;", refusal_id(e)])
+  }
+}
+pure func ints_text(xs: [int]) -> [string] {
+  match xs { [] => [], x :: rest => intToStr(x) :: ints_text(rest) }
+}
+pure func wrap(e: LedgerEvent) -> LedgerRecord { WireRecord(e) }
+
+pure func twin_verdict(evs: [LedgerEvent]) -> string {
+  let lines = journal_lines_of_records(harness_header(default_run_identity("sess_1"), "m"), List.map(wrap, evs));
+  render_verdict(fold_journal(lines, journal_leaf(lines)))
+}
+
+func print_events(key: string, evs: [LedgerEvent]) -> () ! {IO} {
+  match evs {
+    [] => (),
+    e :: rest => { println(concat(["W\t", key, "\t", encode(to_schema_v1(e))])); print_events(key, rest) }
+  }
+}
+
+func one(ix: [int]) -> () ! {IO} {
+  let key = join(",", ints_text(ix));
+  let evs = events_of(ix);
+  print_events(key, evs);
+  println(concat(["T\t", key, "\t", twin_verdict(evs)]))
+}
+
+pure func range_from(i: int, n: int) -> [int] { if i >= n then [] else i :: range_from(i + 1, n) }
+
+func walk(prefix: [int], left: int, is: [int]) -> () ! {IO} {
+  match is {
+    [] => (),
+    i :: rest => {
+      let p = prefix ++ [i];
+      if left == 1 then one(p) else walk(p, left - 1, range_from(0, nsteps()));
+      walk(prefix, left, rest)
+    }
+  }
+}
+
+func emit_len(n: int) -> () ! {IO} {
+  if n == 0 then one([]) else walk([], n, range_from(0, nsteps()))
+}
+
+export func main() -> () ! {IO} {
+  emit_len(0); emit_len(1); emit_len(2); emit_len(3)
+}
+
+-- One named sequence (comma-separated step indices on the command line is not available,
+-- so the repro scripts pass them through --args-json).
+export func one_of(ix: [int]) -> () ! {IO} { one(ix) }
+
+-- A list of sequences (runnable.py's), for run_diff_runnable.sh.
+export func many(ixs: [[int]]) -> () ! {IO} {
+  match ixs { [] => (), i :: rest => { one(i); many(rest) } }
+}

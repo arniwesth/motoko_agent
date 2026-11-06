@@ -1,0 +1,18 @@
+-- Appended to ../JournalTwinModel.lean plus the printing helpers of enumerate.lean.tail (roleCh ..
+-- allSeqs): predicts how many mismatches `T3_FIX=both run_diff.sh` must report. Run:
+--   { cat ../JournalTwinModel.lean; sed -n "/^def roleCh/,/^def allSeqs/p" enumerate.lean.tail;
+--     cat negctl_expect.lean.tail; } > /tmp/x.lean && lean /tmp/x.lean
+-- Output at the final run: host 152, twin 116, across 148, total 416 (work_negctl/run.log: 416).
+
+-- The negative control's prediction: the real side runs with BOTH fixes, the model without.
+-- compare.awk then counts one mismatch per (sequence, comparison) where they differ.
+#eval show IO Unit from do
+  let mut h := 0
+  let mut t := 0
+  let mut a := 0
+  for s in ((List.range 5).flatMap seqsOfLen) do
+    let evs := eventsOf s
+    if verdictStr (foldJournal (hostJournal evs)) != verdictStr (foldJournal (hostJournalFixed evs)) then h := h + 1
+    if verdictStr (foldJournal (twinJournal evs)) != verdictStr (foldJournal (twinJournalFixed evs)) then t := t + 1
+    if verdictStr (foldJournal (hostJournalAcross evs)) != verdictStr (foldJournal (hostJournalAcrossFixed evs)) then a := a + 1
+  IO.println s!"predicted negative-control mismatches: host {h}, twin {t}, across {a}, total {h + t + a}"

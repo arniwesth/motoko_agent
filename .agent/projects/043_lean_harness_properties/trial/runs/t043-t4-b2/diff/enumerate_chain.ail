@@ -1,0 +1,124 @@
+-- enumerate_chain.ail — the AILANG half of the differential test for ../lean/ChainModel.lean
+-- (target T4, src/core/journal.ail:242-300, plus `chain_empty_base` at :322-324).
+--
+-- Runs the REAL, unmodified `chain_digest_base`, `chain_digest_after`, `chain_digest_over`,
+-- `chain_digests_over`, `chain_digests_json` and `chain_empty_base` over every message list
+-- of length 0..3 in the six-message alphabet below, against each of the six bases below,
+-- and prints one line per case. ../lean/Enumerate.lean.tail prints the same lines from the
+-- model; run_diff.sh diffs them.
+--
+--   E|<chain_empty_base()>
+--   F|<i>|<chain_digest_after(chain_empty_base(), alphabet[i])>          for each message i
+--   B|<ix>|<chain_digest_base(ms)>                                        for each list
+--   C|<bi>|<ix>|<chain_digest_over(b, ms)>|<chain_digests_over(b, ms) joined by ",">|<n>|<encode(chain_digests_json(...))>
+--
+-- From the repository root:
+--
+--   ailang run --relax-modules --caps IO --entry main ../out/diff/enumerate_chain.ail
+
+module enumerate_chain
+
+import std/io (println)
+import std/ai (Message, ToolCall, ImagePart)
+import std/json (encode)
+import std/string as Str (join, concat, intToStr)
+import std/list as List (length)
+import src/core/journal (
+  chain_digest_base, chain_digest_after, chain_digest_over, chain_digests_over,
+  chain_digests_json, chain_empty_base
+)
+
+-- The alphabet: same six messages, same order, as Enumerate.lean.tail. None has
+-- `make[` in its content, so `digest_content`'s normalisation (which the model does not
+-- carry) is the identity on all of them.
+pure func alphabet() -> [Message] {
+  [ { role: "user", content: "hi", tool_calls: [], tool_call_id: "", images: [] },
+    { role: "assistant", content: "", tool_calls: [{ id: "a", name: "bash", arguments: "{\"cmd\":\"ls\"}" }], tool_call_id: "", images: [] },
+    { role: "tool", content: "out\nline;2", tool_call_id: "a", tool_calls: [], images: [] },
+    { role: "system", content: "é∅ ✓ 日本", tool_calls: [], tool_call_id: "", images: [] },
+    { role: "user", content: "look", tool_calls: [], tool_call_id: "", images: [{ source: "data:x", mime: "image/png" }, { source: "", mime: "" }] },
+    { role: "assistant", content: "m{role:4:user;", tool_calls: [{ id: "", name: "", arguments: "" }, { id: "b", name: "é", arguments: "{}" }], tool_call_id: "x", images: [] } ]
+}
+
+pure func nth(xs: [Message], i: int) -> Message {
+  match xs { [] => { role: "", content: "", tool_calls: [], tool_call_id: "", images: [] }, x :: rest => if i == 0 then x else nth(rest, i - 1) }
+}
+
+-- The bases: 0 the empty-history base every caller uses, 1 the empty string, 2 a short
+-- string, 3 a digest-shaped string, 4 a real chain value, 5 a multi-byte string.
+pure func bases() -> [string] {
+  [ chain_empty_base(),
+    "",
+    "x",
+    "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    chain_digest_over(chain_empty_base(), [nth(alphabet(), 0)]),
+    "é" ]
+}
+
+pure func nth_s(xs: [string], i: int) -> string {
+  match xs { [] => "", x :: rest => if i == 0 then x else nth_s(rest, i - 1) }
+}
+
+pure func messages_of(ix: [int]) -> [Message] {
+  match ix { [] => [], i :: rest => nth(alphabet(), i) :: messages_of(rest) }
+}
+
+pure func ints_text(xs: [int]) -> [string] {
+  match xs { [] => [], x :: rest => intToStr(x) :: ints_text(rest) }
+}
+
+pure func case_line(bi: int, ix: [int]) -> string {
+  let b = nth_s(bases(), bi);
+  let ms = messages_of(ix);
+  let ds = chain_digests_over(b, ms);
+  concat(["C|", intToStr(bi), "|", join(",", ints_text(ix)), "|",
+          chain_digest_over(b, ms), "|", join(",", ds), "|", intToStr(List.length(ds)), "|",
+          encode(chain_digests_json(ds))])
+}
+
+func emit_cases(bi: int, ix: [int]) -> () ! {IO} {
+  if bi >= 6 then () else {
+    println(case_line(bi, ix));
+    emit_cases(bi + 1, ix)
+  }
+}
+
+func emit_list(ix: [int]) -> () ! {IO} {
+  println(concat(["B|", join(",", ints_text(ix)), "|", chain_digest_base(messages_of(ix))]));
+  emit_cases(0, ix)
+}
+
+pure func range_from(i: int, n: int) -> [int] {
+  if i >= n then [] else i :: range_from(i + 1, n)
+}
+
+func walk(prefix: [int], left: int, is: [int]) -> () ! {IO} {
+  match is {
+    [] => (),
+    i :: rest => {
+      let p = prefix ++ [i];
+      if left == 1 then emit_list(p) else walk(p, left - 1, range_from(0, 6));
+      walk(prefix, left, rest)
+    }
+  }
+}
+
+func emit_len(n: int) -> () ! {IO} {
+  if n == 0 then emit_list([]) else walk([], n, range_from(0, 6))
+}
+
+func emit_frames(i: int) -> () ! {IO} {
+  if i >= 6 then () else {
+    println(concat(["F|", intToStr(i), "|", chain_digest_after(chain_empty_base(), nth(alphabet(), i))]));
+    emit_frames(i + 1)
+  }
+}
+
+export func main() -> () ! {IO} {
+  println(concat(["E|", chain_empty_base()]));
+  emit_frames(0);
+  emit_len(0);
+  emit_len(1);
+  emit_len(2);
+  emit_len(3)
+}

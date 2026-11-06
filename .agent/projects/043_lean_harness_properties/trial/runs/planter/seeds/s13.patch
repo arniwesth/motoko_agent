@@ -1,0 +1,11 @@
+--- a/src/core/journal.ail
++++ b/src/core/journal.ail
+@@ -1402,7 +1402,7 @@
+ -- would not terminate. Recursion depth is the PATH length, not the file's.
+ pure func path_up(es: [JournalEntry], id: string, seen: [string], acc: [JournalEntry]) -> [JournalEntry] {
+   if id == "" then acc
+-  else if contains_string(seen, id) then acc
++  else if contains_string(seen, id) then []
+   else match find_entry(es, id) {
+     None => acc,
+     Some(e) => path_up(es, e.parent_id, id :: seen, e :: acc)

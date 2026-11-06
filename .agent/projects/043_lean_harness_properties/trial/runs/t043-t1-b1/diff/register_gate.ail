@@ -1,0 +1,18 @@
+-- diff/register_gate.ail — the REAL `register_with_config` (packages/motoko-ext-herdr/register.ail),
+-- unchanged, imported by path through ./ailang.toml. Prints the tools it advertises, which is the
+-- AILANG gate as the runtime actually computes it (register.ail:206-207): `Delegate,DelegateCheck`
+-- when `herdr_env_ready` is true, empty otherwise. The three variables come from the process
+-- environment; run with HERDR_ORCHESTRATOR=off so no file is read.
+--
+--   HERDR_ORCHESTRATOR=off ailang run --relax-modules --caps Clock,Env,FS,IO,Process --entry main register_gate.ail
+module register_gate
+
+import std/io (println)
+import std/string (join)
+import pkg/sunholo/motoko_ext_herdr/register (register_with_config)
+import pkg/sunholo/motoko_ext_herdr/herdr (herdr_tools_of)
+
+export func main() -> () ! {Clock, Env, FS, IO, Process} {
+  let r = register_with_config(());
+  println("tools=${join(",", herdr_tools_of(r.config))}")
+}

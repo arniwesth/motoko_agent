@@ -1,0 +1,89 @@
+cases: 3000
+  host=accept twin=accept                  622
+  host=accept twin=digest                  33
+  host=digest twin=accept                  12
+  host=digest twin=digest                  347
+  host=digest twin=pairing                 18
+  host=pairing twin=digest                 40
+  host=pairing twin=pairing                1928
+P3.1 verdict host=accept twin=digest [emittable,session]: 5
+    504 CP,U,RS,U,PS,PS,A2[resume refused][resume refused]
+    825 U,CP,CP,U,RS,SU,FU
+    1036 A2,RS,U,CP,CP,RS,A0
+    2222 U,U,PS,CP,RS,FU,A1
+    2788 U,SU,FU,CP,RS,RS,U
+P3.1 verdict host=accept twin=digest [outside-grammar,session]: 28
+    194 FU,CP,RS,SU,U,CP,H1
+    263 FU,A1,TB,CP,A0,RS,A1
+    469 RS,A1,SU,CP,RS,TA,CP
+    689 A1,CP,RS,A0,RS,PS,FU[resume refused][resume refused]
+    766 R1,CP,CP,RS,A0,PS,SU[resume refused]
+    919 TA,CP,RS,A0,PS,U,FU[resume refused]
+    973 A0,RS,U,TB,CP,RS,U
+    1033 A1,CP,U,A0,RS,A2,R1
+P3.1 verdict host=digest twin=accept [emittable,session]: 1
+    381 RS,FU,A0,R1,RS,U,A2
+P3.1 verdict host=digest twin=accept [outside-grammar,session]: 11
+    171 R1,RS,SU,H1,TB,SU,CP
+    498 RS,R1,RS,A0,R1,FU,CP
+    1253 SU,A0,SU,R1,RS,A1,CP
+    1470 R1,RS,FU,A0,H1,A1,CP
+    1822 H1,TA,RS,H1,CP,PS,U
+    1948 R1,RS,TB,SU,SU,RS,CP[resume refused]
+    2049 FU,U,PS,U,RS,SU,R1
+    2505 H1,SU,TA,TA,RS,A2,RS
+P3.1 verdict host=digest twin=pairing [outside-grammar,session]: 18
+    35 R1,RS,FU,CP,TB,SU,H1
+    237 TB,R1,R1,RS,A1,U,FU
+    747 R1,RS,A0,PS,TA,A0,RS[resume refused]
+    868 RS,R1,RS,TA,U,RS,SU[resume refused]
+    1035 RS,R1,RS,H1,A1,TB,SU
+    1098 R1,R1,RS,A2,A0,TB,R1
+    1413 R1,RS,FU,PS,FU,TA,TA
+    1549 R1,RS,SU,A2,A2,TB,A2
+P3.1 verdict host=pairing twin=digest [emittable,session]: 1
+    137 RS,CP,RS,A1,RS,RS,A0[resume refused][resume refused]
+P3.1 verdict host=pairing twin=digest [outside-grammar,session]: 39
+    21 SU,CP,RS,A1,U,PS,TB[resume refused]
+    27 FU,A2,RS,CP,RS,H1,H1
+    55 CP,RS,SU,H1,A0,H1,TA
+    78 PS,CP,RS,TB,A1,RS,FU[resume refused]
+    289 CP,RS,A2,U,H1,H1,FU
+    371 RS,A2,U,CP,RS,TB,PS[resume refused]
+    456 CP,RS,FU,A2,FU,FU,A0
+    467 A1,A1,CP,A0,RS,A1,A2
+P3.2 twin refuses (digest) [emittable,session]: 17
+    1 RS,CP,SU,FU,PS,FU,U[resume refused]
+    25 A0,CP,U,FU,RS,PS,CP[resume refused][resume refused]
+    137 RS,CP,RS,A1,RS,RS,A0[resume refused][resume refused]
+    175 RS,RS,CP,U,FU,SU,RS[resume refused]
+    504 CP,U,RS,U,PS,PS,A2[resume refused][resume refused]
+    554 CP,FU,A1,TA,FU,A2,PS[resume refused]
+    825 U,CP,CP,U,RS,SU,FU
+    827 A0,CP,SU,A0,A0,FU,A0
+X-3 host pendingToolCalls != fold dangling [emittable,session]: 2
+    132 A0,PS,PS,FU,SU,A0,R1 pending=[] dangling=[a](1)
+    1527 U,RS,RS,PS,CP,A0,R1 pending=[] dangling=[a](1)
+X-3 host pendingToolCalls != fold dangling [outside-grammar,session]: 84
+    9 A2,A1,PS,FU,U,CP,R1[resume refused] pending=[] dangling=[a](1)
+    13 U,A0,U,A2,RS,H1,TA pending=[] dangling=[](1)
+    82 U,CP,U,PS,U,FU,R1 pending=[] dangling=[a](1)
+    121 R1,R1,R1,A1,PS,CP,H1[resume refused] pending=["a"] dangling=[a,](2)
+    140 U,TB,RS,CP,CP,TA,R1[resume refused] pending=[] dangling=[a](1)
+    194 FU,CP,RS,SU,U,CP,H1 pending=["a"] dangling=[a,](2)
+    338 A1,A2,H1,FU,H1,CP,H1 pending=["a"] dangling=[a,](2)
+    380 FU,SU,U,R1,PS,A0,R1 pending=[] dangling=[a](1)
+X-3 host pendingToolCalls != fold dangling [outside-grammar]: 18
+    103 H1,U,H1,TA,R1,CP,R1 pending=[] dangling=[a](1)
+    252 A1,U,U,A0,CP,SU,H1 pending=["a"] dangling=[a,](2)
+    299 A0,TA,SU,TB,CP,A0,R1 pending=[] dangling=[a](1)
+    521 H1,TB,CP,TB,CP,U,H1 pending=["a"] dangling=[a,](2)
+    597 TA,CP,SU,A0,U,A0,R1 pending=[] dangling=[a](1)
+    803 TB,CP,TB,A0,A1,CP,H1 pending=["a"] dangling=[a,](2)
+    999 TB,TB,TA,A2,CP,A0,H1 pending=["a"] dangling=[a,](2)
+    1156 H1,TA,A0,A0,A2,CP,R1 pending=[] dangling=[a](1)
+P3.1: 3000 cases compared, 103 violations
+P3.2: 101 run-emittable cases, 17 violations
+X-3: 104 cases where the host's pendingToolCalls differ from the fold's dangling on the host journal
+X-1: 0 cases where both accept with equal history/dangling but the rest of the state differs
+exit=1

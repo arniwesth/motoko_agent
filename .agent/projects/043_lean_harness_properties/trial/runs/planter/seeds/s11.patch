@@ -1,0 +1,11 @@
+--- a/src/core/journal.ail
++++ b/src/core/journal.ail
+@@ -290,7 +290,7 @@
+ }
+ 
+ export pure func chain_digests_over(base: string, ms: [Message]) -> [string] {
+-  List.foldl(chain_prefix_step, { last: base, out: [] }, ms).out
++  List.foldl(chain_prefix_step, { last: chain_empty_base(), out: [] }, ms).out
+ }
+ 
+ -- The same list as JSON, because every caller that reports it is building a wire

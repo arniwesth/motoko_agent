@@ -1,0 +1,54 @@
+lean: 7381 sequences, 2313 a run can emit
+# fixed model, 2313 valid sequences: P3.1 0 disagree, P3.1 across 0, P3.2 173; e.g. [p32:5,8, p32:0,5,8, p32:3,5,8, p32:5,0,8, p32:5,3,8, p32:5,5,8, p32:5,8,0, p32:5,8,1, p32:5,8,3, p32:5,8,5, p32:5,8,6, p32:5,8,7]
+NEGATIVE CONTROL: twin patched
+NEGATIVE CONTROL: host patched
+ailang twin: 7381 sequences
+bun host: 14762 journals
+real: 22143 lines; sha256 08fffb672ee2d044
+  TWIN MISMATCH [5,6,1,8]
+    model: digest||
+    real:  pairing||
+  P3.2 [7,5,5,8] twin=digest||  spec=accept|s:you are motoko, switched::;a:[CHECKPOINT] s::;u:next::|#0
+  TWIN MISMATCH [5,6,0,4]
+    model: digest||
+    real:  accept|s:you are motoko::;a:[CHECKPOINT] s::;a:plain::|c1#1
+  TWIN MISMATCH [5,6,2,5]
+    model: digest||
+    real:  accept|s:you are motoko::;a:[CHECKPOINT] s::|#0
+  HOST MISMATCH [8,0,4,6]
+    model: accept|s:you are motoko::;u:list the files::;u:next::;a:plain::|c1#1
+    real:  accept|s:you are motoko::;u:list the files::;u:next::;a:plain::|#0
+  HOST-ACROSS MISMATCH [8,0,4,6]
+    model: accept|s:you are motoko::;u:list the files::;u:next::;a:plain::|c1#1
+    real:  accept|s:you are motoko::;u:list the files::;u:next::;a:plain::|#0
+  P3.2 [5,8,5,8] twin=digest||  spec=accept|s:you are motoko::;a:[CHECKPOINT] s::;u:next::|#0
+  P3.2 [3,5,8,3] twin=digest||  spec=accept|s:you are motoko::;a:[CHECKPOINT] s::;u:next::;u:next::|#0
+  P3.2 [3,8,5,8] twin=digest||  spec=accept|s:you are motoko::;a:[CHECKPOINT] s::;u:next::|#0
+  HOST MISMATCH [0,4,4,6]
+    model: accept|s:you are motoko::;u:list the files::;a:plain::|c1#1
+    real:  accept|s:you are motoko::;u:list the files::;a:plain::|#0
+  HOST-ACROSS MISMATCH [0,4,4,6]
+    model: accept|s:you are motoko::;u:list the files::;a:plain::|c1#1
+    real:  accept|s:you are motoko::;u:list the files::;a:plain::|#0
+  P3.2 [5,5,8,3] twin=digest||  spec=accept|s:you are motoko::;a:[CHECKPOINT] s::;u:next::;u:next::|#0
+  TWIN MISMATCH [5,2,6,2]
+    model: digest||
+    real:  pairing||
+  HOST MISMATCH [4,6,1,1]
+    model: digest||
+    real:  pairing||
+  HOST-ACROSS MISMATCH [4,6,1,1]
+    model: digest||
+    real:  pairing||
+  P3.2 [5,8,8,7] twin=digest||  spec=accept|s:you are motoko, switched::;a:[CHECKPOINT] s::;u:next::;u:next::|#0
+  P3.2 [6,5,8] twin=digest||  spec=accept|s:you are motoko::;a:[CHECKPOINT] s::;u:next::|#0
+  P3.2 [5,8,6] twin=digest||  spec=accept|s:you are motoko::;a:[CHECKPOINT] s::;u:next::|#0
+model: 7381 sequences, 416 mismatches with the real code, 0 missing
+P3.1 (real host vs real twin, folded by the real fold): 0 of 2313 valid sequences disagree
+P3.1 across processes (adopted host vs real twin): 0 of 2313 valid sequences disagree
+P3.2 (real twin vs rule 3+4 spec): 173 of 2313 valid sequences violate; host vs spec: 173
+
+real	3m39.375s
+user	2m36.645s
+sys	0m4.580s
+exit 1

@@ -1,0 +1,153 @@
+module t3_gen
+-- T3, the AILANG half. For every case: the wire events a run emits (as `to_schema_v1` puts them
+-- on the wire), and the TWIN's journal (`journal_lines_of_records`) folded by `fold_journal`.
+--   E <tab> case <tab> event-json          one per wire event, in order
+--   W <tab> case <tab> verdict|dangling|n|history-sha|rule3
+-- Cases: Appendix C's T3 alphabet (every history of 0..4 appended messages over the eleven
+-- messages of evidence/diff/enumerate.*, with enumerate_fold.ail's prologue and epilogue), then
+-- the named witness scenarios. rule3 is P3.2's history check: for an accepted journal with no
+-- dangling call, `ok` iff the folded history is the seed then one message per appended entry.
+import std/io (println)
+import std/ai (Message, ToolCall)
+import std/string as Str (join, concat, intToStr)
+import std/list as List (length, map)
+import std/json (Json, encode)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import std/crypto (sha256Hex)
+import src/core/phase_vocab (
+  RuntimeStatusCounts, LedgerRecord, WireRecord, LedgerEvent, to_schema_v1,
+  HistorySeeded, HistoryAppended, HistoryReplaced, StateDelta, SessionStart, RunSummary, SessionResumed
+)
+import src/core/journal (
+  SessionState, refusal_id, fold_journal, journal_lines_of_records, journal_leaf, harness_header,
+  default_run_identity, chain_digest_after, chain_digest_over, chain_digests_over, chain_digests_json,
+  chain_empty_base, chain_digest_base, messages_json, message_json
+)
+
+pure func call(id: string) -> ToolCall { { id: id, name: "bash", arguments: "{}" } }
+pure func calls_of(ids: [string]) -> [ToolCall] { match ids { [] => [], i :: rest => call(i) :: calls_of(rest) } }
+pure func mk(role: string, ids: [string], tcid: string) -> Message {
+  { role: role, content: "", tool_calls: calls_of(ids), tool_call_id: tcid, images: [] }
+}
+pure func mc(role: string, content: string, ids: [string]) -> Message {
+  { role: role, content: content, tool_calls: calls_of(ids), tool_call_id: "", images: [] }
+}
+pure func alphabet() -> [Message] {
+  [ mk("assistant", [], ""), mk("assistant", ["a"], ""), mk("assistant", ["a", "b"], ""),
+    mk("assistant", ["b"], ""), mk("tool", [], "a"), mk("tool", [], "b"), mk("tool", [], ""),
+    mk("user", [], ""), mk("tool", ["b"], "a"), mk("assistant", [], "a"), mk("assistant", ["a", ""], "") ]
+}
+pure func nth(xs: [Message], i: int) -> Message {
+  match xs { [] => mk("user", [], ""), x :: rest => if i == 0 then x else nth(rest, i - 1) }
+}
+
+-- enumerate_fold.ail's fixtures (copies of journal.ail's private test fixtures).
+pure func t_sys() -> Message { { role: "system", content: "you are motoko", tool_calls: [], tool_call_id: "", images: [] } }
+pure func t_user() -> Message { { role: "user", content: "list the files", tool_calls: [], tool_call_id: "", images: [] } }
+pure func t_seed() -> [Message] { [t_sys(), t_user()] }
+pure func t_seed_digest() -> string { chain_digest_over(chain_empty_base(), t_seed()) }
+pure func rid() -> string { "sess_1.r0.0" }
+pure func t_counts() -> RuntimeStatusCounts {
+  { provider_calls_started: 2, provider_calls_completed: 2, stage_applied_total: 0,
+    stage_rejected_total: 0, compaction_ai_applied: 0 }
+}
+pure func seeded(run_id: string, ms: [Message]) -> LedgerRecord {
+  WireRecord(HistorySeeded({ run_id: run_id, messages: messages_json(ms),
+    digest: chain_digest_over(chain_empty_base(), ms),
+    digests: chain_digests_json(chain_digests_over(chain_empty_base(), ms)) }))
+}
+pure func t_start(run_id: string) -> LedgerRecord {
+  WireRecord(SessionStart({ task: "list the files", model: "m", mode: "v2", run_id: run_id }))
+}
+pure func t_append(run_id: string, m: Message, replaces: bool, digest: string) -> LedgerRecord {
+  WireRecord(HistoryAppended({ run_id: run_id, step: 1, message: message_json(m), replaces_previous: replaces, digest_after: digest }))
+}
+pure func t_delta() -> LedgerRecord {
+  WireRecord(StateDelta({ run_id: rid(), step: 1, cumulative: t_counts(),
+    telemetry: { last_input_tokens: 120, last_output_tokens: 40, last_estimated_input_tokens: 100 },
+    ext_artifacts_digest: "sha256:ext", ext_artifacts: None }))
+}
+pure func t_summary() -> LedgerRecord {
+  WireRecord(RunSummary({ model: "m", motoko_commit: "abc", finish_reason: "stop", steps_executed: 1,
+    input_tokens: 10, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0,
+    total_cost_usd: 0.0, total_cost_millicents: 0, duration_ms: 5, error: "", cumulative: t_counts(), world_ordinal: 4 }))
+}
+pure func t_checkpoint(prefix: [Message], summary: Message) -> LedgerRecord {
+  WireRecord(HistoryReplaced({ run_id: rid(), step: 3, reason: "checkpoint", first_kept: None,
+    messages: messages_json([summary]), digest_after: chain_digest_base(prefix ++ [summary]) }))
+}
+pure func t_resumed() -> LedgerRecord {
+  WireRecord(SessionResumed({ resume_count: 1, from_id: "0004", from_ordinal: 0, profile_from: "p", profile_to: "p",
+    prompt_digest_from: "sha256:p", prompt_digest_to: "sha256:p", forced: false }))
+}
+
+pure func appends(ms: [Message], prev: string) -> [LedgerRecord] {
+  match ms { [] => [], m :: rest => { let d = chain_digest_after(prev, m); t_append(rid(), m, false, d) :: appends(rest, d) } }
+}
+
+-- One case: the events, then the twin's fold.
+pure func event_lines(name: string, rs: [LedgerRecord]) -> [string] {
+  match rs { [] => [], r :: rest => match r {
+    WireRecord(e) => "E\t${name}\t${encode(to_schema_v1(e))}" :: event_lines(name, rest),
+    _ => event_lines(name, rest) } }
+}
+pure func result_of(lines: [Json], expected: Option[[Message]]) -> string {
+  match fold_journal(lines, journal_leaf(lines)) {
+    Err(r) => "${refusal_id(r)}||0||n/a",
+    Ok(s) => {
+      let h = sha256Hex(encode(messages_json(s.history)));
+      let r3 = match expected { None => "n/a", Some(ms) =>
+        if List.length(s.dangling) > 0 then "n/a" else if encode(messages_json(s.history)) == encode(messages_json(ms)) then "ok" else "differs" };
+      "accept|${join(",", s.dangling)}|${intToStr(List.length(s.dangling))}|${h}|${r3}"
+    }
+  }
+}
+func print_all(xs: [string]) -> () ! {IO} { match xs { [] => (), x :: rest => { println(x); print_all(rest) } } }
+func emit(name: string, rs: [LedgerRecord], expected: Option[[Message]]) -> () ! {IO} {
+  print_all(event_lines(name, rs));
+  let lines = journal_lines_of_records(harness_header(default_run_identity("sess_1"), "m"), rs);
+  println("W\t${name}\t${result_of(lines, expected)}")
+}
+
+pure func ints_text(xs: [int]) -> string { join(",", map(\x. intToStr(x), xs)) }
+pure func msgs_of(ix: [int]) -> [Message] { map(\i. nth(alphabet(), i), ix) }
+func alphabet_case(ix: [int]) -> () ! {IO} {
+  let ms = msgs_of(ix);
+  emit("A:${ints_text(ix)}", [t_start(rid()), seeded(rid(), t_seed())] ++ appends(ms, t_seed_digest()) ++ [t_delta(), t_summary()], Some(t_seed() ++ ms))
+}
+pure func range_from(i: int, n: int) -> [int] { if i >= n then [] else i :: range_from(i + 1, n) }
+func walk(prefix: [int], left: int, is: [int]) -> () ! {IO} {
+  match is { [] => (), i :: rest => {
+    let p = prefix ++ [i];
+    if left == 1 then alphabet_case(p) else walk(p, left - 1, range_from(0, 11));
+    walk(prefix, left, rest) } }
+}
+func emit_len(n: int) -> () ! {IO} { if n == 0 then alphabet_case([]) else walk([], n, range_from(0, 11)) }
+
+-- The named scenarios (validation/<seed>/). A resumed run seeds the history the fold of the
+-- journal so far hands back, with its own chain from the empty base (D6).
+pure func summary_msg() -> Message { mc("assistant", "[checkpoint summary]", []) }
+pure func user2() -> Message { mc("user", "go on", []) }
+pure func plain() -> Message { mc("assistant", "running ls", []) }
+pure func augmented() -> Message { mc("assistant", "running ls", ["call_1"]) }
+pure func augmented_stripped() -> Message { mc("assistant", "running ls", []) }
+
+pure func w08() -> [LedgerRecord] {
+  let seed2 = [t_sys(), summary_msg()];
+  let d2 = chain_digest_over(chain_empty_base(), seed2);
+  [seeded(rid(), t_seed()), t_checkpoint([t_sys()], summary_msg()), t_resumed(), seeded("sess_1.r1.0", seed2),
+   t_append("sess_1.r1.0", user2(), false, chain_digest_after(d2, user2()))]
+}
+pure func w09() -> [LedgerRecord] {
+  let d_plain = chain_digest_after(t_seed_digest(), plain());
+  let d_aug = chain_digest_after(t_seed_digest(), augmented());
+  [seeded(rid(), t_seed()), t_append(rid(), plain(), false, d_plain), t_append(rid(), augmented(), true, d_aug),
+   t_resumed(), seeded("sess_1.r1.0", t_seed() ++ [augmented_stripped()])]
+}
+
+export func main() -> () ! {IO} {
+  emit("W08", w08(), None);
+  emit("W09", w09(), None);
+  emit_len(0); emit_len(1); emit_len(2); emit_len(3); emit_len(4)
+}

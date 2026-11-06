@@ -1,0 +1,12 @@
+cases: 2955 action sequences, 8865 host journals; scratch /home/motoko/trial-043/s/t043-t3-a2/out/work/p31_3
+  P3.1 VIOLATION one twin=refuse:digest host=accept                                5  e.g. actions [6,9,0]
+  P3.1 VIOLATION one twin=accept host=accept                                       1  e.g. actions [4,5,9]
+  P3.1 VIOLATION restart twin=accept host=accept                                   1  e.g. actions [4,5,9]
+  P3.1 VIOLATION crash twin=accept host=accept                                     1  e.g. actions [4,5,9]
+  P3.1 VIOLATION crash twin=refuse:digest host=accept                              5  e.g. actions [6,9,0]
+  P3.1 VIOLATION restart twin=refuse:digest host=accept                            5  e.g. actions [6,9,0]
+  X-1 host pending != fold dangling (crash) 31  e.g. [4,5 host_pending=[] fold_dangling=[h1]]
+  X-1 host pending != fold dangling (restart) 31  e.g. [4,5 host_pending=[] fold_dangling=[h1]]
+  X-1 host pending != fold dangling (one) 31  e.g. [4,5 host_pending=[] fold_dangling=[h1]]
+p3.1: 8865 host journals compared, 18 disagree with the twin; 93 with host pending != dangling
+exit 1

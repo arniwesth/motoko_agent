@@ -1,0 +1,23 @@
+cases: 651; fold verdicts: {"accept":417,"pairing":234}
+P0.1: 156 violations
+  ops=[201] host=[] fold=["a"] history=system:: user:: assistant::
+  ops=[202] host=[] fold=["a","b"] history=system:: user:: assistant::
+  ops=[300] host=[] fold=["a"] history=system:: user:: assistant:: tool::a assistant::
+  ops=[301] host=[] fold=["b"] history=system:: user:: assistant:a: tool::a assistant::
+  ops=[302] host=[] fold=["b"] history=system:: user:: assistant:a: tool::a tool::b assistant::
+  ops=[0,201] host=[] fold=["a"] history=system:: user:: assistant::
+  ops=[0,202] host=[] fold=["a","b"] history=system:: user:: assistant::
+  ops=[0,300] host=[] fold=["a"] history=system:: user:: assistant:: tool::a assistant::
+X-1: 52 violations
+  ops=[300] dangling=["a"] history=system:: user:: assistant:: tool::a assistant::
+  ops=[302] dangling=["b"] history=system:: user:: assistant:a: tool::a tool::b assistant::
+  ops=[0,300] dangling=["a"] history=system:: user:: assistant:: tool::a assistant::
+  ops=[0,302] dangling=["b"] history=system:: user:: assistant:a: tool::a tool::b assistant::
+  ops=[1,300] dangling=["a"] history=system:: user:: assistant:: tool::a assistant::
+  ops=[1,302] dangling=["b"] history=system:: user:: assistant:a: tool::a tool::b assistant::
+  ops=[2,300] dangling=["a"] history=system:: user:: assistant:: tool::a assistant::
+  ops=[2,302] dangling=["b"] history=system:: user:: assistant:a: tool::a tool::b assistant::
+
+real	0m8.843s
+user	0m9.631s
+sys	0m0.271s

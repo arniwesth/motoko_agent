@@ -1,0 +1,39 @@
+-- repro_x1.ail — X-1: chain_digests_over is quadratic in |ms|. Exit 1 iff, at n = 40000,
+-- chain_digests_over takes more than twice as long as chain_digest_over on the same list.
+-- Both perform exactly n `chain_digest_after` steps; the only extra work chain_digests_over
+-- should do is keep the n results. Its fold step rebuilds the accumulator list with
+-- `acc.out ++ [d]`, which std/list documents as a copy of the whole list (O(i) at step i),
+-- so the fold is O(n^2). chain_digest_over is timed twice and the faster run is used.
+--
+--   ailang run --relax-modules --caps IO,Clock --chdir ../out/pkg --entry main t4/repro_x1.ail
+module repro_x1
+
+import std/io (println, exit)
+import std/clock (now)
+import std/ai (Message)
+import std/string as Str (intToStr)
+import std/list as List (length, map, range, last)
+import std/option (Option, Some, None)
+import src/core/journal (chain_digest_over, chain_digests_over, chain_empty_base)
+
+pure func m(i: int) -> Message {
+  { role: "user", content: "message ${intToStr(i)}", tool_calls: [], tool_call_id: "", images: [] }
+}
+
+export func main() -> () ! {IO, Clock} {
+  let n = 40000;
+  let ms = map(m, range(0, n));
+  let b = chain_empty_base();
+  let t0 = now();
+  let o1 = chain_digest_over(b, ms);
+  let t1 = now();
+  let ds = chain_digests_over(b, ms);
+  let t2 = now();
+  let o2 = chain_digest_over(b, ms);
+  let t3 = now();
+  let over = if t1 - t0 < t3 - t2 then t1 - t0 else t3 - t2;
+  let digs = t2 - t1;
+  println("n=${intToStr(n)} chain_digest_over=${intToStr(over)}ms chain_digests_over=${intToStr(digs)}ms len=${intToStr(length(ds))} last_is_over=${show(last(ds) == Some(o1) && o1 == o2)}");
+  if digs > 2 * over then { println("X-1: chain_digests_over is more than 2x chain_digest_over (superlinear accumulator)"); exit(1) }
+  else println("X-1: within 2x")
+}

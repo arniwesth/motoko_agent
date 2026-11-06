@@ -1,0 +1,170 @@
+-- t4_enum.ail -- bounded-exhaustive check of P4.1, P4.2 and X-1..X-3 on the REAL
+-- `src/core/journal` chain functions (journal.ail:242-300).
+--
+-- Every message list of length 0..maxLen over an alphabet of 7 messages, for each of
+-- 5 bases, and for P4.1 every split `xs ++ ys` of that list. Nothing here models the
+-- functions under test: each check is the property's statement, evaluated on the real
+-- functions' outputs.
+--
+--   P4.1  chain_digests_over(b, xs ++ ys)
+--           == chain_digests_over(b, xs) ++ chain_digests_over(chain_digest_over(b, xs), ys)
+--   P4.2a length(chain_digests_over(b, ms)) == length(ms)
+--   P4.2b ms != []  ==>  last(chain_digests_over(b, ms)) == chain_digest_over(b, ms)
+--   X-1   chain_digests_over(b, ms)[i] == chain_digest_over(b, take(i+1, ms))  (every i)
+--   X-2   twin: journal.chain_digest_over(b, ms) == eval/journal/digests.eval_chain_digest_over(b, ms)
+--   X-3   chain_digest_over(empty, .) is injective on the enumerated lists (no two distinct
+--         lists of length <= maxLen share a digest)
+--
+-- Run from out/harness (the package root is symlinked there); the bound defaults to 4:
+--   T4_MAXLEN=4 ailang run --relax-modules --caps IO,Env --entry main t4_enum.ail
+-- Prints one summary line per (check, base) and exits 1 if any check found a violation.
+
+module t4_enum
+
+import std/io (println, exit)
+import std/ai (Message, ToolCall, ImagePart)
+import std/string as Str (join, concat, intToStr, contains, stringToInt)
+import std/env (getEnv)
+import std/result (Result, Ok, Err)
+import std/option (Option, Some, None)
+import std/list as List (length, take, drop, map, foldl, flatMap, range, nth_or, last_or, sortBy, filter, forEachE)
+import src/core/journal (chain_digest_after, chain_digest_over, chain_digests_over, chain_digest_base, chain_empty_base)
+import src/eval/journal/digests (eval_chain_digest_over)
+
+pure func call(id: string) -> ToolCall { { id: id, name: "bash", arguments: "{\"cmd\":\"ls\"}" } }
+
+pure func mk(role: string, content: string, calls: [ToolCall], tcid: string, images: [ImagePart]) -> Message {
+  { role: role, content: content, tool_calls: calls, tool_call_id: tcid, images: images }
+}
+
+pure func alphabet() -> [Message] {
+  [ mk("system", "you are motoko", [], "", []),                                   -- 0
+    mk("user", "list the files", [], "", []),                                     -- 1
+    mk("assistant", "", [call("a")], "", []),                                     -- 2
+    mk("tool", "a.txt", [], "a", []),                                             -- 3
+    mk("user", "see", [], "", [{ source: "data:x", mime: "image/png" }]),        -- 4: images only differ from 5
+    mk("user", "see", [], "", []),                                                -- 5
+    mk("assistant", "m{role:4:user;}é;", [], "", []) ]                            -- 6: frame-like, non-ASCII
+}
+
+pure func msgs_of(ix: [int]) -> [Message] {
+  let a = alphabet();
+  List.map(\i. nth_or(a, i, mk("user", "", [], "", [])), ix)
+}
+
+-- All index lists of length exactly n over k letters, lexicographic.
+pure func lists_of_len(n: int, k: int) -> [[int]] {
+  if n == 0 then [[]]
+  else List.flatMap(\p. List.map(\i. p ++ [i], range(0, k)), lists_of_len(n - 1, k))
+}
+
+pure func lists_upto(n: int, k: int) -> [[int]] {
+  List.flatMap(\l. lists_of_len(l, k), range(0, n + 1))
+}
+
+pure func ix_text(ix: [int]) -> string { "[${join(",", List.map(intToStr, ix))}]" }
+
+type Base = { name: string, value: string }
+
+pure func bases() -> [Base] {
+  let e = chain_empty_base();
+  [ { name: "empty", value: e },
+    { name: "seed_digest", value: chain_digest_base(msgs_of([0, 1])) },
+    { name: "mid_chain", value: chain_digest_over(e, msgs_of([0, 1])) },
+    { name: "empty_string", value: "" },
+    { name: "literal", value: "sha256:base" } ]
+}
+
+type Tally = { checked: int, bad: int, first: string }
+
+pure func tally0() -> Tally { { checked: 0, bad: 0, first: "" } }
+
+pure func note(t: Tally, ok: bool, witness: string) -> Tally {
+  if ok then { t | checked: t.checked + 1 }
+  else { checked: t.checked + 1, bad: t.bad + 1, first: if t.bad == 0 then witness else t.first }
+}
+
+-- P4.1 over every split of one list.
+pure func p41_one(b: string, ix: [int], t: Tally) -> Tally {
+  let ms = msgs_of(ix);
+  let whole = chain_digests_over(b, ms);
+  List.foldl(\acc k. {
+      let xs = take(k, ms);
+      let ys = drop(k, ms);
+      let rhs = chain_digests_over(b, xs) ++ chain_digests_over(chain_digest_over(b, xs), ys);
+      note(acc, whole == rhs, "ms=${ix_text(ix)} split=${intToStr(k)}")
+    }, t, range(0, List.length(ms) + 1))
+}
+
+pure func p42a_one(b: string, ix: [int], t: Tally) -> Tally {
+  let ms = msgs_of(ix);
+  note(t, List.length(chain_digests_over(b, ms)) == List.length(ms), "ms=${ix_text(ix)}")
+}
+
+pure func p42b_one(b: string, ix: [int], t: Tally) -> Tally {
+  let ms = msgs_of(ix);
+  if List.length(ms) == 0 then t
+  else note(t, last_or(chain_digests_over(b, ms), "<none>") == chain_digest_over(b, ms), "ms=${ix_text(ix)}")
+}
+
+pure func x1_one(b: string, ix: [int], t: Tally) -> Tally {
+  let ms = msgs_of(ix);
+  let ds = chain_digests_over(b, ms);
+  List.foldl(\acc i.
+      note(acc, nth_or(ds, i, "<none>") == chain_digest_over(b, take(i + 1, ms)),
+           "ms=${ix_text(ix)} i=${intToStr(i)}"),
+    t, range(0, List.length(ms)))
+}
+
+pure func x2_one(b: string, ix: [int], t: Tally) -> Tally {
+  let ms = msgs_of(ix);
+  note(t, chain_digest_over(b, ms) == eval_chain_digest_over(b, ms), "ms=${ix_text(ix)}")
+}
+
+-- X-4 (diagnostic, never fails the run): the output equals the chain from the EMPTY base.
+-- On a correct chain_digests_over this is "violated" for every non-empty list at every base
+-- other than the empty one; zero violations there means the base argument is ignored.
+pure func x4_one(b: string, ix: [int], t: Tally) -> Tally {
+  let ms = msgs_of(ix);
+  note(t, chain_digests_over(b, ms) == chain_digests_over(chain_empty_base(), ms), "ms=${ix_text(ix)}")
+}
+
+pure func run_check(name: string, f: (string, [int], Tally) -> Tally, b: Base, all: [[int]]) -> Tally {
+  List.foldl(\acc ix. f(b.value, ix, acc), tally0(), all)
+}
+
+pure func line(name: string, bname: string, t: Tally) -> string {
+  concat([name, " base=", bname, " checked=", intToStr(t.checked), " violated=", intToStr(t.bad),
+          if t.bad > 0 then " first: ${t.first}" else ""])
+}
+
+-- X-3: sort (digest, list) pairs by digest and look for equal neighbours.
+pure func x3(all: [[int]]) -> Tally {
+  let e = chain_empty_base();
+  let pairs = List.map(\ix. (chain_digest_over(e, msgs_of(ix)), ix_text(ix)), all);
+  let sorted = sortBy(\p q. match p { (a, _) => match q { (c, _) => if a < c then -1 else if a == c then 0 else 1 } }, pairs);
+  let n = List.length(sorted);
+  List.foldl(\acc i. {
+      let p = nth_or(sorted, i, ("", ""));
+      let q = nth_or(sorted, i + 1, ("", ""));
+      match p { (dp, lp) => match q { (dq, lq) => note(acc, dp != dq, "${lp} and ${lq} share ${dp}") } }
+    }, tally0(), range(0, if n > 0 then n - 1 else 0))
+}
+
+export func main() -> () ! {IO, Env} {
+  let maxLen = match getEnv("T4_MAXLEN") { Ok(v) => match stringToInt(v) { Some(n) => n, None => 4 }, Err(_) => 4 };
+  let all = lists_upto(maxLen, List.length(alphabet()));
+  println("lists=${intToStr(List.length(all))} maxLen=${intToStr(maxLen)} alphabet=${intToStr(List.length(alphabet()))}");
+  let results = List.flatMap(\b. [
+      line("P4.1 ", b.name, run_check("P4.1", p41_one, b, all)),
+      line("P4.2a", b.name, run_check("P4.2a", p42a_one, b, all)),
+      line("P4.2b", b.name, run_check("P4.2b", p42b_one, b, all)),
+      line("X-1  ", b.name, run_check("X-1", x1_one, b, all)),
+      line("X-2  ", b.name, run_check("X-2", x2_one, b, all)),
+      line("diag X-4 digests(b,ms)==digests(empty,ms)", b.name, run_check("X-4", x4_one, b, all))
+    ], bases()) ++ [line("X-3  ", "empty", x3(all))];
+  forEachE(\l. println(l), results);
+  let bad = List.length(List.filter(\l. !Str.contains(l, "diag") && Str.contains(l, "violated=") && !Str.contains(l, "violated=0"), results));
+  println("lines_with_violations=${intToStr(bad)}");
+  if bad > 0 then exit(1) else ()
+}

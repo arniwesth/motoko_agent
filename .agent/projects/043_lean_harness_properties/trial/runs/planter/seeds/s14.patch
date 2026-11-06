@@ -1,0 +1,19 @@
+--- a/packages/motoko-ext-compose/store.ail
++++ b/packages/motoko-ext-compose/store.ail
+@@ -1,6 +1,7 @@
+ module sunholo/motoko_ext_compose/store
+ 
+ import std/bytes (fromString, length, slice, toString)
++import std/string as Str
+ import std/crypto (sha256Hex)
+ 
+ -- WI-D20. `std/fs` IS GONE FROM THIS MODULE, and that is the whole of what
+@@ -18,7 +19,7 @@
+ 
+ func truncate_utf8_by_bytes(s: string, max_bytes: int) -> string {
+   let b = fromString(s);
+-  let n = length(b);
++  let n = Str.length(s);
+   if n <= max_bytes then s
+   else {
+     match slice(b, 0, max_bytes) {

@@ -1,0 +1,52 @@
+-- via_store.ail — the REAL `truncate_utf8_by_bytes`, reached the only way the tree reaches it:
+-- through the exported `store_stdout_and_elide` (packages/motoko-ext-compose/store.ail:32),
+-- with the conformance package's `canned_ports()` (no filesystem: dir_make/file_write answer
+-- ok=false and the world unchanged, which `store_stdout_and_elide` ignores).
+--
+-- Input: a cases file, one case per line, `<max_bytes>,<base64 of the stdout bytes>`.
+-- The bytes are turned into an AILANG string with std/bytes.toString (no repair), so the
+-- harness can also feed strings that are not valid UTF-8.
+-- Output, one line per case, in order:
+--
+--   <index>|<truncated>|<base64 of the returned stdout's bytes>|<raw_path>
+--
+-- From the tree root:
+--   ailang run --relax-modules --caps IO,FS --entry main --args-json '"<cases file>"' \
+--     /home/motoko/trial-043/s/t043-t6-a2/out/harness/via_store.ail
+module via_store
+
+import std/io (println)
+import std/fs (readFile)
+import std/string as Str (split, stringToInt, intToStr, concat)
+import std/bytes (fromString, toString, toBase64, fromBase64)
+import std/option (Option, Some, None)
+import pkg/sunholo/motoko_ext_abi/types (empty_ext_world)
+import pkg/sunholo/motoko_ext_conformance/harness (canned_ports)
+import pkg/sunholo/motoko_ext_compose/store (store_stdout_and_elide)
+
+func run_case(i: int, line: string) -> () ! {IO, FS} {
+  match split(line, ",") {
+    [ns, b64] => {
+      match (stringToInt(ns), fromBase64(b64)) {
+        (Some(n), Some(b)) => {
+          let s = toString(b);
+          let r = store_stdout_and_elide(canned_ports(), empty_ext_world(), "/wd", "cid", s, n);
+          println(concat([intToStr(i), "|", if r.truncated then "1" else "0", "|", toBase64(fromString(r.stdout)), "|", r.raw_path]))
+        },
+        _ => println(concat([intToStr(i), "|BADCASE||"]))
+      }
+    },
+    _ => if line == "" then () else println(concat([intToStr(i), "|BADCASE||"]))
+  }
+}
+
+func run_all(i: int, lines: [string]) -> () ! {IO, FS} {
+  match lines {
+    [] => (),
+    l :: rest => { run_case(i, l); run_all(i + 1, rest) }
+  }
+}
+
+export func main(path: string) -> () ! {IO, FS} {
+  run_all(0, split(readFile(path), "\n"))
+}

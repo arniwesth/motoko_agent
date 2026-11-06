@@ -1,0 +1,60 @@
+
+-- ---------------------------------------------------------------------------
+-- harness_driver.ail: reads the case file, one case per line
+--   <entries>|<start id>|<variant>      (see gen_cases.py)
+-- and prints
+--   <entries>|<start id>|<variant>|<seqs of path_up's result, comma-joined>|<length>
+-- ---------------------------------------------------------------------------
+
+pure func h_entry(spec: string, seq: int) -> JournalEntry {
+  let parts = split(spec, ">");
+  let e: JournalEntry = match parts {
+    [i, p] => { id: i, parent_id: p, seq: seq, at_ms: 0, kind: "k", raw: js("") },
+    _ => { id: "?bad", parent_id: "?bad", seq: seq, at_ms: 0, kind: "k", raw: js("") }
+  };
+  e
+}
+
+pure func h_entries(specs: [string], seq: int) -> [JournalEntry] {
+  match specs { [] => [], s :: rest => h_entry(s, seq) :: h_entries(rest, seq + 1) }
+}
+
+pure func h_parse(enc: string) -> [JournalEntry] {
+  if enc == "" then [] else h_entries(split(enc, ";"), 0)
+}
+
+pure func h_seqs(es: [JournalEntry]) -> [string] {
+  match es { [] => [], e :: rest => intToStr(e.seq) :: h_seqs(rest) }
+}
+
+pure func h_acc_q() -> [JournalEntry] {
+  let q: JournalEntry = { id: "q", parent_id: "a", seq: 99, at_ms: 0, kind: "k", raw: js("") };
+  [q]
+}
+
+pure func h_line(line: string) -> string {
+  match split(line, "|") {
+    [enc, start, v] => {
+      let es = h_parse(enc);
+      let seen = if v == "1" then ["a"] else [];
+      let acc = if v == "2" then h_acc_q() else [];
+      let r = path_up(es, start, seen, acc);
+      "${line}|${join(",", h_seqs(r))}|${intToStr(List.length(r))}"
+    },
+    _ => "${line}|PARSE-ERROR|"
+  }
+}
+
+func h_walk(lines: [string]) -> () ! {IO} {
+  match lines {
+    [] => (),
+    l :: rest => {
+      if l == "" then () else println(h_line(l));
+      h_walk(rest)
+    }
+  }
+}
+
+export func main() -> () ! {IO, FS} {
+  h_walk(split(readFile("CASES_PATH"), "\n"))
+}
