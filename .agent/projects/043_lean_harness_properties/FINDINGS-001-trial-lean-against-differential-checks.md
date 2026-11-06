@@ -45,7 +45,8 @@ Cost and process:
 
 **Two things carry the outcome.**
 1. **D9's reachability call.** Had the operator judged D9 reachable, (b) would hold and the
-   outcome would be L.
+   outcome would be L. This call was revisited after this note was first written, and a live
+   session reproduced D9. The operator kept the call, by a rule stated for unmeasured cases (§11).
 2. **D's margin.** D's inequality holds by half a seed.
 
 ## 2. The §10 outcome, clause by clause
@@ -134,7 +135,7 @@ outcome is **D**.
   where a `Message`'s content is built from text that never passed through `encode`. Nothing
   was run end to end." If D9 were shown reachable, the rule as written would have given L. W4's
   call stands, and this note does not re-score. It is the dependency an operator would follow
-  first.
+  first. The operator did follow it, and §11 has what was found and the call that resulted.
 - **The margin.**
   - If arm A had found one S1-S3 seed fewer, `D̄_A` would be 9.0 and D would still hold, with
     equality.
@@ -588,8 +589,9 @@ No classification, seed count or §10 input changes.
   measured, and neither is what it would do on a target large enough to need it.
 - **S2 hit a ceiling.** Every replicate detected every S2 seed, so the class that carries H-L
   could not separate the arms. §13 notes the planter knew the bound and the property list.
-- **D9's reachability decides between D and L.** It rests on one route followed in code and one
-  probe (§2.5).
+- **D9's reachability decides between D and L.** At W4 the call rested on one route followed in
+  code and one probe (§2.5). After the revisit (§11), it rests on the operator's rule for a defect
+  whose frequency cannot be measured, while a live session shows D9 reached.
 - **Same model, two replicates, planted seeds, a given property list** (§13).
 - **The blinding audit's limits** (AUDIT.md, "What FINDINGS should carry as limits"):
   - Three sessions saw, in a `ps` listing, the name of a file of the other arm's session on the
@@ -613,8 +615,8 @@ No classification, seed count or §10 input changes.
 - this file;
 - the marker at the top of `RESEARCH-lean-harness-properties.md`;
 - `trial/findings/` (new);
-- `trial/scripts/w5_tokens.py`, `w5_build_tree_at.sh`, `w5_rerun.py` and `w5_tables.py`, all new;
-  no existing script was changed;
+- `trial/scripts/w5_tokens.py`, `w5_build_tree_at.sh`, `w5_rerun.py` and `w5_tables.py`, all new,
+  and for §11 `w5_d9_variant.sh` and `w5_d9_live.py`, also new; no existing script was changed;
 - lines appended to `trial/sequence.log`.
 
 Nothing under `s/*/out`, `collect/`, `unsealed/`, `sealed/` or `adjudication/` was changed.
@@ -627,3 +629,61 @@ Nothing under `s/*/out`, `collect/`, `unsealed/`, `sealed/` or `adjudication/` w
 **The bulk stays on disk** under `/home/motoko/trial-043/findings/`: trees M and B0, the work
 directories, and 266 run logs whose hashes are in `trial/findings/*.RESULTS.sha256`. Publishing
 it is the operator's decision.
+
+## 11. Addendum, 2026-11-06: D9 revisited
+
+After this note was first committed (`f83b4bb0`), the operator asked to revisit D9's
+reachability, because it decides between D and L (§2.5): "I did not look closely at this". The
+call is the operator's (§8). The work is in `trial/sequence.log`, from 2026-11-05T19:44:56Z, and
+its record is in `trial/findings/d9/`.
+
+**A second route, found by reading B0's code.** W4's draft followed bash tool output, which
+`encode` repairs. The system prompt is a route that `encode` never touches:
+- it is `readFile` of the configured SYSTEM.md (`rpc.ail:295-300`);
+- every AGENTS.md from the working directory up to `/` is then appended, read the same way
+  (`rpc.ail:366`, `agents_md.ail:110-169`);
+- prompt hooks can only prepend or append (`ext/runtime.ail:174`);
+- the result is the seed's first message, which the child hashes raw and sends with `emit_json`
+  (`session.ail:3868-3872`, `:405`);
+- the host copies the child's digests and computes none (`session-journal.ts:17-18`).
+
+**Shown by execution, in two steps.**
+1. A probe shows that `std/fs.readFile` keeps invalid UTF-8 bytes.
+2. t3-b1's own reproduction, with its bytes moved into the system message as a Latin-1
+   AGENTS.md produces them, gives a host journal refused `digest` and a twin journal that folds.
+   Valid-UTF-8 controls agree. This holds on B0 and on `origin/main`.
+
+**Then in a live session,** at the operator's request. It used the real host and child at
+`origin/main` `09c4f48e`, Motoko running in its own directory, and a fake OpenAI-compatible
+endpoint on localhost, so nothing left the machine.
+
+| AGENTS.md | First session | Resume (the interactive host, `--resume`) |
+|---|---|---|
+| Latin-1 (`caf` E9) | completes; the journal holds EF BF BD where the file has E9 | **refused, `digest` at entry 2** (the system message); the host marks the session unresumable |
+| The same file in valid UTF-8 (C3 A9) | completes | resumes (`session_resumed`) |
+
+A first attempt was refused with `header` instead. Its working directory was outside the
+install, and the child's file sandbox (`AILANG_FS_SANDBOX`) hid the journal from it. The pair was
+then rerun in Motoko's own layout.
+
+**Not measured:** how often a SYSTEM.md or AGENTS.md that is not valid UTF-8 sits where Motoko
+runs.
+
+**The operator's decision** (2026-11-06T09:35:33Z): "I don't like to judge. If it cannot be
+measured we select the conservative choice: it cannot be reached". D9 stays "not shown
+reachable", as at W4. §10 (b) still fails, and the outcome is still **D**. Nothing in §2-§10
+changes, and the research note's marker stands.
+
+**How to read the call now.**
+- At W4 the call rested on one route examined.
+- It now rests on a rule the operator stated: a defect whose frequency in real runs cannot be
+  measured is not counted as reachable.
+- The record also shows D9 reached in a live session, given such a file.
+
+Both are true. D holds under that rule; judged the other way, §10 as written gives L. D10's W4
+call (reachable) was made before the rule was stated and is unchanged. It does not bear on §10,
+because both arms found D10.
+
+**Also observed, outside the trial and not investigated.** When WORKDIR is outside the Motoko
+install, the child cannot see its own journal through the sandbox. `rpc.ail:551` then refuses
+the resume as `header`, so such a session can never be resumed.
