@@ -78,7 +78,7 @@ import std/io (println, exit)
 import std/env (getEnvOr)
 import std/fs (readFileResult, writeFileResult)
 import std/json (Json)
-import std/list as List (length, map, foldl)
+import std/list as List (length, map, foldl, foldlE)
 import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
 import std/string (join, stringToInt)
@@ -130,7 +130,7 @@ func jr_fail(msg: string) -> () ! {IO} {
 }
 
 func jr_findings(tag: string, fs: [AdmissionFinding]) -> () ! {IO} {
-  let _ = List.foldl(\acc f. { let _ = println("FINDING ${tag} ${finding_label(f)} ${f.detail}"); acc }, (), fs);
+  let _ = List.foldlE(\acc f. { let _ = println("FINDING ${tag} ${finding_label(f)} ${f.detail}"); acc }, (), fs);
   ()
 }
 

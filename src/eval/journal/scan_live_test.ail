@@ -48,7 +48,7 @@ module src/eval/journal/scan_live_test
 import std/bytes (toString)
 import std/fs as FS (fileExists, isDir, writeFileResult, readFileResult, listDir)
 import std/io (println, exit)
-import std/list as List (length, map, foldl, filter)
+import std/list as List (length, map, foldl, filter, mapE)
 import std/process (exec)
 import std/result (Result, Ok, Err)
 import std/string (join, split, trim, replace, contains)
@@ -165,7 +165,7 @@ func m12_entry_written(tmp: string) -> bool ! {IO, FS, Process} {
       lt_report("m12_entry_written", false)
     },
     EntryWritten(rc) => {
-      let file_modes = List.map(\n. sh_out("stat", ["-c", "%a", "${dir}/${n}"]), entry_file_names());
+      let file_modes = List.mapE(\n. sh_out("stat", ["-c", "%a", "${dir}/${n}"]), entry_file_names());
       let dir_modes = [sh_out("stat", ["-c", "%a", dir]), sh_out("stat", ["-c", "%a", "${dir}/runs"])];
       let sorted = sh_out("sh", ["-c", "find \"$1\" -mindepth 1 -printf '%P\\n' | LC_ALL=C sort", "-", dir]);
       let want_sorted = sh_out("sh", ["-c", "printf '%s\\n' \"$@\" | LC_ALL=C sort", "-", "runs", "snapshot.jsonl", "excerpt.jsonl", "sources.sha256", "selector.txt", "expectations.json", "t0_settings.json", "expected_end.txt", "program.artifact", "witness.json", "census.txt", "envelope.json", "identities.json", "scan_report.tsv", "exposure.jsonl"]);
@@ -225,7 +225,7 @@ func m12_entry_scan_refused(tmp: string) -> bool ! {IO, FS, Process} {
   let root = "${tmp}/corpus-scan";
   let _ = sh("install", ["-d", "-m", "0700", root]);
   let cases = ["snapshot", "excerpt", "identity", "projection", "payload", "chunks", "env", "files", "metadata", "record"];
-  let labels = List.map(\c. refused_label(write_entry(root, fixture_poisoned_entry(c))), cases);
+  let labels = List.mapE(\c. refused_label(write_entry(root, fixture_poisoned_entry(c))), cases);
   let sk = fxs_sk();
   let want = ["ScanRefusal:PrivateKeyBlock", "ScanRefusal:UrlUserinfo", "ScanRefusal:ProviderTokenLiteral:${sk}",
               "ScanRefusal:UrlUserinfo", "ScanRefusal:ProviderTokenLiteral:${sk}", "ScanRefusal:PrivateKeyBlock",
