@@ -264,7 +264,7 @@ pure func test_runtime_status_schema() -> bool
 -- #204: the registration shapes that used to put a native name in the catalog
 -- twice. `wrapper_handle` is never called here; the catalog reads only the
 -- name list beside it.
-pure func wrapper_handle(ctx: ProviderCtx, _call: ToolCallEnvelope)
+func wrapper_handle(ctx: ProviderCtx, _call: ToolCallEnvelope)
   -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   { decision: Delegate, next_state: ctx.world }
 }

@@ -344,9 +344,9 @@ func run_window(seeds: [int])
 
 -- The forcings. Each is a REAL condition the job then has to fail on, injected
 -- at the one place the job builds its corpus — not a mutated validator.
-pure func forcing() -> string ! {Env} { getEnvOr("MOTOKO_DST_FORCE", "") }
+func forcing() -> string ! {Env} { getEnvOr("MOTOKO_DST_FORCE", "") }
 
-pure func scale() -> string ! {Env} { getEnvOr("MOTOKO_DST_SCALE", "full") }
+func scale() -> string ! {Env} { getEnvOr("MOTOKO_DST_SCALE", "full") }
 
 pure func forced_seeds(force: string, w: SeedWindow, j: CorpusJob) -> [int] {
   if force == "zero" then []

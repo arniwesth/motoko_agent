@@ -649,11 +649,11 @@ export pure func ext_config_digests(entries: [ExtEntry]) -> [ExtConfigDigest] {
 
 pure func p_shape(_ctx: PureCtx) -> PromptPatch { { prepend: [], append: [] } }
 pure func p_policy(_ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPolicyDecision { NoOpinion }
-pure func p_handle(ctx: ProviderCtx, _call: ToolCallEnvelope)
+func p_handle(ctx: ProviderCtx, _call: ToolCallEnvelope)
   -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   { decision: Delegate, next_state: ctx.world }
 }
-pure func p_judge(ctx: ProcessCtx, _c: string) -> FinalizeOutcome ! {Process} {
+func p_judge(ctx: ProcessCtx, _c: string) -> FinalizeOutcome ! {Process} {
   { decision: NoDecision, next_state: ctx.world }
 }
 
@@ -782,10 +782,10 @@ pure func test_overlapping_provider_names_are_rejected() -> bool
 -- declared". `FsCtx` reaches `Json` through its artifacts, so every fixture
 -- taking one is blocked here; it is a neutral payload for the multiplicity tests
 -- and carries no property worth stating anyway.
-pure func p_exit(ctx: FsCtx) -> ExitIntentOutcome ! {FS}
+func p_exit(ctx: FsCtx) -> ExitIntentOutcome ! {FS}
   { { actions: [], next_state: ctx.world } }
 
-pure func p_work(ctx: FsCtx) -> WorkOutcome ! {FS}
+func p_work(ctx: FsCtx) -> WorkOutcome ! {FS}
   { { items: [], next_state: ctx.world } }
 
 -- 7.0. Two intents pass in list order; two intents ANSWERING TO ONE LABEL do
