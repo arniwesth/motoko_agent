@@ -143,11 +143,11 @@ export pure func fixture_rt() -> ExtRuntime {
 export type FixtureOverrides = {
   config: Json,
   tools: [string],
-  describe: (Json) -> [ToolSchema],
-  prompt: (PureCtx) -> PromptPatch,
-  budget: (PureCtx, BudgetPlan) -> BudgetPatch,
+  describe: (Json) -> [ToolSchema] ! {},
+  prompt: (PureCtx) -> PromptPatch ! {},
+  budget: (PureCtx, BudgetPlan) -> BudgetPatch ! {},
   compact: (AiCtx, [Msg]) -> PreStepOutcome ! {AI, IO, Trace},
-  policy: (PureCtx, ToolCallEnvelope) -> ToolPolicyDecision,
+  policy: (PureCtx, ToolCallEnvelope) -> ToolPolicyDecision ! {},
   provide: (ProviderCtx, ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace},
   intercept: (InterceptCtx, string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock},
   judge: (ProcessCtx, string) -> FinalizeOutcome ! {Process}
