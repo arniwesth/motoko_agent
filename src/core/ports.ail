@@ -1880,7 +1880,7 @@ export func world_tool(state: WorldState, inv: ToolInvocation) -> ToolExecution 
 -- result and the recording said otherwise, so it is refused here, before dispatch,
 -- and nothing runs. `SessionDefault` is not this case: it is a plain `exec`, which
 -- is what D7 asks of it and what the run does today.
-pure func live_tool_outcome(inv: ToolInvocation) -> ToolOutcome ! {IO, Process, FS} {
+func live_tool_outcome(inv: ToolInvocation) -> ToolOutcome ! {IO, Process, FS} {
   if needs_process_primitive(inv.process) then
     ToolFailed({ tool_call_id: inv.call.id, code: process_limit_unavailable_code(),
                  message: "this call asked for a process limit the live executor cannot apply yet, so the command was NOT run. Nothing was executed.",

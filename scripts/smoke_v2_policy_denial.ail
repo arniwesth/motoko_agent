@@ -34,11 +34,11 @@ pure func deny_all_tool_policy(_ctx: PureCtx, _call: ToolCallEnvelope) -> ToolPo
   Deny("synthetic-deny-all: blocked for M4 smoke test")
 }
 
-pure func noop_response_intercept(ctx: InterceptCtx, _response: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: {
+func noop_response_intercept(ctx: InterceptCtx, _response: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock}  { { decision: {
   NoIntercept
 }, next_state: ctx.world } }
 
-pure func nodecision_solver_candidate(ctx: ProcessCtx, _candidate: string) -> FinalizeOutcome ! {Process}  { { decision: {
+func nodecision_solver_candidate(ctx: ProcessCtx, _candidate: string) -> FinalizeOutcome ! {Process}  { { decision: {
   NoDecision
 }, next_state: ctx.world } }
 
@@ -50,13 +50,13 @@ pure func empty_budget_patch(_ctx: PureCtx, _budget: BudgetPlan) -> BudgetPatch 
   { requested_total: None, requested_solver: None, requested_verifier: None }
 }
 
-pure func no_handle(ctx: ProviderCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace}  { { decision: {
+func no_handle(ctx: ProviderCtx, _call: ToolCallEnvelope) -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace}  { { decision: {
   Delegate
 }, next_state: ctx.world } }
 
 pure func empty_describe_tools(_config: Json) -> [ToolSchema] { [] }
 
-pure func pass_pre_step(ctx: AiCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
+func pass_pre_step(ctx: AiCtx, _msgs: [Msg]) -> PreStepOutcome ! {AI, IO, Trace}  { { decision: {
   PassThrough
 }, next_state: ctx.world } }
 

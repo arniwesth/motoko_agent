@@ -49,7 +49,7 @@
 module src/eval/journal/witness_live_test
 
 import std/io (println, exit)
-import std/list as List (length, map, foldl, filter)
+import std/list as List (length, map, foldl, filter, mapE)
 import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
 import std/string (join)
@@ -173,7 +173,7 @@ func lt_t0(name: string, f: WorldFixture, calls: int, tools: int, clock: int, de
           let _ = println("${name}: findings=[${join(";", lt_labels(r.findings))}] witness provider=${show(w.provider_calls)} tools=${show(w.tool_dispatches)} clock=${show(w.clock_delta_ms)} env=${join(",", env)}");
           let _ = println("${name}: budget=${show(x.decision_budget)} retry=${show(x.retry_budget)} decisions=${show(census_count(a8.census, "decisions"))} unevaluated=${join(",", a8.unevaluated)} vacuous=${join(",", a8.vacuous)} evaluate=${show(List.length(evaluate(x)))}");
           let _ = println("${name}: census ${join(" ", lt_count_lines(a8.census))}");
-          let _ = List.map(\l. println("${name}: evidence ${l}"), a8.lines);
+          let _ = List.mapE(\l. println("${name}: evidence ${l}"), a8.lines);
           lt_report(name,
             report_ok(r) && r.calls == calls
               && w.provider_calls == calls && w.tool_dispatches == tools && w.clock_delta_ms == clock

@@ -60,15 +60,15 @@ import pkg/sunholo/motoko_ext_skills/skills (registration_refusal_key as skills_
 pure func describe(_config: Json) -> [ToolSchema] { [] }
 pure func shape(_ctx: PureCtx) -> PromptPatch { { prepend: [], append: [] } }
 pure func budget(_ctx: PureCtx, _p: BudgetPlan) -> BudgetPatch { { requested_total: None, requested_solver: None, requested_verifier: None } }
-pure func compact(ctx: AiCtx, _m: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} { { decision: PassThrough, next_state: ctx.world } }
+func compact(ctx: AiCtx, _m: [Msg]) -> PreStepOutcome ! {AI, IO, Trace} { { decision: PassThrough, next_state: ctx.world } }
 pure func policy(_ctx: PureCtx, _c: ToolCallEnvelope) -> ToolPolicyDecision { NoOpinion }
-pure func handle(ctx: ProviderCtx, _c: ToolCallEnvelope)
+func handle(ctx: ProviderCtx, _c: ToolCallEnvelope)
   -> ToolHandleOutcome ! {IO, Process, FS, AI, Env, Net, SharedMem, Clock, Stream, Rand, Trace} {
   { decision: Delegate, next_state: ctx.world }
 }
-pure func intercept(ctx: InterceptCtx, _r: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} { { decision: NoIntercept, next_state: ctx.world } }
-pure func judge(ctx: ProcessCtx, _c: string) -> FinalizeOutcome ! {Process} { { decision: NoDecision, next_state: ctx.world } }
-pure func at_exit(ctx: FsCtx) -> ExitIntentOutcome ! {FS} { { actions: [], next_state: ctx.world } }
+func intercept(ctx: InterceptCtx, _r: string) -> ResponseInterceptOutcome ! {IO, Process, FS, Clock} { { decision: NoIntercept, next_state: ctx.world } }
+func judge(ctx: ProcessCtx, _c: string) -> FinalizeOutcome ! {Process} { { decision: NoDecision, next_state: ctx.world } }
+func at_exit(ctx: FsCtx) -> ExitIntentOutcome ! {FS} { { actions: [], next_state: ctx.world } }
 
 -- THE NEGATIVE CONTROL: every kind once, plus a second ToolProvider with
 -- DISJOINT names (the one N>1 D3 admits unconditionally). Must load clean.
