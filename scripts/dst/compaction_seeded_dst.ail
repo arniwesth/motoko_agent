@@ -14,7 +14,7 @@ import std/option (Some, None)
 import std/rand (rand_seed, rand_int)
 import std/result (Result, Ok, Err)
 import std/string (repeat, stringToInt)
-import pkg/sunholo/motoko_ext_abi/types (PureCtx, pure_ctx, Msg, PreStepDecision, PassThrough, Compacted)
+import pkg/sunholo/motoko_ext_abi/types (PureCtx, pure_ctx, Msg, PreStepDecision, PassThrough, PassThroughObserved, Compacted)
 import pkg/sunholo/motoko_ext_compaction_structural/compaction_structural (
   compact_for_pre_step,
   estimate_tokens_messages,
@@ -117,10 +117,12 @@ func check_tool_heavy(
 ) -> Result[(), ScenarioFailure] {
   let output = match decision {
     PassThrough => input,
+    PassThroughObserved(_, _) => input,
     Compacted(out, _, _) => out
   };
   let compacted = match decision {
     PassThrough => false,
+    PassThroughObserved(_, _) => false,
     Compacted(_, _, _) => true
   };
   match validate_compactor_output(input, output) {
