@@ -32,9 +32,9 @@ import std/result (Result, Ok, Err)
 import std/string (length, substring, startsWith, trim, stringToInt)
 
 -- D7's types.
-export type SessionLimit = Finite(int) | NoDeadline  -- NoDeadline exists only in scripted worlds
+export type SessionLimit = Finite(int) | NoDeadline deriving (Eq)  -- NoDeadline exists only in scripted worlds
 
-export type Ceiling = CeilingMs(int) | SameAsDefault
+export type Ceiling = CeilingMs(int) | SameAsDefault deriving (Eq)
 
 export type ProcessLimits = { default: SessionLimit, ceiling: Ceiling }
 
