@@ -61,9 +61,9 @@ Not changed:
   inline test changes result because of it (see the 110-file run below).
 
 Found while testing and not fixed here: v0.60.0 warns `LDR006` that
-`sunholo/motoko_ext_scratchpad` imports root-package modules (`src/core/env_client`,
-`src/core/tool_contract`, `src/core/types`), which is "planned to become an error". It is not in
-#323.
+`sunholo/motoko_ext_scratchpad` imports four root-package modules (`src/core/env_client`,
+`src/core/tool_contract`, `src/core/tool_envelope_dispatch`, `src/core/types`), which is
+"planned to become an error". It is not in #323. Filed as #325.
 
 ## Governing docs
 
