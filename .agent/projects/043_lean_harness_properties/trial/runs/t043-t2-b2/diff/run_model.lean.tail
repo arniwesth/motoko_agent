@@ -1,0 +1,37 @@
+
+/-! ## Differential-test driver (appended by diff/run_diff.sh; not part of the model)
+
+Reads <code>\t<hex of UTF-8 stderr> lines and prints, per case:
+  <index>\t<hex herdrFailureCode>\t<T|F herdrMeansAgentGone>\t<hex failure_code>\t<T|F means_agent_gone>
+-/
+
+def hexDigitVal (c : Char) : Nat := (hexVal c).getD 0
+
+def unhex : List Char → List UInt8
+  | a :: b :: rest => (hexDigitVal a * 16 + hexDigitVal b).toUInt8 :: unhex rest
+  | _ => []
+
+def hexOf (s : Str) : String :=
+  let bytes := (String.ofList s).toUTF8
+  let digit (n : Nat) : Char := if n < 10 then Char.ofNat (48 + n) else Char.ofNat (87 + n)
+  String.ofList (bytes.toList.flatMap fun b => [digit (b.toNat / 16), digit (b.toNat % 16)])
+
+def tf (b : Bool) : String := if b then "T" else "F"
+
+def main (args : List String) : IO Unit := do
+  let path := args.headD "cases.hex"
+  let content ← IO.FS.readFile path
+  let out ← IO.getStdout
+  let mut i := 0
+  for line in content.splitOn "\n" do
+    if line.isEmpty then continue
+    match line.splitOn "\t" with
+    | [c, h] =>
+      let code : Int := c.toInt!
+      let err : Str := match String.fromUTF8? (ByteArray.mk (unhex h.toList).toArray) with
+        | some s => s.toList
+        | none => panic! "bad utf8"
+      let r : HerdrResult := { code := code, stderr := err }
+      out.putStrLn s!"{i}\t{hexOf (herdrFailureCode r)}\t{tf (herdrMeansAgentGone r)}\t{hexOf (failureCode code err)}\t{tf (meansAgentGone code err)}"
+    | _ => panic! "bad line"
+    i := i + 1

@@ -1,0 +1,23 @@
+path_props ids {a,b,c}: entry lists of length 0..4, 271205 (list, start) cases
+  P5.1 terminates:                 all 271205 calls returned
+  P5.2 no repeated id:             0 violations
+  P5.3 chain (parent = previous):  0 violations
+  P5.3 last = start (start != ""): 44970 violations
+  P5.3 last = start (start == ""): 0 violations
+  X-1 maximal (D4 rule 1 stops):   44970 violations
+  X-2 first entry with each id:    0 violations
+  X-3 twin ev_path_up agrees:      44970 disagreements
+  X-4 strict_path agrees when Ok:  0 disagreements with start != "", 0 with start == "" (strict_path Ok on 34866)
+  P5.3l  es=[a<a] start=a  path_up=[] ev_path_up=[0] strict_path=Err(ChainBreak)
+  X-1  es=[a<a] start=a  path_up=[] ev_path_up=[0] strict_path=Err(ChainBreak)
+  X-3  es=[a<a] start=a  path_up=[] ev_path_up=[0] strict_path=Err(ChainBreak)
+  P5.3l  es=[b<b] start=b  path_up=[] ev_path_up=[0] strict_path=Err(ChainBreak)
+  X-1  es=[b<b] start=b  path_up=[] ev_path_up=[0] strict_path=Err(ChainBreak)
+  X-3  es=[b<b] start=b  path_up=[] ev_path_up=[0] strict_path=Err(ChainBreak)
+  P5.3l  es=[c<c] start=c  path_up=[] ev_path_up=[0] strict_path=Err(ChainBreak)
+  X-1  es=[c<c] start=c  path_up=[] ev_path_up=[0] strict_path=Err(ChainBreak)
+  X-3  es=[c<c] start=c  path_up=[] ev_path_up=[0] strict_path=Err(ChainBreak)
+  P5.3l  es=[a<a a<""] start=a  path_up=[] ev_path_up=[0] strict_path=Err(ChainBreak)
+  X-1  es=[a<a a<""] start=a  path_up=[] ev_path_up=[0] strict_path=Err(ChainBreak)
+  X-3  es=[a<a a<""] start=a  path_up=[] ev_path_up=[0] strict_path=Err(ChainBreak)
+exit=1 353s

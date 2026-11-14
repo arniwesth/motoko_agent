@@ -1,0 +1,12 @@
+[package]
+name = "local/t043_t2_harness"
+version = "0.1.0"
+edition = "1"
+ailang = ">=0.54.14"
+
+[dependencies]
+"sunholo/motoko_ext_abi" = { path = "pkgs/motoko-ext-abi" }
+"sunholo/motoko_ext_herdr" = { path = "pkgs/motoko-ext-herdr" }
+
+[effects]
+max = ["IO", "Env", "AI", "Net", "FS", "Process", "SharedMem", "Clock", "Stream", "SharedIndex", "Rand", "Trace"]

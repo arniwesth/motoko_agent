@@ -1,0 +1,42 @@
+-- gate_ail.ail — the AILANG half of the P1.1 differential test.
+--
+-- Calls the REAL `herdr_env_ready` (packages/motoko-ext-herdr/types.ail) on every case of
+-- the generated `gate_cases` module (gen_cases.ts writes it in batches; run_p11.sh copies one
+-- batch at a time next to this file as gate_cases.ail; unset is "").
+-- One line per case, in generation order:
+--
+--   <case index>|<T or F>|<length HERDR_ENV>|<length HERDR_BIN_PATH>|<length HERDR_PANE_ID>
+--
+-- The lengths are std/string `length` (code points); gate_ts.ts prints the code-point
+-- count of the same strings, so the comparison also proves the literals were faithful.
+--
+-- Run by run_p11.sh from a scratch package whose ailang.toml points at the tree's
+-- packages/motoko-ext-herdr; nothing in the tree is modified.
+module gate_ail
+
+import std/io (println)
+import std/string (length, join)
+import pkg/sunholo/motoko_ext_herdr/types (herdr_env_ready)
+import gate_cases (base, chunk, chunk_count, chunk_size)
+
+func emit(xs: [(string, string, string)], i: int) -> () ! {IO} {
+  match xs {
+    [] => (),
+    (e, b, p) :: rest => {
+      let r = if herdr_env_ready(e, b, p) then "T" else "F";
+      println(join("|", [show(i), r, show(length(e)), show(length(b)), show(length(p))]));
+      emit(rest, i + 1)
+    }
+  }
+}
+
+func loop(c: int, n: int) -> () ! {IO} {
+  if c >= n then () else {
+    emit(chunk(c), base() + c * chunk_size());
+    loop(c + 1, n)
+  }
+}
+
+export func main() -> () ! {IO} {
+  loop(0, chunk_count())
+}

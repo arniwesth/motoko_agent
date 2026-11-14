@@ -1,0 +1,41 @@
+# Gate comparison: gates-base (unseeded) vs gates-final (seeded)
+## exit codes
+SAME check_core rc=0  |  check_core rc=0
+SAME test rc=0  |  test rc=0
+SAME verify_core rc=0  |  verify_core rc=0
+SAME bun_test rc=1  |  bun_test rc=1
+SAME ailang_test_src_core_journal.ail rc=0  |  ailang_test_src_core_journal.ail rc=0
+SAME ailang_test_packages_motoko-ext-herdr_types.ail rc=0  |  ailang_test_packages_motoko-ext-herdr_types.ail rc=0
+SAME ailang_test_packages_motoko-ext-compose_store.ail rc=1  |  ailang_test_packages_motoko-ext-compose_store.ail rc=1
+SAME ailang_test_packages_motoko-ext-herdr_register.ail rc=1  |  ailang_test_packages_motoko-ext-herdr_register.ail rc=1
+SAME verdicts (3 lines): ailang_test_packages_motoko-ext-compose_store.ail.log
+SAME verdicts (3 lines): ailang_test_packages_motoko-ext-herdr_register.ail.log
+SAME verdicts (332 lines): ailang_test_packages_motoko-ext-herdr_types.ail.log
+SAME verdicts (37 lines): ailang_test_src_core_journal.ail.log
+SAME verdicts (63 lines): bun_test.log
+SAME verdicts (285 lines): check_core.log
+SAME verdicts (18 lines): test.log
+SAME verdicts (19 lines): verify_core.log
+## bun
+Test Suites: 4 failed, 45 passed, 49 total
+Tests:       472 passed, 472 total
+Test Suites: 4 failed, 45 passed, 49 total
+Tests:       472 passed, 472 total
+failing suites, unseeded:
+    FAIL src/compose-output-validator.test.ts
+    FAIL src/compose-output-validator.test.ts
+    FAIL src/compose_guard_semiformal.test.ts
+    FAIL src/compose_guard_semiformal.test.ts
+    FAIL src/env-server.test.ts
+    FAIL src/env-server.test.ts
+    FAIL src/scratchpad/loopback.test.ts
+    FAIL src/scratchpad/loopback.test.ts
+failing suites identical: yes
+## ailang lock warning (first line of each log that has one)
+  gates-base: Warning: dependency sunholo/motoko_ext_skills content changed  
+  gates-final: Warning: dependency sunholo/motoko_ext_skills content changed  
+
+# (earlier run, seeds.patch before the ailang.lock refresh was added)
+# Gate comparison: gates-base (unseeded) vs gates-allseeds (seeded)
+  gates-base: Warning: dependency sunholo/motoko_ext_skills content changed  
+  gates-allseeds: Warning: dependency sunholo/motoko_ext_compose content changed  

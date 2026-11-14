@@ -1,0 +1,52 @@
+-- store_write.ail — X-2: what store_stdout_and_elide (packages/motoko-ext-compose/store.ail:32)
+-- returns when the port refuses both the directory create and the raw-output write.
+--
+-- The ports are the conformance package's `canned_ports()`, whose `dir_make` and `file_write`
+-- answer `ok: false, error: "no filesystem behind this port"` (harness.ail:91-117). This
+-- program asks the same ports once more, to print what they answer, and then calls the real
+-- function. Output, one line per case (cases file as in via_store.ail):
+--
+--   <index>|<1 if dir_make and file_write both answered ok, else 0>|<truncated>|<base64 stdout>|<raw_path>
+module store_write
+
+import std/io (println)
+import std/fs (readFile)
+import std/string as Str (split, stringToInt, intToStr, concat)
+import std/bytes (fromString, toString, toBase64, fromBase64)
+import std/option (Option, Some, None)
+import pkg/sunholo/motoko_ext_abi/types (empty_ext_world)
+import pkg/sunholo/motoko_ext_conformance/harness (canned_ports)
+import pkg/sunholo/motoko_ext_compose/store (store_stdout_and_elide)
+
+func run_case(i: int, line: string) -> () ! {IO, FS} {
+  match split(line, ",") {
+    [ns, b64] => {
+      match (stringToInt(ns), fromBase64(b64)) {
+        (Some(n), Some(b)) => {
+          let s = toString(b);
+          let p = canned_ports();
+          let w = empty_ext_world();
+          let made = p.dir_make(w, "/wd/.motoko-store/compose");
+          let wrote = p.file_write(made.next_state, "/wd/.motoko-store/compose/cid.stdout", s);
+          let ports_ok = made.ok && wrote.ok;
+          let r = store_stdout_and_elide(p, w, "/wd", "cid", s, n);
+          println(concat([intToStr(i), "|", if ports_ok then "1" else "0", "|", if r.truncated then "1" else "0", "|",
+            toBase64(fromString(r.stdout)), "|", r.raw_path]))
+        },
+        _ => println(concat([intToStr(i), "|BADCASE|||"]))
+      }
+    },
+    _ => if line == "" then () else println(concat([intToStr(i), "|BADCASE|||"]))
+  }
+}
+
+func run_all(i: int, lines: [string]) -> () ! {IO, FS} {
+  match lines {
+    [] => (),
+    l :: rest => { run_case(i, l); run_all(i + 1, rest) }
+  }
+}
+
+export func main(path: string) -> () ! {IO, FS} {
+  run_all(0, split(readFile(path), "\n"))
+}

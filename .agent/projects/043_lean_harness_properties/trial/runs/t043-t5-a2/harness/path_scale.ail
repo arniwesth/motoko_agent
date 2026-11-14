@@ -1,0 +1,48 @@
+-- path_scale.ail — P5.1 at scale: the REAL path_up (via gen/core_journal_exposed, see
+-- expose.sh) on one linear, host-shaped chain of N entries (entry k's parent is entry k-1,
+-- entry 0 the root), started at the leaf, and — with CYCLE=1 on the input line — the same chain
+-- with the root's parent set to the leaf (a cycle through the whole file).
+--
+-- AILANG caps NON-tail recursion at depth 10000 (RT_REC_003). path_up's comment says
+-- "Recursion depth is the PATH length, not the file's"; a path longer than 10000 entries is
+-- therefore the case that tells whether path_up's recursion runs in constant depth (a tail
+-- call) or would make P5.1 fail on a long journal. Entries are built with std/list's
+-- iterative helpers so the harness itself stays under the cap.
+--
+-- Input: one line `<N> <0|1>` on stdin. Output: `N=<N> cycle=<0|1> len=<|path|> first=<seq>
+-- last=<seq>`; the caller times the run.
+--
+-- From out/:  echo "12000 0" | ailang run --relax-modules --caps IO --entry main harness/path_scale.ail
+
+module harness/path_scale
+
+import std/io (println, readLine)
+import std/json (Json, jo)
+import std/string as Str (concat, intToStr, split, stringToInt)
+import std/option (Option, Some, None)
+import std/list as List (map, range, length)
+import gen/core_journal_exposed (JournalEntry, path_up)
+
+pure func mk(n: int, cyc: bool, k: int) -> JournalEntry {
+  let parent = if k == 0 then (if cyc then intToStr(n - 1) else "") else intToStr(k - 1);
+  { id: intToStr(k), parent_id: parent, seq: k, at_ms: 0, kind: "x", raw: jo([]) }
+}
+
+pure func last_seq(es: [JournalEntry]) -> int {
+  match es { [] => -1, e :: rest => match rest { [] => e.seq, _ => last_seq(rest) } }
+}
+
+pure func to_int(s: string) -> int {
+  match stringToInt(s) { None => 0, Some(n) => n }
+}
+
+export func main() -> () ! {IO} {
+  let parts = split(readLine(()), " ");
+  let n = match parts { [] => 0, x :: _ => to_int(x) };
+  let cyc = match parts { [] => false, _ :: rest => match rest { [] => false, c :: _ => c == "1" } };
+  let es = List.map(\k. mk(n, cyc, k), List.range(0, n));
+  let p = path_up(es, intToStr(n - 1), [], []);
+  let first = match p { [] => -1, e :: _ => e.seq };
+  println(concat(["N=", intToStr(n), " cycle=", if cyc then "1" else "0", " len=", intToStr(List.length(p)),
+                  " first=", intToStr(first), " last=", intToStr(last_seq(p))]))
+}

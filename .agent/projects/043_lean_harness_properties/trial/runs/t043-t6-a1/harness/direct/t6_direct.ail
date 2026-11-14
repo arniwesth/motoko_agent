@@ -1,0 +1,55 @@
+-- t6_direct.ail — the REAL `truncate_utf8_by_bytes` (packages/motoko-ext-compose/store.ail),
+-- called directly on every case of a cases file written by ../gen.ts.
+--
+-- The function is not exported, so run_direct.sh builds a shim package whose `store.ail` is
+-- the real file with ONE change, `func truncate_utf8_by_bytes(` -> `export func
+-- truncate_utf8_by_bytes(`, checked by diff before every run. Nothing else is copied or
+-- modelled. One output line per case:
+--
+--   <input bytes CSV>|<max_bytes>|<result bytes CSV>
+--
+-- Input strings are built with std/bytes.toString(fromInts(..)), so non-UTF-8 inputs (the
+-- `bytes` generator) are real AILANG strings, the kind process output decodes to.
+
+module t6_direct
+
+import std/io (println)
+import std/fs (readFile)
+import std/bytes (fromString, toString, fromInts, toInts)
+import std/string as Str (split, join, stringToInt, foldSlices)
+import std/list as List (reverse)
+import std/option (Option, Some, None)
+import pkg/sunholo/motoko_ext_compose/store (truncate_utf8_by_bytes)
+
+pure func ints_of(csv: string) -> [int] {
+  if csv == "" then []
+  else reverse(foldSlices(csv, ",", [], \acc p. match stringToInt(p) { Some(v) => v :: acc, None => acc }))
+}
+
+pure func csv_of(xs: [int]) -> string {
+  join(",", foldl_show(xs, []))
+}
+
+pure func foldl_show(xs: [int], acc: [string]) -> [string] {
+  match xs { [] => reverse(acc), x :: rest => foldl_show(rest, show(x) :: acc) }
+}
+
+pure func run_line(line: string) -> string {
+  match split(line, "|") {
+    [csv, m] => match stringToInt(m) {
+      Some(max) => {
+        let s = toString(fromInts(ints_of(csv)));
+        let r = truncate_utf8_by_bytes(s, max);
+        "${csv}|${m}|${csv_of(toInts(fromString(r)))}"
+      },
+      None => "BADMAX|${line}"
+    },
+    _ => "BADLINE|${line}"
+  }
+}
+
+export func main(path: string) -> () ! {IO, FS} {
+  let content = readFile(path);
+  let outs = foldSlices(content, "\n", [], \acc line. if line == "" then acc else run_line(line) :: acc);
+  println(join("\n", reverse(outs)))
+}

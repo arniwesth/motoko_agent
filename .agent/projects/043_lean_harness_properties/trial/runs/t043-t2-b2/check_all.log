@@ -1,0 +1,32 @@
+== 1. lean
+theorems: 61
+== 2. differential test
+gen: 143872 cases
+cases: 143872
+model vs real TS:     0 mismatches
+model vs real AILANG: 0 mismatches
+real P2.1 disagreements (gone): 13411; real P2.2 disagreements (code): 78390
+gen: 125872 cases
+negative control: both mutants caught
+== 3. mutants
+M1_ts_verdict_narrowed: TARGET bug_p21_suffix false; CONTROL bug_p21_key_order true -> PASS
+M2_ts_exit_zero_only: TARGET bug_p21_negative_exit false; CONTROL bug_p21_suffix true -> PASS
+M3_ail_json_first: TARGET bug_p21_nested_in_message false; CONTROL bug_p21_trailing_text true -> PASS
+M4_ail_decode_whole_input: TARGET bug_p21_trailing_text false; CONTROL bug_p21_suffix true -> PASS
+== 4. repros
+B2-T2-1 exit 1
+B2-T2-2 exit 1
+B2-T2-3 exit 1
+B2-T2-4 exit 1
+B2-T2-5 exit 1
+B2-T2-6 exit 1
+B2-T2-7 exit 1
+B2-T2-8 exit 1
+B2-T2-9 exit 1
+B2-T2-10 exit 1
+B2-T2-11 exit 1
+B2-T2-12 exit 1
+B2-T2-13 exit 1
+B2-T2-14 exit 1
+check_all: OK
+check_all exit 0

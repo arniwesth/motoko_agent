@@ -1,0 +1,12 @@
+module t5_witness
+import std/io (println)
+import std/string as Str (join)
+import std/list as List (map)
+import std/json (jo)
+import src/core/journal (JournalEntry, zz_probe_path_up)
+pure func ent(i: string, p: string, n: int) -> JournalEntry { { id: i, parent_id: p, seq: n, at_ms: n, kind: "x", raw: jo([]) } }
+export func main() -> () ! {IO} {
+  let out = zz_probe_path_up([ent("e1", "e1", 0)], "e1");
+  let ok = match out { [] => false, e :: r => match r { [] => e.id == "e1", _ => false } };
+  println("s13-witness entries=[e1 with parent_id e1] start=e1 -> result ids [${join(",", List.map(\e. e.id, out))}] : P5.3 ${if ok then "holds" else "VIOLATED (start names an entry; the result does not end with it)"}")
+}

@@ -1,0 +1,21 @@
+#eval show IO Unit from do
+  let raw ← IO.FS.readFile "p32_runnable_keys.txt"
+  let mut counts : List (String × Nat) := []
+  for line in raw.splitOn "\n" do
+    if line ≠ "" then
+      let s := (line.splitOn ",").map String.toNat!
+      let evs := eventsOf s
+      let tF := verdict (fold (twinLinesFix evs))
+      let accFix := match tF with | .accept _ => true | _ => false
+      -- a follow-up (10) after a checkpoint (7 or 11) with no resume (8/9) in between
+      let rec cpThenFollow : List Nat → Bool → Bool
+        | [], _ => false
+        | i :: r, cp => if i == 10 && cp then true
+                        else cpThenFollow r ((cp || i == 7 || i == 11) && !(i == 8 || i == 9))
+      let cls := if accFix then "V1 (fixed twin accepts)"
+                 else if cpThenFollow s false then "follow-up after checkpoint (documented limitation)"
+                 else s!"other {line}"
+      counts := match counts.find? (·.1 == cls) with
+        | some _ => counts.map (fun p => if p.1 == cls then (p.1, p.2 + 1) else p)
+        | none => counts ++ [(cls, 1)]
+  for (c, n) in counts do IO.println s!"{n}\t{c}"

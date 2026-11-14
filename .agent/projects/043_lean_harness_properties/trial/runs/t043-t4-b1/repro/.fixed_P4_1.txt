@@ -1,0 +1,4 @@
+b = chain_empty_base() = sha256:07e505d6152dd342a81690fadb3ec4bbf002260afc8026277ba78574041657b4
+chain_digests_over(b, xs ++ ys) = [sha256:963eedc56744a00b3a7177ded4d6912fb44dc8c8e4583f120abb77a1d55d551f, sha256:fc15f0bf14033e3d5bfcd6930241244eadd9070cd4f47bd1a62461b3c13eb3af]
+chain_digests_over(b, xs) ++ chain_digests_over(chain_digest_over(b, xs), ys) = [sha256:963eedc56744a00b3a7177ded4d6912fb44dc8c8e4583f120abb77a1d55d551f, sha256:fc15f0bf14033e3d5bfcd6930241244eadd9070cd4f47bd1a62461b3c13eb3af]
+P4.1 HOLDS

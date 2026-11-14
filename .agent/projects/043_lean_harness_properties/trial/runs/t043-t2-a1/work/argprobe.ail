@@ -1,0 +1,21 @@
+module argprobe
+
+import std/io (println)
+import std/string (intToStr, length)
+import pkg/sunholo/motoko_ext_herdr/types (failure_code, means_agent_gone)
+
+type Case = { code: int, err: string }
+
+func b(x: bool) -> string { if x then "1" else "0" }
+
+func go(cs: [Case], i: int) -> () ! {IO} {
+  match cs {
+    [] => (),
+    c :: rest => {
+      println("${intToStr(i)}\t${failure_code(c.code, c.err)}\t${b(means_agent_gone(c.code, c.err))}\t${intToStr(length(c.err))}");
+      go(rest, i + 1)
+    }
+  }
+}
+
+export func main(cs: [Case]) -> () ! {IO} { go(cs, 0) }

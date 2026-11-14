@@ -1,0 +1,14 @@
+# s13: P5.3 witness check on B0, only-s13, T, T-s13. path_up is module-private: each run uses a copy of the tree with one exported wrapper appended to src/core/journal.ail:
+
+-- planter probe (validation copy only)
+export pure func zz_probe_path_up(es: [JournalEntry], id: string) -> [JournalEntry] { path_up(es, id, [], []) }
+== B0
+s13-witness entries=[e1 with parent_id e1] start=e1 -> result ids [e1] : P5.3 holds
+== only-s13
+s13-witness entries=[e1 with parent_id e1] start=e1 -> result ids [] : P5.3 VIOLATED (start names an entry; the result does not end with it)
+== T
+s13-witness entries=[e1 with parent_id e1] start=e1 -> result ids [] : P5.3 VIOLATED (start names an entry; the result does not end with it)
+== minus-s13
+s13-witness entries=[e1 with parent_id e1] start=e1 -> result ids [e1] : P5.3 holds
+
+# witness size: 1 entry (a self-parented entry), start = its id. No list of 0 entries can violate P5.3 (the start then names no entry).

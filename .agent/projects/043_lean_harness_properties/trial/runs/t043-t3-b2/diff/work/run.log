@@ -1,0 +1,38 @@
+lean: 7381 sequences, 2313 a run can emit
+# fixed model, 2313 valid sequences: P3.1 0 disagree, P3.1 across 0, P3.2 173; e.g. [p32:5,8, p32:0,5,8, p32:3,5,8, p32:5,0,8, p32:5,3,8, p32:5,5,8, p32:5,8,0, p32:5,8,1, p32:5,8,3, p32:5,8,5, p32:5,8,6, p32:5,8,7]
+ailang twin: 7381 sequences
+bun host: 14762 journals
+real: 22143 lines; sha256 fbb1b67794836e96
+  P3.2 [7,5,5,8] twin=digest||  spec=accept|s:you are motoko, switched::;a:[CHECKPOINT] s::;u:next::|#0
+  P3.1 [5,6,0,4] host=accept|s:you are motoko::;a:[CHECKPOINT] s::;a:plain::|c1#1  twin=digest||
+  P3.2 [5,6,0,4] twin=digest||  spec=accept|s:you are motoko::;a:[CHECKPOINT] s::;a:plain::|c1#1
+  P3.1-across [5,6,0,4] host=accept|s:you are motoko::;a:[CHECKPOINT] s::;a:plain::|c1#1  twin=digest||
+  P3.1 [8,0,4,6] host=accept|s:you are motoko::;u:list the files::;u:next::;a:plain::|c1#1  twin=accept|s:you are motoko::;u:list the files::;u:next::;a:plain::|#0
+  P3.1-across [8,0,4,6] host=accept|s:you are motoko::;u:list the files::;u:next::;a:plain::|c1#1  twin=accept|s:you are motoko::;u:list the files::;u:next::;a:plain::|#0
+  P3.2 [5,8,5,8] twin=digest||  spec=accept|s:you are motoko::;a:[CHECKPOINT] s::;u:next::|#0
+  P3.2 [3,5,8,3] twin=digest||  spec=accept|s:you are motoko::;a:[CHECKPOINT] s::;u:next::;u:next::|#0
+  P3.2 [3,8,5,8] twin=digest||  spec=accept|s:you are motoko::;a:[CHECKPOINT] s::;u:next::|#0
+  P3.2 [5,5,8,3] twin=digest||  spec=accept|s:you are motoko::;a:[CHECKPOINT] s::;u:next::;u:next::|#0
+  P3.1 [5,5,6,0] host=accept|s:you are motoko::;a:[CHECKPOINT] s::;a:plain::|#0  twin=digest||
+  P3.2 [5,5,6,0] twin=digest||  spec=accept|s:you are motoko::;a:[CHECKPOINT] s::;a:plain::|#0
+  P3.1-across [5,5,6,0] host=accept|s:you are motoko::;a:[CHECKPOINT] s::;a:plain::|#0  twin=digest||
+  P3.2 [5,8,8,7] twin=digest||  spec=accept|s:you are motoko, switched::;a:[CHECKPOINT] s::;u:next::;u:next::|#0
+  P3.1 [7,5,6,8] host=accept|s:you are motoko, switched::;a:[CHECKPOINT] s::;u:next::|#0  twin=digest||
+  P3.1-across [7,5,6,8] host=accept|s:you are motoko, switched::;a:[CHECKPOINT] s::;u:next::|#0  twin=digest||
+  P3.1 [0,0,4,6] host=accept|s:you are motoko::;u:list the files::;a:plain::;a:plain::|c1#1  twin=accept|s:you are motoko::;u:list the files::;a:plain::;a:plain::|#0
+  P3.1-across [0,0,4,6] host=accept|s:you are motoko::;u:list the files::;a:plain::;a:plain::|c1#1  twin=accept|s:you are motoko::;u:list the files::;a:plain::;a:plain::|#0
+  P3.1 [5,6,0,3] host=accept|s:you are motoko::;a:[CHECKPOINT] s::;a:plain::;u:next::|#0  twin=digest||
+  P3.1-across [5,6,0,3] host=accept|s:you are motoko::;a:[CHECKPOINT] s::;a:plain::;u:next::|#0  twin=digest||
+  P3.1 [5,6,1,2] host=accept|s:you are motoko::;a:[CHECKPOINT] s::;a:calls:c1:;t:result::c1|#0  twin=digest||
+  P3.1-across [5,6,1,2] host=accept|s:you are motoko::;a:[CHECKPOINT] s::;a:calls:c1:;t:result::c1|#0  twin=digest||
+  P3.1 [5,0,6,0] host=accept|s:you are motoko::;a:[CHECKPOINT] s::;a:plain::;a:plain::|#0  twin=digest||
+  P3.1-across [5,0,6,0] host=accept|s:you are motoko::;a:[CHECKPOINT] s::;a:plain::;a:plain::|#0  twin=digest||
+model: 7381 sequences, 0 mismatches with the real code, 0 missing
+P3.1 (real host vs real twin, folded by the real fold): 76 of 2313 valid sequences disagree
+P3.1 across processes (adopted host vs real twin): 75 of 2313 valid sequences disagree
+P3.2 (real twin vs rule 3+4 spec): 238 of 2313 valid sequences violate; host vs spec: 184
+
+real	4m40.705s
+user	2m46.602s
+sys	0m4.333s
+exit 0

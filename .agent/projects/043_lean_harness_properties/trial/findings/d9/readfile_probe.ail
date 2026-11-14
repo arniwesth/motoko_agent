@@ -1,0 +1,15 @@
+module readfile_probe
+
+import std/io (println)
+import std/fs (readFile)
+import std/json (encode, JObject, JString)
+import std/bytes (toBase64, fromString)
+
+export func main() -> () ! {IO, FS} {
+  let s = readFile("bad.txt");
+  let l = readFile("latin1.txt");
+  println("bad.txt    raw b64: ${toBase64(fromString(s))}");
+  println("bad.txt   json b64: ${toBase64(fromString(encode(JObject([{ key: "content", value: JString(s) }]))))}");
+  println("latin1.txt raw b64: ${toBase64(fromString(l))}");
+  println("latin1.txt json b64: ${toBase64(fromString(encode(JObject([{ key: "content", value: JString(l) }]))))}")
+}

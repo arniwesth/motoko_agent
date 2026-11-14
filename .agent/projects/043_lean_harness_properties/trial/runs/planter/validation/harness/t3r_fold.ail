@@ -1,0 +1,36 @@
+module t3r_fold
+-- T3: fold the HOST's journals (J lines written by t3_host.ts, read from zz_planter/host_r.jl) with
+-- `fold_journal` at the journal's leaf.   H <tab> case <tab> verdict|dangling|n|history-sha
+import std/io (println)
+import std/fs (readFile)
+import std/string as Str (join, split, intToStr, startsWith)
+import std/list as List (length, map, reverse)
+import std/json (Json, decode, encode)
+import std/result (Result, Ok, Err)
+import std/crypto (sha256Hex)
+import src/core/journal (refusal_id, fold_journal, journal_leaf, messages_json)
+
+pure func dec_all(xs: [string]) -> [Json] {
+  match xs { [] => [], x :: rest => match decode(x) { Ok(j) => j :: dec_all(rest), Err(_) => dec_all(rest) } }
+}
+pure func verdict(lines: [Json]) -> string {
+  match fold_journal(lines, journal_leaf(lines)) {
+    Err(r) => "${refusal_id(r)}||0|",
+    Ok(s) => "accept|${join(",", s.dangling)}|${intToStr(List.length(s.dangling))}|${sha256Hex(encode(messages_json(s.history)))}"
+  }
+}
+-- Lines arrive grouped by case; `acc` is the current case's journal, newest first.
+func go(xs: [string], cur: string, acc: [string]) -> () ! {IO} {
+  match xs {
+    [] => if cur == "" then () else println("H\t${cur}\t${verdict(dec_all(List.reverse(acc)))}"),
+    x :: rest => match split(x, "\t") {
+      _j :: name :: body :: _ =>
+        if name == cur then go(rest, cur, body :: acc)
+        else { if cur == "" then () else println("H\t${cur}\t${verdict(dec_all(List.reverse(acc)))}"); go(rest, name, [body]) },
+      _ => go(rest, cur, acc)
+    }
+  }
+}
+export func main() -> () ! {IO, FS} {
+  go(split(readFile("zz_planter/host_r.jl"), "\n"), "", [])
+}

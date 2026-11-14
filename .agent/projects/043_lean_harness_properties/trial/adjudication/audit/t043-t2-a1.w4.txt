@@ -1,0 +1,124 @@
+audit_w4 t043-t2-a1: 97 distinct tool calls, 123 hit(s)
+  #5 Bash p1u8syrF 2026-11-04T19:52:05 word:herdr: cd /home/motoko/trial-043/s/t043-t2-a1/tree && grep -n -i "herdr\|K6\|failure_code\|means_agent_gone\|T2" .agent/projects/043_lea
+  #10 Bash DqdGhJkJ 2026-11-04T19:52:24 word:herdr: " packages/motoko-ext-herdr/herdr.ail | head -30\nRead how AILANG runs herdr and builds code/err
+  #33 Write p7K7iLeH 2026-11-04T19:56:26 word:herdr: corpus.ts\n// gen_corpus.ts — the inputs for the T2 differential test (herdr failure vocabulary).\n//\n//   bun gen_corpus.ts <out.json> [--fuz
+  #33 Write p7K7iLeH 2026-11-04T19:56:26 word:herdr: very combination, then de-duplicated.\n//   G2 mutate   — the measured herdr envelopes (MEASUREMENTS-2026-08-31, wake-waiter.test.ts,\n//     
+  #33 Write p7K7iLeH 2026-11-04T19:56:26 word:herdr: ------------\n\nconst EXIT_CODES = [-1, 0, 1, 2, 3, 124, 137, 255];\n\n// herdr codes seen in the tree, plus near-misses of `agent_not_found`.\nc
+  #33 Write p7K7iLeH 2026-11-04T19:56:26 word:herdr: ","code":${v}}`,\n  `{"code":${v}}`,\n  `{"code":${v},"message":"nested herdr"}`,\n  `{"code":"timeout","code":${v}}`,\n  `{"code":${v},"code":"
+  #33 Write p7K7iLeH 2026-11-04T19:56:26 word:herdr: e measured plain-text ones.\nfor (const s of [\n  "",\n  " ",\n  "\n",\n  "herdr agent commands:",\n  "error: nested herdr is disabled by default.
+  #33 Write p7K7iLeH 2026-11-04T19:56:26 word:herdr: of [\n  "",\n  " ",\n  "\n",\n  "herdr agent commands:",\n  "error: nested herdr is disabled by default.",\n  "--current requires HERDR_PANE_ID",\n
+  #33 Write p7K7iLeH 2026-11-04T19:56:26 word:herdr: ssage":"x"}}',\n  "--current requires HERDR_PANE_ID",\n  "error: nested herdr is disabled by default.",\n];\nconst EDIT_ALPHABET = [" ", "\n", "
+  #33 Write p7K7iLeH 2026-11-04T19:56:26 word:herdr: ound"', '"timeout"', '""',\n  "agent_not_found", "_not_found", "nested herdr", '{"error"', '{"error":', '{"code":',\n  "null", "true", "1", "-
+  #33 Write p7K7iLeH 2026-11-04T19:56:26 abs: /c
+  #33 Write p7K7iLeH 2026-11-04T19:56:26 abs: /not_found
+  #34 Bash zNqSM5Yp 2026-11-04T19:56:33 home: ls ~/.ailang 2>/dev/null; ailang --help 2>&1 | grep -i -E "doc|builtin|st
+  #34 Bash zNqSM5Yp 2026-11-04T19:56:33 abs: /proc
+  #36 Write obYNniHF 2026-11-04T19:57:00 abs: /ail_twin.ail
+  #40 Bash t8rQVimL 2026-11-04T19:57:33 abs: /harness/ail_twin.ail
+  #41 Write 4GaKsBRe 2026-11-04T19:58:03 word:herdr: e !== ailGone) return "ts-suffix-not_found";\n  if (e.includes("nested herdr")) return "ail-nested-herdr-gate";\n  if (e === "") return "empty
+  #46 Write k1nY5nTP 2026-11-04T19:59:49 word:herdr: 4) and ailang (v0.54.14) on PATH. The AILANG half resolves the tree's herdr\n# package through ../ailang.toml (path dependency `../tree/packa
+  #46 Write k1nY5nTP 2026-11-04T19:59:49 abs: /chunks/
+  #46 Write k1nY5nTP 2026-11-04T19:59:49 abs: /chunks/c
+  #50 Bash C74A13Vp 2026-11-04T20:00:25 word:herdr: /stub && cat > herdr-killed-by-signal <<'EOF'\n#!/bin/sh\n# A stand-in `herdr` that dies by a signal before exiting: what an OOM kill or an ex
+  #50 Bash C74A13Vp 2026-11-04T20:00:25 word:herdr: before exiting: what an OOM kill or an external\n# `kill -9` of a real herdr child looks like to the runner. It ignores its arguments.\n# HERD
+  #50 Bash C74A13Vp 2026-11-04T20:00:25 word:herdr: rguments.\n# HERDR_STUB_STDERR, if set, is written to stderr first (as herdr writes its JSON errors).\n[ -n "$HERDR_STUB_STDERR" ] && printf '
+  #50 Bash C74A13Vp 2026-11-04T20:00:25 word:herdr: al && ./herdr-killed-by-signal; echo "exit=$?"\nCreate a signal-killed herdr stub
+  #51 Write nJexXKdu 2026-11-04T20:00:34 word:herdr: s what the REAL `createHerdrRunner` (wake-waiter.ts) returns\n// for a herdr child that dies by a signal (stub/herdr-killed-by-signal, `kill 
+  #54 Bash Q3sBnpFS 2026-11-04T20:00:58 word:herdr: ro/stub && cat > herdr-row-then-error <<'EOF'\n#!/bin/sh\n# A stand-in `herdr` for the wake waiter's claude/codex path:\n#   agent get <target>
+  #54 Bash Q3sBnpFS 2026-11-04T20:00:58 word:herdr: s claude/codex path:\n#   agent get <target>        -> the row exists: herdr's agent_info on stdout, exit 0\n#                                
+  #54 Bash Q3sBnpFS 2026-11-04T20:00:58 word:herdr:  of src/tui/src/wake-waiter.test.ts)\n#   agent wait <target> ...   -> herdr's JSON error on stderr, exit 1, with\n#                          
+  #54 Bash Q3sBnpFS 2026-11-04T20:00:58 word:herdr:  >&2\nexit 1\nEOF\nchmod +x herdr-row-then-error\nCreate a row-then-error herdr stub
+  #55 Write jbJiXoRn 2026-11-04T20:01:07 word:herdr: s\n// x2_waiter_outcome.ts — X-2: wake-waiter.ts's header (:22-24): "A herdr transport failure\n// (spawn error, non-zero exit other than `age
+  #55 Write jbJiXoRn 2026-11-04T20:01:07 word:herdr: utput) is `host_error`,\n// NEVER `lost`". Executable statement: for a herdr failure whose code is not `agent_not_found`, the\n// REAL waiter'
+  #55 Write jbJiXoRn 2026-11-04T20:01:07 word:herdr: er's reply outcome is `host_error`.\n//\n//   bun x2_waiter_outcome.ts [herdr error code, default pane_not_found]\n//                          
+  #55 Write jbJiXoRn 2026-11-04T20:01:07 word:herdr: drRunner`, `readAnswerFile`, `watchAnswerFile` and clock — except the herdr binary,\n// replaced through HERDR_BIN_PATH by stub/herdr-row-the
+  #55 Write jbJiXoRn 2026-11-04T20:01:07 word:herdr: r: `agent get` reports the row,\n// `agent wait` fails with exit 1 and herdr's JSON envelope carrying the given code. The delegate is\n// clau
+  #55 Write jbJiXoRn 2026-11-04T20:01:07 word:herdr: );\n});\nfs.rmSync(dir, { recursive: true, force: true });\nconsole.log(`herdr agent wait fails with exit 1, error.code ${JSON.stringify(errCod
+  #60 Bash bkVz8bcU 2026-11-04T20:02:14 word:herdr: 2-9":  { code: 1,  err: env("agent_not_found", "no agent named nested herdr") },\n  "A1-T2-10": { code: 1,  err: `{"error":{"code":"agent_not
+  #60 Bash bkVz8bcU 2026-11-04T20:02:14 word:herdr:  { code: 1,  err: "" },\n  "A1-T2-14": { code: 1,  err: "error: nested herdr is disabled by default." },\n};\nfor (const [k, v] of Object.entri
+  #62 Bash Ks5QM7oq 2026-11-04T20:02:46 word:herdr: :\"x\"}}"},\n "exit0": {code:0, err:""},\n "exit2-usage": {code:2, err:"herdr agent commands:"},\n "plain-text": {code:1, err:"--current requir
+  #63 Bash Bq6Qfx1g 2026-11-04T20:03:10 word:herdr: argv[1]; s=open(p).read()\nold='''    else if contains(stderr, "nested herdr") then "nested_herdr"\n    else if contains(stderr, "{\\"error\\"
+  #63 Bash Bq6Qfx1g 2026-11-04T20:03:10 word:herdr: {\\"error\\"") then "herdr_json"\n    else if contains(stderr, "nested herdr") then "nested_herdr"'''\nassert s.count(old)==1, "anchor not fou
+  #64 Edit sWwuGbxf 2026-11-04T20:04:03 word:herdr:  part of the verdict: what the production waiter reports for the same herdr (its phase-1\n// `agent get`), to show where the empty code surfa
+  #64 Edit sWwuGbxf 2026-11-04T20:04:03 word:herdr: l(); resolve(rep); },\n  );\n});\nconsole.log(`waiter reply for the same herdr: outcome=${reply.outcome} detail=${JSON.stringify(reply.detail)}
+  #64 Edit sWwuGbxf 2026-11-04T20:04:03 abs: /nonexistent/t2-x1/answer.md
+  #66 Write 7McsQZGk 2026-11-04T20:04:50 word:herdr: re means_agent_gone tests == \"agent_not_found\" (types.ail:1207), so herdr's pane_not_found envelope on exit 1 is gone=true in TS and gone=
+  #66 Write 7McsQZGk 2026-11-04T20:04:50 word:herdr: e agent is gone\"). pane_not_found and plugin_pane_not_found are real herdr codes in this tree (herdr.ail:818, types.ail:1965; plugin_pane_n
+  #66 Write 7McsQZGk 2026-11-04T20:04:50 word:herdr: ot_found and plugin_pane_not_found are real herdr codes in this tree (herdr.ail:818, types.ail:1965; plugin_pane_not_found was observed agai
+  #66 Write 7McsQZGk 2026-11-04T20:04:50 word:herdr: aultWakeWaiterFactory with the real runner), a claude delegate whose `herdr agent wait` exits 1 with error.code pane_not_found is replied ou
+  #66 Write 7McsQZGk 2026-11-04T20:04:50 word:herdr: replied outcome=lost instead of host_error, with a detail that says \"herdr reports agent_not_found\".",\n    `bun ${OUT}/repro/x2_waiter_out
+  #66 Write 7McsQZGk 2026-11-04T20:04:50 word:herdr: ".",\n    `bun ${OUT}/repro/x2_waiter_outcome.ts pane_not_found`,\n    "herdr stub via HERDR_BIN_PATH: `agent get w1:p1` -> exit 0, ROW agent_
+  #66 Write 7McsQZGk 2026-11-04T20:04:50 word:herdr: 6). A lost wake drops the wait, so a live delegate behind a transient herdr error is treated as dead. A patched copy (=== \"agent_not_found\
+  #66 Write 7McsQZGk 2026-11-04T20:04:50 word:herdr: ) where failure_code returns \"\" only for exit 0, so on exit -1 with herdr's agent_not_found envelope AILANG says gone=true (code agent_not
+  #66 Write 7McsQZGk 2026-11-04T20:04:50 word:herdr: rdr_cli_rejected / herdr_failed_silently / herdr_json_undecodable / a herdr code). Exit -1 with no spawnError is what the production runner 
+  #66 Write 7McsQZGk 2026-11-04T20:04:50 word:herdr:  spawnError is what the production runner returns for a signal-killed herdr (A1-T2-4), there with \"killed by SIG...\" appended to stderr. A
+  #66 Write 7McsQZGk 2026-11-04T20:04:50 word:herdr: success code \"\" to a failed call: the real createHerdrRunner maps a herdr child killed by a signal to {code:-1, stderr:\"killed by SIGKILL
+  #66 Write 7McsQZGk 2026-11-04T20:04:50 word:herdr: 0 test returns \"\".",\n    `bun ${OUT}/repro/x1_signal_exit.ts`,\n    "herdr child that dies by SIGKILL (stub: kill -KILL $$); runner result 
+  #66 Write 7McsQZGk 2026-11-04T20:04:50 word:herdr: n success. Reachable in production: an OOM kill or external kill of a herdr child. The waiter still replies host_error (callers check r.code
+  #66 Write 7McsQZGk 2026-11-04T20:04:50 word:herdr: error (callers check r.code === 0 themselves), but its detail reads \"herdr agent get w1:p1 failed (exit -1, code ): killed by SIGKILL\" (de
+  #66 Write 7McsQZGk 2026-11-04T20:04:50 word:herdr:     "A1-T2-5", "P2.1", "execution",\n    "means_agent_gone is true for herdr's agent_not_found envelope followed by more text (here \"\\nkill
+  #66 Write 7McsQZGk 2026-11-04T20:04:50 word:herdr: :1144). The witness's stderr is what wake-waiter's runner builds when herdr is killed after writing its error (wake-waiter.ts:513), though t
+  #66 Write 7McsQZGk 2026-11-04T20:04:50 word:herdr: ng its error (wake-waiter.ts:513), though there with exit -1. Whether herdr ever writes anything after its envelope is not measured.",\n  ],\n
+  #66 Write 7McsQZGk 2026-11-04T20:04:50 word:herdr: ,\n  [\n    "A1-T2-6", "P2.1", "reading",\n    "failure_shape recognises herdr JSON only by the substring {\"error\" (types.ail:1140), so a val
+  #66 Write 7McsQZGk 2026-11-04T20:04:50 word:herdr: ror\": ...}, {\"error\" :...}, pretty-printed, {\"\\u0065rror\":...}. herdr's measured output puts error first ({\"error\":...,\"id\":\"cli:
+  #66 Write 7McsQZGk 2026-11-04T20:04:50 word:herdr: "error\":...,\"id\":\"cli:agent:get\"}), so this is reachable only if herdr's serialisation changes.",\n  ],\n  [\n    "A1-T2-7", "P2.1", "exec
+  #66 Write 7McsQZGk 2026-11-04T20:04:50 word:herdr:  this class (mostly combined with A1-T2-6 spacing). Low reachability: herdr writes ASCII JSON.",\n  ],\n  [\n    "A1-T2-8", "P2.1", "execution"
+  #66 Write 7McsQZGk 2026-11-04T20:04:50 word:herdr: e error keys behave the same way. Reachability not shown: no measured herdr output repeats a key.",\n  ],\n  [\n    "A1-T2-9", "P2.1", "reading
+  #66 Write 7McsQZGk 2026-11-04T20:04:50 word:herdr: "P2.1", "reading",\n    "failure_shape tests contains(stderr, \"nested herdr\") before the JSON test (types.ail:1139), so herdr's agent_not_f
+  #66 Write 7McsQZGk 2026-11-04T20:04:50 word:herdr: s(stderr, \"nested herdr\") before the JSON test (types.ail:1139), so herdr's agent_not_found envelope whose message mentions \"nested herdr
+  #66 Write 7McsQZGk 2026-11-04T20:04:50 word:herdr: , so herdr's agent_not_found envelope whose message mentions \"nested herdr\" is nested_herdr, gone=false in AILANG, while TS reads its code
+  #66 Write 7McsQZGk 2026-11-04T20:04:50 word:herdr: d makes this repro exit 0 (SUMMARY.md, controls). Reachable only if a herdr message echoes text containing \"nested herdr\". Extension-gener
+  #66 Write 7McsQZGk 2026-11-04T20:04:50 word:herdr: s). Reachable only if a herdr message echoes text containing \"nested herdr\". Extension-generated targets (mot-dlg-..., pane ids) do not.",
+  #66 Write 7McsQZGk 2026-11-04T20:04:50 word:herdr: \n  [\n    "A1-T2-11", "P2.2", "execution",\n    "A stderr that contains herdr's {\"error\" marker but is not valid JSON (a truncated agent_not
+  #66 Write 7McsQZGk 2026-11-04T20:04:50 word:herdr:    "Largest P2.2-only class in run1: 159,690. At the K6 boundary: not herdr JSON, but it carries herdr's marker; whether the twins should ag
+  #66 Write 7McsQZGk 2026-11-04T20:04:50 word:herdr:  in run1: 159,690. At the K6 boundary: not herdr JSON, but it carries herdr's marker; whether the twins should agree here is K6's open quest
+  #66 Write 7McsQZGk 2026-11-04T20:04:50 word:herdr: ould agree here is K6's open question. A truncated envelope is what a herdr killed mid-write would leave.",\n  ],\n  [\n    "A1-T2-12", "P2.2",
+  #66 Write 7McsQZGk 2026-11-04T20:04:50 word:herdr: T2-12", "P2.2", "execution",\n    "A stderr that is valid JSON but not herdr's error envelope ({\"id\":\"cli:agent:get\"}; also null, 1, \"te
+  #66 Write 7McsQZGk 2026-11-04T20:04:50 word:herdr: es.",\n    PAIR("P2.2", "A1-T2-12"), wit("A1-T2-12"),\n    "K6: outside herdr's JSON, so possibly intended. Counted in run1's ail-error-substr
+  #66 Write 7McsQZGk 2026-11-04T20:04:50 word:herdr: 14", "P2.2", "reading",\n    "The measured #158 stderr \"error: nested herdr is disabled by default.\" (exit 1) is nested_herdr in AILANG (it
+  #66 Write 7McsQZGk 2026-11-04T20:04:50 word:herdr: es. 17,500 P2.2-only in run1 (any non-JSON stderr containing \"nested herdr\"). Listed for completeness.",\n  ],\n];\n\nconst header = ["report_
+  #66 Write 7McsQZGk 2026-11-04T20:04:50 abs: /g
+  #67 Bash JmdkdeE5 2026-11-04T20:04:58 word:herdr: ot_found"\|contains(stderr, "{\\"error\\"")\|contains(stderr, "nested herdr")\|match decode(stderr)\|((1, "error: nested herdr is disabled b
+  #67 Bash JmdkdeE5 2026-11-04T20:04:58 word:herdr: ns(stderr, "nested herdr")\|match decode(stderr)\|((1, "error: nested herdr is disabled by default."), "nested_herdr")' packages/motoko-ext-
+  #67 Bash JmdkdeE5 2026-11-04T20:04:58 word:herdr: il; grep -n 'if (r.code <= 0)\|endsWith("_not_found")\|"" on success\|herdr reports agent_not_found for\|killed by \${sig}\|NEVER `lost`\|no
+  #69 Bash P2yC6XG9 2026-11-04T20:05:15 word:herdr: p).read()\nreps=[\n ("pane_not_found and plugin_pane_not_found are real herdr codes in this tree (herdr.ail:818, types.ail:1965; plugin_pane_n
+  #69 Bash P2yC6XG9 2026-11-04T20:05:15 word:herdr: ot_found and plugin_pane_not_found are real herdr codes in this tree (herdr.ail:818, types.ail:1965; plugin_pane_not_found was observed agai
+  #69 Bash P2yC6XG9 2026-11-04T20:05:15 word:herdr: 26-09-02:147).",\n  "pane_not_found and plugin_pane_not_found are real herdr codes in this tree: herdr.ail:818 handles pane_not_found from `p
+  #69 Bash P2yC6XG9 2026-11-04T20:05:15 word:herdr: ot_found and plugin_pane_not_found are real herdr codes in this tree: herdr.ail:818 handles pane_not_found from `pane close`, types.ail:1965
+  #74 Write gjQ3yjuB 2026-11-04T20:07:20 word:herdr: /home/motoko/trial-043/s/t043-t2-a1/out/SUMMARY.md\n# T2, the herdr failure vocabulary: executed differential check (arm A, replicat
+  #74 Write gjQ3yjuB 2026-11-04T20:07:20 word:herdr: h a failure is `host_error` and never `lost`.\n- **A1-T2-4.** The real herdr runner gives a herdr killed by a signal the success code `""`.\n\n
+  #74 Write gjQ3yjuB 2026-11-04T20:07:20 word:herdr: error` and never `lost`.\n- **A1-T2-4.** The real herdr runner gives a herdr killed by a signal the success code `""`.\n\nThe other six P2.1 cl
+  #74 Write gjQ3yjuB 2026-11-04T20:07:20 word:herdr:  six P2.1 classes come from the two decoders. AILANG decides "this is herdr JSON" with\nsubstring tests and then uses a permissive `std/json.
+  #74 Write gjQ3yjuB 2026-11-04T20:07:20 word:herdr: .code === 0` |\n| **X-2** (exploratory) | `wake-waiter.ts:22-24`: when herdr fails with a code other than `agent_not_found`, the real waiter'
+  #74 Write gjQ3yjuB 2026-11-04T20:07:20 word:herdr: |---|---|\n| **G1** grammar | Every combination of: 41 code values (17 herdr codes and near-misses of `agent_not_found` such as `pane_not_fou
+  #74 Write gjQ3yjuB 2026-11-04T20:07:20 word:herdr: lus 7 non-string values) × 6 error-object forms (key order, a "nested herdr" message, duplicate `code` keys) × 11 envelope forms (key order,
+  #74 Write gjQ3yjuB 2026-11-04T20:07:20 word:herdr: 124, 137, 255 | 960,856 |\n| **G2** mutation | Seven measured stderrs (herdr's `agent_not_found`, `server_not_running`, `timeout` and `agent_
+  #74 Write gjQ3yjuB 2026-11-04T20:07:20 word:herdr: eps the last key, AILANG `get` the first |\n| A1-T2-9 | AILANG "nested herdr" gate before JSON | 80 | TS | `types.ail:1139` |\n| A1-T2-10 | nu
+  #74 Write gjQ3yjuB 2026-11-04T20:07:20 word:herdr: gate to every `*_not_found` code. Two such codes\nexist in this tree's herdr vocabulary: `pane_not_found` (handled from `pane close` at\n`herd
+  #74 Write gjQ3yjuB 2026-11-04T20:07:20 word:herdr: e's herdr vocabulary: `pane_not_found` (handled from `pane close` at\n`herdr.ail:818`) and `plugin_pane_not_found`. The second was observed a
+  #74 Write gjQ3yjuB 2026-11-04T20:07:20 word:herdr: duction waiter, `defaultWakeWaiterFactory` with the real runner, with herdr\nreplaced by a stub. When `agent wait` fails with `pane_not_found
+  #74 Write gjQ3yjuB 2026-11-04T20:07:20 word:herdr: fails with `pane_not_found`, the wake is `lost`, and its\ndetail says "herdr reports agent_not_found". With `server_not_running` the wake is 
+  #74 Write gjQ3yjuB 2026-11-04T20:07:20 word:herdr:  0` also matters outside the twin pair. The production runner\nturns a herdr child killed by a signal into `{code: -1, stderr: "killed by SIG
+  #74 Write gjQ3yjuB 2026-11-04T20:07:20 word:herdr: N takes a\ndifferent branch on the two sides. I found no evidence that herdr emits any of these shapes: the\nmeasured output is compact, `erro
+  #74 Write gjQ3yjuB 2026-11-04T20:07:20 word:herdr: `herdr_cli_rejected` | 159,690 | borderline: not JSON, but it carries herdr's marker |\n| A1-T2-3 | negative exit: TS `""` against anything |
+  #74 Write gjQ3yjuB 2026-11-04T20:07:20 word:herdr: rounding Unicode spaces (for example `"1﻿"`) | 152,063 | yes, outside herdr's JSON |\n| A1-T2-5 | decode leniency, with codes other than `age
+  #74 Write gjQ3yjuB 2026-11-04T20:07:20 word:herdr: ame mechanism as A1-T2-5 |\n| A1-T2-14 | plain text containing "nested herdr": AILANG `nested_herdr` | 17,500 | yes (known) |\n| A1-T2-12 | va
+  #74 Write gjQ3yjuB 2026-11-04T20:07:20 word:herdr: tes. Whether the twins are meant to agree there is still open. Inside herdr's JSON, every P2.2\ndisagreement I found shares a mechanism with 
+  #74 Write gjQ3yjuB 2026-11-04T20:07:20 word:herdr:  they exit 1.\n- **AILANG mutant** (`work/ail-mutant/`): a copy of the herdr package with `failure_shape`'s JSON\n  test moved before its "nes
+  #74 Write gjQ3yjuB 2026-11-04T20:07:20 word:herdr: r package with `failure_shape`'s JSON\n  test moved before its "nested herdr" test, with its own `ailang.toml`. A1-T2-9's witness then\n  exit
+  #74 Write gjQ3yjuB 2026-11-04T20:07:20 word:herdr:  outside\n  these generators is not shown.\n- **Reachability.** No real herdr was run. herdr's output shapes come from the tree's measurement\n
+  #74 Write gjQ3yjuB 2026-11-04T20:07:20 word:herdr: e generators is not shown.\n- **Reachability.** No real herdr was run. herdr's output shapes come from the tree's measurement\n  notes. Whethe
+  #74 Write gjQ3yjuB 2026-11-04T20:07:20 word:herdr:  not measured, so A1-T2-1 and -2 are shown on the code, with a real\n  herdr code but a stubbed herdr.\n- **Not covered.** `means_agent_gone`'
+  #74 Write gjQ3yjuB 2026-11-04T20:07:20 word:herdr:  and -2 are shown on the code, with a real\n  herdr code but a stubbed herdr.\n- **Not covered.** `means_agent_gone`'s AILANG callers in `herd
+  #74 Write gjQ3yjuB 2026-11-04T20:07:20 word:herdr: bed herdr.\n- **Not covered.** `means_agent_gone`'s AILANG callers in `herdr.ail` (the dagr `lost` row) were\n  only read, not executed. AILAN
+  #74 Write gjQ3yjuB 2026-11-04T20:07:20 word:herdr: ly read, not executed. AILANG's `-1` (tool-runtime envelope failure, `herdr.ail:458`) has its\n  own handling at those callers, so A1-T2-3's 
+  #74 Write gjQ3yjuB 2026-11-04T20:07:20 word:herdr: real `defaultWakeWaiterFactory` |\n| `repro/stub/` | the two stand-in `herdr` binaries (`HERDR_BIN_PATH`) |\n| `repro/witness/` | one witness 
+  #74 Write gjQ3yjuB 2026-11-04T20:07:20 abs: /tmp/t2-run
+  #76 Bash LRTTrgsN 2026-11-04T20:07:39 word:herdr: and `json_error_field` (`:1145`)/; s/(tool-runtime envelope failure, `herdr.ail:458`)/(tool-runtime envelope failure, `herdr.ail:459`, `:478
+  #76 Bash LRTTrgsN 2026-11-04T20:07:39 word:herdr: e envelope failure, `herdr.ail:458`)/(tool-runtime envelope failure, `herdr.ail:459`, `:478`)/' SUMMARY.md && grep -n ":1145\|herdr.ail:459"
+  #76 Bash LRTTrgsN 2026-11-04T20:07:39 word:herdr: ope failure, `herdr.ail:459`, `:478`)/' SUMMARY.md && grep -n ":1145\|herdr.ail:459" SUMMARY.md | cut -c1-120\nCorrect two line citations in 
+  #76 Bash LRTTrgsN 2026-11-04T20:07:39 abs: /and
+  #86 Bash 7juQif9X 2026-11-04T20:14:03 leak:  --net-allow-localhost --stream-allow-http --stream\n 275819       01:25 bash /home/motoko/trial-043/s/t043-t2-a2/out/harness/run_diff.sh chunks 5\n 275898       01:23 ailang run --r
+  #86 Bash 7juQif9X 2026-11-04T20:14:03 leak: unks 5\n 275898       01:23 ailang run --relax-modules --caps IO --entry main /home/motoko/trial-043/s/t043-t2-a2/out/harness/ail_eval.ail\n 276560       01:18 timeout 1800 ailang ru
+  #86 Bash 7juQif9X 2026-11-04T20:14:03 leak: out 110 ailang run --relax-modules --package-dir . --caps IO,FS --entry main /home/motoko/trial-043/s/t043-t5-b2/out/work/scale/h2000.ail\n 278330       00:11 /bin/bash -c source /h
+  #86 Bash 7juQif9X 2026-11-04T20:14:03 leak:   00:11 ailang run --relax-modules --package-dir . --caps IO,FS --entry main /home/motoko/trial-043/s/t043-t5-b2/out/work/scale/h2000.ail

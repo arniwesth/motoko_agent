@@ -1,0 +1,31 @@
+gen: chunks 5 -> 1158390 cases, sha256 73db25cf72b8c61c (scratch /home/motoko/trial-043/s/t043-t2-a2/out/runs/chunks5)
+cases: 1158390
+P2.1 (means agent gone) mismatches: 6
+P2.1 groups: 4 groups
+P2.2 (failure code) mismatches: 887511 (261451 where AILANG's shape is herdr_json)
+P2.2 groups: 14 groups
+P2.1 mismatches by cause (0 unexplained):
+  [2] B:ail-literal-{"error"-gate
+  [2] A:ts-suffix-rule + B:ail-literal-{"error"-gate
+  [1] H:negative-exit
+  [1] A:ts-suffix-rule
+P2.2 mismatches inside herdr's JSON: 9 (0 unexplained by causes B-H)
+  [6] B:ail-literal-{"error"-gate
+  [3] H:negative-exit
+P2.2 mismatches outside herdr's JSON (K6): 887502
+  [271452] ts="" ail="herdr_cli_rejected"
+      e.g. exit=-1 stderr="{ \"error\":" ts_code="" ail_code="herdr_cli_rejected" ts_gone=0 ail_gone=0
+  [176961] ts="herdr_cli_rejected" ail="nested_herdr"
+      e.g. exit=1 stderr="{\"error\":{\"error\":{\"error\":{\"error\":nested herdr" ts_code="herdr_cli_rejected" ail_code="nested_herdr" ts_gone=0 ail_gone=0
+  [176961] ts="" ail="nested_herdr"
+      e.g. exit=-1 stderr="{\"error\":{\"error\":{\"error\":{\"error\":nested herdr" ts_code="" ail_code="nested_herdr" ts_gone=0 ail_gone=0
+  [130778] ts="" ail="herdr_json_undecodable"
+      e.g. exit=-1 stderr="{\"error\":" ts_code="" ail_code="herdr_json_undecodable" ts_gone=0 ail_gone=0
+  [130670] ts="herdr_cli_rejected" ail="herdr_json_undecodable"
+      e.g. exit=1 stderr="{\"error\":" ts_code="herdr_cli_rejected" ail_code="herdr_json_undecodable" ts_gone=0 ail_gone=0
+  [678] ts="herdr_json_undecodable" ail="herdr_cli_rejected"
+      e.g. exit=1 stderr="{ \"error\":{ \"error\":\"agent_not_found\"}}" ts_code="herdr_json_undecodable" ail_code="herdr_cli_rejected" ts_gone=0 ail_gone=0
+  [1] ts="herdr_cli_rejected" ail="herdr_failed_silently"
+      e.g. exit=1 stderr="" ts_code="herdr_cli_rejected" ail_code="herdr_failed_silently" ts_gone=0 ail_gone=0
+  [1] ts="" ail="herdr_failed_silently"
+      e.g. exit=-1 stderr="" ts_code="" ail_code="herdr_failed_silently" ts_gone=0 ail_gone=0

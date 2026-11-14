@@ -1,0 +1,17 @@
+module smoke
+
+import std/io (println)
+import std/ai (Message)
+import std/string as Str (join, concat)
+import src/core/journal (chain_digest_over, chain_digests_over, chain_empty_base, chain_digest_after)
+
+pure func u(c: string) -> Message { { role: "user", content: c, tool_calls: [], tool_call_id: "", images: [] } }
+
+export func main() -> () ! {IO} {
+  let e = chain_empty_base();
+  println("empty=${e}");
+  println("over x [a] = ${chain_digest_over("x", [u("a")])}");
+  println(concat(["digests x [a] = ", join(",", chain_digests_over("x", [u("a")]))]));
+  println(concat(["over e [a] = ", chain_digest_over(e, [u("a")])]));
+  println(concat(["digests e [a] = ", join(",", chain_digests_over(e, [u("a")]))]))
+}

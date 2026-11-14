@@ -1,0 +1,62 @@
+# s04: end-to-end scenario for P1.1 (S4). The TUI process runs with the environment below; the
+# runtime child is given exactly the HERDR_* variables buildChildEnv returns (plus PATH and HOME).
+== B0, scenario s04
+    TUI_ENV {"HERDR_ENV":"1","HERDR_PANE_ID":"w1:p2"}
+    TUI_GATE closed
+    CHILD HERDR_ENV="1"
+    CHILD HERDR_PANE_ID="w1:p2"
+    RUNTIME  observed 0 tool(s); HERDR_ENV=1 HERDR_BIN_PATH=<unset> HERDR_PANE_ID=w1:p2
+    => TUI gate closed, runtime gate closed: P1.1 end to end holds
+== B0, control (all three set)
+    TUI_ENV {"HERDR_ENV":"1","HERDR_BIN_PATH":"/usr/local/bin/herdr","HERDR_PANE_ID":"w1:p2"}
+    TUI_GATE ready
+    CHILD HERDR_ENV="1"
+    CHILD HERDR_BIN_PATH="/usr/local/bin/herdr"
+    CHILD HERDR_PANE_ID="w1:p2"
+    RUNTIME  observed 2 tool(s); HERDR_ENV=1 HERDR_BIN_PATH=/usr/local/bin/herdr HERDR_PANE_ID=w1:p2
+    => TUI gate ready, runtime gate ready: P1.1 end to end holds
+== only-s04, scenario s04
+    TUI_ENV {"HERDR_ENV":"1","HERDR_PANE_ID":"w1:p2"}
+    TUI_GATE closed
+    CHILD HERDR_ENV="1"
+    CHILD HERDR_PANE_ID="w1:p2"
+    RUNTIME  observed 2 tool(s); HERDR_ENV=1 HERDR_BIN_PATH=<unset> HERDR_PANE_ID=w1:p2
+    => TUI gate closed, runtime gate ready: P1.1 end to end VIOLATED
+== only-s04, control (all three set)
+    TUI_ENV {"HERDR_ENV":"1","HERDR_BIN_PATH":"/usr/local/bin/herdr","HERDR_PANE_ID":"w1:p2"}
+    TUI_GATE ready
+    CHILD HERDR_ENV="1"
+    CHILD HERDR_BIN_PATH="/usr/local/bin/herdr"
+    CHILD HERDR_PANE_ID="w1:p2"
+    RUNTIME  observed 2 tool(s); HERDR_ENV=1 HERDR_BIN_PATH=/usr/local/bin/herdr HERDR_PANE_ID=w1:p2
+    => TUI gate ready, runtime gate ready: P1.1 end to end holds
+== T, scenario s04
+    TUI_ENV {"HERDR_ENV":"1","HERDR_PANE_ID":"w1:p2"}
+    TUI_GATE closed
+    CHILD HERDR_ENV="1"
+    CHILD HERDR_PANE_ID="w1:p2"
+    RUNTIME  observed 2 tool(s); HERDR_ENV=1 HERDR_BIN_PATH=<unset> HERDR_PANE_ID=w1:p2
+    => TUI gate closed, runtime gate ready: P1.1 end to end VIOLATED
+== T, control (all three set)
+    TUI_ENV {"HERDR_ENV":"1","HERDR_BIN_PATH":"/usr/local/bin/herdr","HERDR_PANE_ID":"w1:p2"}
+    TUI_GATE ready
+    CHILD HERDR_ENV="1"
+    CHILD HERDR_BIN_PATH="/usr/local/bin/herdr"
+    CHILD HERDR_PANE_ID="w1:p2"
+    RUNTIME  observed 2 tool(s); HERDR_ENV=1 HERDR_BIN_PATH=/usr/local/bin/herdr HERDR_PANE_ID=w1:p2
+    => TUI gate ready, runtime gate ready: P1.1 end to end holds
+== minus-s04, scenario s04
+    TUI_ENV {"HERDR_ENV":"1","HERDR_PANE_ID":"w1:p2"}
+    TUI_GATE closed
+    CHILD HERDR_ENV="1"
+    CHILD HERDR_PANE_ID="w1:p2"
+    RUNTIME  observed 0 tool(s); HERDR_ENV=1 HERDR_BIN_PATH=<unset> HERDR_PANE_ID=w1:p2
+    => TUI gate closed, runtime gate closed: P1.1 end to end holds
+== minus-s04, control (all three set)
+    TUI_ENV {"HERDR_ENV":"1","HERDR_BIN_PATH":"/usr/local/bin/herdr","HERDR_PANE_ID":"w1:p2"}
+    TUI_GATE ready
+    CHILD HERDR_ENV="1"
+    CHILD HERDR_BIN_PATH="/usr/local/bin/herdr"
+    CHILD HERDR_PANE_ID="w1:p2"
+    RUNTIME  observed 2 tool(s); HERDR_ENV=1 HERDR_BIN_PATH=/usr/local/bin/herdr HERDR_PANE_ID=w1:p2
+    => TUI gate ready, runtime gate ready: P1.1 end to end holds

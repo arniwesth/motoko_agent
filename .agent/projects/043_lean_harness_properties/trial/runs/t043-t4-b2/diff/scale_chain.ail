@@ -1,0 +1,32 @@
+-- scale_chain.ail — step (2) on long inputs: the REAL chain_digest_over and
+-- chain_digests_over over n copies of one message, to see how each scales with n.
+-- chain_digests_over appends with `acc.out ++ [d]` at every step (journal.ail:289).
+-- One entry per (function, n); scale.sh times each.
+module scale_chain
+
+import std/io (println)
+import std/ai (Message)
+import std/string as Str (concat, intToStr)
+import std/list as List (length)
+import src/core/journal (chain_digest_over, chain_digests_over, chain_empty_base)
+
+pure func hi() -> Message { { role: "user", content: "hi", tool_calls: [], tool_call_id: "", images: [] } }
+
+pure func copies(n: int, acc: [Message]) -> [Message] {
+  if n <= 0 then acc else copies(n - 1, hi() :: acc)
+}
+
+func over(n: int) -> () ! {IO} {
+  println(concat(["over ", intToStr(n), " ", chain_digest_over(chain_empty_base(), copies(n, []))]))
+}
+
+func digests(n: int) -> () ! {IO} {
+  println(concat(["digests ", intToStr(n), " ", intToStr(List.length(chain_digests_over(chain_empty_base(), copies(n, []))))]))
+}
+
+export func over_1000() -> () ! {IO} { over(1000) }
+export func over_4000() -> () ! {IO} { over(4000) }
+export func over_16000() -> () ! {IO} { over(16000) }
+export func digests_1000() -> () ! {IO} { digests(1000) }
+export func digests_4000() -> () ! {IO} { digests(4000) }
+export func digests_16000() -> () ! {IO} { digests(16000) }

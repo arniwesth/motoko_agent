@@ -1,0 +1,34 @@
+-- repro_x9.ail — X-9: `chain_digest_after(previous, m)` hashes `previous ++ frame(m)`, which is
+-- not injective in (previous, m) when `previous` is an arbitrary string. Exit 1 iff the two
+-- different inputs below give the same digest (with sha256 injective, that means the hashed
+-- strings are equal).
+--   (previous = "",                            m = user "m{role:4:user;content:1:Z")
+--   (previous = "m{role:4:user;content:25:",   m = user "Z")
+-- Same collision lifted to the list functions: chain_digest_over and chain_digests_over agree
+-- on ("", [m1]) and ("m{role:4:user;content:25:", [m2]) only if the base were honoured, so
+-- only chain_digest_over is compared at list level.
+--
+--   ailang run --relax-modules --caps IO --chdir ../out/pkg --entry main t4/repro_x9.ail
+module repro_x9
+
+import std/io (println, exit)
+import std/ai (Message)
+import src/core/journal (chain_digest_after, chain_digest_over)
+
+pure func u(c: string) -> Message { { role: "user", content: c, tool_calls: [], tool_call_id: "", images: [] } }
+
+export func main() -> () ! {IO} {
+  let m1 = u("m{role:4:user;content:1:Z");
+  let m2 = u("Z");
+  let b1 = "";
+  let b2 = "m{role:4:user;content:25:";
+  let d1 = chain_digest_after(b1, m1);
+  let d2 = chain_digest_after(b2, m2);
+  let o1 = chain_digest_over(b1, [m1]);
+  let o2 = chain_digest_over(b2, [m2]);
+  println("chain_digest_after(\"\", user \"m{role:4:user;content:1:Z\")   = ${d1}");
+  println("chain_digest_after(\"m{role:4:user;content:25:\", user \"Z\") = ${d2}");
+  println("chain_digest_over on the same pairs: ${o1} / ${o2}");
+  if d1 == d2 then { println("X-9: COLLISION between distinct (previous, message) pairs"); exit(1) }
+  else println("X-9: no collision")
+}

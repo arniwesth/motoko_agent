@@ -1,0 +1,11 @@
+--- a/packages/motoko-ext-herdr/types.ail
++++ b/packages/motoko-ext-herdr/types.ail
+@@ -1137,7 +1137,7 @@
+     if exit_code == 0 then "ok"
+     else if exit_code == 2 then "cli_syntax"
+     else if contains(stderr, "nested herdr") then "nested_herdr"
+-    else if contains(stderr, "\"error\"") then "herdr_json"
++    else if contains(stderr, "{\"error\"") then "herdr_json"
+     else if stderr == "" then "unknown"
+     else "plain_text"
+   }

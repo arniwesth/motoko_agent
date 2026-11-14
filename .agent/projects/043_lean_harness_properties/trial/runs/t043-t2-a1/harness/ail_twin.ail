@@ -1,0 +1,51 @@
+-- ail_twin.ail — the AILANG half: the REAL `failure_code` and `means_agent_gone`
+-- (packages/motoko-ext-herdr/types.ail:1160, :1198, via `failure_shape` :1127), on the cases
+-- ts_twin.ts wrote, compared with the TypeScript twin's values using AILANG's own `==`.
+--
+-- The cases arrive as the entry's argument (`--args-file`), decoded by the runtime, so std/json's
+-- `decode` — which `failure_code` itself uses, and which is under test — never touches the input.
+-- The package manifest next to this directory (../ailang.toml) resolves
+-- `pkg/sunholo/motoko_ext_herdr` to the tree's packages/motoko-ext-herdr by path.
+--
+-- From the tree root (absolute paths: ailang rejects a relative `../` entry path):
+--
+--   ailang run --relax-modules --caps IO --entry main --args-file <ts.json> <abs>/ail_twin.ail
+--
+-- One line per case:
+--
+--   <index> TAB <P2.1 agree 1/0> TAB <P2.2 agree 1/0> TAB <ail gone 1/0> TAB <ail code, display-escaped>
+--
+-- The code column is for reading only (newline, tab, CR and backslash escaped); the agreement
+-- flags are computed on the unescaped strings.
+
+module ail_twin
+
+import std/io (println)
+import std/string (intToStr, replace)
+import pkg/sunholo/motoko_ext_herdr/types (failure_code, means_agent_gone)
+
+type Case = { code: int, err: string, gen: string, ts_code: string, ts_gone: bool }
+
+pure func flag(x: bool) -> string { if x then "1" else "0" }
+
+pure func display(s: string) -> string {
+  replace(replace(replace(replace(s, "\\", "\\\\"), "\n", "\\n"), "\t", "\\t"), "\r", "\\r")
+}
+
+pure func line(i: int, c: Case) -> string {
+  let ac = failure_code(c.code, c.err);
+  let ag = means_agent_gone(c.code, c.err);
+  "${intToStr(i)}\t${flag(ag == c.ts_gone)}\t${flag(ac == c.ts_code)}\t${flag(ag)}\t${display(ac)}"
+}
+
+func go(cs: [Case], i: int) -> () ! {IO} {
+  match cs {
+    [] => (),
+    c :: rest => {
+      println(line(i, c));
+      go(rest, i + 1)
+    }
+  }
+}
+
+export func main(cs: [Case]) -> () ! {IO} { go(cs, 0) }

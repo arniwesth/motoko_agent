@@ -1,0 +1,32 @@
+-- repro_P4_2.ail — P4.2 on the REAL chain_digests_over (src/core/journal.ail:292-294).
+-- Lean: ChainModel.lean `bug_P4_2_witness` (and `bug_P4_2_last`, `P4_2_last_iff`).
+-- Witness: base = chain_digest_base([sys]) — the shape a `history_replaced` re-bases the
+-- chain to — and ms = [user]. P4.2 says the last element of chain_digests_over(base, ms) is
+-- chain_digest_over(base, ms). Prints "P4.2 VIOLATED" or "P4.2 HOLDS".
+module repro_P4_2
+
+import std/io (println)
+import std/ai (Message)
+import std/string as Str (join, concat, intToStr)
+import std/list as List (length)
+import src/core/journal (chain_digest_base, chain_digest_over, chain_digests_over, chain_empty_base)
+
+pure func sys() -> Message { { role: "system", content: "you are motoko", tool_calls: [], tool_call_id: "", images: [] } }
+pure func user() -> Message { { role: "user", content: "list the files", tool_calls: [], tool_call_id: "", images: [] } }
+
+pure func last_or(xs: [string], d: string) -> string {
+  match xs { [] => d, x :: rest => match rest { [] => x, _ => last_or(rest, d) } }
+}
+
+export func main() -> () ! {IO} {
+  let b = chain_digest_base([sys()]);
+  let ms = [user()];
+  let ds = chain_digests_over(b, ms);
+  let over = chain_digest_over(b, ms);
+  println(concat(["base = chain_digest_base([sys]) = ", b, " (chain_empty_base() = ", chain_empty_base(), ")"]));
+  println(concat(["length(chain_digests_over(base, ms)) = ", intToStr(List.length(ds)), ", length(ms) = ", intToStr(List.length(ms))]));
+  println(concat(["last(chain_digests_over(base, ms))   = ", last_or(ds, "<empty>")]));
+  println(concat(["chain_digest_over(base, ms)          = ", over]));
+  println(concat(["chain_digest_over(chain_empty_base(), ms) = ", chain_digest_over(chain_empty_base(), ms)]));
+  println(if List.length(ds) == List.length(ms) && last_or(ds, "") == over then "P4.2 HOLDS" else "P4.2 VIOLATED")
+}

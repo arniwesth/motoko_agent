@@ -1,0 +1,31 @@
+
+/-
+diff/enumerate.lean.tail — appended, after diff/alphabet.lean, to ../HerdrGateModel.lean by
+run_diff.sh. Prints one line per triple of the alphabet, in the order enumerate.ts and
+enumerate_gate.ail use:
+
+  <i>,<j>,<k>|<readHerdrEnvironment>|<herdrEnvReady>
+
+where i indexes HERDR_ENV, j HERDR_BIN_PATH and k HERDR_PANE_ID (the argument order of
+`herdr_env_ready`). The TypeScript field is `null`, or `obj:<P|?>:<B|?>` with P when the
+returned paneId is the HERDR_PANE_ID given and B when the returned bin is the HERDR_BIN_PATH
+given. Unset is passed to the AILANG field as "" (P1.1).
+-/
+
+def alphabet : List (Option Str) := alphabetS.map (·.map String.toList)
+
+def tsField (e b p : Option Str) : String :=
+  match readHerdrEnvironment e b p with
+  | none => "null"
+  | some r =>
+    s!"obj:{if some r.paneId = p then "P" else "?"}:{if some r.bin = b then "B" else "?"}"
+
+#eval show IO Unit from do
+  let a := alphabet.toArray
+  for i in List.range a.size do
+    for j in List.range a.size do
+      for k in List.range a.size do
+        let e := a[i]!
+        let b := a[j]!
+        let p := a[k]!
+        IO.println s!"{i},{j},{k}|{tsField e b p}|{herdrEnvReady (e.getD []) (b.getD []) (p.getD [])}"

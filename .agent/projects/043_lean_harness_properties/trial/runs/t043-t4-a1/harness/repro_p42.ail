@@ -1,0 +1,27 @@
+-- repro_p42.ail -- A1-T4-2. P4.2 on the REAL functions, at a base that is a real chain value.
+--   b = chain_digest_over(chain_empty_base(), [system "you are motoko"]), ms = [user "list the files"]
+-- Prints DEFECT and exits 1 when length(chain_digests_over(b, ms)) != length(ms) or its last
+-- element != chain_digest_over(b, ms); prints OK and exits 0 otherwise.
+module repro_p42
+
+import std/io (println, exit)
+import std/ai (Message)
+import std/list as List (length, last_or)
+import std/string as Str (join, intToStr)
+import src/core/journal (chain_digest_over, chain_digests_over, chain_empty_base)
+
+pure func sys() -> Message { { role: "system", content: "you are motoko", tool_calls: [], tool_call_id: "", images: [] } }
+pure func usr() -> Message { { role: "user", content: "list the files", tool_calls: [], tool_call_id: "", images: [] } }
+
+export func main() -> () ! {IO} {
+  let b = chain_digest_over(chain_empty_base(), [sys()]);
+  let ms = [usr()];
+  let ds = chain_digests_over(b, ms);
+  let d = chain_digest_over(b, ms);
+  println("b                       = ${b}");
+  println("chain_digests_over(b, ms) = [${join(", ", ds)}]  (length ${intToStr(List.length(ds))}, |ms| = ${intToStr(List.length(ms))})");
+  println("chain_digest_over(b, ms)  = ${d}");
+  println("chain_digests_over(chain_empty_base(), ms) = [${join(", ", chain_digests_over(chain_empty_base(), ms))}]");
+  if List.length(ds) == List.length(ms) && last_or(ds, "") == d then println("OK: P4.2 holds on this input")
+  else { println("DEFECT: P4.2 violated"); exit(1) }
+}

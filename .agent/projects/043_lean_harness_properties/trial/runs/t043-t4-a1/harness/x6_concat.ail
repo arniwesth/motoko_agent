@@ -1,0 +1,29 @@
+-- x6_concat.ail -- X-6 (exploratory). chain_digest_after(previous, m) hashes previous ++ frame(m)
+-- with no separator, so (previous, m) |-> digest is injective only while every `previous` has one
+-- fixed length. Every base in the tree is a 71-character "sha256:<hex>" value, so this is an
+-- observation about the function's domain, not a reachable collision. Exits 1 if the collision
+-- below holds (it is constructed, not searched).
+--   m1 = user, tool_call_id V = "m{role:4:user;content:0:;tool_call_id:0:"
+--   m2 = user, everything empty
+-- frame(m1) = P ++ frame(m2), with P = "m{role:4:user;content:0:;tool_call_id:<|V|>:"
+-- so chain_digest_after(b, m1) == chain_digest_after(b ++ P, m2).
+module x6_concat
+
+import std/io (println, exit)
+import std/ai (Message)
+import std/string as Str (intToStr, length)
+import src/core/journal (chain_digest_after, chain_empty_base)
+
+export func main() -> () ! {IO} {
+  let v = "m{role:4:user;content:0:;tool_call_id:0:";
+  let m1: Message = { role: "user", content: "", tool_calls: [], tool_call_id: v, images: [] };
+  let m2: Message = { role: "user", content: "", tool_calls: [], tool_call_id: "", images: [] };
+  let b = chain_empty_base();
+  let p = "m{role:4:user;content:0:;tool_call_id:${intToStr(Str.length(v))}:";
+  let d1 = chain_digest_after(b, m1);
+  let d2 = chain_digest_after("${b}${p}", m2);
+  println("chain_digest_after(b, m1)      = ${d1}");
+  println("chain_digest_after(b ++ P, m2) = ${d2}");
+  if d1 == d2 then { println("COLLISION: distinct (previous, message) pairs share a digest"); exit(1) }
+  else println("no collision")
+}

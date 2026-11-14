@@ -1,0 +1,89 @@
+cases: 1369869
+  G1: 960856 cases, P2.1 disagree 24678, P2.2 disagree 526162
+  G2: 29928 cases, P2.1 disagree 1130, P2.2 disagree 14330
+  G3: 378758 cases, P2.1 disagree 120, P2.2 disagree 215637
+  G4: 327 cases, P2.1 disagree 65, P2.2 disagree 95
+P2.1 (gone) disagreements: 25993
+P2.2 (code) disagreements: 756224 (733738 of them with gone agreeing)
+P2.1 by class:
+  ts-suffix-not_found: 15627
+      exit=1 stderr="{\"error\":{\"code\":\"_not_found\"}}" | ts: "_not_found" gone=true | ail: "_not_found" gone=false
+      exit=3 stderr="{\"error\":{\"code\":\"_not_found\"}}" | ts: "_not_found" gone=true | ail: "_not_found" gone=false
+      exit=1 stderr="{\"error\":{\"code\":\"_not_found\"}} " | ts: "_not_found" gone=true | ail: "_not_found" gone=false
+      exit=3 stderr="{\"error\":{\"code\":\"_not_found\"}} " | ts: "_not_found" gone=true | ail: "_not_found" gone=false
+  ail-decode-lenient(ts-rejects): 5730
+      exit=1 stderr="{\"error\":{\"code\":\"agent_not_found\"}}x" | ts: "herdr_cli_rejected" gone=false | ail: "agent_not_found" gone=true
+      exit=3 stderr="{\"error\":{\"code\":\"agent_not_found\"}}x" | ts: "herdr_cli_rejected" gone=false | ail: "agent_not_found" gone=true
+      exit=1 stderr="{\"error\":{\"code\":\"agent_not_found\"}}}" | ts: "herdr_cli_rejected" gone=false | ail: "agent_not_found" gone=true
+      exit=3 stderr="{\"error\":{\"code\":\"agent_not_found\"}}}" | ts: "herdr_cli_rejected" gone=false | ail: "agent_not_found" gone=true
+  negative-exit: 2232
+      exit=-1 stderr="{\"error\":{\"code\":\"agent_not_found\"}}" | ts: "" gone=false | ail: "agent_not_found" gone=true
+      exit=-1 stderr="{\"error\":{\"code\":\"agent_not_found\"}}x" | ts: "" gone=false | ail: "agent_not_found" gone=true
+      exit=-1 stderr="{\"error\":{\"code\":\"agent_not_found\"}}}" | ts: "" gone=false | ail: "agent_not_found" gone=true
+      exit=-1 stderr="{\"error\":{\"code\":\"agent_not_found\"}}," | ts: "" gone=false | ail: "agent_not_found" gone=true
+  ts-trims-non-json-whitespace: 1277
+      exit=1 stderr="﻿{ \"error\": {\"code\":\"agent_not_found\"} }" | ts: "agent_not_found" gone=true | ail: "herdr_cli_rejected" gone=false
+      exit=3 stderr="﻿{ \"error\": {\"code\":\"agent_not_found\"} }" | ts: "agent_not_found" gone=true | ail: "herdr_cli_rejected" gone=false
+      exit=1 stderr=" { \"error\": {\"code\":\"agent_not_found\"} }" | ts: "agent_not_found" gone=true | ail: "herdr_cli_rejected" gone=false
+      exit=3 stderr=" { \"error\": {\"code\":\"agent_not_found\"} }" | ts: "agent_not_found" gone=true | ail: "herdr_cli_rejected" gone=false
+  ail-error-substring-gate(ts-parses): 644
+      exit=1 stderr="{ \"error\": {\"code\":\"agent_not_found\"} }" | ts: "agent_not_found" gone=true | ail: "herdr_cli_rejected" gone=false
+      exit=3 stderr="{ \"error\": {\"code\":\"agent_not_found\"} }" | ts: "agent_not_found" gone=true | ail: "herdr_cli_rejected" gone=false
+      exit=124 stderr="{ \"error\": {\"code\":\"agent_not_found\"} }" | ts: "agent_not_found" gone=true | ail: "herdr_cli_rejected" gone=false
+      exit=137 stderr="{ \"error\": {\"code\":\"agent_not_found\"} }" | ts: "agent_not_found" gone=true | ail: "herdr_cli_rejected" gone=false
+  duplicate-keys: 380
+      exit=1 stderr="{\"error\":{\"code\":\"timeout\",\"code\":\"agent_not_found\"}}" | ts: "agent_not_found" gone=true | ail: "timeout" gone=false
+      exit=3 stderr="{\"error\":{\"code\":\"timeout\",\"code\":\"agent_not_found\"}}" | ts: "agent_not_found" gone=true | ail: "timeout" gone=false
+      exit=1 stderr="{\"error\":{\"code\":\"agent_not_found\",\"code\":\"timeout\"}}" | ts: "timeout" gone=false | ail: "agent_not_found" gone=true
+      exit=3 stderr="{\"error\":{\"code\":\"agent_not_found\",\"code\":\"timeout\"}}" | ts: "timeout" gone=false | ail: "agent_not_found" gone=true
+  ail-nested-herdr-gate: 80
+      exit=1 stderr="{\"error\":{\"code\":\"agent_not_found\",\"message\":\"nested herdr\"}}" | ts: "agent_not_found" gone=true | ail: "nested_herdr" gone=false
+      exit=3 stderr="{\"error\":{\"code\":\"agent_not_found\",\"message\":\"nested herdr\"}}" | ts: "agent_not_found" gone=true | ail: "nested_herdr" gone=false
+      exit=1 stderr="{\"error\" :{\"code\":\"agent_not_found\",\"message\":\"nested herdr\"}}" | ts: "agent_not_found" gone=true | ail: "nested_herdr" gone=false
+      exit=3 stderr="{\"error\" :{\"code\":\"agent_not_found\",\"message\":\"nested herdr\"}}" | ts: "agent_not_found" gone=true | ail: "nested_herdr" gone=false
+  other: 23
+      exit=1 stderr="{\"error\":{\"code\":\"agent_not_found\",\"n\":1e999}}" | ts: "agent_not_found" gone=true | ail: "herdr_json_undecodable" gone=false
+      exit=3 stderr="{\"error\":{\"code\":\"agent_not_found\",\"n\":1e999}}" | ts: "agent_not_found" gone=true | ail: "herdr_json_undecodable" gone=false
+      exit=124 stderr="{\"error\":{\"code\":\"agent_not_found\",\"n\":1e999}}" | ts: "agent_not_found" gone=true | ail: "herdr_json_undecodable" gone=false
+      exit=137 stderr="{\"error\":{\"code\":\"agent_not_found\",\"n\":1e999}}" | ts: "agent_not_found" gone=true | ail: "herdr_json_undecodable" gone=false
+P2.2-only (gone agrees, code differs) by class:
+  error-substring-but-not-json(ail-undecodable): 207494
+      exit=1 stderr="{\"error\"" | ts: "herdr_cli_rejected" gone=false | ail: "herdr_json_undecodable" gone=false
+      exit=3 stderr="{\"error\"" | ts: "herdr_cli_rejected" gone=false | ail: "herdr_json_undecodable" gone=false
+      exit=1 stderr="{\"error\":" | ts: "herdr_cli_rejected" gone=false | ail: "herdr_json_undecodable" gone=false
+      exit=3 stderr="{\"error\":" | ts: "herdr_cli_rejected" gone=false | ail: "herdr_json_undecodable" gone=false
+  negative-exit: 190710
+      exit=-1 stderr=" " | ts: "" gone=false | ail: "herdr_cli_rejected" gone=false
+      exit=-1 stderr="1" | ts: "" gone=false | ail: "herdr_cli_rejected" gone=false
+      exit=-1 stderr="﻿" | ts: "" gone=false | ail: "herdr_cli_rejected" gone=false
+      exit=-1 stderr=":" | ts: "" gone=false | ail: "herdr_cli_rejected" gone=false
+  ts-trims-non-json-whitespace: 154202
+      exit=3 stderr="0 " | ts: "herdr_json_undecodable" gone=false | ail: "herdr_cli_rejected" gone=false
+      exit=3 stderr=" 0" | ts: "herdr_json_undecodable" gone=false | ail: "herdr_cli_rejected" gone=false
+      exit=1 stderr="0﻿" | ts: "herdr_json_undecodable" gone=false | ail: "herdr_cli_rejected" gone=false
+      exit=1 stderr="1﻿" | ts: "herdr_json_undecodable" gone=false | ail: "herdr_cli_rejected" gone=false
+  ail-decode-lenient(ts-rejects): 109029
+      exit=1 stderr="{\"error\":{\"code\":\"id\"}}}" | ts: "herdr_cli_rejected" gone=false | ail: "id" gone=false
+      exit=3 stderr="{\"error\":{\"code\":\n\"id\"}}}" | ts: "herdr_cli_rejected" gone=false | ail: "id" gone=false
+      exit=1 stderr="{\"error\":{\"code\":\"error\"}}}" | ts: "herdr_cli_rejected" gone=false | ail: "error" gone=false
+      exit=3 stderr="{\"error\":{\"code\":\"error\"}\t}}" | ts: "herdr_cli_rejected" gone=false | ail: "error" gone=false
+  ail-nested-herdr-gate: 56423
+      exit=3 stderr="nested herdr" | ts: "herdr_cli_rejected" gone=false | ail: "nested_herdr" gone=false
+      exit=1 stderr="nested herdr" | ts: "herdr_cli_rejected" gone=false | ail: "nested_herdr" gone=false
+      exit=1 stderr="}nested herdr" | ts: "herdr_cli_rejected" gone=false | ail: "nested_herdr" gone=false
+      exit=3 stderr=" nested herdr" | ts: "herdr_cli_rejected" gone=false | ail: "nested_herdr" gone=false
+  ail-error-substring-gate(ts-parses): 10125
+      exit=1 stderr="1" | ts: "herdr_json_undecodable" gone=false | ail: "herdr_cli_rejected" gone=false
+      exit=3 stderr="1" | ts: "herdr_json_undecodable" gone=false | ail: "herdr_cli_rejected" gone=false
+      exit=3 stderr="0" | ts: "herdr_json_undecodable" gone=false | ail: "herdr_cli_rejected" gone=false
+      exit=1 stderr="0" | ts: "herdr_json_undecodable" gone=false | ail: "herdr_cli_rejected" gone=false
+  duplicate-keys: 5750
+      exit=1 stderr="{\"error\":{\"code\":\"timeout\",\"code\":\"not_found\"}}" | ts: "not_found" gone=false | ail: "timeout" gone=false
+      exit=3 stderr="{\"error\":{\"code\":\"timeout\",\"code\":\"not_found\"}}" | ts: "not_found" gone=false | ail: "timeout" gone=false
+      exit=1 stderr="{\"error\":{\"code\":\"not_found\",\"code\":\"timeout\"}}" | ts: "timeout" gone=false | ail: "not_found" gone=false
+      exit=3 stderr="{\"error\":{\"code\":\"not_found\",\"code\":\"timeout\"}}" | ts: "timeout" gone=false | ail: "not_found" gone=false
+  empty-stderr: 5
+      exit=1 stderr="" | ts: "herdr_cli_rejected" gone=false | ail: "herdr_failed_silently" gone=false
+      exit=3 stderr="" | ts: "herdr_cli_rejected" gone=false | ail: "herdr_failed_silently" gone=false
+      exit=124 stderr="" | ts: "herdr_cli_rejected" gone=false | ail: "herdr_failed_silently" gone=false
+      exit=137 stderr="" | ts: "herdr_cli_rejected" gone=false | ail: "herdr_failed_silently" gone=false

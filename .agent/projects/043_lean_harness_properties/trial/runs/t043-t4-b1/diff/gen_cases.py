@@ -1,0 +1,212 @@
+#!/usr/bin/env python3
+"""gen_cases.py SEED N OUTDIR — the shared inputs of the differential test.
+
+Writes, from one seeded random draw, the SAME cases twice:
+  OUTDIR/cases.ail         the AILANG half: the REAL journal.ail functions over the cases
+  OUTDIR/Cases.lean.tail   the Lean half: the model (ChainModel.lean) over the same cases
+
+Each case is (base, messages). Both halves print, per case i:
+  i|cdb|<chain_digest_base(ms)>
+  i|over|<chain_digest_over(b, ms)>
+  i|digests|<length>|<chain_digests_over(b, ms), joined with ",">
+  i|json|<encode(chain_digests_json(chain_digests_over(b, ms)))>
+and once, first:  E|<chain_empty_base()>
+
+Bases: "E" = chain_empty_base(), "B" = chain_digest_base(ms) (the shape `history_replaced`
+re-bases to), or a literal string. Inputs are aimed at the boundaries the frame has:
+multi-byte text (its length prefix), `make[N]` (digest_content), frame punctuation, quotes,
+backslashes, newlines, empty fields, several tool calls and images.
+`$` is left out: it would be read as interpolation by AILANG's string literal syntax.
+"""
+import json
+import unicodedata
+import random
+import sys
+
+ROLES = ["system", "user", "assistant", "tool", "", "é"]
+TEXT = [
+    "", "hi", "list the files", "you are motoko", "ok",
+    "make[1]", "make[20] and make[2]", "make[21]", "make[0]", "make[1make[2]]", "make[12]make[3]",
+    "é", "日本語", "😀", "á", "x:3:y;", "m{role:4:user;}", "}m{", "im-end;", "tc-end;",
+    "line\nbreak", "tab\there", "\"quoted\"", "back\\slash", "sha256:", "{}", "[\"a\"]",
+    "ü:2:ü;", "𝔘𝔫𝔦", " nbsp",
+]
+IDS = ["", "a", "call_1", "é", "😀"]
+NAMES = ["bash", "read_file", "", "日本"]
+ARGS = ["{}", "{\"a\":1}", "", "é", "make[3]"]
+SOURCES = ["", "data:image/png;base64,AAAA", "file:///tmp/a.png", "é"]
+MIMES = ["image/png", "", "image/jpeg"]
+# Strings the AILANG half BUILDS AT RUN TIME, `concat([a, b])`, so that no literal contains the
+# combining sequence: real histories arrive by JSON decode, not by literal.
+SPLIT = [("a", "\u0301"), ("e", "\u0301x"), ("日", "本"), ("\r", "\n"), ("x", "\u200d😀")]
+LIT_BASES = ["", "x", "sha256:", "sha256:" + "0" * 64, "é😀", "m-end;", "sha256:e3b0"]
+
+
+def rand_text(r):
+    if r.random() < 0.1:
+        return Split(*r.choice(SPLIT))
+    if r.random() < 0.7:
+        return r.choice(TEXT)
+    alphabet = "ab:;{}[]m0123é日😀\n\"\\ -"
+    return "".join(r.choice(alphabet) for _ in range(r.randint(0, 12)))
+
+
+def rand_msg(r):
+    return {
+        "role": r.choice(ROLES),
+        "content": rand_text(r),
+        "tool_calls": [
+            {"id": r.choice(IDS), "name": r.choice(NAMES), "arguments": r.choice(ARGS)}
+            for _ in range(r.choice([0, 0, 0, 1, 1, 2]))
+        ],
+        "tool_call_id": r.choice(IDS),
+        "images": [
+            {"source": r.choice(SOURCES), "mime": r.choice(MIMES)}
+            for _ in range(r.choice([0, 0, 0, 1, 2]))
+        ],
+    }
+
+
+def fixed_cases():
+    sys_m = {"role": "system", "content": "you are motoko", "tool_calls": [], "tool_call_id": "", "images": []}
+    user = {"role": "user", "content": "list the files", "tool_calls": [], "tool_call_id": "", "images": []}
+    asst = {"role": "assistant", "content": "ok", "tool_calls": [], "tool_call_id": "", "images": []}
+    return [
+        ("E", "", []), ("E", "", [sys_m]), ("E", "", [sys_m, user]), ("E", "", [sys_m, user, asst]),
+        ("L", "", [user]), ("L", "x", [user, asst]), ("B", "", [sys_m]), ("B", "", [sys_m, user]),
+        ("B", "", []), ("L", "", []),
+    ]
+
+
+class Split(str):
+    """A string the AILANG half builds with concat; the Lean half sees the plain string."""
+    def __new__(cls, a, b):
+        o = str.__new__(cls, a + b)
+        o.parts = (a, b)
+        return o
+
+
+def q(s):
+    return json.dumps(s, ensure_ascii=False)
+
+
+def qa(s):
+    if isinstance(s, Split):
+        return f"concat([{q(s.parts[0])}, {q(s.parts[1])}])"
+    return q(s)
+
+
+def ql(s):
+    """The Lean half: what the real code holds. AILANG NFC-normalises string LITERALS
+    (a HARNESS change found by the differential test; not a model change), so a literal is normalised here and a
+    run-time `concat` is not."""
+    if isinstance(s, Split):
+        return q(str(s))
+    return q(unicodedata.normalize("NFC", s))
+
+
+def ail_msg(m):
+    tcs = "[" + ", ".join(f"tc({q(c['id'])}, {q(c['name'])}, {q(c['arguments'])})" for c in m["tool_calls"]) + "]"
+    ims = "[" + ", ".join(f"im({q(i['source'])}, {q(i['mime'])})" for i in m["images"]) + "]"
+    return f"msg({q(m['role'])}, {qa(m['content'])}, {tcs}, {q(m['tool_call_id'])}, {ims})"
+
+
+def lean_msg(m):
+    tcs = "[" + ", ".join(f"tc {ql(c['id'])} {ql(c['name'])} {ql(c['arguments'])}" for c in m["tool_calls"]) + "]"
+    ims = "[" + ", ".join(f"im {ql(i['source'])} {ql(i['mime'])}" for i in m["images"]) + "]"
+    return f"msg {ql(m['role'])} {ql(m['content'])} {tcs} {ql(m['tool_call_id'])} {ims}"
+
+
+AIL_HEAD = """-- GENERATED by gen_cases.py (seed {seed}, {n} cases). The AILANG half of the differential
+-- test: the REAL chain functions of src/core/journal.ail over the cases. Run from the tree root:
+--   ailang run --relax-modules --caps IO --entry main <this file>
+module cases
+
+import std/io (println)
+import std/ai (Message, ToolCall, ImagePart)
+import std/string as Str (join, concat, intToStr)
+import std/list as List (length)
+import std/json (encode)
+import src/core/journal (chain_digest_base, chain_digest_over, chain_digests_over, chain_digests_json, chain_empty_base)
+
+pure func tc(id: string, name: string, args: string) -> ToolCall {{ {{ id: id, name: name, arguments: args }} }}
+pure func im(s: string, m: string) -> ImagePart {{ {{ source: s, mime: m }} }}
+pure func msg(role: string, content: string, tcs: [ToolCall], tcid: string, ims: [ImagePart]) -> Message {{
+  {{ role: role, content: content, tool_calls: tcs, tool_call_id: tcid, images: ims }}
+}}
+
+pure func base_of(kind: string, lit: string, ms: [Message]) -> string {{
+  if kind == "E" then chain_empty_base() else if kind == "B" then chain_digest_base(ms) else lit
+}}
+
+func run_case(i: int, kind: string, lit: string, ms: [Message]) -> () ! {{IO}} {{
+  let b = base_of(kind, lit, ms);
+  let ds = chain_digests_over(b, ms);
+  let id = intToStr(i);
+  println(concat([id, "|cdb|", chain_digest_base(ms)]));
+  println(concat([id, "|over|", chain_digest_over(b, ms)]));
+  println(concat([id, "|digests|", intToStr(List.length(ds)), "|", join(",", ds)]));
+  println(concat([id, "|json|", encode(chain_digests_json(ds))]))
+}}
+
+export func main() -> () ! {{IO}} {{
+  println(concat(["E|", chain_empty_base()]));
+"""
+
+LEAN_HEAD = """/-
+GENERATED by gen_cases.py (seed {seed}, {n} cases). The Lean half of the differential test:
+appended to ChainModel.lean and Sha256.lean.tail; prints the same lines as cases.ail.
+-/
+
+def tc (i n a : String) : ToolCall := ⟨lit i, lit n, lit a⟩
+def im (s m : String) : ImagePart := ⟨lit s, lit m⟩
+def msg (r c : String) (tcs : List ToolCall) (tcid : String) (ims : List ImagePart) : Message :=
+  ⟨lit r, lit c, tcs, lit tcid, ims⟩
+
+def baseOf (kind : String) (l : String) (ms : List Message) : Str :=
+  if kind == "E" then chainEmptyBase sha256Hex
+  else if kind == "B" then chainDigestBase sha256Hex ms
+  else lit l
+
+def runCase (i : Nat) (kind l : String) (ms : List Message) : IO Unit := do
+  let b := baseOf kind l ms
+  let ds := chainDigestsOver sha256Hex canonicalMessageFrame b ms
+  IO.println s!"{{i}}|cdb|{{String.ofList (chainDigestBase sha256Hex ms)}}"
+  IO.println s!"{{i}}|over|{{String.ofList (chainDigestOver sha256Hex canonicalMessageFrame b ms)}}"
+  IO.println s!"{{i}}|digests|{{ds.length}}|{{String.intercalate "," (ds.map String.ofList)}}"
+  IO.println s!"{{i}}|json|{{String.ofList (chainDigestsJsonText ds)}}"
+
+#eval show IO Unit from do
+  IO.println s!"E|{{String.ofList (chainEmptyBase sha256Hex)}}"
+"""
+
+
+def main():
+    seed, n, outdir = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3]
+    r = random.Random(seed)
+    cases = list(fixed_cases())
+    while len(cases) < n:
+        kind = r.choice(["E", "E", "B", "L"])
+        lit = r.choice(LIT_BASES) if kind == "L" else ""
+        ms = [rand_msg(r) for _ in range(r.choice([0, 1, 1, 2, 2, 3, 4]))]
+        cases.append((kind, lit, ms))
+    with open(f"{outdir}/cases.tsv", "w", encoding="utf-8") as f:
+        f.write("i\tkind\tlit\tlen\n")
+        for i, (kind, lit, ms) in enumerate(cases):
+            f.write(f"{i}\t{kind}\t{json.dumps(lit, ensure_ascii=True)}\t{len(ms)}\n")
+    with open(f"{outdir}/cases.ail", "w", encoding="utf-8") as f:
+        f.write(AIL_HEAD.format(seed=seed, n=len(cases)))
+        for i, (kind, lit, ms) in enumerate(cases):
+            sep = ";" if i < len(cases) - 1 else ""
+            f.write(f"  run_case({i}, {q(kind)}, {q(lit)}, [{', '.join(ail_msg(m) for m in ms)}]){sep}\n")
+        f.write("}\n")
+    with open(f"{outdir}/Cases.lean.tail", "w", encoding="utf-8") as f:
+        f.write(LEAN_HEAD.format(seed=seed, n=len(cases)))
+        for i, (kind, lit, ms) in enumerate(cases):
+            if i > 0 and i % 40 == 0:  # one #eval per 40 cases: a longer `do` block hits maxRecDepth
+                f.write("\n#eval show IO Unit from do\n")
+            f.write(f"  runCase {i} {q(kind)} {ql(lit)} [{', '.join(lean_msg(m) for m in ms)}]\n")
+
+
+if __name__ == "__main__":
+    main()

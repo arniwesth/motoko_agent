@@ -1,0 +1,32 @@
+alphabet: 60 values, 226981 triples, seed 43
+ts:     226981 triples, sha256 2d6bed22457b56f3
+ailang: 226981 triples, sha256 2aecad9972c16792
+model:  lean took 632 s
+model:  226981 triples
+diff TS     (model vs real readHerdrEnvironment): 226981 triples, 0 mismatches
+diff AILANG (model vs real herdr_env_ready)    : 226981 triples, 0 mismatches
+    TS open, AILANG shut:  1,0,1|obj:1,0|1,0,1|false
+    TS open, AILANG shut:  1,0,2|obj:2,0|1,0,2|false
+    TS open, AILANG shut:  1,0,3|obj:3,0|1,0,3|false
+    AILANG open, TS shut:  3,1,1|null|3,1,1|true
+    AILANG open, TS shut:  3,1,2|null|3,1,2|true
+    AILANG open, TS shut:  3,1,3|null|3,1,3|true
+P1.1 on the real code: 139299 of 226981 triples disagree (59 TS-only, 139240 AILANG-only)
+axiom report: /home/motoko/trial-043/s/t043-t1-b2/out/diff/run_seed43/axioms.txt
+mutant TS     (bin === undefined -> !bin): 226981 triples, 59 mismatches
+    real 1,0,1|null   model 1,0,1|obj:1,0
+    real 1,0,2|null   model 1,0,2|obj:2,0
+    real 1,0,3|null   model 1,0,3|obj:3,0
+    real 1,0,4|null   model 1,0,4|obj:4,0
+    real 1,0,5|null   model 1,0,5|obj:5,0
+mutant AILANG (>= "1" -> == "1")      : 226981 triples, 139240 mismatches
+    real 3,1,1|false   model 3,1,1|true
+    real 3,1,2|false   model 3,1,2|true
+    real 3,1,3|false   model 3,1,3|true
+    real 3,1,4|false   model 3,1,4|true
+    real 3,1,5|false   model 3,1,5|true
+
+real	10m51.589s
+user	3m31.618s
+sys	0m1.249s
+EXIT=0

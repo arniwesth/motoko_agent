@@ -1,0 +1,7 @@
+module t2_note
+import std/io (println)
+import pkg/sunholo/motoko_ext_herdr/types (means_agent_gone, failure_code)
+export func main() -> () ! {IO} {
+  let s = "{\"\\u0065rror\":{\"code\":\"agent_not_found\"}}";
+  println("AIL escaped-key exit=1 -> ${if means_agent_gone(1, s) then "gone" else "kept"} (${failure_code(1, s)})")
+}

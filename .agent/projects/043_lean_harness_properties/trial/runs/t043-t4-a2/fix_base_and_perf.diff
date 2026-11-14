@@ -1,0 +1,8 @@
+43c43
+< import std/list as List (length, map, foldl)
+---
+> import std/list as List (length, map, foldl, mapAccumL)
+293c293
+<   List.foldl(chain_prefix_step, { last: chain_empty_base(), out: [] }, ms).out
+---
+>   match List.mapAccumL(\prev m. { let d = chain_digest_after(prev, m); (d, d) }, base, ms) { (ds, _) => ds }

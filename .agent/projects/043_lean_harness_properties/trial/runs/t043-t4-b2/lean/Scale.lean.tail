@@ -1,0 +1,11 @@
+/-
+Scale.lean.tail — appended after ChainModel.lean, FrameModel.lean, Sha256.lean and Enumerate.lean.tail (with
+that file's `#eval` removed by ../diff/run_scale.sh). The model's values for
+../diff/scale_chain.ail's long inputs: n copies of `user "hi"` (alphabet[0]) from the empty
+base, n = 1000, 4000, 16000.
+-/
+#eval show IO Unit from do
+  for n in [1000, 4000, 16000] do
+    let ms := List.replicate n alphabet[0]!
+    IO.println s!"over {n} {chainDigestOver realEnv (chainEmptyBase realEnv) ms}"
+    IO.println s!"digests {n} {(chainDigestsOver realEnv (chainEmptyBase realEnv) ms).length}"

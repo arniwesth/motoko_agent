@@ -1,0 +1,26 @@
+# s05: P2.1 witness check. Each line: tree | case | TS herdrMeansAgentGone (code) | AILANG means_agent_gone (code) | P2.1
+B0         | s05-witness exit=-1 compact-json agent_not_found   | TS gone (agent_not_found)       | AIL gone (agent_not_found)       | holds
+B0         | s06-witness exit=1 compact-json pane_not_found     | TS kept (pane_not_found)        | AIL kept (pane_not_found)        | holds
+B0         | s07-witness exit=1 spaced-json agent_not_found     | TS gone (agent_not_found)       | AIL gone (agent_not_found)       | holds
+B0         | control exit=1 compact-json agent_not_found        | TS gone (agent_not_found)       | AIL gone (agent_not_found)       | holds
+B0         | control exit=1 compact-json server_not_running     | TS kept (server_not_running)    | AIL kept (server_not_running)    | holds
+only-s05   | s05-witness exit=-1 compact-json agent_not_found   | TS kept ()                      | AIL gone (agent_not_found)       | VIOLATED
+only-s05   | s06-witness exit=1 compact-json pane_not_found     | TS kept (pane_not_found)        | AIL kept (pane_not_found)        | holds
+only-s05   | s07-witness exit=1 spaced-json agent_not_found     | TS gone (agent_not_found)       | AIL gone (agent_not_found)       | holds
+only-s05   | control exit=1 compact-json agent_not_found        | TS gone (agent_not_found)       | AIL gone (agent_not_found)       | holds
+only-s05   | control exit=1 compact-json server_not_running     | TS kept (server_not_running)    | AIL kept (server_not_running)    | holds
+T          | s05-witness exit=-1 compact-json agent_not_found   | TS kept ()                      | AIL gone (agent_not_found)       | VIOLATED
+T          | s06-witness exit=1 compact-json pane_not_found     | TS gone (pane_not_found)        | AIL kept (pane_not_found)        | VIOLATED
+T          | s07-witness exit=1 spaced-json agent_not_found     | TS gone (agent_not_found)       | AIL kept (herdr_cli_rejected)    | VIOLATED
+T          | control exit=1 compact-json agent_not_found        | TS gone (agent_not_found)       | AIL gone (agent_not_found)       | holds
+T          | control exit=1 compact-json server_not_running     | TS kept (server_not_running)    | AIL kept (server_not_running)    | holds
+minus-s05  | s05-witness exit=-1 compact-json agent_not_found   | TS gone (agent_not_found)       | AIL gone (agent_not_found)       | holds
+minus-s05  | s06-witness exit=1 compact-json pane_not_found     | TS gone (pane_not_found)        | AIL kept (pane_not_found)        | VIOLATED
+minus-s05  | s07-witness exit=1 spaced-json agent_not_found     | TS gone (agent_not_found)       | AIL kept (herdr_cli_rejected)    | VIOLATED
+minus-s05  | control exit=1 compact-json agent_not_found        | TS gone (agent_not_found)       | AIL gone (agent_not_found)       | holds
+minus-s05  | control exit=1 compact-json server_not_running     | TS kept (server_not_running)    | AIL kept (server_not_running)    | holds
+
+# witness stderr byte lengths
+s05 50 bytes: {"error":{"code":"agent_not_found","message":"x"}}
+s06 49 bytes: {"error":{"code":"pane_not_found","message":"x"}}
+s07 55 bytes: { "error": {"code": "agent_not_found", "message": "x"}}

@@ -1,0 +1,25 @@
+-- p4_1.ail — reproduces bug_P4_1 (../lean/ChainModel.lean) on the REAL chain_digests_over.
+--
+-- P4.1: chain_digests_over(b, xs ++ ys) == chain_digests_over(b, xs) ++
+--       chain_digests_over(chain_digest_over(b, xs), ys)
+-- Witness: b = chain_empty_base() (the base every caller passes), xs = ys = [user "hi"].
+-- Prints "P4.1 VIOLATED" or "P4.1 holds" and both sides. Run by p4_1.sh.
+module p4_1
+
+import std/io (println)
+import std/ai (Message)
+import std/string as Str (join, concat)
+import src/core/journal (chain_digest_over, chain_digests_over, chain_empty_base)
+
+pure func hi() -> Message { { role: "user", content: "hi", tool_calls: [], tool_call_id: "", images: [] } }
+
+export func main() -> () ! {IO} {
+  let b = chain_empty_base();
+  let xs = [hi()];
+  let ys = [hi()];
+  let lhs = chain_digests_over(b, xs ++ ys);
+  let rhs = chain_digests_over(b, xs) ++ chain_digests_over(chain_digest_over(b, xs), ys);
+  println(concat(["lhs: ", join(",", lhs)]));
+  println(concat(["rhs: ", join(",", rhs)]));
+  if lhs == rhs then println("P4.1 holds") else println("P4.1 VIOLATED")
+}

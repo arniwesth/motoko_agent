@@ -1,0 +1,231 @@
+-- enumerate_chain.ail — exhaustive check of T4 (src/core/journal.ail:242-300) on the REAL code.
+--
+-- Every list of length 0..MAXLEN over an alphabet of ALPHA messages, at each of BASES bases,
+-- is run through the real `chain_digests_over` / `chain_digest_over` (and the evaluator's
+-- pinned twin `eval_chain_digest_over`), and these executable statements are checked:
+--
+--   P4.1      for every split k of ms:  chain_digests_over(b, ms)
+--               == chain_digests_over(b, take(k,ms)) ++ chain_digests_over(chain_digest_over(b, take(k,ms)), drop(k,ms))
+--   P4.2-len  length(chain_digests_over(b, ms)) == length(ms)
+--   P4.2-last ms != [] ==> last(chain_digests_over(b, ms)) == chain_digest_over(b, ms)
+--   X-2       the prefix chain: element i == chain_digest_over(b, take(i+1, ms)) for every i
+--   X-3       twin: chain_digest_over(b, ms) == eval_chain_digest_over(b, ms)  (src/eval/journal/digests.ail)
+--   X-4       fold split: chain_digest_over(b, ms) == chain_digest_over(chain_digest_over(b, take k), drop k)
+--
+-- Run from the tree root (the package dir under out/ symlinks the tree's src/ and packages/):
+--
+--   [T4_ALPHA=k T4_MAXLEN=n] ailang run --relax-modules --caps IO,Env --chdir ../out/pkg --entry main t4/enumerate_chain.ail
+--
+-- Size: T4_ALPHA / T4_MAXLEN (defaults 8 / 4); `main` prints a summary per property
+-- and up to 3 witnesses each, and exits 1 if any property fails.
+
+module enumerate_chain
+
+import std/io (println, exit)
+import std/env (getEnvOr)
+import std/ai (Message, ToolCall, ImagePart)
+import std/string as Str (join, concat, intToStr, repeat, stringToInt)
+import std/list as List (length, map, foldl, take, drop, range, flatMap, last, nth)
+import std/option (Option, Some, None)
+import src/core/journal (chain_digest_over, chain_digests_over, chain_empty_base, chain_digest_after)
+import src/eval/journal/digests (eval_chain_digest_over)
+
+-- ---------------------------------------------------------------------------
+-- The alphabet: chosen to hit every field the chain frame covers.
+-- ---------------------------------------------------------------------------
+
+pure func msg(role: string, content: string, calls: [ToolCall], tcid: string, images: [ImagePart]) -> Message {
+  { role: role, content: content, tool_calls: calls, tool_call_id: tcid, images: images }
+}
+
+pure func alphabet() -> [Message] {
+  [ msg("user", "", [], "", []),
+    msg("user", "a", [], "", []),
+    msg("assistant", "", [{ id: "c1", name: "bash", arguments: "{}" }], "", []),
+    msg("tool", "ok", [], "c1", []),
+    msg("system", "you are motoko", [], "", []),
+    msg("user", "é😀", [], "", [{ source: "data:image/png;base64,AAAA", mime: "image/png" }]),
+    msg("user", "m{role:4:user;content:1:a;tool_call_id:0:;tool_calls_len:1:0;tc-end;im-end;}", [], "", []),
+    msg("assistant", "a", [], "", []) ]
+}
+
+-- Size: T4_ALPHA (1..8, default 8) messages from the front of the alphabet, lists of length
+-- 0..T4_MAXLEN (default 4). Read in `main` (needs --caps IO,Env when set; defaults otherwise).
+pure func int_or(s: string, d: int) -> int { match stringToInt(s) { Some(n) => n, None => d } }
+
+pure func bases() -> [string] {
+  [ chain_empty_base(),
+    "",
+    "x",
+    "sha256:${repeat("0", 64)}",
+    chain_digest_over(chain_empty_base(), [msg("user", "a", [], "", [])]),
+    "ü;m{" ]
+}
+
+pure func base_name(i: int) -> string {
+  match i {
+    0 => "chain_empty_base()",
+    1 => "\"\"",
+    2 => "\"x\"",
+    3 => "\"sha256:0{64}\"",
+    4 => "chain_digest_over(chain_empty_base(),[user a])",
+    _ => "\"ü;m{\""
+  }
+}
+
+pure func at(xs: [Message], i: int) -> Message {
+  match nth(xs, i) { Some(m) => m, None => msg("?", "", [], "", []) }
+}
+
+pure func messages_of(ix: [int]) -> [Message] {
+  let a = alphabet();
+  map(\i. at(a, i), ix)
+}
+
+-- All index sequences of exactly length n over 0..k-1.
+pure func seqs(n: int, k: int) -> [[int]] {
+  if n == 0 then [[]]
+  else flatMap(\s. map(\i. s ++ [i], range(0, k)), seqs(n - 1, k))
+}
+
+pure func all_seqs(maxn: int, k: int) -> [[int]] {
+  flatMap(\n. seqs(n, k), range(0, maxn + 1))
+}
+
+-- ---------------------------------------------------------------------------
+-- Executable statements.
+-- ---------------------------------------------------------------------------
+
+pure func str_list_eq(xs: [string], ys: [string]) -> bool {
+  match xs {
+    [] => (match ys { [] => true, _ => false }),
+    x :: xr => (match ys { [] => false, y :: yr => x == y && str_list_eq(xr, yr) })
+  }
+}
+
+pure func p41_at(b: string, ms: [Message], k: int) -> bool {
+  let xs = take(k, ms);
+  let ys = drop(k, ms);
+  str_list_eq(chain_digests_over(b, ms), chain_digests_over(b, xs) ++ chain_digests_over(chain_digest_over(b, xs), ys))
+}
+
+pure func p41(b: string, ms: [Message]) -> bool {
+  foldl(\ok k. ok && p41_at(b, ms, k), true, range(0, length(ms) + 1))
+}
+
+pure func p42_len(b: string, ms: [Message]) -> bool {
+  length(chain_digests_over(b, ms)) == length(ms)
+}
+
+pure func p42_last(b: string, ms: [Message]) -> bool {
+  match ms {
+    [] => true,
+    _ => (match last(chain_digests_over(b, ms)) {
+      Some(d) => d == chain_digest_over(b, ms),
+      None => false
+    })
+  }
+}
+
+pure func x_prefix(b: string, ms: [Message]) -> bool {
+  let ds = chain_digests_over(b, ms);
+  length(ds) == length(ms) &&
+    foldl(\ok i. ok && (match nth(ds, i) { Some(d) => d == chain_digest_over(b, take(i + 1, ms)), None => false }),
+          true, range(0, length(ms)))
+}
+
+pure func x_twin(b: string, ms: [Message]) -> bool {
+  chain_digest_over(b, ms) == eval_chain_digest_over(b, ms)
+}
+
+pure func x_fold(b: string, ms: [Message]) -> bool {
+  foldl(\ok k. ok && chain_digest_over(b, ms) == chain_digest_over(chain_digest_over(b, take(k, ms)), drop(k, ms)),
+        true, range(0, length(ms) + 1))
+}
+
+-- First failing split for P4.1, for the witness line.
+pure func p41_first_bad(b: string, ms: [Message]) -> int {
+  foldl(\acc k. if acc >= 0 then acc else if p41_at(b, ms, k) then -1 else k, -1, range(0, length(ms) + 1))
+}
+
+-- ---------------------------------------------------------------------------
+-- The run.
+-- ---------------------------------------------------------------------------
+
+type Tally = {
+  cases: int,
+  f41: int, f42len: int, f42last: int, fprefix: int, ftwin: int, ffold: int,
+  w41: [string], w42len: [string], w42last: [string], wprefix: [string], wtwin: [string], wfold: [string]
+}
+
+pure func ints_text(xs: [int]) -> string { join(",", map(\x. intToStr(x), xs)) }
+
+pure func witness(bi: int, ix: [int], extra: string) -> string {
+  "base=${base_name(bi)} ms=[${ints_text(ix)}]${extra}"
+}
+
+pure func keep(ws: [string], w: string) -> [string] {
+  if length(ws) < 3 then ws ++ [w] else ws
+}
+
+pure func step(t: Tally, c: (int, [int])) -> Tally {
+  match c {
+    (bi, ix) => {
+      let b = match List.nth(bases(), bi) { Some(s) => s, None => "" };
+      let ms = messages_of(ix);
+      let ok41 = p41(b, ms);
+      let ok42l = p42_len(b, ms);
+      let ok42t = p42_last(b, ms);
+      let okp = x_prefix(b, ms);
+      let okt = x_twin(b, ms);
+      let okf = x_fold(b, ms);
+      { cases: t.cases + 1,
+        f41: if ok41 then t.f41 else t.f41 + 1,
+        f42len: if ok42l then t.f42len else t.f42len + 1,
+        f42last: if ok42t then t.f42last else t.f42last + 1,
+        fprefix: if okp then t.fprefix else t.fprefix + 1,
+        ftwin: if okt then t.ftwin else t.ftwin + 1,
+        ffold: if okf then t.ffold else t.ffold + 1,
+        w41: if ok41 then t.w41 else keep(t.w41, witness(bi, ix, " first bad split k=${intToStr(p41_first_bad(b, ms))}")),
+        w42len: if ok42l then t.w42len else keep(t.w42len, witness(bi, ix, "")),
+        w42last: if ok42t then t.w42last else keep(t.w42last, witness(bi, ix, "")),
+        wprefix: if okp then t.wprefix else keep(t.wprefix, witness(bi, ix, "")),
+        wtwin: if okt then t.wtwin else keep(t.wtwin, witness(bi, ix, "")),
+        wfold: if okf then t.wfold else keep(t.wfold, witness(bi, ix, "")) }
+    }
+  }
+}
+
+pure func cases(maxn: int, k: int) -> [(int, [int])] {
+  let ss = all_seqs(maxn, k);
+  flatMap(\bi. map(\s. (bi, s), ss), range(0, length(bases())))
+}
+
+func report(name: string, fails: int, ws: [string]) -> () ! {IO} {
+  println("${name}: ${intToStr(fails)} failing case(s)");
+  let _ = map(\w. w, ws);
+  printWs(ws)
+}
+
+func printWs(ws: [string]) -> () ! {IO} {
+  match ws {
+    [] => (),
+    w :: rest => { println("    witness: ${w}"); printWs(rest) }
+  }
+}
+
+export func main() -> () ! {IO, Env} {
+  let k = int_or(getEnvOr("T4_ALPHA", "8"), 8);
+  let maxn = int_or(getEnvOr("T4_MAXLEN", "4"), 4);
+  let t0 = { cases: 0, f41: 0, f42len: 0, f42last: 0, fprefix: 0, ftwin: 0, ffold: 0,
+             w41: [], w42len: [], w42last: [], wprefix: [], wtwin: [], wfold: [] };
+  let t = foldl(step, t0, cases(maxn, k));
+  println("enumerate_chain: alphabet=${intToStr(k)} max_len=${intToStr(maxn)} bases=${intToStr(length(bases()))} cases=${intToStr(t.cases)}");
+  report("P4.1  (split law, every k)", t.f41, t.w41);
+  report("P4.2  length", t.f42len, t.w42len);
+  report("P4.2  last == chain_digest_over", t.f42last, t.w42last);
+  report("X-2   prefix chain (every element)", t.fprefix, t.wprefix);
+  report("X-3   twin eval_chain_digest_over", t.ftwin, t.wtwin);
+  report("X-4   chain_digest_over fold split", t.ffold, t.wfold);
+  if t.f41 + t.f42len + t.f42last + t.fprefix + t.ftwin + t.ffold > 0 then exit(1) else ()
+}

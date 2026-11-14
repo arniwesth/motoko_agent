@@ -1,0 +1,28 @@
+-- x2.ail — X-2, an OBSERVATION (not a reported defect): `chain_digest_after` hashes
+-- `previous ++ frame` with no separator, so for a `previous` that is not a fixed-length digest
+-- two different (previous, message) pairs give the same chain value. Witness, proved in
+-- ../lean/FrameModel.lean (`obs_X2_after_collides`, for every hash):
+--   chain_digest_after("", m1) == chain_digest_after("m{role:4:user;content:24:", m2)
+-- with m1 = user "m{role:4:user;content:0:" and m2 = user "". Every base the code passes is a
+-- 71-character `sha256:` digest, for which the concatenation is injective, so this needs a
+-- caller-supplied base of another shape. Prints "X-2 collide" or "X-2 distinct". Run by x2.sh.
+module x2
+
+import std/io (println)
+import std/ai (Message)
+import std/string as Str (concat)
+import src/core/journal (chain_digest_after, chain_digest_over)
+
+pure func m1() -> Message { { role: "user", content: "m{role:4:user;content:0:", tool_calls: [], tool_call_id: "", images: [] } }
+pure func m2() -> Message { { role: "user", content: "", tool_calls: [], tool_call_id: "", images: [] } }
+
+export func main() -> () ! {IO} {
+  let a = chain_digest_after("", m1());
+  let b = chain_digest_after("m{role:4:user;content:24:", m2());
+  let oa = chain_digest_over("", [m1()]);
+  let ob = chain_digest_over("m{role:4:user;content:24:", [m2()]);
+  println(concat(["chain_digest_after(\"\", m1)                          = ", a]));
+  println(concat(["chain_digest_after(\"m{role:4:user;content:24:\", m2) = ", b]));
+  println(concat(["chain_digest_over, same inputs: ", oa, " / ", ob]));
+  if a == b && oa == ob then println("X-2 collide") else println("X-2 distinct")
+}

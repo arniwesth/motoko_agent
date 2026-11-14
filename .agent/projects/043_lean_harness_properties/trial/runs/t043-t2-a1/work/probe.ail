@@ -1,0 +1,17 @@
+module probe
+
+import std/io (println)
+import std/string (intToStr)
+import pkg/sunholo/motoko_ext_herdr/types (failure_code, means_agent_gone, failure_shape)
+
+func b(x: bool) -> string { if x then "true" else "false" }
+
+export func main() -> () ! {IO} {
+  println(failure_code(1, "{\"error\":{\"code\":\"agent_not_found\"}}"));
+  println(b(means_agent_gone(1, "{\"error\":{\"code\":\"agent_not_found\"}}")));
+  println(failure_code(-1, "{\"error\":{\"code\":\"agent_not_found\"}}"));
+  println(failure_code(1, "{\"error\":{\"code\":\"agent_not_found\"}}\n"));
+  println(failure_code(1, "{\"error\":{\"code\":\"agent_not_found\"}} trailing"));
+  println(failure_code(1, "{\"error\":{\"code\":\"x\"},\"error\":{\"code\":\"agent_not_found\"}}"));
+  println(failure_code(1, "{\"error\":{\"code\":\"agent\\u005fnot_found\"}}"))
+}

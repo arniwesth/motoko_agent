@@ -1,0 +1,526 @@
+-- gen_twin.ail — stage 1 of the T3 harness (P3.1, P3.2).
+--
+-- A CHILD MODEL that emits the journal-class wire events a run emits, the way
+-- `session.ail` does: the seed with its prefix chain (`chain_digests_over`),
+-- one `HistoryAppended` per message chained with `chain_digest_after` (and,
+-- for `replaces_previous`, from the chain BEFORE the replaced entry, as
+-- `c2_append_step` does), a checkpoint `HistoryReplaced` whose `digest_after`
+-- is `digest_messages(prefix ++ summary)` and after which the chain continues
+-- from it (`session.ail:3141`), the follow-up turn's user append chained from
+-- `c2_seed_digest(history)` (`session.ail:4387`), and the crash resume's
+-- `SessionResumed` + `HistorySeeded(folded history)` (`session.ail:4804`),
+-- where the folded history is the REAL fold of the journal so far.
+--
+-- For every op sequence it prints two lines (tab-separated):
+--
+--   W <id> <ops> <emittable> <single_run> <wire events as a JSON array (to_schema_v1)>
+--   T <id> <twin verdict> <dangling> <#dangling> <twin history> <spec history> <child history> <rest of state>
+--
+-- <twin verdict> is `accept` or the refusal id of
+-- fold_journal(journal_lines_of_records(h, rs), journal_leaf(...)). Histories
+-- are `encode(messages_json(..))`. <spec history> is P3.2's executable
+-- statement of rule 3 (+ rule 4's strip), computed from the RECORDS, not from
+-- any journal. <child history> is what the child model holds.
+--
+-- Env: T3_MAXLEN (exhaustive length, default 3), T3_RANDOM (number of random
+-- sequences, default 0), T3_RLEN (random sequence length, default 6),
+-- T3_ALPHA (alphabet size to use, default 13), T3_NSYS (system messages in the
+-- first seed, 1 or 2, default 1; -1 is the interactive start with rpc.ail's
+-- [system, user ""] loop history, -2 the same with an empty one), T3_OPS (dash-separated op indices, e.g. 7-9-0: emit only
+-- that one case, id 0 — the repro mode).
+
+module gen_twin
+
+import std/io (println)
+import std/env (getEnv)
+import std/ai (Message, ToolCall)
+import std/json (Json, encode, ja, jo, kv, js)
+import std/string as Str (join, concat, intToStr, stringToInt, split)
+import std/list as List (length, map, foldl)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import src/core/phase_vocab (
+  RuntimeStatusCounts, LedgerRecord, LedgerEvent, WireRecord,
+  HistorySeeded, HistoryAppended, HistoryReplaced, StateDelta, SessionStart, RunSummary,
+  SessionResumed, RunSuspended, to_schema_v1, digest_messages
+)
+import src/core/journal (
+  SessionState, Refusal, refusal_id, Boundary, BoundaryRunFinished, BoundarySuspended, BoundaryExit,
+  BoundaryOpen, BoundaryParked, boundary_id,
+  fold_journal, journal_lines_of_records, journal_leaf, harness_header, default_run_identity,
+  chain_digest_after, chain_digest_over, chain_digests_over, chain_digests_json, chain_empty_base,
+  messages_json, message_json, messages_of_json, message_of_json
+)
+
+-- ---------------------------------------------------------------------------
+-- Messages.
+-- ---------------------------------------------------------------------------
+
+pure func call(id: string) -> ToolCall { { id: id, name: "bash", arguments: "{}" } }
+pure func calls_of(ids: [string]) -> [ToolCall] { match ids { [] => [], i :: rest => call(i) :: calls_of(rest) } }
+pure func mk(role: string, content: string, ids: [string], tcid: string) -> Message {
+  { role: role, content: content, tool_calls: calls_of(ids), tool_call_id: tcid, images: [] }
+}
+
+pure func m_sys() -> Message { mk("system", "you are motoko", [], "") }
+pure func m_sys2() -> Message { mk("system", "you are motoko, probe profile", [], "") }
+pure func m_user() -> Message { mk("user", "list the files", [], "") }
+
+-- ---------------------------------------------------------------------------
+-- The child model.
+-- ---------------------------------------------------------------------------
+
+type Ch = {
+  recs: [LedgerRecord],
+  hist: [Message],
+  at: string,
+  prev: string,
+  run: int,
+  turn: int,
+  run_id: string,
+  step: int,
+  note: string
+}
+
+pure func rid(run: int, turn: int) -> string { "sess_1.r${show(run)}.${show(turn)}" }
+
+pure func cons_rec(acc: [LedgerRecord], r: LedgerRecord) -> [LedgerRecord] { r :: acc }
+pure func rev_recs(xs: [LedgerRecord]) -> [LedgerRecord] { List.foldl(cons_rec, [], xs) }
+
+pure func emit(c: Ch, e: LedgerEvent) -> Ch { { c | recs: WireRecord(e) :: c.recs } }
+
+pure func counts0() -> RuntimeStatusCounts {
+  { provider_calls_started: 1, provider_calls_completed: 1, stage_applied_total: 0,
+    stage_rejected_total: 0, compaction_ai_applied: 0 }
+}
+
+pure func delta_ev(run_id: string, step: int) -> LedgerEvent {
+  StateDelta({
+    run_id: run_id, step: step, cumulative: counts0(),
+    telemetry: { last_input_tokens: 1, last_output_tokens: 1, last_estimated_input_tokens: 1 },
+    ext_artifacts_digest: "sha256:ext", ext_artifacts: None
+  })
+}
+
+pure func summary_ev(ordinal: int) -> LedgerEvent {
+  RunSummary({
+    model: "m", motoko_commit: "abc", finish_reason: "stop", steps_executed: 1,
+    input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0,
+    cache_creation_input_tokens: 0, total_cost_usd: 0.0, total_cost_millicents: 0,
+    duration_ms: 1, error: "", cumulative: counts0(), world_ordinal: ordinal
+  })
+}
+
+pure func seed_ev(run_id: string, ms: [Message]) -> LedgerEvent {
+  HistorySeeded({
+    run_id: run_id,
+    messages: messages_json(ms),
+    digest: chain_digest_over(chain_empty_base(), ms),
+    digests: chain_digests_json(chain_digests_over(chain_empty_base(), ms))
+  })
+}
+
+pure func init_msgs(ms: [Message]) -> [Message] {
+  match ms { [] => [], [_] => [], m :: rest => m :: init_msgs(rest) }
+}
+
+pure func last_or_empty_prev(ms: [Message]) -> string {
+  -- the chain over all but the last message: the `prev` a fresh seed leaves
+  chain_digest_over(chain_empty_base(), init_msgs(ms))
+}
+
+-- A fresh seed: the run's history IS `ms`, its chain from the empty base.
+pure func seeded(c: Ch, run_id: string, ms: [Message]) -> Ch {
+  let c1 = emit({ c | run_id: run_id }, seed_ev(run_id, ms));
+  { c1 | hist: ms, at: chain_digest_over(chain_empty_base(), ms), prev: last_or_empty_prev(ms) }
+}
+
+pure func append(c: Ch, m: Message) -> Ch {
+  let d = chain_digest_after(c.at, m);
+  let c1 = emit(c, HistoryAppended({
+    run_id: c.run_id, step: c.step, message: message_json(m), replaces_previous: false, digest_after: d
+  }));
+  { c1 | hist: c.hist ++ [m], at: d, prev: c.at, step: c.step + 1 }
+}
+
+-- The hybrid batch's first entry: replaces the message the previous entry holds,
+-- chained from the entry BEFORE it (`c2_append_step`).
+pure func replace(c: Ch, m: Message) -> Ch {
+  let d = chain_digest_after(c.prev, m);
+  let c1 = emit(c, HistoryAppended({
+    run_id: c.run_id, step: c.step, message: message_json(m), replaces_previous: true, digest_after: d
+  }));
+  { c1 | hist: init_msgs(c.hist) ++ [m], at: d, step: c.step + 1 }
+}
+
+pure func take_sys(ms: [Message]) -> [Message] {
+  match ms { [] => [], m :: rest => if m.role == "system" then m :: take_sys(rest) else [] }
+}
+
+pure func drop_sys(ms: [Message]) -> [Message] {
+  match ms { [] => [], m :: rest => if m.role == "system" then drop_sys(rest) else ms }
+}
+
+-- `session.ail:3109`: messages = the summary alone, digest_after =
+-- digest_messages(cp_msgs), and the chain continues from it (`:3141`).
+pure func checkpoint(c: Ch, first_kept: Option[int]) -> Ch {
+  let summary = mk("user", "[checkpoint summary]", [], "");
+  let cp = take_sys(c.hist) ++ [summary];
+  let d = digest_messages(cp);
+  let c1 = emit(c, HistoryReplaced({
+    run_id: c.run_id, step: c.step, reason: "checkpoint", first_kept: first_kept,
+    messages: messages_json([summary]), digest_after: d
+  }));
+  let c2 = emit(c1, delta_ev(c.run_id, c.step));
+  let kept = match first_kept { None => [], Some(k) => drop_n(k, c.hist) };
+  { c2 | hist: cp ++ kept, at: d, prev: c.at }
+}
+
+-- The follow-up turn (`session.ail:4387`): the previous run's summary, the
+-- operator's message appended with the chain recomputed from the turn's
+-- history, then the next run's `session_start` and seed (arm 3 on the host).
+pure func follow_up(c: Ch) -> Ch {
+  let u = mk("user", "and now the tests", [], "");
+  let next_turn = c.turn + 1;
+  let r = rid(c.run, next_turn);
+  let c1 = emit(c, summary_ev(c.turn + c.run));
+  let base = chain_digest_over(chain_empty_base(), c.hist);
+  let d = chain_digest_after(base, u);
+  let c2 = emit(c1, HistoryAppended({
+    run_id: r, step: 0, message: message_json(u), replaces_previous: false, digest_after: d
+  }));
+  let c3 = emit({ c2 | turn: next_turn, run_id: r }, SessionStart({ task: "and now the tests", model: "m", mode: "v2", run_id: r }));
+  let c4 = seeded(c3, r, c.hist ++ [u]);
+  { c4 | step: 0 }
+}
+
+pure func twin_lines(c: Ch) -> [Json] {
+  journal_lines_of_records(harness_header(default_run_identity("sess_1"), "m"), rev_recs(c.recs))
+}
+
+-- The crash resume (`session.ail:4804`): `SessionResumed` then the seed of the
+-- FOLDED history; then the resumed run's own `session_start` and seed. The fold
+-- is the real one over the twin's journal so far; a refusal means no resume.
+pure func resume(c: Ch, switch: bool) -> Ch {
+  let lines = twin_lines(c);
+  match fold_journal(lines, journal_leaf(lines)) {
+    Err(_) => { c | note: "${c.note}[resume refused]" },
+    Ok(s) => {
+      let n = c.run + 1;
+      let r = rid(n, 0);
+      let hist = if switch then [m_sys2()] ++ drop_sys(s.history) else s.history;
+      let c1 = emit(c, SessionResumed({
+        resume_count: n, from_id: journal_leaf(lines), from_ordinal: 0,
+        profile_from: "dogfood", profile_to: if switch then "probe" else "dogfood",
+        prompt_digest_from: "sha256:p0", prompt_digest_to: if switch then "sha256:p1" else "sha256:p0",
+        forced: false
+      }));
+      let c2 = seeded({ c1 | run: n, turn: 0 }, r, hist);
+      let c3 = emit(c2, SessionStart({ task: "resume", model: "m", mode: "v2", run_id: r }));
+      let c4 = seeded(c3, r, hist);
+      { c4 | step: 0 }
+    }
+  }
+}
+
+-- ---------------------------------------------------------------------------
+-- The alphabet.
+--   0 A0  assistant, no calls        1 A1  assistant, calls [a]
+--   2 A2  assistant, calls [a, b]    3 TA  tool result for a
+--   4 TB  tool result for b          5 U   user message
+--   6 R1  replaces_previous: assistant with calls [a] (the hybrid batch head)
+--   7 CP  checkpoint (first_kept None), then a state_delta
+--   8 FU  follow-up turn (run_summary, user append, session_start, seed)
+--   9 RS  crash + resume, same profile
+--  10 PS  crash + resume, profile switch
+--  11 SU  run_suspended + run_summary
+--  12 H1  assistant, calls [a, ""] (an empty call id)
+--  13 SB  `session_start` with no `run_id` (rpc.ail's startup banner, every spawn)
+--  14 KN  checkpoint with first_kept Some(-1)       (not emitted at HEAD)
+--  15 KL  checkpoint with first_kept Some(len - 1)  (not emitted at HEAD)
+-- ---------------------------------------------------------------------------
+
+pure func op_name(i: int) -> string {
+  if i == 0 then "A0" else if i == 1 then "A1" else if i == 2 then "A2"
+  else if i == 3 then "TA" else if i == 4 then "TB" else if i == 5 then "U"
+  else if i == 6 then "R1" else if i == 7 then "CP" else if i == 8 then "FU"
+  else if i == 9 then "RS" else if i == 10 then "PS" else if i == 11 then "SU" else if i == 12 then "H1"
+  else if i == 13 then "SB" else if i == 14 then "KN" else "KL"
+}
+
+pure func apply_op(c: Ch, i: int) -> Ch {
+  if i == 0 then append(c, mk("assistant", "thinking", [], ""))
+  else if i == 1 then append(c, mk("assistant", "", ["a"], ""))
+  else if i == 2 then append(c, mk("assistant", "", ["a", "b"], ""))
+  else if i == 3 then append(c, mk("tool", "out a", [], "a"))
+  else if i == 4 then append(c, mk("tool", "out b", [], "b"))
+  else if i == 5 then append(c, mk("user", "go on", [], ""))
+  else if i == 6 then replace(c, mk("assistant", "augmented", ["a"], ""))
+  else if i == 7 then checkpoint(c, None)
+  else if i == 8 then follow_up(c)
+  else if i == 9 then resume(c, false)
+  else if i == 10 then resume(c, true)
+  else if i == 11 then {
+    let c1 = emit(c, RunSuspended({ session_id: "sess_1", run_id: c.run_id, reason: "budget", step: c.step }));
+    emit(c1, summary_ev(c.turn))
+  }
+  else if i == 12 then append(c, mk("assistant", "", ["a", ""], ""))
+  else if i == 13 then emit(c, SessionStart({ task: "", model: "m", mode: "v2", run_id: "" }))
+  else if i == 14 then checkpoint(c, Some(-1))
+  else checkpoint(c, Some(List.length(c.hist) - 1))
+}
+
+pure func seed_msgs(nsys: int) -> [Message] {
+  if nsys >= 2 then [m_sys(), mk("system", "pinned rules", [], ""), m_user()] else [m_sys(), m_user()]
+}
+
+pure func start(nsys: int) -> Ch {
+  let r = rid(0, 0);
+  let c0: Ch = { recs: [], hist: [], at: chain_empty_base(), prev: chain_empty_base(),
+                 run: 0, turn: 0, run_id: r, step: 0, note: "" };
+  let c1 = emit(c0, SessionStart({ task: "list the files", model: "m", mode: "v2", run_id: r }));
+  let c2 = seeded(c1, r, seed_msgs(nsys));
+  emit(c2, delta_ev(r, 0))
+}
+
+-- THE INTERACTIVE START (`session.ail:4660`, `task == ""`): no seed before the
+-- conversation loop, so the first turn is a follow-up — `session_start`, the
+-- operator's message appended with the chain recomputed from the loop's history
+-- (`:4387`), then the run's seed of history ++ [message] (`:3868`). The loop's
+-- history is rpc.ail's `init` (`:365`): the system message and an empty user task.
+pure func start_interactive(nsys: int) -> Ch {
+  let r = rid(0, 0);
+  let init = if nsys == 0 then [] else [m_sys(), mk("user", "", [], "")];
+  let u = m_user();
+  let c0: Ch = { recs: [], hist: [], at: chain_empty_base(), prev: chain_empty_base(),
+                 run: 0, turn: 0, run_id: r, step: 0, note: "" };
+  let c1 = emit(c0, SessionStart({ task: "list the files", model: "m", mode: "v2", run_id: r }));
+  let d = chain_digest_after(chain_digest_over(chain_empty_base(), init), u);
+  let c2 = emit(c1, HistoryAppended({ run_id: r, step: 0, message: message_json(u), replaces_previous: false, digest_after: d }));
+  let c3 = seeded(c2, r, init ++ [u]);
+  emit(c3, delta_ev(r, 0))
+}
+
+pure func run_ops(nsys: int, ix: [int]) -> Ch {
+  if nsys < 0 then List.foldl(apply_op, start_interactive(nsys + 2), ix)
+  else List.foldl(apply_op, start(nsys), ix)
+}
+
+-- ---------------------------------------------------------------------------
+-- What a run can emit: the grammar the real loop follows. A call batch is
+-- answered by its results before anything else (a crash may cut it: RS/PS);
+-- R1 only directly after A0; CP/FU/SU only with nothing open; H1 is outside
+-- (an empty call id is not shown reachable).
+-- ---------------------------------------------------------------------------
+
+type Gr = { ok: bool, open: [string], prev_op: int, single: bool }
+
+pure func without(xs: [string], t: string) -> [string] {
+  match xs { [] => [], x :: rest => if x == t then without(rest, t) else x :: without(rest, t) }
+}
+pure func has(xs: [string], t: string) -> bool {
+  match xs { [] => false, x :: rest => if x == t then true else has(rest, t) }
+}
+
+pure func gr_step(g: Gr, i: int) -> Gr {
+  let closed = List.length(g.open) == 0;
+  let g1 =
+    if i == 0 || i == 5 then { g | ok: g.ok && closed }
+    else if i == 1 then { g | ok: g.ok && closed, open: ["a"] }
+    else if i == 2 then { g | ok: g.ok && closed, open: ["a", "b"] }
+    else if i == 3 then { g | ok: g.ok && has(g.open, "a"), open: without(g.open, "a") }
+    else if i == 4 then { g | ok: g.ok && has(g.open, "b"), open: without(g.open, "b") }
+    else if i == 6 then { g | ok: g.ok && g.prev_op == 0, open: ["a"] }
+    else if i == 7 || i == 11 then { g | ok: g.ok && closed }
+    else if i == 8 then { g | ok: g.ok && closed, single: false }
+    else if i == 9 || i == 10 then { g | open: [], single: false }
+    else if i == 13 then { g | ok: g.ok && closed, single: false }
+    else { g | ok: false };
+  { g1 | prev_op: i }
+}
+
+pure func grammar(ix: [int]) -> Gr { List.foldl(gr_step, { ok: true, open: [], prev_op: -1, single: true }, ix) }
+
+-- ---------------------------------------------------------------------------
+-- P3.2's executable statement, over the RECORDS. Rule 3: the seed, then one
+-- message per appended entry (`replaces_previous` takes the place of the
+-- message before it); from the latest replacement onwards, that entry's
+-- messages (after the head system prefix, for a checkpoint) and the entries
+-- after it. A seed after a `session_resumed` is the resumed history (D1 arm 2,
+-- or arm 3 when it is equal). Then rule 4: the trailing unanswered calls are
+-- stripped.
+-- ---------------------------------------------------------------------------
+
+type Sp = { hist: [Message], seeded: bool, resumed: bool }
+
+pure func json_msgs(j: Json) -> [Message] {
+  match messages_of_json(j) { Ok(ms) => ms, Err(_) => [] }
+}
+
+pure func msg_of(j: Json) -> [Message] {
+  match message_of_json(j) { Ok(m) => [m], Err(_) => [] }
+}
+
+pure func drop_n(n: int, ms: [Message]) -> [Message] {
+  if n <= 0 then ms else match ms { [] => [], _ :: rest => drop_n(n - 1, rest) }
+}
+
+pure func sp_step(s: Sp, r: LedgerRecord) -> Sp {
+  match r {
+    WireRecord(e) => match e {
+      HistorySeeded(i) =>
+        if not s.seeded then { s | hist: json_msgs(i.messages), seeded: true, resumed: false }
+        else if s.resumed then { s | hist: json_msgs(i.messages), resumed: false }
+        else s,
+      HistoryAppended(i) =>
+        if i.replaces_previous then { s | hist: init_msgs(s.hist) ++ msg_of(i.message) }
+        else { s | hist: s.hist ++ msg_of(i.message) },
+      HistoryReplaced(i) => {
+        let kept = match i.first_kept { None => [], Some(k) => drop_n(k, s.hist) };
+        if i.reason == "checkpoint" then { s | hist: take_sys(s.hist) ++ json_msgs(i.messages) ++ kept }
+        else { s | hist: json_msgs(i.messages) }
+      },
+      SessionResumed(_) => { s | resumed: true },
+      _ => s
+    },
+    _ => s
+  }
+}
+
+-- Rule 4, stated independently: the LAST assistant with calls; its ids minus
+-- the ids of the tool results after it; those calls are removed from it.
+type Dg = { idx: int, ids: [string], at: int }
+
+pure func call_ids_of(cs: [ToolCall]) -> [string] { match cs { [] => [], c :: rest => c.id :: call_ids_of(rest) } }
+
+pure func dg_step(d: Dg, m: Message) -> Dg {
+  if m.role != "tool" && List.length(m.tool_calls) > 0 then { idx: d.idx + 1, ids: call_ids_of(m.tool_calls), at: d.idx }
+  else if m.role == "tool" then { d | idx: d.idx + 1, ids: without(d.ids, m.tool_call_id) }
+  else { d | idx: d.idx + 1 }
+}
+
+pure func keep(cs: [ToolCall], open: [string]) -> [ToolCall] {
+  match cs { [] => [], c :: rest => if has(open, c.id) then keep(rest, open) else c :: keep(rest, open) }
+}
+
+pure func strip_at(ms: [Message], i: int, open: [string]) -> [Message] {
+  match ms {
+    [] => [],
+    m :: rest => if i == 0 then { m | tool_calls: keep(m.tool_calls, open) } :: rest
+                 else m :: strip_at(rest, i - 1, open)
+  }
+}
+
+pure func rule4(ms: [Message]) -> [Message] {
+  let d = List.foldl(dg_step, { idx: 0, ids: [], at: -1 }, ms);
+  if List.length(d.ids) == 0 then ms else strip_at(ms, d.at, d.ids)
+}
+
+pure func spec_history(rs: [LedgerRecord]) -> [Message] {
+  rule4(List.foldl(sp_step, { hist: [], seeded: false, resumed: false }, rs).hist)
+}
+
+-- ---------------------------------------------------------------------------
+-- Output.
+-- ---------------------------------------------------------------------------
+
+pure func wire_of(r: LedgerRecord) -> [Json] { match r { WireRecord(e) => [to_schema_v1(e)], _ => [] } }
+
+pure func wires(rs: [LedgerRecord]) -> [Json] {
+  match rs { [] => [], r :: rest => wire_of(r) ++ wires(rest) }
+}
+
+pure func names(ix: [int]) -> [string] { match ix { [] => [], i :: rest => op_name(i) :: names(rest) } }
+
+pure func b01(b: bool) -> string { if b then "1" else "0" }
+
+-- Everything in SessionState except header/history/dangling, for the exploratory X-1.
+pure func show_last(b: Boundary) -> string {
+  match b {
+    BoundaryRunFinished(r, o) => "run_finished(${r},${show(o)})",
+    BoundarySuspended(r, st) => "suspended(${r},${show(st)})",
+    BoundaryExit(x) => "exit(${x})",
+    BoundaryOpen(k) => "open(${k})",
+    BoundaryParked(_, _) => "parked"
+  }
+}
+
+pure func rest_of(s: SessionState) -> string {
+  "last=${show_last(s.last)};ord=${show(s.world_ordinal)};model=${s.model};profile=${s.profile}"
+}
+
+func emit_case(nsys: int, id: int, ix: [int]) -> () ! {IO} {
+  let c = run_ops(nsys, ix);
+  let rs = rev_recs(c.recs);
+  let lines = journal_lines_of_records(harness_header(default_run_identity("sess_1"), "m"), rs);
+  let g = grammar(ix);
+  let ops = concat([join(",", names(ix)), c.note]);
+  let tw = match fold_journal(lines, journal_leaf(lines)) {
+    Ok(s) => concat(["accept\t", join(",", s.dangling), "\t", intToStr(List.length(s.dangling)), "\t", encode(messages_json(s.history))]),
+    Err(r) => concat([refusal_id(r), "\t\t0\t"])
+  };
+  let rest = match fold_journal(lines, journal_leaf(lines)) { Ok(s) => rest_of(s), Err(_) => "" };
+  println(concat(["W\t", intToStr(id), "\t", ops, "\t", b01(g.ok), "\t", b01(g.single), "\t", encode(ja(wires(rs)))]));
+  println(concat(["T\t", intToStr(id), "\t", tw, "\t", encode(messages_json(spec_history(rs))), "\t",
+                  encode(messages_json(rule4(c.hist))), "\t", rest]))
+}
+
+-- Exhaustive: every sequence of length 0..maxlen over the first `k` ops.
+pure func range_from(i: int, n: int) -> [int] { if i >= n then [] else i :: range_from(i + 1, n) }
+
+func walk(nsys: int, prefix: [int], left: int, is: [int], k: int, id: int) -> int ! {IO} {
+  match is {
+    [] => id,
+    i :: rest => {
+      let p = prefix ++ [i];
+      let id2 = if left == 1 then { emit_case(nsys, id, p); id + 1 } else walk(nsys, p, left - 1, range_from(0, k), k, id);
+      walk(nsys, prefix, left, rest, k, id2)
+    }
+  }
+}
+
+func emit_len(nsys: int, n: int, k: int, id: int) -> int ! {IO} {
+  if n == 0 then { emit_case(nsys, id, []); id + 1 } else walk(nsys, [], n, range_from(0, k), k, id)
+}
+
+func exhaustive(nsys: int, n: int, maxlen: int, k: int, id: int) -> int ! {IO} {
+  if n > maxlen then id else exhaustive(nsys, n + 1, maxlen, k, emit_len(nsys, n, k, id))
+}
+
+-- Random: a 31-bit LCG, seeded per sequence.
+pure func lcg(x: int) -> int { (x * 1103515245 + 12345) % 2147483648 }
+
+pure func rand_seq(x: int, len: int, k: int) -> [int] {
+  if len == 0 then [] else { let y = lcg(x); (y / 65536) % k :: rand_seq(y, len - 1, k) }
+}
+
+func randoms(nsys: int, i: int, n: int, len: int, k: int, id: int) -> int ! {IO} {
+  if i >= n then id else { emit_case(nsys, id, rand_seq(lcg(i * 7919 + 17), len, k)); randoms(nsys, i + 1, n, len, k, id + 1) }
+}
+
+pure func ints_of(ss: [string]) -> [int] {
+  match ss { [] => [], x :: rest => match stringToInt(x) { Some(n) => n :: ints_of(rest), None => ints_of(rest) } }
+}
+
+func env_int(name: string, dflt: int) -> int ! {Env} {
+  match getEnv(name) {
+    Ok(s) => match stringToInt(s) { Some(n) => n, None => dflt },
+    Err(_) => dflt
+  }
+}
+
+export func main() -> () ! {IO, Env} {
+  let maxlen = env_int("T3_MAXLEN", 3);
+  let k = env_int("T3_ALPHA", 13);
+  let nrand = env_int("T3_RANDOM", 0);
+  let rlen = env_int("T3_RLEN", 6);
+  let nsys = env_int("T3_NSYS", 1);
+  match getEnv("T3_OPS") {
+    Ok(ops) => if ops == "" then () else emit_case(nsys, 0, ints_of(Str.split(ops, "-"))),
+    Err(_) => {
+      let id = exhaustive(nsys, 0, maxlen, k, 0);
+      let _ = randoms(nsys, 0, nrand, rlen, k, id);
+      ()
+    }
+  }
+}

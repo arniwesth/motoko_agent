@@ -1,0 +1,107 @@
+-- path_direct.ail — the REAL `path_up` and `find_entry` (src/core/journal.ail:1392-1410) and the
+-- REAL eval twin `ev_path_up` (src/eval/journal/reader.ail:1226), called directly.
+--
+-- They are private, so they are reached through gen/core_journal_exposed.ail and
+-- gen/eval_reader_exposed.ail, which harness/expose.sh writes from the tree at every run with
+-- only `export` added (its diff guard refuses any other change).
+--
+-- Input, one case per stdin line:   <entries>|<start id>
+--   <entries> is `id<parent` items joined by `,` (empty for []); a root's parent is empty.
+--   Entry k (0-based) gets seq = k, so a result can name exactly which entry it holds.
+-- Output, one line per case:        <case#>|F:<find seq>|C:<core seqs>|T:<twin seqs>|S:<strict>
+--   <find seq> is the seq `find_entry(es, start)` returns, or `-` for None;
+--   <core seqs>/<twin seqs> are the seqs of path_up's / ev_path_up's result, joined by `,`;
+--   <strict> is the eval reader's exported `strict_path` (reader.ail:1713), a different real
+--   function over the same entries: its path's seqs when it accepts, `!` when it refuses. It
+--   refuses cycles, missing parents and paths not rooted at a `header`, so every root entry
+--   (parent "") is given kind "header" here; path_up does not read `kind`.
+-- The last line is `END|<cases>`, so a run that stops early (non-termination killed by the
+-- caller's timeout) is told apart from one that finished.
+--
+-- From the out/ directory (whose ailang.toml, src and packages are symlinks to the tree):
+--   ailang run --relax-modules --caps IO --entry main harness/path_direct.ail < cases.txt
+
+module harness/path_direct
+
+import std/io (println, readLineOpt)
+import std/json (Json, jo)
+import std/string as Str (join, concat, intToStr, split)
+import std/option (Option, Some, None)
+import std/list as List (map, zip, range, length)
+import gen/core_journal_exposed (JournalEntry, path_up, find_entry)
+import gen/eval_reader_exposed (EvJournalEntry, ev_path_up, strict_path)
+
+pure func mk(id: string, parent: string, seq: int) -> JournalEntry {
+  { id: id, parent_id: parent, seq: seq, at_ms: 0, kind: if parent == "" then "header" else "x", raw: jo([]) }
+}
+
+pure func mk_ev(id: string, parent: string, seq: int) -> EvJournalEntry {
+  { id: id, parent_id: parent, seq: seq, at_ms: 0, kind: if parent == "" then "header" else "x", raw: jo([]) }
+}
+
+-- `id<parent` -> (id, parent). split on "<" of "a<" gives ["a", ""].
+pure func item_id(s: string) -> string {
+  match split(s, "<") { [] => "", x :: _ => x }
+}
+
+pure func item_parent(s: string) -> string {
+  match split(s, "<") { [] => "", _ :: rest => match rest { [] => "", p :: _ => p } }
+}
+
+pure func items_of(spec: string) -> [string] {
+  if spec == "" then [] else split(spec, ",")
+}
+
+-- Built with std/list's iterative map/zip/range, not by recursion: AILANG caps non-tail
+-- recursion at depth 10000 (RT_REC_003), and the deep/long generators exceed that.
+pure func entry_of(p: (string, int)) -> JournalEntry {
+  match p { (s, k) => mk(item_id(s), item_parent(s), k) }
+}
+
+pure func ev_entry_of(p: (string, int)) -> EvJournalEntry {
+  match p { (s, k) => mk_ev(item_id(s), item_parent(s), k) }
+}
+
+pure func entries_of(items: [string], k: int) -> [JournalEntry] {
+  List.map(entry_of, List.zip(items, List.range(k, k + List.length(items))))
+}
+
+pure func ev_entries_of(items: [string], k: int) -> [EvJournalEntry] {
+  List.map(ev_entry_of, List.zip(items, List.range(k, k + List.length(items))))
+}
+
+pure func seq_str(e: JournalEntry) -> string { intToStr(e.seq) }
+pure func ev_seq_str(e: EvJournalEntry) -> string { intToStr(e.seq) }
+
+pure func seqs(es: [JournalEntry]) -> [string] { List.map(seq_str, es) }
+
+pure func ev_seqs(es: [EvJournalEntry]) -> [string] { List.map(ev_seq_str, es) }
+
+pure func run_case(n: int, line: string) -> string {
+  let parts = split(line, "|");
+  let spec = match parts { [] => "", x :: _ => x };
+  let start = match parts { [] => "", _ :: rest => match rest { [] => "", s :: _ => s } };
+  let items = items_of(spec);
+  let es = entries_of(items, 0);
+  let ev = ev_entries_of(items, 0);
+  let f = match find_entry(es, start) { None => "-", Some(e) => intToStr(e.seq) };
+  let core = path_up(es, start, [], []);
+  let twin = ev_path_up(ev, start, [], []);
+  let strict = match strict_path(ev, start) { Err(_) => "!", Ok(p) => join(",", ev_seqs(p)) };
+  concat([intToStr(n), "|F:", f, "|C:", join(",", seqs(core)), "|T:", join(",", ev_seqs(twin)), "|S:", strict])
+}
+
+func loop(n: int) -> int ! {IO} {
+  match readLineOpt(()) {
+    None => n,
+    Some(line) => {
+      println(run_case(n, line));
+      loop(n + 1)
+    }
+  }
+}
+
+export func main() -> () ! {IO} {
+  let n = loop(0);
+  println(concat(["END|", intToStr(n)]))
+}

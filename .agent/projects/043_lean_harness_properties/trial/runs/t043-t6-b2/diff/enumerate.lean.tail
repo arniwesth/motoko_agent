@@ -1,0 +1,72 @@
+/-
+Appended to ../TruncateModel.lean by run_diff.sh. The same cases, in the same order, as
+caller/harness.ail (the real `store_stdout_and_elide`), one line per case:
+
+  <tag>|<input bytes>|<max>|<truncated 0/1>|<returned stdout bytes>
+
+Bytes decimal and '.'-joined. `storeElide` is the model of the caller; through it, the
+model's `truncate` is compared with the real `truncate_utf8_by_bytes` on every case where
+the input's byte length exceeds `max` (the only cases the caller passes on).
+-/
+
+namespace T6Diff
+open T6
+
+def atoms : List Bytes :=
+  [ [97], [195, 169], [226, 130, 172], [240, 159, 152, 128], [128], [195], [226, 130],
+    [255], [192, 175], [237, 160, 128], [244, 144, 128, 128], [224, 128, 128],
+    [240, 159], [10] ]
+
+def nthAtom (i : Nat) : Bytes := atoms.getD i []
+
+def seqsOfLen : Nat → List (List Nat)
+  | 0 => [[]]
+  | n + 1 => (seqsOfLen n).flatMap (fun s => (List.range atoms.length).map (fun i => s ++ [i]))
+
+def concatAtoms (ix : List Nat) : Bytes := ix.flatMap nthAtom
+
+def showBytes (b : Bytes) : String := String.intercalate "." (b.map toString)
+
+def notice : Bytes :=
+  ("\n[stdout elided; full output at W/.motoko-store/compose/C.stdout]".toUTF8.toList.map (·.toNat))
+
+def line (tag : String) (bs : Bytes) (m : Int) : String :=
+  let r := storeElide bs m notice
+  s!"{tag}|{showBytes bs}|{m}|{if r.2 then "1" else "0"}|{showBytes r.1}"
+
+def lcg (x : Nat) : Nat := (x * 1103515245 + 12345) % 2147483648
+
+def draw (x : Nat) : Nat → Bytes × Nat
+  | 0 => ([], x)
+  | k + 1 =>
+    let x1 := lcg x
+    let x2 := lcg x1
+    let b := if (x1 / 65536) % 2 == 0 then (x2 / 65536) % 256
+             else (nthAtom ((x2 / 65536) % 14)).headD 0
+    let rest := draw x2 k
+    (b :: rest.1, rest.2)
+
+def randomCases : Nat → Nat → List (Bytes × Int)
+  | 0, _ => []
+  | n + 1, x =>
+    let x1 := lcg x
+    let k := (x1 / 65536) % 13
+    let d := draw x1 k
+    let x2 := lcg d.2
+    let m : Int := ((x2 / 65536) % (k + 5) : Nat) - 2
+    (d.1, m) :: randomCases n x2
+
+def maxesFor (bs : Bytes) : List Int :=
+  (List.range (bs.length + 3)).map (fun (i : Nat) => (i : Int) - 1)
+
+end T6Diff
+
+open T6Diff in
+#eval show IO Unit from do
+  for n in [0, 1, 2, 3] do
+    for ix in seqsOfLen n do
+      let bs := concatAtoms ix
+      for m in maxesFor bs do
+        IO.println (line "E" bs m)
+  for (bs, m) in randomCases 3000 20261104 do
+    IO.println (line "R" bs m)

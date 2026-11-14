@@ -1,0 +1,26 @@
+-- x1.ail — X-1, a stale comment in the target span (journal.ail:225-228).
+--
+-- The comment says `chain_digest_base` (= `digest_messages`) "is the whole-history digest a
+-- `history_seeded` entry carries as `digest`". The code that builds and checks that field
+-- says otherwise: `HistorySeeded.digest` is the chain quantity
+-- `chain_digest_over(chain_empty_base(), messages)` (phase_vocab.ail:1074-1084, which records
+-- the correction; session.ail:3871; the pin in dst_invariants.ail:1173). This prints both
+-- quantities for a one-message seed; when they differ the comment cannot be true of any
+-- non-empty seed. x1.sh combines this with a check that the comment is still there.
+module x1
+
+import std/io (println)
+import std/ai (Message)
+import std/string as Str (concat)
+import src/core/journal (chain_digest_base, chain_digest_over, chain_empty_base)
+
+pure func hi() -> Message { { role: "user", content: "hi", tool_calls: [], tool_call_id: "", images: [] } }
+
+export func main() -> () ! {IO} {
+  let seed = [hi()];
+  let base_d = chain_digest_base(seed);
+  let chain_d = chain_digest_over(chain_empty_base(), seed);
+  println(concat(["chain_digest_base(seed)                    = ", base_d]));
+  println(concat(["chain_digest_over(chain_empty_base(), seed) = ", chain_d]));
+  if base_d == chain_d then println("X-1 same") else println("X-1 differ")
+}

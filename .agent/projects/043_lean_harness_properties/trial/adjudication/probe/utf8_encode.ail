@@ -1,0 +1,20 @@
+module probe
+
+import std/io (println)
+import std/json (encode, Json, JString, JObject)
+import std/bytes (fromBase64, toString, toBase64, fromString)
+import std/option (Some, None)
+
+export func main() -> () ! {IO} {
+  -- "ab" 0xFF "bc", from base64 YWL/YmM=
+  match fromBase64("YWL/YmM=") {
+    Some(b) => {
+      let s = toString(b);
+      let e = encode(JObject([{ key: "stdout", value: JString(s) }]));
+      println("raw  b64: ${toBase64(fromString(s))}");
+      println("json b64: ${toBase64(fromString(e))}");
+      println("json    : ${e}")
+    },
+    None => println("base64 error")
+  }
+}

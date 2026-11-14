@@ -1,0 +1,40 @@
+-- p31_fold.ail — P3.1: the REAL `fold_journal` over the journals the REAL host wrote.
+-- Reads host.tsv (`p31_host.ts`'s output): <ix>\t<mode>\t<path>\t<leaf>\t<pending>\t<errors>
+-- and prints, per line:  <ix>\t<mode>\t<verdict>\t<dangling>\t<count>\t<history json>\t<host pending>
+--
+-- args: the path of host.tsv (a JSON string)
+
+module p31_fold
+
+import std/io (println)
+import std/fs (readFile)
+import std/string as Str (split, join, concat)
+import std/list as List (length, map, foldl)
+import std/result (Result, Ok, Err)
+import src/core/journal (fold_journal, parse_journal_text, refusal_id, refusal_message)
+import scratchpad/t3/t3gen (verdict_of)
+
+pure func nth(xs: [string], i: int) -> string {
+  match xs { [] => "", x :: rest => if i == 0 then x else nth(rest, i - 1) }
+}
+
+func one(line: string) -> () ! {IO, FS} {
+  if line == "" then ()
+  else {
+    let f = split(line, "\t");
+    let raw = readFile(nth(f, 2));
+    let v = match parse_journal_text(raw) {
+      Err(r) => concat(["refuse:", refusal_id(r), "\t\t\t", refusal_message(r)]),
+      Ok(lines) => verdict_of(fold_journal(lines, nth(f, 3)))
+    };
+    println(concat([nth(f, 0), "\t", nth(f, 1), "\t", v, "\t", nth(f, 4)]))
+  }
+}
+
+func each(ls: [string]) -> () ! {IO, FS} {
+  match ls { [] => (), l :: rest => { one(l); each(rest) } }
+}
+
+export func main(p: string) -> () ! {IO, FS} {
+  each(split(readFile(p), "\n"))
+}

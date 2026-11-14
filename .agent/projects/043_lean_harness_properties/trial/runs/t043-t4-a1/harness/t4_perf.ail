@@ -1,0 +1,34 @@
+-- t4_perf.ail -- X-5: cost of chain_digests_over against chain_digest_over on the REAL
+-- functions, at growing history length n. Prints `n which ms`. The two functions do the same
+-- number of chain_digest_after calls (n), so any growth beyond linear in chain_digests_over is
+-- the accumulator, not the hashing.
+--   ailang run --relax-modules --caps IO,Clock --entry main t4_perf.ail '<which>' '<n>'
+module t4_perf
+
+import std/io (println)
+import std/ai (Message)
+import std/clock (now)
+import std/list as List (length, map, range)
+import std/string as Str (intToStr)
+import src/core/journal (chain_digest_over, chain_digests_over, chain_empty_base)
+
+pure func mk(i: int) -> Message {
+  { role: if i % 2 == 0 then "user" else "assistant", content: "message ${intToStr(i)}", tool_calls: [], tool_call_id: "", images: [] }
+}
+
+func time_one(n: int) -> () ! {IO, Clock} {
+  let ms = List.map(mk, range(0, n));
+  let e = chain_empty_base();
+  let t0 = now();
+  let d = chain_digest_over(e, ms);
+  let t1 = now();
+  let ds = chain_digests_over(e, ms);
+  let t2 = now();
+  println("n=${intToStr(n)} over_ms=${intToStr(t1 - t0)} digests_ms=${intToStr(t2 - t1)} len=${intToStr(List.length(ds))} ${d}")
+}
+
+export func main() -> () ! {IO, Clock} {
+  time_one(16000);
+  time_one(32000);
+  time_one(64000)
+}

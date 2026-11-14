@@ -1,0 +1,16 @@
+-- gate_ail.ail — calls the REAL `herdr_env_ready` (packages/motoko-ext-herdr/types.ail:1425)
+-- once, on the three strings in T1_HERDR_ENV, T1_HERDR_BIN_PATH, T1_HERDR_PANE_ID (unset is
+-- read as "", P1.1's convention), and prints `true` or `false`. The T1_ names keep the real
+-- HERDR_* variables of whoever runs it out of the input.
+module gate_ail
+
+import std/io (println)
+import std/env (getEnvOr)
+import pkg/sunholo/motoko_ext_herdr/types (herdr_env_ready)
+
+export func main() -> () ! {IO, Env} {
+  let e = getEnvOr("T1_HERDR_ENV", "");
+  let b = getEnvOr("T1_HERDR_BIN_PATH", "");
+  let p = getEnvOr("T1_HERDR_PANE_ID", "");
+  println(if herdr_env_ready(e, b, p) then "true" else "false")
+}

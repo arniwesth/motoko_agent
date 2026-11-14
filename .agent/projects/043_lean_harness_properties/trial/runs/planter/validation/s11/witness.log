@@ -1,0 +1,15 @@
+# s11: P4.1/P4.2 witness check on B0, only-s11, T, T-s11 (t4_witness.ail)
+== B0
+s11-witness P4.2 base=sha256:b ms=[0]: holds
+s11-witness P4.1 base=chain_empty_base xs=[0] ys=[0]: holds
+== only-s11
+s11-witness P4.2 base=sha256:b ms=[0]: VIOLATED
+s11-witness P4.1 base=chain_empty_base xs=[0] ys=[0]: VIOLATED
+== T
+s11-witness P4.2 base=sha256:b ms=[0]: VIOLATED
+s11-witness P4.1 base=chain_empty_base xs=[0] ys=[0]: VIOLATED
+== minus-s11
+s11-witness P4.2 base=sha256:b ms=[0]: holds
+s11-witness P4.1 base=chain_empty_base xs=[0] ys=[0]: holds
+
+# witness sizes: P4.2 with |ms| = 1 (base sha256:b, ms = [message 0]); P4.1 with |xs| + |ys| = 2 (base chain_empty_base(), xs = ys = [message 0])

@@ -1,0 +1,42 @@
+-- perf_chain.ail — X-1: how chain_digests_over scales against chain_digest_over on the REAL code.
+--
+-- Both compute exactly n chain steps (one sha256 per message); chain_digest_over's fold
+-- accumulator is a string (O(1) step), chain_digests_over's is a record whose `out` list is
+-- rebuilt with `acc.out ++ [d]` at every step. Prints, per n, the wall time of each and
+-- their ratio. If chain_digests_over were O(n) the ratio would stay flat as n doubles.
+--
+--   ailang run --relax-modules --caps IO,Clock --chdir ../out/pkg --entry main t4/perf_chain.ail
+
+module perf_chain
+
+import std/io (println)
+import std/clock (now)
+import std/ai (Message)
+import std/string as Str (intToStr)
+import std/list as List (length, map, range, last)
+import std/option (Option, Some, None)
+import src/core/journal (chain_digest_over, chain_digests_over, chain_empty_base)
+
+pure func m(i: int) -> Message {
+  { role: "user", content: "message ${intToStr(i)}", tool_calls: [], tool_call_id: "", images: [] }
+}
+
+func time_one(n: int) -> () ! {IO, Clock} {
+  let ms = map(m, range(0, n));
+  let t0 = now();
+  let o = chain_digest_over(chain_empty_base(), ms);
+  let t1 = now();
+  let ds = chain_digests_over(chain_empty_base(), ms);
+  let t2 = now();
+  let a = t1 - t0;
+  let b = t2 - t1;
+  println("n=${intToStr(n)}\tchain_digest_over_ms=${intToStr(a)}\tchain_digests_over_ms=${intToStr(b)}\tlen=${intToStr(length(ds))}\tlast_is_over=${show(List.last(ds) == Some(o))}")
+}
+
+func run(ns: [int]) -> () ! {IO, Clock} {
+  match ns { [] => (), n :: rest => { time_one(n); run(rest) } }
+}
+
+export func main() -> () ! {IO, Clock} {
+  run([1000, 2000, 4000, 8000, 16000, 32000, 64000])
+}

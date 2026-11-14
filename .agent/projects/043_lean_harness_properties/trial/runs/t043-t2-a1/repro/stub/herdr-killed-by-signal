@@ -1,0 +1,6 @@
+#!/bin/sh
+# A stand-in `herdr` that dies by a signal before exiting: what an OOM kill or an external
+# `kill -9` of a real herdr child looks like to the runner. It ignores its arguments.
+# HERDR_STUB_STDERR, if set, is written to stderr first (as herdr writes its JSON errors).
+[ -n "$HERDR_STUB_STDERR" ] && printf '%s\n' "$HERDR_STUB_STDERR" >&2
+kill -KILL $$

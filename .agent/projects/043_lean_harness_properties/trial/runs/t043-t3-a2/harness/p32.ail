@@ -1,0 +1,249 @@
+-- p32.ail — P3.2 on the real code: `fold_journal(journal_lines_of_records(h, rs), leaf)`
+-- for single-run record lists `rs`, against an executable statement of D4 rule 3
+-- (`journal.ail:1266-1270`) computed from `rs` alone:
+--
+--   the seed, then one message per appended entry, an entry with `replaces_previous`
+--   taking the place of the message before it; from the latest `history_replaced`,
+--   [the head system prefix when the reason is `checkpoint`,] that entry's messages,
+--   [then the kept tail from `first_kept`,] then the entries after it.
+--
+-- followed by rule 4 (the trailing assistant's unanswered calls removed; they are the
+-- dangling ids). Prints one line per case and a summary; exit code via the `FAIL` lines.
+--
+--   <start>\t<actions>\t<ok|FAIL>\t<fold verdict>\t<expected dangling>\t<expected history>
+--
+-- Starts (how a run's trace begins, `session.ail`):
+--   0  fresh:   SessionStart, HistorySeeded([system, user])                (`:3868`)
+--   1  later:   SessionStart, HistorySeeded(a longer history)               (follow-up / resumed run)
+--   2  parked:  SessionStart, HistoryAppended(wake message), HistorySeeded(plan.history ++ [wake])
+--               (`run_v2_from_parked_traced`, `:5044-5052`: the trace is prefix.records ++ r.trace.records)
+--   3  bare:    HistorySeeded([system, user]) with no SessionStart
+--   4  parked-harness: the whole trace `run_v2_session_park_resumed_traced` returns:
+--               SessionResumed, ParkEntered, WakeReceived, SessionStart, HistoryAppended(wake),
+--               HistorySeeded(plan.history ++ [wake])
+-- Actions: t3gen's alphabet restricted to one run: 0 A, 1 C1, 2 C2, 3 T, 4 HP, 5 HR, 6 K, 7 D,
+-- 11 S, 12 PK, 13 WK, 14 AX (assistant with odd content and an image), and 15 END (RunSummary).
+--
+-- args: {"maxlen": n, "starts": [..], "accept_only": bool}
+
+module p32
+
+import std/io (println)
+import std/ai (Message, ToolCall)
+import std/json (Json, encode)
+import std/string as Str (join, concat, intToStr)
+import std/list as List (length, map, foldl)
+import std/option (Option, Some, None)
+import std/result (Result, Ok, Err)
+import src/core/phase_vocab (
+  LedgerEvent, HistorySeeded, HistoryAppended, HistoryReplaced, SessionStart, RunSummary,
+  SessionResumed, ParkEntered, WakeReceived, OperatorWait
+)
+import src/core/journal (
+  SessionState, Refusal, fold_journal, journal_leaf, messages_of_json, message_of_json,
+  chain_digest_after, chain_digest_over, chain_empty_base, message_json, messages_json
+)
+import scratchpad/t3/t3gen (
+  Child, mkmsg, step, child0, events_of, twin_fold, verdict_of, history_text, ints_text, range_from,
+  ev_seed, ev_append, ev_summary
+)
+
+-- ---------------------------------------------------------------------------
+-- Starts
+-- ---------------------------------------------------------------------------
+
+pure func sys() -> Message { mkmsg("system", "you are motoko", [], "") }
+pure func usr(s: string) -> Message { mkmsg("user", s, [], "") }
+
+pure func base_child(msgs: [Message], rev: [LedgerEvent]) -> Child {
+  { msgs: msgs, at: chain_digest_over(chain_empty_base(), msgs),
+    prev: chain_digest_over(chain_empty_base(), drop_last(msgs)),
+    k: 100, run: 0, rid: "sess_1.r0.0", open: [], hybrid: false, profile: "dogfood",
+    prompt: "sha256:p", resumes: 0, park: 0, parked: false, rev: rev }
+}
+
+pure func drop_last(ms: [Message]) -> [Message] {
+  match ms { [] => [], [_] => [], m :: rest => m :: drop_last(rest) }
+}
+
+pure func start_of(kind: int) -> Child {
+  let ss = SessionStart({ task: "t", model: "m", mode: "v2", run_id: "sess_1.r0.0" });
+  if kind == 0 then child0()
+  else if kind == 1 then {
+    let h = [sys(), usr("list the files"), mkmsg("assistant", "a1", ["x1"], ""), mkmsg("tool", "r1", [], "x1"),
+             mkmsg("assistant", "done", [], ""), usr("again")];
+    base_child(h, [ev_seed("sess_1.r0.0", h), ss])
+  }
+  else if kind == 2 then {
+    let plan = [sys(), usr("list the files"), mkmsg("assistant", "waiting", [], "")];
+    let wake = usr("[wake] operator_input");
+    let d = chain_digest_after(chain_digest_over(chain_empty_base(), plan), wake);
+    let h = plan ++ [wake];
+    base_child(h, [ev_seed("sess_1.r0.0", h), ev_append("sess_1.r0.0", wake, false, d), ss])
+  }
+  else if kind == 4 then {
+    -- `run_v2_session_park_resumed_traced` (`session.ail:5086-5116`) exactly: its trace is
+    -- SessionResumed (trace0), the resumed frame's ParkEntered and WakeReceived
+    -- (`consume_parked_wake`), then `run_v2_from_parked_traced`'s SessionStart and
+    -- HistoryAppended(wake message), then the run's own HistorySeeded(plan.history ++ [wake]).
+    let plan = [sys(), usr("list the files"), mkmsg("assistant", "waiting", [], "")];
+    let wake = usr("[wake] operator_input");
+    let d = chain_digest_after(chain_digest_over(chain_empty_base(), plan), wake);
+    let h = plan ++ [wake];
+    let req = "sess_1.r1.0.p0";
+    base_child(h, [ev_seed("sess_1.r1.0", h), ev_append("sess_1.r1.0", wake, false, d),
+                   SessionStart({ task: "t", model: "m", mode: "v2", run_id: "sess_1.r1.0" }),
+                   WakeReceived({ request_id: req, wait_id: "w0", outcome: "operator_input", detail: "" }),
+                   ParkEntered({ request_id: req, step: 0, waits: [OperatorWait({ id: "w0" })] }),
+                   SessionResumed({ resume_count: 1, from_id: "0007", from_ordinal: 0, profile_from: "dogfood",
+                                    profile_to: "dogfood", prompt_digest_from: "sha256:p", prompt_digest_to: "sha256:p",
+                                    forced: false })])
+  }
+  else {
+    let h = [sys(), usr("list the files")];
+    base_child(h, [ev_seed("sess_1.r0.0", h)])
+  }
+}
+
+-- 14: an assistant with content that exercises the codec, and an image; 15: RunSummary.
+pure func run_step(c: Child, a: int) -> Child {
+  if a == 14 then {
+    if List.length(c.open) > 0 then c
+    else {
+      let m: Message = { role: "assistant", content: "q\"b\\s\n\tt é 😀 \u{2028} <x>&", tool_calls: [],
+                         tool_call_id: "", images: [{ source: "screenshot.png", mime: "image/png" }] };
+      let d = chain_digest_after(c.at, m);
+      { c | msgs: c.msgs ++ [m], at: d, prev: c.at, k: c.k + 1, rev: ev_append(c.rid, m, false, d) :: c.rev, parked: false }
+    }
+  }
+  else if a == 15 then { c | rev: ev_summary(c.k) :: c.rev, parked: false }
+  else step(c, a)
+}
+
+-- ---------------------------------------------------------------------------
+-- The executable statement of rule 3 (+ rule 4), from the events alone
+-- ---------------------------------------------------------------------------
+
+type Exp = { ok: bool, seeded: bool, hist: [Message] }
+
+pure func take_sys(ms: [Message]) -> [Message] {
+  match ms { [] => [], m :: rest => if m.role == "system" then m :: take_sys(rest) else [] }
+}
+
+pure func drop_n(n: int, ms: [Message]) -> [Message] {
+  if n <= 0 then ms else match ms { [] => [], _ :: rest => drop_n(n - 1, rest) }
+}
+
+pure func exp_step(e: Exp, ev: LedgerEvent) -> Exp {
+  match ev {
+    HistorySeeded(i) =>
+      if e.seeded then e
+      else match messages_of_json(i.messages) {
+        Ok(ms) => { e | seeded: true, hist: ms ++ e.hist },
+        Err(_) => { e | ok: false }
+      },
+    HistoryAppended(i) => match message_of_json(i.message) {
+      Ok(m) => { e | hist: (if i.replaces_previous then drop_last(e.hist) else e.hist) ++ [m] },
+      Err(_) => { e | ok: false }
+    },
+    HistoryReplaced(i) => match messages_of_json(i.messages) {
+      Ok(ms) =>
+        if i.reason == "checkpoint"
+        then { e | hist: take_sys(e.hist) ++ ms ++ (match i.first_kept { None => [], Some(k) => drop_n(k, e.hist) }) }
+        else { e | hist: ms },
+      Err(_) => { e | ok: false }
+    },
+    _ => e
+  }
+}
+
+pure func contains(xs: [string], t: string) -> bool {
+  match xs { [] => false, x :: rest => if x == t then true else contains(rest, t) }
+}
+
+pure func ids_of(cs: [ToolCall]) -> [string] { List.map(\c. c.id, cs) }
+
+-- Rule 4: the last assistant with calls; its ids not answered by a later tool message.
+type Dang = { ids: [string], idx: int, i: int }
+
+pure func dang_step(d: Dang, m: Message) -> Dang {
+  if List.length(m.tool_calls) > 0 then { ids: ids_of(m.tool_calls), idx: d.i, i: d.i + 1 }
+  else if m.role == "tool" then { d | ids: List.foldl(\acc x. if x == m.tool_call_id then acc else acc ++ [x], [], d.ids), i: d.i + 1 }
+  else { d | i: d.i + 1 }
+}
+
+pure func strip_at(idx: int, ids: [string], ms: [Message], i: int) -> [Message] {
+  match ms {
+    [] => [],
+    m :: rest =>
+      if i == idx then { m | tool_calls: List.foldl(\acc c. if contains(ids, c.id) then acc else acc ++ [c], [], m.tool_calls) } :: rest
+      else m :: strip_at(idx, ids, rest, i + 1)
+  }
+}
+
+pure func expected(es: [LedgerEvent]) -> { ok: bool, hist: [Message], dangling: [string] } {
+  let e = List.foldl(exp_step, { ok: true, seeded: false, hist: [] }, es);
+  -- The statement's own order: the seed first, so a pre-seed append lands after it.
+  let d = List.foldl(dang_step, { ids: [], idx: -1, i: 0 }, e.hist);
+  let h = if List.length(d.ids) == 0 then e.hist else strip_at(d.idx, d.ids, e.hist, 0);
+  { ok: e.ok, hist: h, dangling: d.ids }
+}
+
+-- ---------------------------------------------------------------------------
+-- Driver
+-- ---------------------------------------------------------------------------
+
+func one(accept_only: bool, kind: int, ix: [int]) -> int ! {IO} {
+  let c = List.foldl(run_step, start_of(kind), ix);
+  let es = events_of(c);
+  let r = twin_fold(es);
+  let x = expected(es);
+  let good = match r {
+    Ok(s) => accept_only || (x.ok && history_text(s.history) == history_text(x.hist) && join(",", s.dangling) == join(",", x.dangling)),
+    Err(_) => false
+  };
+  let _ = if good then () else
+    println(concat([intToStr(kind), "\t", ints_text(ix), "\tFAIL\t", verdict_of(r), "\t", join(",", x.dangling), "\t", history_text(x.hist)]));
+  if good then 0 else 1
+}
+
+pure func alphabet() -> [int] { [0, 1, 2, 3, 4, 5, 6, 7, 11, 12, 13, 14, 15] }
+
+func walk(ao: bool, kind: int, prefix: [int], left: int, is: [int]) -> { n: int, bad: int } ! {IO} {
+  match is {
+    [] => { n: 0, bad: 0 },
+    i :: rest => {
+      let p = prefix ++ [i];
+      let here = if left == 1 then { n: 1, bad: one(ao, kind, p) } else walk(ao, kind, p, left - 1, alphabet());
+      let more = walk(ao, kind, prefix, left, rest);
+      { n: here.n + more.n, bad: here.bad + more.bad }
+    }
+  }
+}
+
+func upto(ao: bool, kind: int, i: int, n: int) -> { n: int, bad: int } ! {IO} {
+  if i > n then { n: 0, bad: 0 }
+  else {
+    let here = if i == 0 then { n: 1, bad: one(ao, kind, []) } else walk(ao, kind, [], i, alphabet());
+    let more = upto(ao, kind, i + 1, n);
+    { n: here.n + more.n, bad: here.bad + more.bad }
+  }
+}
+
+func starts(ao: bool, ks: [int], maxlen: int) -> { n: int, bad: int } ! {IO} {
+  match ks {
+    [] => { n: 0, bad: 0 },
+    k :: rest => {
+      let a = upto(ao, k, 0, maxlen);
+      println("start ${intToStr(k)}: ${intToStr(a.n)} runs, ${intToStr(a.bad)} FAIL");
+      let b = starts(ao, rest, maxlen);
+      { n: a.n + b.n, bad: a.bad + b.bad }
+    }
+  }
+}
+
+-- `accept_only`: judge only P3.2's first clause (the fold accepts), not the history.
+export func main(args: { maxlen: int, starts: [int], accept_only: bool }) -> () ! {IO} {
+  let t = starts(args.accept_only, args.starts, args.maxlen);
+  println("p3.2: ${intToStr(t.n)} runs, ${intToStr(t.bad)} FAIL")
+}

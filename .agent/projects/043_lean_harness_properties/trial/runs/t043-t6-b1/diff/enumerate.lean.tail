@@ -1,0 +1,34 @@
+
+/-
+Appended to ../T6Model.lean by run_diff.sh. Reads the case file named by the first argument
+(`<max_bytes>;<b1>,<b2>,...` per line, the format gen_cases.py writes) and prints, per case,
+the same four fields the AILANG driver prints from the REAL function:
+
+  <index>|<input bytes>|<Str.length(input)>|<result bytes>
+
+The model's `fromString` is the identity, so field 2 is the case's bytes as given; the AILANG
+side prints them as AILANG sees them after `toString(fromInts(...))`, which checks that the
+harness itself does not repair or reject anything on the way in.
+-/
+
+def joinNats (xs : List Nat) : String := String.intercalate "," (xs.map toString)
+
+def parseCase (line : String) : Option (Int × List Nat) :=
+  match line.splitOn ";" with
+  | [ms, bs] =>
+    let m? := ms.toInt?
+    let bytes := if bs.isEmpty then [] else (bs.splitOn ",").filterMap String.toNat?
+    m?.map (fun m => (m, bytes))
+  | _ => none
+
+def main (args : List String) : IO Unit := do
+  let path := args.headD "cases.txt"
+  let content ← IO.FS.readFile path
+  let mut i := 0
+  for line in content.splitOn "\n" do
+    if line.trimAscii.isEmpty then continue
+    match parseCase line with
+    | some (m, s) =>
+      IO.println s!"{i}|{joinNats s}|{T6.runeCount s}|{joinNats (T6.truncate s m)}"
+    | none => IO.println s!"{i}|BADLINE"
+    i := i + 1

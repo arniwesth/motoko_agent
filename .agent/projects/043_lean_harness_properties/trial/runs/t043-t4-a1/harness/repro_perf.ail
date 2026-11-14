@@ -1,0 +1,45 @@
+-- repro_perf.ail -- A1-T4-3. chain_digests_over is quadratic in the history length.
+-- Times the REAL chain_digest_over and chain_digests_over over the same n-message history
+-- from chain_empty_base(). Both make exactly n chain_digest_after calls, so their ratio is the
+-- cost of chain_digests_over's accumulator (`acc.out ++ [d]`, which copies the list: std/list
+-- docs, "a foldl whose step concatenates to a list accumulator is O(n^2)"). It also times
+-- n/4 first so the growth can be read directly.
+-- Prints DEFECT and exits 1 when, at n = 64000, chain_digests_over takes more than 2x as long
+-- as chain_digest_over; OK and exit 0 otherwise. Linear code gives a ratio near 1 (the
+-- mapAccumL control measured below in SUMMARY.md); this code gives about 3.5 unloaded. The ratio
+-- is taken within one run, so a uniformly loaded machine slows both sides alike.
+--   ailang run --relax-modules --caps IO,Clock --entry main repro_perf.ail
+module repro_perf
+
+import std/io (println, exit)
+import std/ai (Message)
+import std/clock (now)
+import std/list as List (length, map, range)
+import std/string as Str (intToStr)
+import src/core/journal (chain_digest_over, chain_digests_over, chain_empty_base)
+
+pure func mk(i: int) -> Message {
+  { role: if i % 2 == 0 then "user" else "assistant", content: "message ${intToStr(i)}", tool_calls: [], tool_call_id: "", images: [] }
+}
+
+func time_pair(n: int) -> (int, int) ! {IO, Clock} {
+  let ms = List.map(mk, range(0, n));
+  let e = chain_empty_base();
+  let t0 = now();
+  let d = chain_digest_over(e, ms);
+  let t1 = now();
+  let ds = chain_digests_over(e, ms);
+  let t2 = now();
+  println("n=${intToStr(n)} chain_digest_over=${intToStr(t1 - t0)}ms chain_digests_over=${intToStr(t2 - t1)}ms (len ${intToStr(List.length(ds))}, last ${d})");
+  (t1 - t0, t2 - t1)
+}
+
+export func main() -> () ! {IO, Clock} {
+  let _ = time_pair(16000);
+  match time_pair(64000) {
+    (over, digests) =>
+      if digests > 2 * (if over < 1 then 1 else over)
+      then { println("DEFECT: chain_digests_over took ${intToStr(digests)}ms, more than 2x chain_digest_over's ${intToStr(over)}ms over the same 64000 messages"); exit(1) }
+      else println("OK: chain_digests_over within 2x of chain_digest_over (${intToStr(digests)}ms vs ${intToStr(over)}ms)")
+  }
+}

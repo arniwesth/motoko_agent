@@ -1,0 +1,62 @@
+check_cases: 4200 cases, 4200 results (P5.1: every call returned)
+  cases per generator: graph=550 weird(start "")=121 chain=600 rootcycle=600 backedge=600 selfloop=600 dupid=600 weird=479 graph(start "")=50
+  max entries in a case: 60
+  P5.2        0 violations  
+  P5.3c       0 violations  
+  P5.3l    1986 violations  graph=184 weird(start "")=65 rootcycle=600 backedge=507 selfloop=600 weird=30
+  X-1      1921 violations  graph=184 rootcycle=600 backedge=507 selfloop=600 weird=30
+  X-2         0 violations  
+  X-3      1921 violations  graph=184 rootcycle=600 backedge=507 selfloop=600 weird=30
+  X-4        29 violations  weird(start "")=29
+  P5.3l [graph] es=["c"<"b" "b"<"a" "b"<"b" "c"<"b" "a"<"a" "b"<"b"] start="a"  path_up=[] ev_path_up=[4] strict_path=Err(ChainBreak)
+  P5.3l [graph] es=["b"<"b" "a"<"c" "c"<"a" "b"<"b" "a"<"" "c"<"" "c"<"" "b"<"" "c"<"c"] start="a"  path_up=[] ev_path_up=[2,1] strict_path=Err(ChainBreak)
+  P5.3l [graph] es=["a"<"a" "a"<"missing" "a"<"a" "a"<"a" "a"<"a" "a"<"a" "a"<"a" "a"<"a" "a"<"a" "a"<"" "a"<"a" "a"<"a"] start="a"  path_up=[] ev_path_up=[0] strict_path=Err(ChainBreak)
+  X-1 [graph] es=["c"<"b" "b"<"a" "b"<"b" "c"<"b" "a"<"a" "b"<"b"] start="a"  path_up=[] ev_path_up=[4] strict_path=Err(ChainBreak)
+  X-1 [graph] es=["b"<"b" "a"<"c" "c"<"a" "b"<"b" "a"<"" "c"<"" "c"<"" "b"<"" "c"<"c"] start="a"  path_up=[] ev_path_up=[2,1] strict_path=Err(ChainBreak)
+  X-1 [graph] es=["a"<"a" "a"<"missing" "a"<"a" "a"<"a" "a"<"a" "a"<"a" "a"<"a" "a"<"a" "a"<"a" "a"<"" "a"<"a" "a"<"a"] start="a"  path_up=[] ev_path_up=[0] strict_path=Err(ChainBreak)
+  X-3 [graph] es=["c"<"b" "b"<"a" "b"<"b" "c"<"b" "a"<"a" "b"<"b"] start="a"  path_up=[] ev_path_up=[4] strict_path=Err(ChainBreak)
+  X-3 [graph] es=["b"<"b" "a"<"c" "c"<"a" "b"<"b" "a"<"" "c"<"" "c"<"" "b"<"" "c"<"c"] start="a"  path_up=[] ev_path_up=[2,1] strict_path=Err(ChainBreak)
+  X-3 [graph] es=["a"<"a" "a"<"missing" "a"<"a" "a"<"a" "a"<"a" "a"<"a" "a"<"a" "a"<"a" "a"<"a" "a"<"" "a"<"a" "a"<"a"] start="a"  path_up=[] ev_path_up=[0] strict_path=Err(ChainBreak)
+  P5.3l [weird(start "")] es=["0001"<"\"" ","<"0001" ""<"," ","<"a" "ü"<"" "null"<"null" "0001"<" "] start=""  path_up=[] ev_path_up=[] strict_path=Err(ChainBreak)
+  P5.3l [weird(start "")] es=[""<"ü"] start=""  path_up=[] ev_path_up=[] strict_path=Err(ChainBreak)
+  P5.3l [weird(start "")] es=["ü"<" " " "<"\"" "0001"<"\"" "null"<"null" " "<"missing" "\""<" " "null"<"" ""<"0001"] start=""  path_up=[] ev_path_up=[] strict_path=Err(ChainBreak)
+  P5.3l [rootcycle] es=["0000"<"0001" "0001"<"0000"] start="0001"  path_up=[] ev_path_up=[0,1] strict_path=Err(ChainBreak)
+  P5.3l [rootcycle] es=["0000"<"0005" "0001"<"0000" "0002"<"0001" "0003"<"0002" "0004"<"0003" "0005"<"0004"] start="0005"  path_up=[] ev_path_up=[0,1,2,3,4,5] strict_path=Err(ChainBreak)
+  P5.3l [rootcycle] es=["0000"<"0042" "0001"<"0000" "0002"<"0001" "0003"<"0002" "0004"<"0003" "0005"<"0004" "0006"<"0005" "0007"<"0006" "0008"<"0007" "0009"<"0008" "0010"<"0009" "0011"<"0010" "0012"<"0011" "0013"<"0012" "0014"<"0013" "0015"<"0014" "0016"<"0015" "0017"<"0016" "0018"<"0017" "0019"<"00 …
+  X-1 [rootcycle] es=["0000"<"0001" "0001"<"0000"] start="0001"  path_up=[] ev_path_up=[0,1] strict_path=Err(ChainBreak)
+  X-1 [rootcycle] es=["0000"<"0005" "0001"<"0000" "0002"<"0001" "0003"<"0002" "0004"<"0003" "0005"<"0004"] start="0005"  path_up=[] ev_path_up=[0,1,2,3,4,5] strict_path=Err(ChainBreak)
+  X-1 [rootcycle] es=["0000"<"0042" "0001"<"0000" "0002"<"0001" "0003"<"0002" "0004"<"0003" "0005"<"0004" "0006"<"0005" "0007"<"0006" "0008"<"0007" "0009"<"0008" "0010"<"0009" "0011"<"0010" "0012"<"0011" "0013"<"0012" "0014"<"0013" "0015"<"0014" "0016"<"0015" "0017"<"0016" "0018"<"0017" "0019"<"0018 …
+  X-3 [rootcycle] es=["0000"<"0001" "0001"<"0000"] start="0001"  path_up=[] ev_path_up=[0,1] strict_path=Err(ChainBreak)
+  X-3 [rootcycle] es=["0000"<"0005" "0001"<"0000" "0002"<"0001" "0003"<"0002" "0004"<"0003" "0005"<"0004"] start="0005"  path_up=[] ev_path_up=[0,1,2,3,4,5] strict_path=Err(ChainBreak)
+  X-3 [rootcycle] es=["0000"<"0042" "0001"<"0000" "0002"<"0001" "0003"<"0002" "0004"<"0003" "0005"<"0004" "0006"<"0005" "0007"<"0006" "0008"<"0007" "0009"<"0008" "0010"<"0009" "0011"<"0010" "0012"<"0011" "0013"<"0012" "0014"<"0013" "0015"<"0014" "0016"<"0015" "0017"<"0016" "0018"<"0017" "0019"<"0018 …
+  P5.3l [backedge] es=["0000"<"" "0001"<"0000" "0002"<"0001" "0003"<"0002" "0004"<"0005" "0005"<"0004"] start="0005"  path_up=[] ev_path_up=[4,5] strict_path=Err(ChainBreak)
+  P5.3l [backedge] es=["0000"<"" "0001"<"0000" "0002"<"0001" "0003"<"0002" "0004"<"0003" "0005"<"0004" "0006"<"0005" "0007"<"0006" "0008"<"0007" "0009"<"0008" "0010"<"0009" "0011"<"0010" "0012"<"0011" "0013"<"0012" "0014"<"0013" "0015"<"0014" "0016"<"0015" "0017"<"0016" "0018"<"0017" "0019"<"0018" " …
+  P5.3l [backedge] es=["0000"<"" "0001"<"0000" "0002"<"0001" "0003"<"0002" "0004"<"0003" "0005"<"0004" "0006"<"0005" "0007"<"0008" "0008"<"0007" "0009"<"0008"] start="0009"  path_up=[] ev_path_up=[7,8,9] strict_path=Err(ChainBreak)
+  X-1 [backedge] es=["0000"<"" "0001"<"0000" "0002"<"0001" "0003"<"0002" "0004"<"0005" "0005"<"0004"] start="0005"  path_up=[] ev_path_up=[4,5] strict_path=Err(ChainBreak)
+  X-1 [backedge] es=["0000"<"" "0001"<"0000" "0002"<"0001" "0003"<"0002" "0004"<"0003" "0005"<"0004" "0006"<"0005" "0007"<"0006" "0008"<"0007" "0009"<"0008" "0010"<"0009" "0011"<"0010" "0012"<"0011" "0013"<"0012" "0014"<"0013" "0015"<"0014" "0016"<"0015" "0017"<"0016" "0018"<"0017" "0019"<"0018" "00 …
+  X-1 [backedge] es=["0000"<"" "0001"<"0000" "0002"<"0001" "0003"<"0002" "0004"<"0003" "0005"<"0004" "0006"<"0005" "0007"<"0008" "0008"<"0007" "0009"<"0008"] start="0009"  path_up=[] ev_path_up=[7,8,9] strict_path=Err(ChainBreak)
+  X-3 [backedge] es=["0000"<"" "0001"<"0000" "0002"<"0001" "0003"<"0002" "0004"<"0005" "0005"<"0004"] start="0005"  path_up=[] ev_path_up=[4,5] strict_path=Err(ChainBreak)
+  X-3 [backedge] es=["0000"<"" "0001"<"0000" "0002"<"0001" "0003"<"0002" "0004"<"0003" "0005"<"0004" "0006"<"0005" "0007"<"0006" "0008"<"0007" "0009"<"0008" "0010"<"0009" "0011"<"0010" "0012"<"0011" "0013"<"0012" "0014"<"0013" "0015"<"0014" "0016"<"0015" "0017"<"0016" "0018"<"0017" "0019"<"0018" "00 …
+  X-3 [backedge] es=["0000"<"" "0001"<"0000" "0002"<"0001" "0003"<"0002" "0004"<"0003" "0005"<"0004" "0006"<"0005" "0007"<"0008" "0008"<"0007" "0009"<"0008"] start="0009"  path_up=[] ev_path_up=[7,8,9] strict_path=Err(ChainBreak)
+  P5.3l [selfloop] es=["0000"<"" "0001"<"0000" "0002"<"0001" "0003"<"0002" "0004"<"0003" "0005"<"0004" "0006"<"0005" "0007"<"0006" "0008"<"0008" "0009"<"0008" "0010"<"0009" "0011"<"0010" "0012"<"0011" "0013"<"0012" "0014"<"0013" "0015"<"0014" "0016"<"0015"] start="0016"  path_up=[] ev_path_up=[8,9,1 …
+  P5.3l [selfloop] es=["0000"<"" "0001"<"0000" "0002"<"0001" "0003"<"0002" "0004"<"0003" "0005"<"0005" "0006"<"0005" "0007"<"0006" "0008"<"0007"] start="0008"  path_up=[] ev_path_up=[5,6,7,8] strict_path=Err(ChainBreak)
+  P5.3l [selfloop] es=["0000"<"" "0001"<"0000" "0002"<"0001" "0003"<"0002" "0004"<"0003" "0005"<"0004" "0006"<"0006" "0007"<"0006" "0008"<"0007" "0009"<"0008" "0010"<"0009"] start="0010"  path_up=[] ev_path_up=[6,7,8,9,10] strict_path=Err(ChainBreak)
+  X-1 [selfloop] es=["0000"<"" "0001"<"0000" "0002"<"0001" "0003"<"0002" "0004"<"0003" "0005"<"0004" "0006"<"0005" "0007"<"0006" "0008"<"0008" "0009"<"0008" "0010"<"0009" "0011"<"0010" "0012"<"0011" "0013"<"0012" "0014"<"0013" "0015"<"0014" "0016"<"0015"] start="0016"  path_up=[] ev_path_up=[8,9,10, …
+  X-1 [selfloop] es=["0000"<"" "0001"<"0000" "0002"<"0001" "0003"<"0002" "0004"<"0003" "0005"<"0005" "0006"<"0005" "0007"<"0006" "0008"<"0007"] start="0008"  path_up=[] ev_path_up=[5,6,7,8] strict_path=Err(ChainBreak)
+  X-1 [selfloop] es=["0000"<"" "0001"<"0000" "0002"<"0001" "0003"<"0002" "0004"<"0003" "0005"<"0004" "0006"<"0006" "0007"<"0006" "0008"<"0007" "0009"<"0008" "0010"<"0009"] start="0010"  path_up=[] ev_path_up=[6,7,8,9,10] strict_path=Err(ChainBreak)
+  X-3 [selfloop] es=["0000"<"" "0001"<"0000" "0002"<"0001" "0003"<"0002" "0004"<"0003" "0005"<"0004" "0006"<"0005" "0007"<"0006" "0008"<"0008" "0009"<"0008" "0010"<"0009" "0011"<"0010" "0012"<"0011" "0013"<"0012" "0014"<"0013" "0015"<"0014" "0016"<"0015"] start="0016"  path_up=[] ev_path_up=[8,9,10, …
+  X-3 [selfloop] es=["0000"<"" "0001"<"0000" "0002"<"0001" "0003"<"0002" "0004"<"0003" "0005"<"0005" "0006"<"0005" "0007"<"0006" "0008"<"0007"] start="0008"  path_up=[] ev_path_up=[5,6,7,8] strict_path=Err(ChainBreak)
+  X-3 [selfloop] es=["0000"<"" "0001"<"0000" "0002"<"0001" "0003"<"0002" "0004"<"0003" "0005"<"0004" "0006"<"0006" "0007"<"0006" "0008"<"0007" "0009"<"0008" "0010"<"0009"] start="0010"  path_up=[] ev_path_up=[6,7,8,9,10] strict_path=Err(ChainBreak)
+  P5.3l [weird] es=[","<"" "null"<"a" "ü"<" " "a"<"\"" " "<"a" "0001"<"null" ""<"," "a"<"0001" "\""<"\"" "ü"<"\"" ","<"" " "<"a"] start="null"  path_up=[] ev_path_up=[8,3,1] strict_path=Err(ChainBreak)
+  P5.3l [weird] es=["ü"<"a" ","<"missing" ""<"" "null"<"ü" "\""<"missing" "ü"<"ü" "ü"<"," "null"<"a" "\""<"," ""<"0001" "a"<"null" "null"<"0001"] start="ü"  path_up=[] ev_path_up=[3,10,0] strict_path=Err(ChainBreak)
+  P5.3l [weird] es=[""<"missing" "a"<"missing" "a"<"\"" "ü"<"" "0001"<"0001" "ü"<"" "\""<"ü" "\""<"null"] start="0001"  path_up=[] ev_path_up=[4] strict_path=Err(ChainBreak)
+  X-1 [weird] es=[","<"" "null"<"a" "ü"<" " "a"<"\"" " "<"a" "0001"<"null" ""<"," "a"<"0001" "\""<"\"" "ü"<"\"" ","<"" " "<"a"] start="null"  path_up=[] ev_path_up=[8,3,1] strict_path=Err(ChainBreak)
+  X-1 [weird] es=["ü"<"a" ","<"missing" ""<"" "null"<"ü" "\""<"missing" "ü"<"ü" "ü"<"," "null"<"a" "\""<"," ""<"0001" "a"<"null" "null"<"0001"] start="ü"  path_up=[] ev_path_up=[3,10,0] strict_path=Err(ChainBreak)
+  X-1 [weird] es=[""<"missing" "a"<"missing" "a"<"\"" "ü"<"" "0001"<"0001" "ü"<"" "\""<"ü" "\""<"null"] start="0001"  path_up=[] ev_path_up=[4] strict_path=Err(ChainBreak)
+  X-3 [weird] es=[","<"" "null"<"a" "ü"<" " "a"<"\"" " "<"a" "0001"<"null" ""<"," "a"<"0001" "\""<"\"" "ü"<"\"" ","<"" " "<"a"] start="null"  path_up=[] ev_path_up=[8,3,1] strict_path=Err(ChainBreak)
+  X-3 [weird] es=["ü"<"a" ","<"missing" ""<"" "null"<"ü" "\""<"missing" "ü"<"ü" "ü"<"," "null"<"a" "\""<"," ""<"0001" "a"<"null" "null"<"0001"] start="ü"  path_up=[] ev_path_up=[3,10,0] strict_path=Err(ChainBreak)
+  X-3 [weird] es=[""<"missing" "a"<"missing" "a"<"\"" "ü"<"" "0001"<"0001" "ü"<"" "\""<"ü" "\""<"null"] start="0001"  path_up=[] ev_path_up=[4] strict_path=Err(ChainBreak)
+  X-4 [weird(start "")] es=["null"<"\"" "\""<"" "ü"<"," "\""<"0001" ""<"" ""<"0001" "0001"<"" " "<"0001" ""<""] start=""  path_up=[] ev_path_up=[] strict_path=[4]
+  X-4 [weird(start "")] es=["\""<"null" "a"<"\"" ""<"" "a"<"missing" "\""<"a" ""<""] start=""  path_up=[] ev_path_up=[] strict_path=[2]
+  X-4 [weird(start "")] es=[""<"" "null"<"missing" " "<"ü" ""<"0001" "\""<"missing" ","<""] start=""  path_up=[] ev_path_up=[] strict_path=[0]
+exit=1 49s

@@ -1,0 +1,25 @@
+-- fold_file.ail — fold one journal FILE the way the resume path does
+-- (src/core/rpc.ail:553-557): parse_journal_text(readFile(path)), journal_leaf, fold_journal.
+-- All three are the REAL exported functions of src/core/journal.ail, unmodified.
+-- Prints `accept|<history length>|<leaf>|<last boundary>` or `refuse|<refusal id>|<leaf>`.
+module fold_file
+
+import std/io (println)
+import std/fs (readFile)
+import std/string (intToStr)
+import std/list as List (length)
+import std/result (Result, Ok, Err)
+import src/core/journal (fold_journal, journal_leaf, parse_journal_text, refusal_id, boundary_id)
+
+export func main(path: string) -> () ! {IO, FS} {
+  match parse_journal_text(readFile(path)) {
+    Err(r) => println("parse-refused|${refusal_id(r)}|"),
+    Ok(lines) => {
+      let leaf = journal_leaf(lines);
+      match fold_journal(lines, leaf) {
+        Ok(s) => println("accept|${intToStr(List.length(s.history))}|${leaf}|${boundary_id(s.last)}"),
+        Err(r) => println("refuse|${refusal_id(r)}|${leaf}")
+      }
+    }
+  }
+}

@@ -1,0 +1,27 @@
+-- repro_P4_1.ail — P4.1 on the REAL chain_digests_over (src/core/journal.ail:292-294).
+-- Lean: ChainModel.lean `bug_P4_1_witness` (and `bug_P4_1`, `P4_1_iff`).
+-- Witness: b = chain_empty_base() — the base every current caller passes — xs = [sys],
+-- ys = [user]. P4.1 says
+--   chain_digests_over(b, xs ++ ys) == chain_digests_over(b, xs) ++ chain_digests_over(chain_digest_over(b, xs), ys).
+-- Prints "P4.1 VIOLATED" or "P4.1 HOLDS".
+module repro_P4_1
+
+import std/io (println)
+import std/ai (Message)
+import std/string as Str (join, concat)
+import src/core/journal (chain_digest_over, chain_digests_over, chain_empty_base)
+
+pure func sys() -> Message { { role: "system", content: "you are motoko", tool_calls: [], tool_call_id: "", images: [] } }
+pure func user() -> Message { { role: "user", content: "list the files", tool_calls: [], tool_call_id: "", images: [] } }
+
+export func main() -> () ! {IO} {
+  let b = chain_empty_base();
+  let xs = [sys()];
+  let ys = [user()];
+  let lhs = chain_digests_over(b, xs ++ ys);
+  let rhs = chain_digests_over(b, xs) ++ chain_digests_over(chain_digest_over(b, xs), ys);
+  println(concat(["b = chain_empty_base() = ", b]));
+  println(concat(["chain_digests_over(b, xs ++ ys) = [", join(", ", lhs), "]"]));
+  println(concat(["chain_digests_over(b, xs) ++ chain_digests_over(chain_digest_over(b, xs), ys) = [", join(", ", rhs), "]"]));
+  println(if lhs == rhs then "P4.1 HOLDS" else "P4.1 VIOLATED")
+}
