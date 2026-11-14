@@ -26,7 +26,7 @@
 module src/core/process_limits
 
 import std/option (Option, Some, None)
-import std/json (Json, JNull, JNumber, JObject, get, jint, encode, decode)
+import std/json (Json, JNull, JObject, get, asNumber, jint, encode, decode)
 import std/math (floor, round, floatToInt, intToFloat)
 import std/result (Result, Ok, Err)
 import std/string (length, substring, startsWith, trim, stringToInt)
@@ -85,18 +85,22 @@ pure func whole_ms_of_secs(x: float) -> Option[int] {
   }
 }
 
--- D2's request table, reading the raw `timeout_secs`. E3: `std/json` holds every
--- number as a float, so `60.0` cannot be told from `60` and is valid.
+-- D2's request table, reading the raw `timeout_secs`. E3: `60.0` and `60` are the
+-- same request, and both are valid. `asNumber` reads either one as a float. From
+-- AILANG v0.60.0 `decode` gives `60` as `JInt(60)`, not `JNumber`, so a `JNumber`
+-- pattern here would send every integer to `BadRequest` (#323).
 -- contracts: BLOCKED — takes a recursive `Json`, which the Z3 fragment does not encode.
 pure func parse_timeout_request(args: Json) -> TimeoutRequest {
   match get(args, "timeout_secs") {
     None => NoRequest,
     Some(JNull) => NoRequest,
-    Some(JNumber(x)) =>
-      if x > 0.0 && x == floor(x) && x <= intToFloat(max_request_secs())
-      then ValidMs(floatToInt(x) * 1000)
-      else BadRequest(whole_ms_of_secs(x)),
-    Some(_) => BadRequest(None)
+    Some(v) => match asNumber(v) {
+      Some(x) =>
+        if x > 0.0 && x == floor(x) && x <= intToFloat(max_request_secs())
+        then ValidMs(floatToInt(x) * 1000)
+        else BadRequest(whole_ms_of_secs(x)),
+      None => BadRequest(None)
+    }
   }
 }
 
