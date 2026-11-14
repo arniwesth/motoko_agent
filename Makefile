@@ -2675,7 +2675,7 @@ verify_native_process_tree:
 	@printf '%s\n' '  native process-tree timeout containment'
 	@AILANG_BIN="$${AILANG_BIN:-ailang}"; \
 	version=$$("$$AILANG_BIN" --version 2>/dev/null | head -1); \
-	case "$$version" in *v0.54.14*|*v0.54.15*|*v0.54.16*|*v0.54.17*|*v0.54.18*|*v0.54.19*|*v0.55.*|*v0.56.*|*v0.57.*|*v0.58.*|*v0.59.*) ;; \
+	case "$$version" in *v0.54.14*|*v0.54.15*|*v0.54.16*|*v0.54.17*|*v0.54.18*|*v0.54.19*|*v0.55.*|*v0.56.*|*v0.57.*|*v0.58.*|*v0.59.*|*v0.6[0-9].*) ;; \
 	*) echo "FAIL: native process-tree probe requires AILANG >=0.54.14, got $$version"; exit 1;; esac; \
 	env -u AILANG_FS_SANDBOX "$$AILANG_BIN" run --caps IO,FS,Process,Clock --process-timeout 1s --entry main scripts/verify_native_process_tree.ail; rc=$$?; \
 	dir=$$(mktemp -d); \
