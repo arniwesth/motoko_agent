@@ -9,11 +9,14 @@ title: "fix: ready for AILANG's JInt and exhaustive-match changes (#323)"
 ## Summary
 
 Issue #323 lists the AILANG changes between v0.54.14 and 1.0 that affect this repo. Item 1
-landed in #321 and #322. This PR fixes items 2 and 3. Item 2 is already live: AILANG v0.60.0
-(released 2026-11-10) gives an integer as `JInt`, and four matches here stop seeing integers.
-Item 3, a non-exhaustive `match` becoming a compile error, is planned for 1.0, and ten matches
-here would fail it. The same source checks and passes its tests on v0.54.14, which stays the
-pin, and on v0.60.0.
+landed in #321 and #322. This PR fixes items 2 and 3. Item 2 is live from AILANG v0.60.0
+(released 2026-11-10), which gives an integer as `JInt`, and four matches here stop seeing
+integers. Item 3 is live from v0.60.4 (released 2026-11-13): a non-exhaustive `match` is a
+compile error, `TC_MATCH_002`, and twelve matches here fail it. One of them can also fail at
+run time on v0.54.14. The same source checks and passes its tests on v0.54.14, which stays the pin,
+and on v0.60.0. v0.60.4 also adds checks that #323 does not list. #326 fixes those, and
+with both PRs every file that checks on v0.54.14 checks on v0.60.4, except 27 deliberate
+limitation pins.
 
 Closes #323
 
@@ -22,8 +25,9 @@ Closes #323
 - fix: read JSON numbers through asNumber, so a JInt is still a number
 - fix: name every constructor in the ten matches that left one out
 - chore: re-lock after the skills and progress-contract-guard changes
+- fix: name the constructors two more matches left out
 
-9 files changed.
+11 files changed.
 
 **Item 2, `JInt` (sunholo-data/ailang#2223).** The four matches read numbers with `asNumber`,
 as the issue's comment suggests. It accepts `JNumber` and `JInt` on newer compilers and
@@ -37,8 +41,9 @@ does not export it (`IMP010`).
 | `skills.ail` `name_violations` | an all-digit `name:` skipped its specific message | specific message again |
 | `association.ail` `arguments_equal` | outer: run-time failure. Inner: `60` ≠ `60.0` | numbers compare by value through `asNumber` |
 
-**Item 3, exhaustive matches (sunholo-data/ailang#2146).** None of these can fail today, because
-the missing constructor never arrives. Each now names it:
+**Item 3, exhaustive matches (sunholo-data/ailang#2146).** #323 lists ten matches. v0.60.4's
+checker found two more, which #323's text search missed. Each now names the constructors it
+left out:
 
 | Match | Added |
 |---|---|
@@ -46,6 +51,15 @@ the missing constructor never arrives. Each now names it:
 | `stream_parity_dst.ail` `has_adjacent_repeat` | `[] => false` in the inner match |
 | `progress_contract_guard.ail` test (2) | `Accept => false`, so the test passes only on the decision it expects |
 | `scripted_ports.ail` `state_from_step_provider` | the four `*World` providers return their world's script, the world `session.ail`'s `ported_provider` builds. New test for `ScriptedWorld` and `RecordingWorld` |
+| `admission.ail` `ad_rejection_location` | `AppliedFaultNotATool` and `AppliedFaultRepeated` at the ordinal they list, `CeilingInvalid` at the program. New test |
+| `verify_herdr_orchestrator.ail` `kind_of` | `DecisionSolverJudge` and `DecisionToolPolicy` |
+
+Eleven of these cannot fail today, because the missing constructor never arrives. For `kind_of`,
+herdr registers neither decision capability. `ad_rejection_location` can fail:
+`validate_program` returns all three constructors it left out, and `check_a9` maps it over that
+list. On v0.54.14, a program with an invalid ceiling or a bad applied-fault ordinal stopped A9
+with "no pattern matched in match expression" instead of giving a finding. The new test fails
+that way before the change and passes after it.
 
 `ailang.lock`: only the content hashes of the two edited packages change.
 
@@ -63,7 +77,12 @@ Not changed:
 Found while testing and not fixed here: v0.60.0 warns `LDR006` that
 `sunholo/motoko_ext_scratchpad` imports four root-package modules (`src/core/env_client`,
 `src/core/tool_contract`, `src/core/tool_envelope_dispatch`, `src/core/types`), which is
-"planned to become an error". It is not in #323. Filed as #325.
+"planned to become an error". It is not in #323. Filed as #325. It is still a warning on
+v0.60.4.
+
+Not fixed here: v0.60.1 to v0.60.4 also type-check contracts and test rows, check a lambda's
+effect row against its body, and refuse a type name two modules declare. These stop most files
+on v0.60.4 and are not in #323. #326 fixes them.
 
 ## Governing docs
 
@@ -75,10 +94,11 @@ Found while testing and not fixed here: v0.60.0 warns `LDR006` that
 
 On v0.60.0, an integer `timeout_secs` resolves to its budget instead of `ProcessInvalid`. A
 skill whose `name:` is all digits gets the "has to be quoted" message instead of a run-time
-failure. Two tool calls that differ only in `60` against `60.0` still associate. On v0.54.14
-nothing changes. When AILANG makes non-exhaustive matches an error, these ten matches do not
-fail. To check: `ailang check` on v0.60.0 prints no `TC_MATCH_005` for this repo's files, and
-the inline-test counts below hold.
+failure. Two tool calls that differ only in `60` against `60.0` still associate. On v0.54.14,
+A9 gives a `program-ceiling-invalid` or `program-applied-fault-*` finding where it used to stop,
+and nothing else changes. On v0.60.4 these twelve matches check. To check: `ailang check` on
+v0.60.0 prints no `TC_MATCH_005` for this repo's files, on v0.60.4 with #326 no file fails
+on `TC_MATCH_002`, and the inline-test counts below hold.
 
 ## Test evidence
 
@@ -103,6 +123,24 @@ Item 3:
 - `ailang test`: `scripted_ports.ail` 11/11 and `progress_contract_guard.ail` 25/25 on both.
 - On v0.54.14: `compaction_policy_dst` PASS count=3, `compaction_seeded_dst` PASS seeds=5,
   `make stream_parity` wire gate PASS.
+
+The two matches v0.60.4 found:
+
+- `admission.ail` inline tests: v0.54.14 12 passed and 1 failed before the change. The new test
+  fails with "no pattern matched in match expression". After the change: 13/13 on v0.54.14 and
+  v0.60.0.
+- `ailang check` passes on v0.54.14 and v0.60.0 for both files and for the 15 files that import
+  `admission.ail`. Those with tests give the same counts on both.
+- `make verify_herdr_orchestrator` on v0.54.14: 24 OK, `orchestrator.ail` 90/90.
+
+v0.60.4, from a checkout with #326 applied: 397 of the 502 tracked `.ail` files outside
+`.agent/` check on v0.54.14, and 370 of them check on v0.60.4. The other 27 are the limitation
+pins #326 describes, and no file reports `TC_MATCH_002`. Every one of the 110 files with
+`tests [` gives its v0.54.14 result on v0.60.4, except `compaction_structural.ail`, which goes
+from 1 failed to 10/10. This PR's files give `process_limits` 239/239, `skills` 62/62,
+`association` 31/31, `admission` 13/13, `scripted_ports` 11/11 and `progress_contract_guard`
+25/25. Without #326, both files in the last commit stop on v0.60.4 at `process_limits.ail`'s
+contracts.
 
 Whole tree: `ailang test` on every tracked `.ail` file whose text contains `tests [` (110 files,
 1,954 tests) gives the same result on v0.54.14 and v0.60.0 for every file. Not all of them come
