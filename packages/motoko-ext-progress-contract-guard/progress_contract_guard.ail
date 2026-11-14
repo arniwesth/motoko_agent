@@ -3,7 +3,7 @@ module sunholo/motoko_ext_progress_contract_guard/progress_contract_guard
 import std/string (trim, contains, toLower, replaceMany)
 import std/json (jo, ja, js, asArray)
 import std/option (Option, Some, None)
-import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, ProcessCtx, pure_ctx, process_ctx, WorkItem, FinalizeDecision, ContinueWithFeedback, NoDecision, Msg)
+import pkg/sunholo/motoko_ext_abi/types (empty_ext_world, ProcessCtx, pure_ctx, process_ctx, WorkItem, FinalizeDecision, Accept, ContinueWithFeedback, NoDecision, Msg)
 
 export pure func guard_marker() -> string {
   "[motoko-progress-contract-guard]"
@@ -257,11 +257,13 @@ pure func test_open_waits_suppress_the_nudge() -> bool
     let base = test_ctx(contract_task(), hist);
     let nudged = match decide_with_budget(base, failure_candidate(), 2) {
       ContinueWithFeedback(_) => true,
-      NoDecision => false
+      NoDecision => false,
+      Accept => false
     };
     let silenced = match decide_with_budget({ base | open_waits: ja([jo([{ key: "id", value: js("h1") }])]) }, failure_candidate(), 2) {
       ContinueWithFeedback(_) => false,
-      NoDecision => true
+      NoDecision => true,
+      Accept => false
     };
     nudged && silenced && not declared_open_waits(base)
   }

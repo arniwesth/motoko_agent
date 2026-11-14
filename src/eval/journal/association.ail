@@ -91,7 +91,7 @@
 module src/eval/journal/association
 
 import std/ai (Message, ToolCall)
-import std/json (Json, JNull, JBool, JNumber, JString, JArray, JObject, decode, encode, get, getString, getInt)
+import std/json (Json, JNull, JBool, JString, JArray, JObject, decode, encode, get, asNumber, getString, getInt)
 import std/list as List (length, map, foldl)
 import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
@@ -223,17 +223,27 @@ pure func fields_covered(xs: [{key: string, value: Json}], ys: [{key: string, va
 -- JSON equality: objects compare as sets of members (key order ignored; with
 -- duplicate keys, each member of either side must have an equal member on the
 -- other and the member counts must agree), arrays in order, numbers by value.
+--
+-- Numbers are compared through `asNumber`, as floats. From AILANG v0.60.0 `decode`
+-- gives an integer as `JInt` and any other number as `JNumber`, so `60` and `60.0`
+-- arrive as different constructors and still have to compare equal. `JInt` cannot
+-- be named while v0.54.14 is supported, because that compiler's `std/json` does
+-- not export it. The final `_` arm is the numbers that `asNumber` already took
+-- (#323).
 export pure func arguments_equal(a: Json, b: Json) -> bool {
-  match a {
-    JNull => (match b { JNull => true, _ => false }),
-    JBool(x) => (match b { JBool(y) => x == y, _ => false }),
-    JNumber(x) => (match b { JNumber(y) => x == y, _ => false }),
-    JString(x) => (match b { JString(y) => x == y, _ => false }),
-    JArray(xs) => (match b { JArray(ys) => arrays_equal(xs, ys), _ => false }),
-    JObject(xs) => (match b {
-      JObject(ys) => List.length(xs) == List.length(ys) && fields_covered(xs, ys) && fields_covered(ys, xs),
+  match asNumber(a) {
+    Some(x) => (match asNumber(b) { Some(y) => x == y, None => false }),
+    None => match a {
+      JNull => (match b { JNull => true, _ => false }),
+      JBool(x) => (match b { JBool(y) => x == y, _ => false }),
+      JString(x) => (match b { JString(y) => x == y, _ => false }),
+      JArray(xs) => (match b { JArray(ys) => arrays_equal(xs, ys), _ => false }),
+      JObject(xs) => (match b {
+        JObject(ys) => List.length(xs) == List.length(ys) && fields_covered(xs, ys) && fields_covered(ys, xs),
+        _ => false
+      }),
       _ => false
-    })
+    }
   }
 }
 
