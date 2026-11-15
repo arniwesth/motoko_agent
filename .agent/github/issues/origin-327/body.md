@@ -7,7 +7,7 @@ title: "declared_vs_performed needs re-measuring on AILANG v0.60.4: 17 of ADR-00
 ## Summary
 
 `make declared_vs_performed` holds the evidence for 031 ADR-001, and it does not pass on AILANG
-v0.60.4. The pin to v0.60.4 (branch `fix/pin-ailang-0.60.4`) lists it in `DST_KNOWN_RED`. That
+v0.60.4. The pin to v0.60.4, #328, lists it in `DST_KNOWN_RED`. That
 names the failure in the sweep summary and waives nothing, so `make dst` still exits 2. Most of
 the red is good news: v0.60.4 rejects 17 of the 18 escapes the gate pins as LIMITATIONs. The gate
 needs the re-measurement Amendment 6 made at the v0.52.5 pin, and this issue holds the inventory.
