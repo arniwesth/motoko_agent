@@ -659,6 +659,22 @@ $(DST_LANE_TARGETS): export AILANG_CACHE_DIR = $(CURDIR)/.ailang/lane/$@
 # and a `stale_skip_record`) was dropped once it passed, per the summary's
 # reverse check.
 #
+# declared_vs_performed -- LISTED 2026-11-15 with the AILANG v0.60.4 pin; the
+# row inventory is issue #327. It was red on main before the pin: on v0.54.14
+# it reports 126 passed, 11 failed (the on_budget_plan binding site at
+# src/core/test/ext_fixture.ail:148, GROUP 1 n_pure_passthru_xmod, and nine
+# RECONSTRUCTED rows whose table reason no longer matches). On v0.60.4 its probe,
+# scripts/dst/declared_vs_performed.ail, does not compile: control_env and
+# control_fs perform Env and FS inside PureCtx callbacks through limitation 1's
+# record-field door, and v0.60.4 closes that door. With those two bodies stubbed
+# out so the probe compiles, 46 rows are red: LIMITATIONs 1-6 and 8-18 report
+# FIXED UPSTREAM; 23 GROUP 1 rows are still rejected, but in words other than the
+# ones they pin; the record-update and imported-sum rows changed with limitation
+# 1; the two controls must be re-sited; the binding-site row is as before.
+# LIMITATION 7 still holds. The re-measurement belongs to 031 ADR-001, as
+# Amendment 6 did at the v0.52.5 pin. Drop this entry when the summary reports
+# the target PASSED.
+#
 # depth_canary -- REMOVED 2026-09-15: pins re-measured and bumped with the
 # reason recorded in run_depth_canary.sh's header (floors 63/92/105, ceilings
 # 76/110/126, records 123/191/217; fault-present re-measured at HEAD, 150/237/265;
@@ -698,7 +714,7 @@ $(DST_LANE_TARGETS): export AILANG_CACHE_DIR = $(CURDIR)/.ailang/lane/$@
 # before any P3 part. Disposition pending the owner's D4 re-issue of the profile
 # against the corrected table. Drop both entries when the summary reports them
 # PASSED.)
-DST_KNOWN_RED :=
+DST_KNOWN_RED := declared_vs_performed
 
 # bash for `pipefail` alone: the phases are piped through `tee` so the run is
 # both watchable and logged, and without pipefail the pipeline would report
