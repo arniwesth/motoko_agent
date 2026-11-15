@@ -109,6 +109,12 @@ echo "attribution anchors:"
 check src/core/ext/runtime.ail 199 'now()' "the ambient clock read attributed to test_dummy"
 # 034 PLAN-001 W1.4 (2026-10-18) RE-BASELINED THESE TWO AND :484 BELOW,
 # 388/389/484 -> 403/404/499, all +15 -- see the W1.4 note at the foot.
+# #325 (2026-11-15) DID NOT MOVE THEM. It added one import above them, for
+# `dispatch_tool_envelope`, which :404 now passes to `exec_scratchpad_cell_ws`
+# so the scratchpad package imports nothing from src/. The edit is
+# line-neutral, as PLAN-002 W2's was: `ToolPlanEntry, ToolPending` share a line
+# in the phase_vocab import. :404 gains that one argument and calls the same
+# function under the same guard, so no site is added, removed or re-routed.
 check src/core/tool_phase.ail 403 'is_scratchpad_tool_name' "the mixed guard"
 check src/core/tool_phase.ail 404 'exec_scratchpad_cell_ws' "the call attributed to scratchpad"
 # WI-D16 RE-BASELINED the five session.ail anchors 881/1126/1232/2677/2787 ->

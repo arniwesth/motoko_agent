@@ -6,11 +6,12 @@ import std/json (Json, jo, kv, js, jnum, encode, decode, asString, asNumber, get
 import std/result (Ok, Err)
 import std/string (replace)
 import std/stream (connect, transmit, onEvent, runEventLoop, disconnect, StreamEvent)
-import pkg/sunholo/motoko_ext_abi/types (ExtCtx, ExtRuntime)
-import src/core/tool_contract (ToolCallEnvelope, ToolResultEnvelope)
-import src/core/types (CellExecResult)
-import src/core/tool_envelope_dispatch (dispatch_tool_envelope)
-import src/core/env_client (exec_scratchpad_cell)
+import pkg/sunholo/motoko_ext_abi/types (ExtCtx, ExtRuntime, ToolCallEnvelope, ToolResultEnvelope)
+import pkg/sunholo/motoko_ext_scratchpad/cell_client (CellExecResult, exec_scratchpad_cell)
+
+-- The core's tool dispatcher reaches this module as the `dispatch` argument of
+-- exec_scratchpad_cell_ws, not as an import: importing it from src/ is what
+-- AILANG v0.60 warns about (LDR006, #325).
 
 func string_field(obj: Json, key: string, fallback: string) -> string {
   match obj {
@@ -180,18 +181,18 @@ func collect_one(conn, req_path: string, done_path: string) -> () ! {Stream, FS}
   runEventLoop(conn)
 }
 
-func dispatch_deferred_request(rt: ExtRuntime, ctx: ExtCtx, raw_req: string) -> string ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Rand, Trace} {
+func dispatch_deferred_request(rt: ExtRuntime, ctx: ExtCtx, dispatch: (ExtRuntime, ExtCtx, ToolCallEnvelope) -> ToolResultEnvelope ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Rand, Trace}, raw_req: string) -> string ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Rand, Trace} {
   match decode(raw_req) {
     Err(_) => error_tool_result("", "invalid tool-request frame"),
     Ok(obj) => {
       let req_id = string_field(obj, "reqId", "");
-      let dispatch_result = dispatch_tool_envelope(rt, ctx, call_from_loopback_frame(obj));
+      let dispatch_result = dispatch(rt, ctx, call_from_loopback_frame(obj));
       tool_result_frame(req_id, dispatch_result)
     }
   }
 }
 
-func loop_until_done(rt: ExtRuntime, ctx: ExtCtx, conn, req_path: string, done_path: string, remaining: int) -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Rand, Trace} {
+func loop_until_done(rt: ExtRuntime, ctx: ExtCtx, dispatch: (ExtRuntime, ExtCtx, ToolCallEnvelope) -> ToolResultEnvelope ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Rand, Trace}, conn, req_path: string, done_path: string, remaining: int) -> () ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Rand, Trace} {
   if remaining <= 0 then ()
   else if fileExists(done_path) then ()
   else {
@@ -200,14 +201,14 @@ func loop_until_done(rt: ExtRuntime, ctx: ExtCtx, conn, req_path: string, done_p
     if fileExists(done_path) then ()
     else if fileExists(req_path) then {
       let raw_req = readFile(req_path);
-      let result_frame = dispatch_deferred_request(rt, ctx, raw_req);
+      let result_frame = dispatch_deferred_request(rt, ctx, dispatch, raw_req);
       let _ = transmit(conn, result_frame);
-      loop_until_done(rt, ctx, conn, req_path, done_path, remaining - 1)
+      loop_until_done(rt, ctx, dispatch, conn, req_path, done_path, remaining - 1)
     } else ()
   }
 }
 
-export func exec_scratchpad_cell_ws(rt: ExtRuntime, ctx: ExtCtx, call: ToolCallEnvelope, cells: Json, timeout_secs: int) -> CellExecResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Rand, Trace} {
+export func exec_scratchpad_cell_ws(rt: ExtRuntime, ctx: ExtCtx, call: ToolCallEnvelope, cells: Json, timeout_secs: int, dispatch: (ExtRuntime, ExtCtx, ToolCallEnvelope) -> ToolResultEnvelope ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Rand, Trace}) -> CellExecResult ! {AI, Clock, Env, FS, IO, Net, Process, SharedMem, Stream, Rand, Trace} {
   if getEnvOr("MOTOKO_SCRATCHPAD_WS_LOOPBACK", "0") != "1" then
     exec_scratchpad_cell(ctx.env_server_url, cells, ctx.state_key, timeout_secs)
   else {
@@ -226,7 +227,7 @@ export func exec_scratchpad_cell_ws(rt: ExtRuntime, ctx: ExtCtx, call: ToolCallE
           kv("timeout", jnum(_int_to_float(timeout_secs)))
         ]));
         let _ = transmit(conn, run_frame);
-        loop_until_done(rt, ctx, conn, req_path, path, 32);
+        loop_until_done(rt, ctx, dispatch, conn, req_path, path, 32);
         disconnect(conn);
         if fileExists(path) then
           result_from_json(readFile(path))

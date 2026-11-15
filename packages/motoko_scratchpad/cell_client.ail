@@ -1,0 +1,56 @@
+module sunholo/motoko_ext_scratchpad/cell_client
+
+-- The environment server's /scratchpad-cell endpoint, and the record it
+-- answers with. Only this package calls it.
+--
+-- Moved here from src/core/env_client and src/core/types (#325): from AILANG
+-- v0.60 a dependency importing the package that depends on it warns LDR006,
+-- and AILANG plans to make that an error. This package now imports nothing
+-- from the root package.
+
+import std/net  (httpPost)
+import std/json (Json, encode, decode, jo, kv, js, jnum, get, asString, asNumber)
+
+export type CellExecResult = {
+  stdout:    string,
+  stderr:    string,
+  exit_code: int,
+  metadata:  Json
+}
+
+-- ---------------------------------------------------------------------------
+-- exec_scratchpad_cell : string -> Json -> string -> int -> CellExecResult ! {Net}
+--
+-- Execute persistent Python/JS cells through the environment server.
+-- `cells` is the JSON array from the scratchpad tool arguments.
+-- ---------------------------------------------------------------------------
+export func exec_scratchpad_cell(url: string, cells: Json, session_id: string, timeout_secs: int) -> CellExecResult ! {Net} {
+  let body = encode(jo([
+    kv("cells",     cells),
+    kv("sessionId", js(session_id)),
+    kv("timeout",   jnum(_int_to_float(timeout_secs)))
+  ]));
+  let raw = httpPost("${url}/scratchpad-cell", body);
+  match decode(raw) {
+    Err(_) =>
+      { stdout: "", stderr: "env-server: malformed scratchpad-cell response: ${raw}", exit_code: 1, metadata: jo([]) },
+    Ok(obj) => {
+      let stdout = match get(obj, "stdout") {
+        None    => "",
+        Some(j) => match asString(j) { None => "", Some(s) => s }
+      };
+      let stderr = match get(obj, "stderr") {
+        None    => "",
+        Some(j) => match asString(j) { None => "", Some(s) => s }
+      };
+      let exit_code = match get(obj, "exit_code") {
+        None    => 0,
+        Some(j) => match asNumber(j) {
+          None    => 0,
+          Some(n) => _float_to_int(n)
+        }
+      };
+      { stdout: stdout, stderr: stderr, exit_code: exit_code, metadata: obj }
+    }
+  }
+}
