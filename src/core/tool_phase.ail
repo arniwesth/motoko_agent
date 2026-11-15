@@ -17,8 +17,7 @@ import src/core/ext/runtime (dispatch_tool_policy, dispatch_tool_handle)
 import src/core/phase_vocab (
   ApprovalRequest,
   ToolPlan,
-  ToolPlanEntry,
-  ToolPending,
+  ToolPlanEntry, ToolPending,
   NativeToolDenied,
   ExtToolHandled,
   DelegatedToolDeferred,
@@ -48,6 +47,7 @@ import src/core/tool_runtime (backend_for_v2)
 import src/core/types (ToolBackend, ToolFault)
 import src/core/tool_fault (fault_key, effects_note_none, effects_note_unknown, failed_fault, deadline_fault, correlation_mismatch_fault, denied_fault, arguments_undecodable_fault, refused_fault) -- 034 W1.4: the `fault` object's one home (PLAN-001 C3)
 import pkg/sunholo/motoko_ext_scratchpad/ws_loopback (exec_scratchpad_cell_ws)
+import src/core/tool_envelope_dispatch (dispatch_tool_envelope)  -- passed to exec_scratchpad_cell_ws, so the package imports nothing from src/ (#325)
 
 export type PendingApprovalPlan = {
   event: LedgerEvent,
@@ -401,7 +401,7 @@ export func execute_allowed_tool_call(
       emitted: [undecodable_event], open_waits: open_waits }
   }
   else if is_scratchpad_tool_name(envelope.tool) && scratchpad_extension_active(rt) then {
-    let result_cell = exec_scratchpad_cell_ws(rt, ctx, envelope, scratchpad_cells_arg(envelope.arguments), 30);
+    let result_cell = exec_scratchpad_cell_ws(rt, ctx, envelope, scratchpad_cells_arg(envelope.arguments), 30, dispatch_tool_envelope);
     let result_env: ToolResultEnvelope = {
       tool_call_id: envelope.id,
       tool: "scratchpad",

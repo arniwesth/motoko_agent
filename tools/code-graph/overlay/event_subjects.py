@@ -89,7 +89,7 @@ RULES: tuple[Rule, ...] = (
     Rule("WireRecord:ProviderCallPrepared", FIXED, (MODEL_PHASE,),
          note="1. Call assembly; payload digests are replay identity (009/D8)"),
     Rule("WireRecord:ScratchpadResult", FIXED, (TOOL_PHASE, ENV_CLIENT),
-         note="2. env_client.exec_scratchpad_cell (env_client.ail:118) executes cells; "
+         note="2. the scratchpad package's cell_client.exec_scratchpad_cell executes cells; "
               "always the scratchpad tool, so fixed rather than payload_routed. "
               "D6.4 GAP — never in a trace today; the row exists so closure needs no table change"),
     Rule("WireRecord:RunSummary", FIXED, (SESSION,),
