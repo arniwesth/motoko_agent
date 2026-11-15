@@ -8,9 +8,11 @@ wrote one". Guessing at it from the six rejection codes in
 a crude in-fragment filter", an estimate that turned out to be off by a factor of
 four in the direction that matters.
 
-Method: for each module, synthesise `ensures { true }` on every `pure func` that
-does not already have an ensures, verify the module once, and read the per-
-function verdict.
+Method: for each module, synthesise `ensures { 0 == 0 }` on every `pure func`
+that does not already have an ensures, verify the module once, and read the per-
+function verdict. (Not the literal `true`: from AILANG v0.60 the verifier SKIPs
+that as "nothing to verify" without reading the body, and every function would
+read as outside the fragment.)
 
   VERIFIED   the function is INSIDE the fragment -- a real contract on it would
              be decided. This is the candidate list.
@@ -150,7 +152,7 @@ def probe_module(path: Path, keep: bool = False) -> dict[str, tuple[str, str]]:
     parts, prev = [], 0
     for at in points:
         parts.append(text[prev:at])
-        parts.append("\n  ensures { true }\n  ")
+        parts.append("\n  ensures { 0 == 0 }\n  ")
         prev = at
     parts.append(text[prev:])
 

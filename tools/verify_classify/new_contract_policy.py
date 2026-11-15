@@ -4,8 +4,11 @@
 ADR-001 §4. Free text is what let compaction.ail's honest comments and
 agents_md.ail's misleading `Z3 / SMT verification targets` banner look alike to a
 reader, so a justification here is not taken on trust: for each annotated
-function the checker synthesises a trivial contract (`ensures { true }`) and
-confirms the verifier really does reject the function. An unchecked excuse is as
+function the checker synthesises a trivial contract (`ensures { 0 == 0 }`) and
+confirms the verifier really does reject the function. Not the literal `true`:
+from AILANG v0.60 `ailang verify` SKIPs a function whose ensures is the literal
+`true` ("nothing to verify") without reading the body, which this checker would
+take for a rejection -- every excuse would stand. An unchecked excuse is as
 self-asserted as no excuse.
 
 Keyed on the diff, not the tree. ~1545 `pure func` declarations predate this rule
@@ -119,7 +122,7 @@ def has_contract(text: str, name: str) -> bool:
 
 
 def verifier_rejects(path: str, name: str) -> tuple[bool | None, str]:
-    """Synthesise `ensures { true }` on `name` and report whether it verifies.
+    """Synthesise `ensures { 0 == 0 }` on `name` and report whether it verifies.
 
     Returns (True, reason) if the verifier rejects it -- the excuse stands;
     (False, _) if it VERIFIES -- the excuse is wrong; (None, detail) if the
@@ -142,7 +145,7 @@ def verifier_rejects(path: str, name: str) -> tuple[bool | None, str]:
     head = sig.rstrip()[:-1].rstrip() if body_opens_here else sig
     tail = "\n  {" if body_opens_here else ""
 
-    probed = text[:m.start()] + head + "\n  ensures { true }" + tail + text[m.end():]
+    probed = text[:m.start()] + head + "\n  ensures { 0 == 0 }" + tail + text[m.end():]
     stem = src_path.stem
     # THE MODULE LINE IS DERIVED FROM THE PATH, not assumed flat. `module
     # src/core/{stem}` matched nothing for a file under `src/core/ext/`, whose
