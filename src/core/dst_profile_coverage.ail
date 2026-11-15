@@ -163,7 +163,7 @@ export type CapabilityKind
   -- 8.0 (031 ADR-001 D2): the two structured-decision variants, one per vote
   -- family. Their classification is `capability_purity_basis` below.
   | DecisionSolverJudgeKind
-  | DecisionToolPolicyKind
+  | DecisionToolPolicyKind deriving (Eq)
 
 -- THREE kinds since the 7.0 ABI bump, and the third exists because two could only
 -- describe `ExitIntent` by lying in one direction or the other.
@@ -269,7 +269,7 @@ export pure func capability_dispatch(k: CapabilityKind) -> DispatchKind {
 -- The 7.x rowless slots also take `PureCtx` at 8.0, and they keep the basis they
 -- were admitted on: D2 re-bases the two new slots, not the old ones, and this
 -- table does not widen the ADR.
-export type PurityBasis = EffectRow | DeclaredEmptyRow | ViewsPlusBoundary
+export type PurityBasis = EffectRow | DeclaredEmptyRow | ViewsPlusBoundary deriving (Eq)
 
 -- The contract is D2's re-basing and nothing wider: EXACTLY the two decision slots
 -- rest on views-plus-boundary, and no pre-8.0 slot does. Both directions are the

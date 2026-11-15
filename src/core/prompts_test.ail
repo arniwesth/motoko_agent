@@ -48,8 +48,8 @@ func wch_extends(system: string, hint: string) -> bool
 func fm(msgs: [Msg]) -> string
   tests [
     ([], ""),
-    ([{role: "user", content: "hello"}], "[user]\nhello\n\n"),
-    ([{role: "user", content: "hi"}, {role: "assistant", content: "hello"}],
+    ([{role: "user", content: "hello", tool_calls: [], tool_call_id: ""}], "[user]\nhello\n\n"),
+    ([{role: "user", content: "hi", tool_calls: [], tool_call_id: ""}, {role: "assistant", content: "hello", tool_calls: [], tool_call_id: ""}],
      "[user]\nhi\n\n[assistant]\nhello\n\n")
   ]
   { fmt_msgs(msgs) }

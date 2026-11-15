@@ -970,7 +970,7 @@ export type ProviderExchange = {
 -- A sum and not a `[ToolSchema]` because the catalogue belongs to the adapter
 -- that holds the runtime, as it did before. The caller states what kind of
 -- request this is; it does not rebuild the list.
-export type ToolOffer = AgentTools | NoTools
+export type ToolOffer = AgentTools | NoTools deriving (Eq)
 
 -- What a provider request projection says about its `ToolOffer`, so that two
 -- requests differing only in the offer record as different interactions and
