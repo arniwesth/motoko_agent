@@ -12,7 +12,7 @@ import std/result (Result, Ok, Err)
 import std/trace as Trace
 import src/core/ports (ScriptedStep, ApprovalResolution, ApprovalAllowed, ApprovalDenied, Ports, ProviderExchange, WorldState, ports_shape_probe, virtual_clock, ToolOffer, AgentTools)
 import src/core/phase_vocab (ApprovalRequest, ExecNative)
-import src/core/test/stub_step (StepProvider, Scripted, ScriptedWorld, LiveAI, Ported, scripted_to_step_result, scripted_world_state, bounded_scripted_ports, scripted_provider_input_tokens)
+import src/core/test/stub_step (StepProvider, Scripted, ScriptedWorld, RecordingWorld, GeneratedWorld, PortedWorld, LiveAI, Ported, scripted_to_step_result, scripted_world_state, bounded_scripted_ports, scripted_provider_input_tokens)
 import src/core/config (CostRates, VerificationConfig)
 import pkg/sunholo/motoko_ext_abi/types (BudgetPlan, ExtRuntime)
 import src/core/session as Session
@@ -27,9 +27,16 @@ export pure func scripted_state(model_steps: [ScriptedStep], approvals: [Approva
   { model_steps: model_steps, approvals: approvals, clock_values: clock_values }
 }
 
+-- The model steps are the script of the provider's initial world, the same world
+-- `session.ail`'s `ported_provider` builds. A `*World` variant carries that world
+-- and its script; `LiveAI` and `Ported` start from an empty one.
 export pure func state_from_step_provider(provider: StepProvider) -> ScriptedPortsState {
   match provider {
     Scripted(steps) => scripted_state(steps, [], []),
+    ScriptedWorld(w) => scripted_state(w.script, [], []),
+    RecordingWorld(w) => scripted_state(w.script, [], []),
+    GeneratedWorld(w) => scripted_state(w.script, [], []),
+    PortedWorld(_, w) => scripted_state(w.script, [], []),
     LiveAI => scripted_state([], [], []),
     Ported(_) => scripted_state([], [], [])
   }
@@ -170,6 +177,14 @@ pure func test_state_from_step_provider_preserves_script() -> bool
   {
     let state = state_from_step_provider(Scripted([scripted_step()]));
     List.length(state.model_steps) == 1
+  }
+
+pure func test_state_from_step_provider_reads_a_world_script() -> bool
+  tests [((), true)]
+  {
+    let world = scripted_world_state([scripted_step()]);
+    List.length(state_from_step_provider(ScriptedWorld(world)).model_steps) == 1
+      && List.length(state_from_step_provider(RecordingWorld(world)).model_steps) == 1
   }
 
 pure func test_scripted_approval_defaults_on_exhaustion() -> bool

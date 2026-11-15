@@ -105,7 +105,7 @@ import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
 import std/string (join, split, startsWith, endsWith, stringToInt, compare)
 import std/string as Str (length)
-import src/core/process_limits (Legacy)
+import src/core/process_limits (Legacy, Limits, NoDeadline, CeilingMs)
 import src/core/ports (WorldState, ScriptedStep, empty_world_state, encode_provider_outcome, encode_exhausted_provider_outcome)
 import src/core/fs_node (FsNode, FsFile, FsDir)
 import src/core/dst_interaction (
@@ -117,7 +117,7 @@ import src/core/dst_program (
   ExecutionProgram, ProgramRejection, validate_program, program_rule, program_schema_version,
   SchemaFieldMissing, SchemaVersionUndecodable, InitialValueMissing, NegativeTime, DuplicateOrdinal,
   OrdinalNotDense, ImpossibleReference, IdentityComponentMissing, DeadlineDisagreesWithClass,
-  StreamOnNonProvider, ChunkOffsetsNotMonotone, OutcomeStatusDisagreesWithFault, EmptyProgram
+  StreamOnNonProvider, ChunkOffsetsNotMonotone, OutcomeStatusDisagreesWithFault, EmptyProgram, AppliedFaultNotATool, AppliedFaultRepeated, CeilingInvalid
 )
 import src/core/dst_profile (ExecutionManifest, ManifestRejection, ManifestFieldMissing, ManifestProfileMismatch, ManifestVersionDrifted, validate_manifest, manifest_rule)
 import src/core/dst_driver_only (driver_only, driver_only_manifest, driver_only_version)
@@ -343,7 +343,10 @@ pure func ad_rejection_location(r: ProgramRejection) -> Location {
     SchemaFieldMissing(_) => Aggregate("program"),
     SchemaVersionUndecodable(_) => Aggregate("program"),
     InitialValueMissing(_) => Aggregate("program"),
-    EmptyProgram => Aggregate("program")
+    EmptyProgram => Aggregate("program"),
+    AppliedFaultNotATool(o, _) => at(o),
+    AppliedFaultRepeated(o) => at(o),
+    CeilingInvalid(_, _) => Aggregate("program")
   }
 }
 
@@ -1228,6 +1231,22 @@ pure func test_m9_a9_round_trip() -> bool
       && first_label(check_a9(blank_generator)) == "A9:program-schema-field-missing@aggregate:program"
       && first_label(check_a9(stale_manifest)) == "A9:manifest-version-drifted@aggregate:manifest"
       && first_label(check_a9(epoch)) == "A9:program-negative-time@aggregate:program"
+  }
+
+-- A9 places the three rejections `validate_program` gained with 041 W5's
+-- ceiling and the applied-fault list: the ceiling has no position, an
+-- applied fault is at the ordinal it lists.
+pure func test_a9_locates_ceiling_and_applied_fault_rejections() -> bool
+  tests [((), true)]
+  {
+    let clean = tx_program(tx_log_from(served_step_payload()));
+    let ceiling = { clean | initial_world: { clean.initial_world | process_limits: Limits({ default: NoDeadline, ceiling: CeilingMs(0) }) } };
+    let not_a_tool = { clean | applied_faults: [9] };
+    let repeated = { clean | applied_faults: [2, 2] };
+    first_label(check_a9(ceiling)) == "A9:program-ceiling-invalid@aggregate:program"
+      && first_label(check_a9(not_a_tool)) == "A9:program-applied-fault-not-a-tool@interaction:9"
+      && List.length(List.filter(\l. l == "A9:program-applied-fault-repeated@interaction:2",
+                                 ad_labels(check_a9(repeated)))) == 1
   }
 
 -- A served step's payload, as the recorder's codec encodes it (so the clean

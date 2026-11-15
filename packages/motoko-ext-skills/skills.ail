@@ -20,7 +20,7 @@
 
 module sunholo/motoko_ext_skills/skills
 
-import std/json (Json, JNull, JBool, JNumber, JString, JArray, JObject, jo, kv, js, jint, get, encode)
+import std/json (Json, JNull, JBool, JString, JArray, JObject, jo, kv, js, jint, get, asNumber, encode)
 import std/list (foldl, map, filter, range)
 import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
@@ -162,14 +162,17 @@ export pure func frontmatter_block(text: string) -> FrontmatterBlock {
   else Block(substring(body, w.start, w.stop))
 }
 
+-- The last arm is the numbers. That is `JNumber`, and from AILANG v0.60.0 also the
+-- `JInt` that `decode` gives an integer. `JInt` cannot be named while v0.54.14 is
+-- supported, because that compiler's `std/json` does not export it (#323).
 pure func json_kind(j: Json) -> string {
   match j {
     JNull => "null",
     JBool(_) => "a boolean",
-    JNumber(_) => "a number",
     JString(_) => "a string",
     JArray(_) => "a sequence",
-    JObject(_) => "a mapping"
+    JObject(_) => "a mapping",
+    _ => "a number"
   }
 }
 
@@ -242,8 +245,12 @@ pure func name_violations(path: string, dir_name: string, mapping: Json) -> [Vio
         _ => [violation(V5, path, concat(["`name` (`", s, "`) ", join("; ", breaks)]))]
       }
     },
-    Some(JNumber(_)) => [violation(V5, path, "`name` is not a string: it decodes as a number, so a name made only of digits has to be quoted")],
-    Some(other) => [violation(V5, path, concat(["`name` is not a string: it decodes as ", json_kind(other)]))]
+    -- `asNumber`, not a `JNumber` pattern: an all-digit name decodes as `JInt` from
+    -- AILANG v0.60.0 (#323).
+    Some(other) => match asNumber(other) {
+      Some(_) => [violation(V5, path, "`name` is not a string: it decodes as a number, so a name made only of digits has to be quoted")],
+      None => [violation(V5, path, concat(["`name` is not a string: it decodes as ", json_kind(other)]))]
+    }
   }
 }
 

@@ -39,7 +39,7 @@ import std/option (None)
 import pkg/sunholo/motoko_ext_abi/types (
   ExtCtx, PureCtx, ExtRegistration, pure_ctx_of, NotReached, ExtPorts, BudgetPlan, Msg, Capability, ToolCallEnvelope, ToolPolicyDecision,
   DescribeTools, PromptShaper, BudgetShaper, Compactor, ToolPolicy, ToolProvider,
-  ResponseInterceptor, SolverJudge, ExitIntent, WorkInFlight,
+  ResponseInterceptor, SolverJudge, ExitIntent, WorkInFlight, DecisionSolverJudge, DecisionToolPolicy,
   Allow, Deny, NoOpinion, Pending, PromptPatch,
   ExtEntry, ExtRegistry, ExtRuntime, empty_ext_world
 )
@@ -109,7 +109,9 @@ func kind_of(c: Capability) -> string {
     ResponseInterceptor(_) => "response_interceptor",
     SolverJudge(_) => "solver_judge",
     ExitIntent(_, _, _) => "exit_intent",
-    WorkInFlight(_, _) => "work_in_flight"
+    WorkInFlight(_, _) => "work_in_flight",
+    DecisionSolverJudge(_, _, _) => "decision_solver_judge",
+    DecisionToolPolicy(_, _, _) => "decision_tool_policy"
   }
 }
 
