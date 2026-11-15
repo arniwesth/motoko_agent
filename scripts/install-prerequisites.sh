@@ -25,6 +25,10 @@
 #   - macOS (Homebrew)
 #
 # Run as a non-root user with sudo access. Root is supported for minimal containers.
+# Without either it still runs, and stops only at a step that must install
+# system-wide (apt, Go in /usr/local, Node from NodeSource, Omnigraph's /opt
+# clone), naming the command. When those are already installed, the rest,
+# AILANG included, installs under $HOME.
 
 set -euo pipefail
 
@@ -206,8 +210,18 @@ configure_privilege() {
     SUDO=(sudo)
     SUDO_E=(sudo -E)
   else
-    die "This installer needs root privileges for system packages. Run as root or install sudo."
+    # Not fatal yet: a dev container often has every system package already,
+    # and then nothing here needs root. need_root stops the run at the first
+    # step that does.
+    SUDO=(need_root)
+    SUDO_E=(need_root)
+    log_warn "Not root and no sudo: running as $(id -un). A step that must install system-wide will stop with an error."
   fi
+}
+
+# Stands in for sudo when there is none.
+need_root() {
+  die "This step needs root: $*. Run as root or install sudo."
 }
 
 # ---------------------------------------------------------------------------
@@ -296,8 +310,6 @@ ensure_user_local_bin_on_path() {
 # ---------------------------------------------------------------------------
 install_apt_packages() {
   log_header "System packages (apt)"
-  log_info "Updating package lists..."
-  "${SUDO[@]}" env DEBIAN_FRONTEND=noninteractive TZ="${TZ:-Etc/UTC}" apt-get update -qq
 
   local pkgs=(
     git
@@ -321,7 +333,11 @@ install_apt_packages() {
   if [[ ${#missing[@]} -eq 0 ]]; then
     log_ok "All system packages already installed"
   else
+    # Only when something is missing: the package lists are needed to install,
+    # not to check, and updating them takes root.
     log_info "Installing: ${missing[*]}"
+    log_info "Updating package lists..."
+    "${SUDO[@]}" env DEBIAN_FRONTEND=noninteractive TZ="${TZ:-Etc/UTC}" apt-get update -qq
     "${SUDO[@]}" env DEBIAN_FRONTEND=noninteractive TZ="${TZ:-Etc/UTC}" apt-get install -y -qq "${missing[@]}"
     log_ok "System packages installed"
   fi
