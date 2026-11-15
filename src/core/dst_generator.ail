@@ -1020,12 +1020,16 @@ export pure func canary_bounds_tight() -> GeneratorBounds {
 --   draws          the SHAPE of the trajectory. Moves when the choice surface
 --                  gains or loses a draw, even if every value is unchanged.
 --   digest         the choices themselves, every field of every decision.
+--
+-- Eq because tools/verify_classify/classify.py's DETERMINE probe compares the
+-- pinned tables with `==` in a contract, and from AILANG v0.60 a contract's
+-- `==` needs an instance.
 export type CanaryRow = {
   seed: int,
   initial_state: int,
   draws: int,
   digest: int
-}
+} deriving (Eq)
 
 export type CanaryFinding
   = SeedRemapped(int, int, int)        -- seed, pinned initial state, observed

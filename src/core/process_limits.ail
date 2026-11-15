@@ -36,7 +36,7 @@ export type SessionLimit = Finite(int) | NoDeadline deriving (Eq)  -- NoDeadline
 
 export type Ceiling = CeilingMs(int) | SameAsDefault deriving (Eq)
 
-export type ProcessLimits = { default: SessionLimit, ceiling: Ceiling }
+export type ProcessLimits = { default: SessionLimit, ceiling: Ceiling } deriving (Eq)
 
 export type LimitMode = Legacy | Limits(ProcessLimits)
 
