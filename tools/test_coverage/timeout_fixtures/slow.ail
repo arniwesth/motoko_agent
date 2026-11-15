@@ -1,7 +1,9 @@
 -- MUTANT for the per-file cap (LEG-CI-COVERAGE-CAP). Kept OUT of fixtures/ so
 -- the fixture walk never runs it under the real cap; `_constructed_rows()`
--- runs it alone under a small one. One test, naive fib(30): ~25 s on the dev
--- box, 5x a 5 s cap, so the timeout fires on any machine and names this file.
+-- runs it alone under a small one. One test, naive fib(35): ~80 s on the dev
+-- box with AILANG v0.60.4, 15x a 5 s cap, so the timeout fires on any machine
+-- and names this file. It was fib(30), ~25 s on v0.54.14; v0.60.4 runs that in
+-- 5.5 s here and inside the cap on CI's runners, and the row went red.
 
 module tools/test_coverage/timeout_fixtures/slow
 
@@ -12,5 +14,5 @@ pure func fib(n: int) -> int {
 pure func slow_fib_is_positive() -> bool
   tests [((), true)]
 {
-  fib(30) > 0
+  fib(35) > 0
 }

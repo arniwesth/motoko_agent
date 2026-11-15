@@ -785,7 +785,7 @@ def _constructed_rows() -> list[str]:
         print("  \u2713 a `$(MAKE)` recipe invocation is recognised")
 
     # The per-file cap, both directions (LEG-CI-COVERAGE-CAP). The mutant is one
-    # naive fib(30), ~21 s, against a 5 s cap: it must be reported `unrunnable`
+    # naive fib(35), ~80 s, against a 5 s cap: it must be reported `unrunnable`
     # FOR THE TIMEOUT, and killed at the cap -- a cap that waits for its child
     # has no teeth on a hang. The survivor is the same file at fib(15), ~0.3 s,
     # under the same cap, so the row cannot pass by firing on everything. Both
