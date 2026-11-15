@@ -37,8 +37,8 @@ GO_MIN_MINOR=22
 BUN_MIN_MAJOR=1
 NODE_MIN_MAJOR=18
 OMNIGRAPH_MIN_VERSION="0.3.0"
-AILANG_REF="v0.54.14"
-AILANG_MIN_VERSION="0.54.14"
+AILANG_REF="v0.60.4"
+AILANG_MIN_VERSION="0.60.4"
 DUCKDB_VERSION="1.1.3"
 # Ubuntu noble's universe carries gh 2.45.0 and will for the life of the release.
 # The PR ops pipeline (.agent/projects/016_github_ops/) needs newer: `gh api
@@ -623,8 +623,8 @@ install_ailang() {
     return
   fi
 
+  local cur_ver=""
   if command -v ailang &>/dev/null; then
-    local cur_ver
     cur_ver="$(ailang --version 2>/dev/null | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || echo "unknown")"
     log_warn "ailang ${cur_ver} found but < ${AILANG_MIN_VERSION} required — upgrading..."
   fi
@@ -656,6 +656,13 @@ install_ailang() {
 
   if ailang_version_ok; then
     log_ok "ailang installed: $(ailang --version 2>/dev/null | head -1)"
+    # The old build's compile caches stay behind, and the two builds' cached
+    # interfaces can disagree: measured at the v0.54.14 -> v0.60.4 upgrade,
+    # tools/ext_ambient_inventory/derive.py read both and failed four DST gates.
+    if [[ -n "$cur_ver" ]]; then
+      log_warn "Compile caches written by ailang ${cur_ver} can disagree with this build. Remove them before running the DST gates:"
+      log_warn "  find \"$PROJECT_ROOT\" \"$ailang_src/std\" -name .ailang -type d -prune -exec rm -rf {} +"
+    fi
   else
     die "ailang build completed but version check failed (need >= ${AILANG_MIN_VERSION})"
   fi

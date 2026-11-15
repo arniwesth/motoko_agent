@@ -281,7 +281,12 @@ func mk_meta(stdout: string, stderr: string, truncated: bool) -> ToolResultMeta 
   }
 }
 
-pure func normalize_range(start: int, end: int) -> { start: int, end: int }
+-- Named so it can derive Eq: tools/verify_classify/classify.py's DETERMINE
+-- probe compares this result with `==`, and from AILANG v0.60 a contract's
+-- `==` needs an instance. An anonymous record type cannot derive one.
+type LineRange = { start: int, end: int } deriving (Eq)
+
+pure func normalize_range(start: int, end: int) -> LineRange
   ensures { result.start >= 1 && result.end >= result.start }
   {
     let s = if start <= 0 then 1 else start;
