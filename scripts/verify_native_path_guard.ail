@@ -24,6 +24,15 @@
 -- atomic_write's mode copy, which used GNU-only `chmod --reference` and failed
 -- every edit on macOS.
 --
+-- A third leg runs the checks with a HOME whose .bash_profile is `exit 0`. A
+-- login shell would source it and exit 0 before the guard ran, which reads as
+-- inside; the guard runs under `bash -c`, which sources no profile.
+--
+-- A fourth leg runs `no_resolver` with a `realpath` first on PATH that always
+-- fails. The guard fails closed: a path it cannot judge is refused, inside ones
+-- included, and a symlink escape writes nothing. Only that leg can notice a
+-- return to failing open, because the guard no longer fails in normal use.
+--
 -- The guard has two copies, in src/core/tool_runtime (the native tools) and
 -- motoko_ext_ailang_tools/register (inside_workdir); this asserts they are the
 -- same string, so the escape checks below cover both.
@@ -32,6 +41,8 @@
 --   AILANG_RELAX_MODULES=1 ailang run --caps IO,FS,Process,Env,Clock \
 --     --entry main scripts/verify_native_path_guard.ail
 -- One leg, in whatever SHLVL the caller has: --entry scenario.
+-- The fail-closed leg on its own needs a failing `realpath` first on PATH:
+-- --entry no_resolver.
 module scripts/verify_native_path_guard
 
 import std/io (println, exit)
@@ -40,6 +51,7 @@ import std/bytes (toString)
 import std/json (jo, ja, kv, js, jnum, encode)
 import std/fs (readFileResult, fileExists, writeFileResult)
 import std/process (exec)
+import std/env (getEnvOr)
 import std/result (Ok, Err)
 import src/core/tool_dispatch_adapter (dispatch_one)
 import src/core/tool_runtime (path_guard_script as native_guard)
@@ -56,6 +68,10 @@ func check(label: string, ok: bool, detail: string) -> bool ! {IO} {
 
 func refused(result: string) -> bool {
   contains(result, "\"error\":true") && contains(result, "escapes workspace")
+}
+
+func refused_undecided(result: string) -> bool {
+  contains(result, "\"error\":true") && contains(result, "could not judge the path")
 }
 
 func file_text(p: string) -> string ! {FS} {
@@ -137,6 +153,30 @@ export func scenario() -> () ! {IO, FS, Process, Env, Clock} {
   }
 }
 
+-- Run with a `realpath` that always fails (see `main`). Every path must be
+-- refused as undecided, not let through and not reported as an escape.
+export func no_resolver() -> () ! {IO, FS, Process, Env, Clock} {
+  let root = match exec("mktemp", ["-d"]) { Ok(out) => trim(toString(out.stdout)), Err(_) => "" };
+  if root == "" then { println("FAIL: mktemp -d"); exit(1) } else {
+    let workdir = "${root}/work";
+    let outside = "${root}/outside";
+    let _ = exec("mkdir", ["-p", workdir, outside]);
+    let _ = exec("ln", ["-s", outside, "${workdir}/link"]);
+    let _ = writeFileResult("${workdir}/inside.txt", "inside\n");
+    let read_in = call(workdir, "r1", "ReadFile",
+      encode(jo([kv("path", js("inside.txt")), kv("start", jnum(1.0)), kv("end", jnum(5.0))])));
+    let write_esc = call(workdir, "w1", "WriteFile",
+      encode(jo([kv("path", js("link/planted.txt")), kv("content", js("planted"))])));
+    let results = [
+      check("ReadFile inside the workdir is refused as undecided", refused_undecided(read_in), read_in),
+      check("WriteFile through a symlink out of the workdir is refused as undecided", refused_undecided(write_esc), write_esc),
+      check("...and nothing was written outside", not fileExists("${outside}/planted.txt"), "planted.txt exists")
+    ];
+    let _ = exec("rm", ["-rf", root]);
+    if all_true(results) then () else exit(1)
+  }
+}
+
 pure func all_true(xs: [bool]) -> bool {
   match xs { [] => true, x :: rest => x && all_true(rest) }
 }
@@ -152,8 +192,8 @@ func print_verdicts(label: string, lines: [string]) -> () ! {IO} {
   match lines {
     [] => (),
     l :: rest => {
-      if startsWith(l, "OK: ") then println("OK: [SHLVL ${label}] ${substring_from(l, 4)}")
-      else if startsWith(l, "FAIL: ") then println("FAIL: [SHLVL ${label}] ${substring_from(l, 6)}")
+      if startsWith(l, "OK: ") then println("OK: [${label}] ${substring_from(l, 4)}")
+      else if startsWith(l, "FAIL: ") then println("FAIL: [${label}] ${substring_from(l, 6)}")
       else ();
       print_verdicts(label, rest)
     }
@@ -165,30 +205,68 @@ pure func substring_from(s: string, n: int) -> string {
 }
 
 -- How many OK lines a passing child prints: scenario's inside, escapes and
--- shared lists. A leg that prints fewer did not run every check.
+-- shared lists, and no_resolver's list. A leg that prints fewer did not run
+-- every check.
 pure func expected_checks() -> int { 14 }
+pure func expected_no_resolver_checks() -> int { 3 }
 
--- One leg. A child that could not run, or that ran without the pinned SHLVL or
--- without every check passing, fails: a leg must not pass by not testing.
-func leg(label: string, pin: [string]) -> bool ! {IO, Process} {
+-- One leg: `ailang run --entry <entry>` in a child, with AILANG_FS_SANDBOX
+-- cleared and `pin` (env arguments) applied. Started through `env`, not a
+-- shell, which would move SHLVL itself. A child that could not run, or that ran
+-- without the pinned SHLVL or without every check passing, fails: a leg must
+-- not pass by not testing.
+func leg(label: string, pin: [string], entry: string, expected: int, shlvl: string) -> bool ! {IO, Process} {
   let argv = ["-u", "AILANG_FS_SANDBOX"] ++ pin ++ ["AILANG_RELAX_MODULES=1", "ailang", "run",
-    "--caps", "IO,FS,Process,Env,Clock", "--entry", "scenario", "scripts/verify_native_path_guard.ail"];
+    "--caps", "IO,FS,Process,Env,Clock", "--entry", entry, "scripts/verify_native_path_guard.ail"];
   match exec("env", argv) {
-    Err(_) => check("[SHLVL ${label}] the probe's child runs", false, "exec failed"),
+    Err(_) => check("[${label}] the probe's child runs", false, "exec failed"),
     Ok(out) => {
       let text = toString(out.stdout);
       let lines = split(text, "\n");
       print_verdicts(label, lines);
-      let pinned = check("[SHLVL ${label}] the child really had that SHLVL", contains(text, "SHLVL seen: ${label}\n"), text);
-      let passed = check("[SHLVL ${label}] all ${show(expected_checks())} checks ran and passed", out.exitCode == 0 && count_ok(lines) == expected_checks(),
+      let pinned = if shlvl == "" then true
+        else check("[${label}] the child really had that SHLVL", contains(text, "SHLVL seen: ${shlvl}\n"), text);
+      let passed = check("[${label}] all ${show(expected)} checks ran and passed", out.exitCode == 0 && count_ok(lines) == expected,
         "exit ${show(out.exitCode)}, ${show(count_ok(lines))} OK");
       pinned && passed
     }
   }
 }
 
+-- A HOME whose .bash_profile exits 0, for the profile leg. Its .ailang links to
+-- the real one, where ailang keeps its package cache.
+func exit_zero_profile_home() -> string ! {Process} {
+  match exec("bash", ["-c", "d=$(mktemp -d) && printf 'exit 0\\n' > \"$d/.bash_profile\" && ln -s \"$HOME/.ailang\" \"$d/.ailang\" && printf '%s' \"$d\""]) {
+    Ok(out) => if out.exitCode == 0 then toString(out.stdout) else "",
+    Err(_) => ""
+  }
+}
+
+-- A directory holding a `realpath` that always fails, for the no_resolver leg.
+func failing_realpath_dir() -> string ! {Process} {
+  match exec("bash", ["-c", "d=$(mktemp -d) && printf '#!/bin/sh\\necho \"realpath: stubbed to fail\" >&2\\nexit 1\\n' > \"$d/realpath\" && chmod +x \"$d/realpath\" && printf '%s' \"$d\""]) {
+    Ok(out) => if out.exitCode == 0 then toString(out.stdout) else "",
+    Err(_) => ""
+  }
+}
+
 export func main() -> () ! {IO, FS, Process, Env, Clock} {
-  let unset_ok = leg("unset", ["-u", "SHLVL"]);
-  let one_ok = leg("1", ["SHLVL=1"]);
-  if unset_ok && one_ok then () else exit(1)
+  let unset_ok = leg("SHLVL unset", ["-u", "SHLVL"], "scenario", expected_checks(), "unset");
+  let one_ok = leg("SHLVL 1", ["SHLVL=1"], "scenario", expected_checks(), "1");
+  let home = exit_zero_profile_home();
+  let profile_ok = if home == "" then check("[profile exits 0] a HOME with that profile was made", false, "mktemp or ln failed")
+    else {
+      let ok = leg("profile exits 0", ["-u", "SHLVL", "HOME=${home}"], "scenario", expected_checks(), "unset");
+      let _ = exec("rm", ["-rf", home]);
+      ok
+    };
+  let stub = failing_realpath_dir();
+  let closed_ok = if stub == "" then check("[no realpath] a failing realpath stub was made", false, "mktemp or chmod failed")
+    else {
+      let path = getEnvOr("PATH", "/usr/bin:/bin");
+      let ok = leg("no realpath", ["PATH=${stub}:${path}"], "no_resolver", expected_no_resolver_checks(), "");
+      let _ = exec("rm", ["-rf", stub]);
+      ok
+    };
+  if unset_ok && one_ok && profile_ok && closed_ok then () else exit(1)
 }
