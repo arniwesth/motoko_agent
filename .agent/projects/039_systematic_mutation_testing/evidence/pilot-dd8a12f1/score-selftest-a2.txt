@@ -1,0 +1,16 @@
+ok   a clean complete run: GREEN | kills=- | also=-
+ok   a family rule red on one member: KILL | kills=outcome-finish-disagrees on seed-4 (1) | also=-
+ok   a gate check red on one member: KILL | kills=provider-calls-exceed-budget on seed-215 (1) | also=-
+ok   a timeout after eight clean members and no verdict: TIMEOUT (8 of 18 members judged before it) | kills=- | also=-
+ok   a timeout after a red row: TIMEOUT (3 of 18 members judged before it) | kills=- | also=JUDGE rows RED but the run did not complete: steps-not-contiguous on seed-1
+ok   a panic before any member row: PANIC (0 of 18 members judged before it: panic: division by zero) | kills=- | also=-
+ok   a panic after the bank (a control reached it): PANIC (18 of 18 members judged before it: panic: division by zero) | kills=- | also=-
+ok   a v0.60.4 runtime error after five members: PANIC (5 of 18 members judged before it: Error: execution failed: RT001: integer division by zero at src/core/session.ail:3523:13) | kills=- | also=-
+ok   a compile error: COMPILE (Error: type error in src/core/session (decl 118): ...) | kills=- | also=-
+ok   a run that stopped at member 12 with exit 0: INCOMPLETE (12 of 18 members judged, closing=None, rc=0) | kills=- | also=-
+ok   only a CONTROL row red: RED-NO-KILL | kills=- | also=CONTROL tool-dispatches-unbalanced RED on tool-run-without-approval
+ok   only a guard red: RED-NO-KILL | kills=- | also=guard: a member dispatched a tool (0 of 16)
+ok   only a not-evaluated rule: RED-NO-KILL | kills=- | also=not-evaluated: seed-1:retry-at-budget-edge
+ok   green rows but exit 2 and a red verdict: RED-NO-KILL | kills=- | also=-
+ok   a kill names its rule and member; the aggregate row and a CONTROL row are not kills
+score_selftest: PASS

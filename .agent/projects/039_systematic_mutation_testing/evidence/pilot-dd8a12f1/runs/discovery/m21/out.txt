@@ -1,0 +1,130 @@
+make[1]: Entering directory '/workspaces/motoko_agent-039-pilot-scratch'
+discovery_dst: WI-A13 stage 2 — completeness AND fidelity against driver_only
+
+approve: 29 interactions recorded
+approve: witness provider=4 tool=3 approval_reads=3 approvals_served=3 clock_delta=37ms
+CENSUS approve expect_provider=4 expect_tool=3 expect_approval=3 expect_wake=0 expect_extension_effect=0 environment_read=13 runtime_random_draw=0 advance_clock=6 file_write=0 file_remove=0 dir_make=0
+  ✓ approve: the scenario reached its terminator
+  ✓ approve: the recorded log accounts for the run, in both directions
+  ✓ approve: recorded provider steps equal the driver's own
+  ✓ approve: recorded tool call ids equal the driver's own correlation
+  mutations (each must go red):
+  ✓ discovery-under-recorded ← the recorder drops the provider class
+  ✓ discovery-env-read-under-recorded ← the recorder drops the environment class
+  ✓ discovery-clock-unaccounted ← the recorder drops the clock class
+  ✓ discovery-over-recorded ← the recorder appends every interaction twice
+  ✓ discovery-log-not-dense ← the recorder numbers from 1 instead of 0
+  ✓ discovery-clock-unaccounted ← the world clock moved further than the log accounts for
+  ✓ discovery-empty-log ← the log records nothing at all
+  ✓ discovery-approval-cursor-disagrees ← the approval cursor moved further than the served reads account for
+  ✓ approve: the check is RED when the adapters do not record
+  ✓ approve: two runs of the same world record the same log
+  ✓ approve: the recorded log is a structurally valid ExecutionProgram
+  ✓ approve: the discovered program is within its declared bounds
+
+deny: 20 interactions recorded
+deny: witness provider=4 tool=0 approval_reads=3 approvals_served=3 clock_delta=3ms
+CENSUS deny expect_provider=4 expect_tool=0 expect_approval=3 expect_wake=0 expect_extension_effect=0 environment_read=10 runtime_random_draw=0 advance_clock=3 file_write=0 file_remove=0 dir_make=0
+  ✓ deny: the scenario reached its terminator
+  ✓ deny: the recorded log accounts for the run, in both directions
+  ✓ deny: recorded provider steps equal the driver's own
+  ✓ deny: recorded tool call ids equal the driver's own correlation
+  mutations (each must go red):
+  ✓ discovery-under-recorded ← the recorder drops the provider class
+  ✓ discovery-env-read-under-recorded ← the recorder drops the environment class
+  ✓ discovery-clock-unaccounted ← the recorder drops the clock class
+  ✓ discovery-over-recorded ← the recorder appends every interaction twice
+  ✓ discovery-log-not-dense ← the recorder numbers from 1 instead of 0
+  ✓ discovery-clock-unaccounted ← the world clock moved further than the log accounts for
+  ✓ discovery-empty-log ← the log records nothing at all
+  ✓ discovery-approval-cursor-disagrees ← the approval cursor moved further than the served reads account for
+  ✓ deny: the check is RED when the adapters do not record
+  ✓ deny: two runs of the same world record the same log
+  ✓ deny: the recorded log is a structurally valid ExecutionProgram
+  ✓ deny: the discovered program is within its declared bounds
+
+eof: 23 interactions recorded
+eof: witness provider=4 tool=1 approval_reads=3 approvals_served=1 clock_delta=11ms
+CENSUS eof expect_provider=4 expect_tool=1 expect_approval=3 expect_wake=0 expect_extension_effect=0 environment_read=11 runtime_random_draw=0 advance_clock=4 file_write=0 file_remove=0 dir_make=0
+  ✓ eof: the scenario reached its terminator
+  ✓ eof: the recorded log accounts for the run, in both directions
+  ✓ eof: recorded provider steps equal the driver's own
+  ✓ eof: recorded tool call ids equal the driver's own correlation
+  mutations (each must go red):
+  ✓ discovery-under-recorded ← the recorder drops the provider class
+  ✓ discovery-env-read-under-recorded ← the recorder drops the environment class
+  ✓ discovery-clock-unaccounted ← the recorder drops the clock class
+  ✓ discovery-over-recorded ← the recorder appends every interaction twice
+  ✓ discovery-log-not-dense ← the recorder numbers from 1 instead of 0
+  ✓ discovery-clock-unaccounted ← the world clock moved further than the log accounts for
+  ✓ discovery-empty-log ← the log records nothing at all
+  ✓ discovery-approval-cursor-disagrees ← the approval cursor moved further than the served reads account for
+  ✓ eof: the check is RED when the adapters do not record
+  ✓ eof: two runs of the same world record the same log
+  ✓ eof: the recorded log is a structurally valid ExecutionProgram
+  ✓ eof: the discovered program is within its declared bounds
+
+-- WI-D19: a ROUTED extension on a graded profile --
+  ✓ routing: the scenario reached its terminator
+  ✓ routing: the routed hook actually RAN — its seams reached the recorder
+  routed classes: dir_make=8 file_write=4 file_remove=4 (witness 4 of each)
+  ✓ routing: the three routed classes balance against a witness that is not the log
+  the WI-D17/D18 tripwire, run against the routed log (each must go red):
+  ✓ discovery-over-recorded ← the pre-WI-D19 pin: file_write expected 0
+  ✓ discovery-over-recorded ← the pre-WI-D19 pin: file_remove expected 0
+  ✓ discovery-over-recorded ← the pre-WI-D19 pin: dir_make expected 0
+  ✓ discovery-under-recorded ← the recorder drops the file_write class
+  ✓ discovery-under-recorded ← the recorder drops the dir_make class
+
+-- WI-D20: a ROUTED on_tool_handle on a graded profile --
+  ✓ handle: the scenario reached its terminator
+  ✓ handle: the routed hook actually RAN — its seams reached the recorder
+  handled/ holds 3 entr(y|ies): ["call_0.ail", "call_1.ail", "call_2.ail"] (dispatches 3)
+  ✓ handle: the routed classes balance against a witness that is not the log
+  ✓ handle: each dispatch SAW the previous dispatch's world
+
+-- WI-D20: TWO tool calls in ONE batch — the stale-ctx input --
+  ✓ batch: the scenario reached its terminator
+  ✓ batch: the fold really ran twice against ONE ctx
+  ✓ batch: the SECOND call in the batch saw the FIRST call's world
+  handled/ holds 2: ["call_0.ail", "call_1.ail"] (dir_make=2 file_write=2)
+
+-- WI-D24: an extension EFFECT recorded, validated and REPLAYED --
+  ✓ effect: the scenario reached its terminator
+  ✓ effect: the routed hook actually RAN — the extension seam reached the recorder
+  ✓ effect: the driver's tool dispatches and the extension's effects are both in the log
+  recorded: expect_extension_effect=4 expect_tool=3 (witness 4 effects)
+  ✓ effect: every recorded effect names the EXTENSION that performed it, not a constant
+  ✓ effect: every recorded effect names the catalogue's extension-effect row
+  ✓ effect: the extension-effect class balances against a witness that is not the log
+  the WI-D19 pin, run against the routed log (must go red):
+  ✓ discovery-over-recorded ← the pre-WI-D24 pin: extension_effect expected 0
+  ✓ effect: the recorded program VALIDATES — WI-D21 §4's rejected program is closed by measurement
+  ✓ effect: the reconstituted world accounts for BOTH dispatch queues
+  reconstituted: tools=3 ext_effects=4
+  ✓ effect: the reconstituted queue SERVES the recorded dispatch, content and exit code
+  ✓ effect: the program replays to an identical interaction log, with nothing left unconsumed
+  ✓ effect: the replay reproduces the terminal outcome
+
+-- WI-D26: COMPOSE's own check path, served from the world --
+  ✓ compose: the scenario reached its terminator
+  ✓ compose: the routed check RAN — compose's own seam reached the recorder
+  ✓ compose: the recorded effect names compose as the performer
+  ✓ compose: the FAILURE branch was taken, on the typed exit code and not on the rendered one
+  ✓ compose: the diagnostic came back through the decode, not lost with the rendering
+  recorded: expect_extension_effect=1 origin=[compose]
+  ✓ compose: the recorded program VALIDATES
+  ✓ compose: the reconstituted queue serves the same TYPED code the recording did
+  ✓ compose: the authoring loop REPLAYS to an identical interaction log
+  ✓ compose: the REPLAY takes the same failure branch
+
+-- WI-D26: a QUIET ripgrep — exit 1 means no matches, not failure --
+  ✓ grep: the scenario reached its terminator
+  ✓ grep: the routed search RAN — the seam reached the recorder
+  ✓ grep: a no-match search still runs the fallback scan — the exit code is NOT the gate
+  verdict=SCANNED (expect_extension_effect=1)
+
+discovery_dst PASS
+FAIL: the driver emitted no provider_call_prepared/v2_tool_dispatch_start to the wire (prov=0 tool=3) — the witness is absent, so a match would prove nothing
+make[1]: *** [Makefile:1097: discovery] Error 1
+make[1]: Leaving directory '/workspaces/motoko_agent-039-pilot-scratch'

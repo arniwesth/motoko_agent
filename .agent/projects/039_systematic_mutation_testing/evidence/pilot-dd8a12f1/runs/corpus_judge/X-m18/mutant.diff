@@ -1,0 +1,7 @@
+diff --git a/src/core/session.ail b/src/core/session.ail
+index 549044a3..51597dd8 100644
+--- a/src/core/session.ail
++++ b/src/core/session.ail
+@@ -4574 +4574 @@ func publish_turn_exit_manifest(
+-    ports: ext_ports_of(ports, seen.world, env_url),
++    ports: ext_ports_of(ports, { seen.world | clock_ms: 1 / (world.ordinal - world.ordinal) }, env_url),

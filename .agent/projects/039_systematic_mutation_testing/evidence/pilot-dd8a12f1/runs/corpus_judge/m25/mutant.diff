@@ -1,0 +1,7 @@
+diff --git a/src/core/session.ail b/src/core/session.ail
+index 549044a3..e5fe2f19 100644
+--- a/src/core/session.ail
++++ b/src/core/session.ail
+@@ -3519 +3519 @@ func c2_loop(
+-                  let capt = if not e.retryable then { let capture = st.provider.env_get(stepped.world, "MOTOKO_CAPTURE_FAILED_PAYLOAD", ""); let _ = if capture.value != "" then capture_failing_payload(e, compacted_msgs) else (); witness(session_id, trace_after_end, advance(capture.next_state, EnvRead)) } else { trace: trace_after_end, world: stepped.world }; -- PLAN-001 P2 Part 5(b): read from the step's successor, advanced and witnessed; `capt` (not `exchange.next_state`) feeds both arms below. On a retryable error it is exactly `trace_after_end`/`stepped.world`
++                  let capt = if not e.retryable then { let capture = st.provider.env_get(st.world_state, "MOTOKO_CAPTURE_FAILED_PAYLOAD", ""); let _ = if capture.value != "" then capture_failing_payload(e, compacted_msgs) else (); witness(session_id, trace_after_end, advance(capture.next_state, EnvRead)) } else { trace: trace_after_end, world: stepped.world }; -- PLAN-001 P2 Part 5(b): read from the step's successor, advanced and witnessed; `capt` (not `exchange.next_state`) feeds both arms below. On a retryable error it is exactly `trace_after_end`/`stepped.world`
