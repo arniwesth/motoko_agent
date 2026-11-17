@@ -31,7 +31,7 @@ import std/clock (now)
 import std/json (Json, jo, ja, kv, js, jnum, jb, encode, decode, get, asString, asNumber)
 import std/list as List (length, foldl)
 import std/result (Result, Ok, Err)
-import std/string (trim, startsWith, substring, toLower, contains)
+import std/string (trim, startsWith, substring, toLower, contains, find)
 import std/string as Str (length)
 import std/fs (writeFileResult)
 import std/process (ProcessError, ProcessOutput)
@@ -160,7 +160,7 @@ import src/core/phase_vocab (
   Finalize,
   Fail,
   FailInfo,
-  Park, ParkEntered, WakeReceived, OperatorWait, DelegateWait, TimerWait, wait_id
+  Park, ParkEntered, WakeReceived, OperatorWait, DelegateWait, TimerWait, wait_id, tool_result_message, tool_message_capped
 )
 -- ADR-003 v6.1 D1/D2/D4. THE EDGE THE PLAN SAYS TO ADD, and the direction is
 -- the whole of why `journal.ail` is a leaf: it imports no `session`, so this
@@ -2021,7 +2021,7 @@ func tool_messages_to_result_jsons(msgs: [Message]) -> [Json] {
     m :: rest => {
       let inner = match decode(m.content) {
         Ok(j) => j,
-        Err(_) => jo([])
+        Err(_) => capped_result_fields(m.content)
       };
       let stdout_str = json_field_str(inner, "stdout", "");
       let stderr_str = json_field_str(inner, "stderr", "");
@@ -2030,8 +2030,8 @@ func tool_messages_to_result_jsons(msgs: [Message]) -> [Json] {
       -- carries `exit_code`; deriving it from `error` showed a BashExec that
       -- exited 127 as `[done] exit=0`. A payload without a numeric one
       -- (`policy_denied_message`, `delegated_deferred_message`, a tool fault)
-      -- falls back to its `error: true` flag: 1, else 0. The nine lines here
-      -- replace nine, so the clock anchors below do not move.
+      -- falls back to its `error: true` flag: 1, else 0. A cut content is read
+      -- by `capped_result_fields`. Nine lines replace nine: no anchor moves.
       let fallback = if json_field_bool_true(inner, "error") then 1.0 else 0.0;
       let exit_code = match get(inner, "exit_code") { Some(j) => match asNumber(j) { Some(n) => n, None => fallback }, None => fallback };
       let normalized = jo([
@@ -5902,3 +5902,58 @@ func test_333_result_jsons_carry_the_payload_exit_code() -> bool
     t333_wire(tool_messages_to_result_jsons([not_found, cut, errored, denied]))
       == "127/false;0/true;1/false;1/false;"
   }
+
+-- #333, the capped half: a result over 65536 bytes reaches this function cut by
+-- `cap_tool_message_content` and no longer decodes. AILANG's process limit is
+-- 10 MB, so a BashExec that prints 100 KB gets here. `exit_code` is rendered
+-- ahead of `stdout`, so the cut leaves it, and the row must show it and mark
+-- the output truncated rather than fall back to `0` and `false`.
+func test_333_capped_result_keeps_its_exit_code() -> bool
+  tests [((), true)]
+  {
+    let x1 = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyzAB";
+    let x2 = "${x1}${x1}";
+    let x4 = "${x2}${x2}";
+    let x8 = "${x4}${x4}";
+    let x16 = "${x8}${x8}";
+    let x32 = "${x16}${x16}";
+    let x64 = "${x32}${x32}";
+    let x128 = "${x64}${x64}";
+    let x256 = "${x128}${x128}";
+    let x512 = "${x256}${x256}";
+    let x1024 = "${x512}${x512}";
+    let content = encode(jo([kv("tool", js("BashExec")), kv("cmd", js("make -k")), kv("exit_code", jnum(2.0)),
+      kv("stdout", js(x1024)), kv("stderr", js("")), kv("truncated", jb(false))]));
+    let capped = tool_result_message({ id: "tc", name: "BashExec", arguments: "{}" }, content);
+    -- A refusal's `exit_code` follows its `message` and is cut; its `error` is not.
+    let refusal = encode(jo([kv("tool", js("Nope")), kv("error", jb(true)), kv("message", js(x1024)), kv("exit_code", jnum(1.0))]));
+    let refused = tool_result_message({ id: "tc", name: "Nope", arguments: "{}" }, refusal);
+    -- A code the marker cut into is not read as a shorter one: 12 is not 1.
+    let mid_number = t333_tool_msg("{\"tool\":\"BashExec\",\"cmd\":\"x\",\"exit_code\":12\n...[truncated; original 70000 bytes]");
+    -- Never JSON and never cut: unchanged, `{}`.
+    let plain = t333_tool_msg("plain text from an extension");
+    Str.length(content) > 65536 && Str.length(capped.content) == 65536 && Str.length(refused.content) == 65536
+      && t333_wire(tool_messages_to_result_jsons([capped, refused, mid_number, plain])) == "2/true;1/true;0/true;0/false;"
+  }
+
+-- #333: what a content `cap_tool_message_content` cut still says, for the TUI's
+-- row. The cut is from the end. BashExec and RunTests render `exit_code` ahead
+-- of `stdout`, and a refusal renders `error` ahead of `message`, so the head
+-- holds them. ReadFile, Search, WriteFile and EditFile render theirs after the
+-- bulk and can lose it, but theirs is always 0, the fallback. An unescaped
+-- `"exit_code":` is a key, since a quote inside a JSON string is escaped. A
+-- number cut by the marker does not decode, so it cannot be misread as a
+-- shorter one. Content that never was JSON stays `{}`, as before. At the end of
+-- the file so no anchor moves.
+func capped_result_fields(content: string) -> Json {
+  if tool_message_capped(content) then {
+    let at = find(content, "\"exit_code\":");
+    let rest = if at < 0 then "" else substring(content, at, Str.length(content));
+    let comma = find(rest, ",");
+    let field = if comma < 0 then rest else substring(rest, 0, comma);
+    let exit_code = match decode("{${field}}") { Ok(j) => get(j, "exit_code"), Err(_) => None };
+    jo([kv("truncated", jb(true))]
+      ++ (if contains(content, "\"error\":true") then [kv("error", jb(true))] else [])
+      ++ (match exit_code { Some(v) => [kv("exit_code", v)], None => [] }))
+  } else jo([])
+}

@@ -12,7 +12,7 @@ import std/json (Json, jo, ja, kv, js, jnum, jb, encode, get, asString, asNumber
 import std/list as List (length, map)
 import std/option (Option, Some, None)
 import std/result (Result, Ok, Err)
-import std/string (contains, substring, replaceMany, concat)
+import std/string (contains, substring, replaceMany, concat, endsWith, startsWith)
 import std/string as Str (length)
 import src/core/compaction (estimate_tokens_messages, usage_percent_with_limit, exhaustion_pct, output_token_allowance, effective_input_limit, calibrated_tokens_anchored, calibrated_usage_percent_anchored)
 import src/core/tool_contract (ToolResultEnvelope, result_to_model_json)
@@ -1550,10 +1550,29 @@ pure func cap_tool_message_content(content: string) -> string {
   let n = Str.length(content);
   if n <= cap then content
   else {
-    let marker = "\n...[truncated; original ${show(n)} bytes]";
+    let marker = "${cap_marker_head()}${show(n)} bytes]";
     let keep = cap - Str.length(marker);
     "${substring(content, 0, keep)}${marker}"
   }
+}
+
+-- The marker's fixed head: what `cap_tool_message_content` writes between the
+-- kept prefix and the byte count. One spelling, read by the cap and by
+-- `tool_message_capped`, so recognising a cut cannot drift from making one.
+pure func cap_marker_head() -> string
+  ensures { startsWith(result, "\n") && endsWith(result, " ") }
+{
+  "\n...[truncated; original "
+}
+
+-- Whether `cap_tool_message_content` cut this content: it ends in the marker.
+-- A cut content is no longer valid JSON, so a reader that decodes it (#333,
+-- `session.tool_messages_to_result_jsons`) asks this to tell a cut result from
+-- one that never was JSON, such as an extension's plain-text answer.
+export pure func tool_message_capped(content: string) -> bool
+  ensures { not result || endsWith(content, " bytes]") }
+{
+  endsWith(content, " bytes]") && contains(content, cap_marker_head())
 }
 
 pure func test_cap_tool_message_content_keeps_small_content() -> bool
