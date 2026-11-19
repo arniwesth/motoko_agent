@@ -1,0 +1,93 @@
+Warning: --caps AI requires --ai <model> flag.
+  No AI model configured. Programs using AI.call will fail.
+  Fix: ailang run --caps AI --ai gemini-2-5-flash ...
+  Or for testing: ailang run --caps AI --ai-stub ...
+=== ledger_parity_dst (D6.4, general obligation) ===
+  35 Logical variant(s) are required in the returned trace (vocabulary minus d64_gap_register)
+LEDGER_REQUIRE ProviderCallPrepared provider_call_prepared
+LEDGER_REQUIRE RunSummary run_summary
+LEDGER_REQUIRE NativeToolDenied native_tool_denied
+LEDGER_REQUIRE ToolPending tool_pending
+LEDGER_REQUIRE ExtToolHandled ext_tool_handled
+LEDGER_REQUIRE DelegatedToolDeferred delegated_tool_deferred
+LEDGER_REQUIRE V2ToolDispatchStart v2_tool_dispatch_start
+LEDGER_REQUIRE V2ToolDispatchComplete v2_tool_dispatch_complete
+LEDGER_REQUIRE CostExhausted cost_exhausted
+LEDGER_REQUIRE CompactionExhausted compaction_exhausted
+LEDGER_REQUIRE ThinkingStreamStart thinking_stream_start
+LEDGER_REQUIRE ThinkingStreamEnd thinking_stream_end
+LEDGER_REQUIRE StreamErrorRetry stream_error_retry
+LEDGER_REQUIRE ProviderResult thinking
+LEDGER_REQUIRE ExtInterceptHandled ext_intercept_handled
+LEDGER_REQUIRE ToolArgumentsInvalid tool_arguments_invalid
+LEDGER_REQUIRE ToolArgumentsUndecodable tool_arguments_undecodable
+LEDGER_REQUIRE DoneEvent done
+LEDGER_REQUIRE EmptyStopFinalize empty_stop_finalize
+LEDGER_REQUIRE ExtSolverFeedback ext_solver_feedback
+LEDGER_REQUIRE NativeToolCalls native_tool_calls
+LEDGER_REQUIRE NativeToolResults native_tool_results
+LEDGER_REQUIRE RunSuspended run_suspended
+LEDGER_REQUIRE ParkEntered park_entered
+LEDGER_REQUIRE WakeReceived wake_received
+LEDGER_REQUIRE HistorySeeded history_seeded
+LEDGER_REQUIRE HistoryAppended history_appended
+LEDGER_REQUIRE HistoryReplaced history_replaced
+LEDGER_REQUIRE StateDelta state_delta
+LEDGER_REQUIRE SessionResumed session_resumed
+LEDGER_REQUIRE ContextLimitResolved context_limit_resolved
+LEDGER_REQUIRE WorldRequest world_request
+LEDGER_REQUIRE ErrorEvent error
+LEDGER_REQUIRE CheckpointTaken history_checkpoint
+LEDGER_REQUIRE StreamDelta reasoning_delta
+LEDGER_REQUIRE StreamDelta thinking_delta
+  ✓ the required set is non-empty
+  ✓ the register still carries the variants no run here can reach
+WORLD_RUN_BEGIN native 0
+WORLD_RUN_END native 21
+LEDGER_TRACE native WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|HistorySeeded|ContextLimitResolved|ThinkingStreamStart|ProviderCallPrepared|WorldRequest|ThinkingStreamEnd|ProviderResult|HistoryAppended|StateDelta|NativeToolCalls|V2ToolDispatchStart|V2ToolDispatchComplete|WorldRequest|WorldRequest|WorldRequest|NativeToolResults|HistoryAppended|ThinkingStreamStart|ProviderCallPrepared|WorldRequest|ThinkingStreamEnd|ProviderResult|HistoryAppended|StateDelta|DoneEvent|WorldRequest|WorldRequest|RunSummary|
+  [native] 42 wire record(s) in the returned trace
+  ✓ native: the returned trace holds wire records at all
+  ✓ native: exactly one RunSummary, and it is the FINAL wire record (D6.1)
+  ✓ native: the returned trace holds NativeToolCalls
+  ✓ native: the returned trace holds V2ToolDispatchStart
+  ✓ native: the returned trace holds V2ToolDispatchComplete
+  ✓ native: the returned trace holds NativeToolResults
+  ✓ native: the returned trace holds ThinkingStreamEnd
+WORLD_RUN_BEGIN denied 0
+WORLD_RUN_END denied 18
+LEDGER_TRACE denied WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|HistorySeeded|ContextLimitResolved|ThinkingStreamStart|ProviderCallPrepared|WorldRequest|ThinkingStreamEnd|ProviderResult|HistoryAppended|StateDelta|NativeToolCalls|NativeToolDenied|NativeToolResults|HistoryAppended|ThinkingStreamStart|ProviderCallPrepared|WorldRequest|ThinkingStreamEnd|ProviderResult|HistoryAppended|StateDelta|DoneEvent|WorldRequest|WorldRequest|RunSummary|
+  [denied] 38 wire record(s) in the returned trace
+  ✓ denied: the returned trace holds wire records at all
+  ✓ denied: exactly one RunSummary, and it is the FINAL wire record (D6.1)
+  ✓ denied: the returned trace holds NativeToolDenied
+WORLD_RUN_BEGIN pending 0
+WORLD_RUN_END pending 19
+LEDGER_TRACE pending WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|HistorySeeded|ContextLimitResolved|ThinkingStreamStart|ProviderCallPrepared|WorldRequest|ThinkingStreamEnd|ProviderResult|HistoryAppended|StateDelta|NativeToolCalls|ToolPending|WorldRequest|NativeToolDenied|NativeToolResults|HistoryAppended|ThinkingStreamStart|ProviderCallPrepared|WorldRequest|ThinkingStreamEnd|ProviderResult|HistoryAppended|StateDelta|DoneEvent|WorldRequest|WorldRequest|RunSummary|
+  [pending] 40 wire record(s) in the returned trace
+  ✓ pending: the returned trace holds wire records at all
+  ✓ pending: exactly one RunSummary, and it is the FINAL wire record (D6.1)
+  ✓ pending: the returned trace holds ToolPending
+  ✓ pending: the returned trace holds NativeToolDenied
+WORLD_RUN_BEGIN errored 0
+WORLD_RUN_END errored 17
+LEDGER_TRACE errored WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|HistorySeeded|ContextLimitResolved|ThinkingStreamStart|ProviderCallPrepared|StreamDelta|StreamDelta|WorldRequest|ThinkingStreamEnd|WorldRequest|WorldRequest|RunSummary|
+  [errored] 25 wire record(s) in the returned trace
+  ✓ errored: the returned trace holds wire records at all
+  ✓ errored: exactly one RunSummary, and it is the FINAL wire record (D6.1)
+  ✓ errored: the returned trace holds ThinkingStreamEnd
+WORLD_RUN_BEGIN capped 0
+WORLD_RUN_END capped 16
+LEDGER_TRACE capped WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|HistorySeeded|ContextLimitResolved|ThinkingStreamStart|ProviderCallPrepared|WorldRequest|ThinkingStreamEnd|ProviderResult|HistoryAppended|StateDelta|NativeToolCalls|NativeToolDenied|NativeToolResults|HistoryAppended|CostExhausted|WorldRequest|RunSummary|
+  [capped] 30 wire record(s) in the returned trace
+  ✓ capped: the returned trace holds wire records at all
+  ✓ capped: exactly one RunSummary, and it is the FINAL wire record (D6.1)
+  ✓ capped: the returned trace holds CostExhausted
+WORLD_RUN_BEGIN handled 0
+WORLD_RUN_END handled 18
+LEDGER_TRACE handled WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|WorldRequest|HistorySeeded|ContextLimitResolved|ThinkingStreamStart|ProviderCallPrepared|WorldRequest|ThinkingStreamEnd|ProviderResult|HistoryAppended|StateDelta|NativeToolCalls|ExtToolHandled|NativeToolResults|HistoryAppended|ThinkingStreamStart|ProviderCallPrepared|WorldRequest|ThinkingStreamEnd|ProviderResult|HistoryAppended|StateDelta|DoneEvent|WorldRequest|WorldRequest|RunSummary|
+  [handled] 38 wire record(s) in the returned trace
+  ✓ handled: the returned trace holds wire records at all
+  ✓ handled: exactly one RunSummary, and it is the FINAL wire record (D6.1)
+  ✓ handled: the returned trace holds ExtToolHandled
+WORLD_RUN_BEGIN delegated 0
+Error: execution failed: RT001: integer division by zero at /workspaces/motoko_agent-039-pilot-scratch/src/core/tool_phase.ail:476:23

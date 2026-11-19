@@ -71,3 +71,24 @@ records. The README also gains:
 - a line under *What was not verified*;
 - one sentence in the recommendation: re-running the reach probes under `make dst` would show which
   of these sites another gate already walks.
+
+## A6, 2026-11-19, after A5 was committed: F1's results added
+
+A5 said reach was probed under `corpus_judge` only and suggested re-running the probes under
+`make dst`. The operator asked for that run. It is follow-up F1: the plan, predictions, scorer and
+reading rules are in `reach-dst-plan.md` and `scripts/score_reach_dst.py`, each hashed in
+`sequence.log` before any sweep result existed. The results are in `reach-dst-scores.tsv` and
+`reach-dst-results.md`.
+
+No verdict, count, yield or kill changes: the verdicts are defined on reach by a bank member, and
+F1 measures reach by the rest of the suite. `README.md` is edited; the README after A5 stays
+beside it as `README-pre-a6.md`. The README gains:
+
+- an F1 clause in the result's reach bullet;
+- F1 notes in the survivor rows for m02, m03, m12, m13, m19, m15, m17, m23, m30, m08 and m26;
+- a subsection, *Follow-up F1*, with F1's table. It replaces the A5 paragraph's unmeasured
+  text search, which became F1's predictions;
+- an updated line under *What was not verified*;
+- one changed sentence in the recommendation: `make dst` already walks the four branches, so the
+  ruling narrows to whether `corpus_judge` should walk them too;
+- F1's files and scripts in the file table, and A5 and A6 in deviation 7.

@@ -13,8 +13,10 @@ the tree was hash-checked against `base.sha256` before and after each run.
 - **14 of the 30 were killed by a named check**: 5 by a `corpus_judge` rule, 8 more by the
   tier-3 gates, 1 more by the full `make dst`.
 - **13 of the 30 sit on code no bank member runs.** 11 are run by none of `corpus_judge`'s members
-  or controls, two of them dead code (my judgement). 2 are run only by one of its controls. Reach
-  was probed under `corpus_judge` alone: whether another DST gate runs these lines was not measured.
+  or controls, two of them dead code (my judgement). 2 are run only by one of its controls. Under
+  a full `make dst` (follow-up F1, amendment A6), **8 of the 11 are run by another target**, and 3
+  by none: m15, on the extension-handled tool path ADR-003 D6 names, and the two dead-code sites.
+  The mutants at those 8 sites were never run under the targets that reach them.
 - **3 were run by a member and killed by no rule at any tier.** Two of them (m05, m18) change
   nothing that any run here observes, and I judge them equivalent on every path a run here walks.
   The third, **m11, is the one measured gap**: the retry record leaves the returned trace and
@@ -107,10 +109,10 @@ no test was written for any of them.
 | m18 | `publish_turn_exit_manifest`'s comment: the render sees the turn's successor | nothing differs | reached (seed 1), no observable difference. *Judgement*: equivalent while `MOTOKO_EXIT_MANIFEST` is unset (`ext/exit_manifest.ail:203` returns before the ports are used); a run that publishes a manifest would hand its exit intents a world one env read behind |
 | m14 | D4: the journal's fold reproduces the final history | `journal-fold-disagrees` on the `solver-feedback` CONTROL row; the brief counts JUDGE rows only | no member reaches it; the gate's control does and names the rule |
 | m09 | 009 ADR-001 D6.4 parity | the invalid-request control reaches it and stays green: the gate reads only the trace | no member reaches it |
-| m02, m03, m12, m13, m19 | m02: ADR-003 D2 and D4 (m22, the same edit one function over, was killed by `journal-fold-disagrees`). m03, m13: none in ADR-003. m12, m19: 009 ADR-001 D6.4 | not evaluated | **not reached**: the response-intercept arm (m02), an approval timeout that allows (m03), the delegated backend (m12), a policy that denies (m13, m19). No `corpus_judge` run walks any of them; the other gates were not probed for reach |
-| m15 | 009 ADR-001 D6.4 | not evaluated | not reached: the scratchpad tool, "a tool an extension handles" (D6, known) |
-| m17, m23, m30 | D9 (m17); ADR-002 D2's wake match (m23, m30) | not evaluated | not reached: open waits and wakes. Known: "The corpus never parks" (D6's list) |
-| m08, m26 | none | not evaluated | not reached. *Judgement*: dead code. m08's `None` arm needs `await_approval` without a pending approval, and the only producer of that reason (`session.ail:3353`) sets one; m26's `[]` arm is called only with pending calls (`step_machine.ail:112-114`) |
+| m02, m03, m12, m13, m19 | m02: ADR-003 D2 and D4 (m22, the same edit one function over, was killed by `journal-fold-disagrees`). m03, m13: none in ADR-003. m12, m19: 009 ADR-001 D6.4 | not evaluated | **not reached**: the response-intercept arm (m02), an approval timeout that allows (m03), the delegated backend (m12), a policy that denies (m13, m19). No `corpus_judge` run walks any of them. Under `make dst` (F1) all five are walked, by `smoke_driver` and others (m02, m03, m13, m19) and by `ledger_parity`'s delegated scenario (m12) |
+| m15 | 009 ADR-001 D6.4 | not evaluated | not reached: the scratchpad tool, "a tool an extension handles" (D6, known). No `make dst` target walks it either (F1) |
+| m17, m23, m30 | D9 (m17); ADR-002 D2's wake match (m23, m30) | not evaluated | not reached: open waits and wakes. Known: "The corpus never parks" (D6's list). Under `make dst` `park_resume` walks all three (F1) |
+| m08, m26 | none | not evaluated | not reached. *Judgement*: dead code. m08's `None` arm needs `await_approval` without a pending approval, and the only producer of that reason (`session.ail:3353`) sets one; m26's `[]` arm is called only with pending calls (`step_machine.ail:112-114`). No `make dst` target reaches either (F1), which fits the judgement and does not prove it |
 
 **Counts with and without the judgements.** Of the 30: 14 killed. Of the 16 not killed, 4 rest on
 my judgement (m05, m18 equivalent on walked paths; m08, m26 dead code). Without them, 12 not
@@ -142,12 +144,34 @@ and a policy that denies (m13, m19).
 
 Reach was probed under `corpus_judge` only: tier 2 ran each probe through `make corpus_judge`, so
 "not reached" means not reached by its 18 members and 5 controls, not by the DST suite (amendment
-A5). A text search of `scripts/dst/` suggests some of these are walked elsewhere and some may not
-be. Parking has `park_resume_dst.ail`. A denying policy appears in `ledger_parity_dst.ail`,
-`world_state_probe.ail` and `scripted_cursor_probe.ail`. `compose_live_exec.ail` drives the
-intercept dispatch but says it is not a session. The delegated backend appears only in
-event-vocabulary checks, and `AllowAfterTimeout` appears in no DST script. None of this was
-measured: a name in a script does not show that the mutated line runs.
+A5).
+
+### Follow-up F1: the same probes under `make dst`
+
+Run on 2026-11-19 at the operator's request (`reach-dst-plan.md`, `reach-dst-results.md`). The 11
+probes not reached by `corpus_judge`, plus the positive control, each ran through a full `make
+dst`. A site counts as reached only when the probe's own runtime error appears at its file and
+line. The scorer and its reading rules were fixed and hashed before the sweeps produced any result.
+
+| site | the branch | under `make dst` | targets that printed the probe's error |
+|---|---|---|---|
+| m02 | the response-intercept arm | **reached** | discovery, driver_plus_compose, smoke_driver, smoke_parity, strict_replay |
+| m03 | an approval timeout that allows | **reached** | smoke_driver, smoke_parity |
+| m12 | the delegated backend | **reached** | ledger_parity, world_framed_wire (read by hand: both hide the error) |
+| m13, m19 | a policy that denies | **reached** | compaction_dst, journal_resume, smoke_driver, smoke_parity, terminal_trace, world_state |
+| m17, m23, m30 | open waits and wakes | **reached** | park_resume (all three); driver_plus_herdr and herdr_graded (m17, m30) |
+| m15 | the scratchpad tool | not reached | none |
+| m08, m26 | judged dead code | not reached | none |
+
+So **"not reached" was a `corpus_judge` finding, not a suite-wide one.** Across the suite, the
+one reach gap among these sites is m15, which ADR-003 D6 already names. The eight mutants at
+reached sites stopped at tier 2 and were never run under these targets (tier 3 ran only on mutants
+a member reaches), so whether those targets kill them is not measured by F1. The predictions came
+from a text search of `scripts/dst/` and held for 8 of 12: m02, m03 and m12 were predicted
+unreached, and m15 was predicted reached. A side observation: `ledger_parity` and
+`world_framed_wire` print only a failed program's `✗` rows and delete the rest, so m12's probe
+crash showed only as a missing frame end. `scripts/run_program.sh` re-ran that one program with its
+output kept to read it, by a rule logged before it ran.
 
 ## Per operator
 
@@ -253,7 +277,8 @@ selftest`).
 7. **Four amendments**, each dated, hashed and kept beside what it replaced (`AMENDMENTS.md`):
    A1, before the draw, the enumerator against `operators.md` (409 candidates became 399); A2 and
    A3, the scorer (v0.60.4's runtime-error wording; members counted once); A4, the runner keeps
-   `corpus_pr`'s whole output.
+   `corpus_pr`'s whole output. A5 and A6 came after the pilot was committed: the reach wording,
+   and F1's results.
 8. **The machine was shared.** Load stayed between 6 and 15 from other sessions. `corpus_pr`
    never failed on its ceiling, so the brief's single re-run was never needed.
 
@@ -268,8 +293,10 @@ selftest`).
 - **m01's failing `corpus_pr` row is not recorded.** The recipe shows only its last 40 lines, and
   the full output was overwritten before amendment A4.
 - **Reach was measured to the first member that reaches a site**, not per member.
-- **Reach was probed under `corpus_judge` only** (A5). Whether another DST gate runs any of the 13
-  sites no member reaches was not measured.
+- **Reach was probed under `corpus_judge` only** (A5). F1 (A6) measured it under `make dst` for
+  11 of the 13 sites no member reaches. m09 and m14 were left out because `corpus_judge`'s own
+  controls reach them. The mutants at the 8 sites F1 finds reached were not run under the targets
+  that reach them.
 - **`corpus_pr` writes a fixed `/tmp/corpus_pr.out`.** A concurrent `corpus_pr` from another
   session would have overwritten the file A4 copies; none was seen, and it cannot be excluded.
 - **Whether one mutant per line is enough** (the Google result) under property verdicts. Not
@@ -288,8 +315,9 @@ is **not to draw a second batch from this population yet.** Of the
 mainly more of what this one found most of: 13 of 30 landed on branches no bank member walks, five
 of them on four branches ADR-003 does not record as unwalked. Those branches (the intercept arm, an allowing
 timeout, the delegated backend, a denying policy) need a ruling first: whether each should be
-walked by a member or a control, or recorded as known and unseen. Re-running these sites' reach
-probes under `make dst` would show which of them another gate already walks. m11 needs its own ruling on
+walked by a member or a control, or recorded as known and unseen. F1 shows `make dst` already
+walks all four, so the ruling narrows to whether `corpus_judge` should walk them too. Whether the
+targets that walk them kill these mutants is the next measurement. m11 needs its own ruling on
 whether the retry record's parity should be witnessed, and m18 on whether an exit-manifest
 publication should be walked. After those rulings, a second batch would
 measure the gate that results rather than re-measure the reach gaps this one already shows. If the
@@ -303,8 +331,11 @@ with the next 30 type-checking sites taken from `draw-order.tsv` after rank 38.
 | `sequence.log` | every step, in order, with times and hashes, and every run's integrity check |
 | `base.txt`, `base.sha256` | the base commit and toolchain; the four files' hashes |
 | `population.md`, `population.tsv`, `population-accounting.tsv` | the rule, the 31 functions, all 133 reachable with their verdict |
-| `operators.md`, `AMENDMENTS.md` | the five operators; A1 to A5 |
+| `operators.md`, `AMENDMENTS.md` | the five operators; A1 to A6 |
 | `README-pre-a5.md` | this page as first committed in `94b0f678`, kept beside it by A5 |
+| `README-pre-a6.md` | this page after A5 (`fb1f9779`), kept beside it by A6 |
+| `reach-dst-plan.md`, `reach-dst-scores.tsv`, `reach-dst-results.md` | follow-up F1: the plan and predictions, the scorer's readings, the write-up |
+| `runs/program/ledger_parity_dst/X-m12/` | F1's one hand-reading run, with the program's output kept |
 | `enumeration/`, `enumeration-a1/` | STEP4's enumeration as first run; the amended one the draw used |
 | `draw-order.tsv`, `draw-checked.tsv`, `draw-check.log` | the seeded order of all 265 sites; the 38 walked with their type check |
 | `predictions.tsv` | the predictions, hashed before any gate ran |
@@ -313,6 +344,6 @@ with the next 30 type-checking sites taken from `draw-order.tsv` after rank 38.
 | `triage.tsv` | the judgement per mutant: verdict, stated rule, checker, known list, prediction outcome |
 | `mutants.tsv` | everything per drawn site, assembled by `scripts/assemble.py` from the above |
 | `runs/<target>/<id>/` | each run: `out.txt` (non-wire lines), `mutant.diff`, `apply.log`, `rc`; `corpus_pr` runs after A4 also keep `full.txt` |
-| `scripts/` | `ailsrc.py` (tokenizer), `population.py`, `mutator.py`, `draw.py`, `fixed_edits.py` (controls and probes), `run_gate.sh`, `run_tier3.sh`, `run_tier4.sh`, the scorers and their self-tests, `assemble.py`; `*-step3.py`, `*-pre-a*.*` are the versions amendments replaced |
+| `scripts/` | `ailsrc.py` (tokenizer), `population.py`, `mutator.py`, `draw.py`, `fixed_edits.py` (controls and probes), `run_gate.sh`, `run_tier3.sh`, `run_tier4.sh`, the scorers and their self-tests, `assemble.py`, and F1's `score_reach_dst.py` and `run_program.sh`; `*-step3.py`, `*-pre-a*.*` are the versions amendments replaced |
 
 The scratch worktree, `/workspaces/motoko_agent-039-pilot-scratch`, is left clean at `dd8a12f1`.
