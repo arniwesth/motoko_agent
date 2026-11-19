@@ -21,8 +21,18 @@ What it found (`evidence/pilot-dd8a12f1/README.md` has the per-mutant table):
 ## Changes
 
 - docs(039): random-mutant pilot on the session driver at dd8a12f1
+- chore(github): PR #337 record
 
-633 files changed, all under `.agent/projects/039_systematic_mutation_testing/evidence/pilot-dd8a12f1/`. The directory is 7.3 MB, mostly `runs/`. That folder keeps the raw output of every gate run so each verdict can be re-read rather than taken on trust. For comparison, 011's `acceptance-ce9cb247` is 1.5 MB.
+**Reviewers: of the 634 files, only the 54 outside `runs/` are meant to be read.** All are under `.agent/projects/039_systematic_mutation_testing/evidence/pilot-dd8a12f1/`:
+
+- **Read:** `README.md`, which holds the result, the per-mutant verdict table, deviations and the recommendation.
+- **Check if you want the method:** the other top-level files. These are `population.md`, `operators.md`, `AMENDMENTS.md`, `draw-order.tsv`, `predictions.tsv`, `triage.tsv`, `mutants.tsv` and `sequence.log`, the step log with each step's SHA-256.
+- **Open only to check a method or a verdict:**
+  - `scripts/`: the tools that enumerate, draw, apply and score the mutants.
+  - `runs/<target>/<id>/`: the raw output of one gate run, with its `out.txt`, `rc`, `mutant.diff` and `apply.log`.
+- **Skip:** `runs/` itself. It holds 579 files of raw output kept as evidence, not for review. Its value is that the survivors' "no rule named it" rests on green outputs a later re-run may not reproduce, and that the score tables can be re-derived from it.
+
+The directory is 7.3 MB uncompressed and about 0.7 MB compressed. Each run's files follow the same layout as 011's `acceptance-ce9cb247`.
 
 ## Governing docs
 
