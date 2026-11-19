@@ -12,8 +12,10 @@ src/tui/dist/
 
 # Local AILANG source checkout used to build a patched binary (e.g. the Bedrock
 # OPENAI_BASE_URL direct-fallback fix). Its own git repo + ailang/.bin/ailang
-# build artifact must never be committed into motoko_agent.
-/ailang/
+# build artifact must never be committed into motoko_agent. No trailing slash: a
+# worktree's `ailang` link to the shared checkout's directory is ignored as well,
+# and a slash would match only the directory.
+/ailang
 # Environment
 .env
 

@@ -41,8 +41,9 @@ scripts and the notes on what a worktree lacks are this repository's.
 4. **Know what is missing.** A worktree has tracked files only. The script prints what the shared
    checkout has that yours does not:
 
-   - `ailang/`, the nested AILANG checkout. Linking it in leaves an untracked `ailang` entry,
-     because `.gitignore` ignores the directory and not a link; do not `git add -A` over it.
+   - `ailang/`, the nested AILANG checkout. To use it, link it in:
+     `ln -s <shared checkout>/ailang ailang`. `.gitignore` ignores the link as well as the
+     directory.
    - `.env`. `tools/pr` then needs `MOTOKO_BOT_GH_TOKEN` in the environment.
    - `.dagr/` and `.motoko/`, which hold run files, sessions and the delegate mailbox.
 
