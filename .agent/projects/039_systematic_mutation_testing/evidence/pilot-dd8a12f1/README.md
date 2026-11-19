@@ -12,8 +12,9 @@ the tree was hash-checked against `base.sha256` before and after each run.
   seeded order took 38 sites: 8 drawn edits did not type-check and were replaced by the next site.
 - **14 of the 30 were killed by a named check**: 5 by a `corpus_judge` rule, 8 more by the
   tier-3 gates, 1 more by the full `make dst`.
-- **13 of the 30 sit on code no bank member runs.** 11 are run by nothing at all, two of them dead
-  code (my judgement). 2 are run only by one of `corpus_judge`'s controls.
+- **13 of the 30 sit on code no bank member runs.** 11 are run by none of `corpus_judge`'s members
+  or controls, two of them dead code (my judgement). 2 are run only by one of its controls. Reach
+  was probed under `corpus_judge` alone: whether another DST gate runs these lines was not measured.
 - **3 were run by a member and killed by no rule at any tier.** Two of them (m05, m18) change
   nothing that any run here observes, and I judge them equivalent on every path a run here walks.
   The third, **m11, is the one measured gap**: the retry record leaves the returned trace and
@@ -106,7 +107,7 @@ no test was written for any of them.
 | m18 | `publish_turn_exit_manifest`'s comment: the render sees the turn's successor | nothing differs | reached (seed 1), no observable difference. *Judgement*: equivalent while `MOTOKO_EXIT_MANIFEST` is unset (`ext/exit_manifest.ail:203` returns before the ports are used); a run that publishes a manifest would hand its exit intents a world one env read behind |
 | m14 | D4: the journal's fold reproduces the final history | `journal-fold-disagrees` on the `solver-feedback` CONTROL row; the brief counts JUDGE rows only | no member reaches it; the gate's control does and names the rule |
 | m09 | 009 ADR-001 D6.4 parity | the invalid-request control reaches it and stays green: the gate reads only the trace | no member reaches it |
-| m02, m03, m12, m13, m19 | m02: ADR-003 D2 and D4 (m22, the same edit one function over, was killed by `journal-fold-disagrees`). m03, m13: none in ADR-003. m12, m19: 009 ADR-001 D6.4 | not evaluated | **not reached**: the response-intercept arm (m02), an approval timeout that allows (m03), the delegated backend (m12), a policy that denies (m13, m19). No run here walks any of them |
+| m02, m03, m12, m13, m19 | m02: ADR-003 D2 and D4 (m22, the same edit one function over, was killed by `journal-fold-disagrees`). m03, m13: none in ADR-003. m12, m19: 009 ADR-001 D6.4 | not evaluated | **not reached**: the response-intercept arm (m02), an approval timeout that allows (m03), the delegated backend (m12), a policy that denies (m13, m19). No `corpus_judge` run walks any of them; the other gates were not probed for reach |
 | m15 | 009 ADR-001 D6.4 | not evaluated | not reached: the scratchpad tool, "a tool an extension handles" (D6, known) |
 | m17, m23, m30 | D9 (m17); ADR-002 D2's wake match (m23, m30) | not evaluated | not reached: open waits and wakes. Known: "The corpus never parks" (D6's list) |
 | m08, m26 | none | not evaluated | not reached. *Judgement*: dead code. m08's `None` arm needs `await_approval` without a pending approval, and the only producer of that reason (`session.ail:3353`) sets one; m26's `[]` arm is called only with pending calls (`step_machine.ail:112-114`) |
@@ -124,7 +125,7 @@ The brief's yield: reached (by a bank member) and killed by no tier.
 |---|---|---|
 | reached by a member, killed by no rule at any tier | 3: m05, m11, m18 | the same 3 |
 | of these, on ADR-003's "Known, and not seen" list | 0 | 0 |
-| of these, a new gap | 3 | **2**: m11, an oracle gap (the difference is observable and no rule reads it); m18, a reach gap (judged to differ only when an exit manifest is published, which no run does and nothing records). m05 is not counted: judged to differ only on the extension-handled tool path, which D6's paragraph after the list already names as not shown |
+| of these, a new gap | 3 | **2**: m11, an oracle gap (the difference is observable and no rule reads it); m18, a reach gap (judged to differ only when an exit manifest is published, which no run here does and ADR-003 does not record). m05 is not counted: judged to differ only on the extension-handled tool path, which D6's paragraph after the list already names as not shown |
 
 **Under the ordinary reading**, where any target red under the mutant and green at base counts,
 m11 is caught at tier 4 (`corpus_judge`'s guard and `depth_canary`'s pin), and the counts fall by
@@ -132,12 +133,21 @@ one: 2 measured, 1 after judgement. I report the rule reading as the headline be
 spike's `M2` make exactly this distinction: a pin kept for something else, red by accident, is not
 the property seen.
 
-**Reach is the larger finding.** 13 of 30 drawn mutants sit where no bank member runs. Four are
-on branches ADR-003 already records as unwalked (parking: m17, m23, m30; an extension-handled
+**Within `corpus_judge`, reach is the larger finding.** 13 of 30 drawn mutants sit where no bank
+member runs. Four are on branches ADR-003 already records as unwalked (parking: m17, m23, m30; an extension-handled
 tool: m15). Two are dead code by my judgement (m08, m26). Two are walked only by the gate's own
-controls (m09, m14). The other five sit on four branches I found recorded nowhere as unwalked: the
+controls (m09, m14). The other five sit on four branches ADR-003 does not record as unwalked: the
 response-intercept arm (m02), an approval timeout that allows (m03), the delegated backend (m12)
 and a policy that denies (m13, m19).
+
+Reach was probed under `corpus_judge` only: tier 2 ran each probe through `make corpus_judge`, so
+"not reached" means not reached by its 18 members and 5 controls, not by the DST suite (amendment
+A5). A text search of `scripts/dst/` suggests some of these are walked elsewhere and some may not
+be. Parking has `park_resume_dst.ail`. A denying policy appears in `ledger_parity_dst.ail`,
+`world_state_probe.ail` and `scripted_cursor_probe.ail`. `compose_live_exec.ail` drives the
+intercept dispatch but says it is not a session. The delegated backend appears only in
+event-vocabulary checks, and `AllowAfterTimeout` appears in no DST script. None of this was
+measured: a name in a script does not show that the mutated line runs.
 
 ## Per operator
 
@@ -258,6 +268,8 @@ selftest`).
 - **m01's failing `corpus_pr` row is not recorded.** The recipe shows only its last 40 lines, and
   the full output was overwritten before amendment A4.
 - **Reach was measured to the first member that reaches a site**, not per member.
+- **Reach was probed under `corpus_judge` only** (A5). Whether another DST gate runs any of the 13
+  sites no member reaches was not measured.
 - **`corpus_pr` writes a fixed `/tmp/corpus_pr.out`.** A concurrent `corpus_pr` from another
   session would have overwritten the file A4 copies; none was seen, and it cannot be excluded.
 - **Whether one mutant per line is enough** (the Google result) under property verdicts. Not
@@ -274,9 +286,10 @@ operator decides"; if the operator does not accept it, the rule says draw again.
 is **not to draw a second batch from this population yet.** Of the
 17 mutants a member reaches, 14 were named by a check, so a second draw of the same shape buys
 mainly more of what this one found most of: 13 of 30 landed on branches no bank member walks, five
-of them on four branches nothing records as unwalked. Those branches (the intercept arm, an allowing
+of them on four branches ADR-003 does not record as unwalked. Those branches (the intercept arm, an allowing
 timeout, the delegated backend, a denying policy) need a ruling first: whether each should be
-walked by a member or a control, or recorded as known and unseen. m11 needs its own ruling on
+walked by a member or a control, or recorded as known and unseen. Re-running these sites' reach
+probes under `make dst` would show which of them another gate already walks. m11 needs its own ruling on
 whether the retry record's parity should be witnessed, and m18 on whether an exit-manifest
 publication should be walked. After those rulings, a second batch would
 measure the gate that results rather than re-measure the reach gaps this one already shows. If the
@@ -290,7 +303,8 @@ with the next 30 type-checking sites taken from `draw-order.tsv` after rank 38.
 | `sequence.log` | every step, in order, with times and hashes, and every run's integrity check |
 | `base.txt`, `base.sha256` | the base commit and toolchain; the four files' hashes |
 | `population.md`, `population.tsv`, `population-accounting.tsv` | the rule, the 31 functions, all 133 reachable with their verdict |
-| `operators.md`, `AMENDMENTS.md` | the five operators; A1 to A4 |
+| `operators.md`, `AMENDMENTS.md` | the five operators; A1 to A5 |
+| `README-pre-a5.md` | this page as first committed in `94b0f678`, kept beside it by A5 |
 | `enumeration/`, `enumeration-a1/` | STEP4's enumeration as first run; the amended one the draw used |
 | `draw-order.tsv`, `draw-checked.tsv`, `draw-check.log` | the seeded order of all 265 sites; the 38 walked with their type check |
 | `predictions.tsv` | the predictions, hashed before any gate ran |

@@ -54,3 +54,20 @@ scorer is kept as `scripts/score-pre-a3.py`.
 the time was not edited under it. m04's full output was still in `/tmp/corpus_pr.out` and was copied
 by hand right after the amendment, before the next corpus_pr run. m01's had already been
 overwritten; its failing row is not recorded. The pre-A4 runner is kept as `scripts/run_gate-pre-a4.sh`.
+
+## A5, 2026-11-19, after the pilot was committed: "not reached" said more than the probe measured
+
+Found when the operator asked whether the 11 unreached mutants are a weakness of the DST suite.
+The reach probe (tier 2) ran only under `make corpus_judge`, so "not reached" means not reached
+by its 18 members and 5 controls. The README said "11 are run by nothing at all", "No run here
+walks any of them" and "recorded nowhere as unwalked", which reads as the whole suite and every
+record. What it measured is `corpus_judge`'s bank, and the record searched is ADR-003.
+
+Only wording changes. No verdict, count, yield or recommendation does. `README.md` is edited; the
+README as first committed stays beside it as `README-pre-a5.md`, at the hash the FINAL step
+records. The README also gains:
+
+- a text search of `scripts/dst/` for the unwalked branches, marked as unmeasured;
+- a line under *What was not verified*;
+- one sentence in the recommendation: re-running the reach probes under `make dst` would show which
+  of these sites another gate already walks.

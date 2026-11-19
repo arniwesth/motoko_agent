@@ -13,7 +13,7 @@ This PR adds the first unbiased measure of how much the DST checks notice, as RE
 What it found (`evidence/pilot-dd8a12f1/README.md` has the per-mutant table):
 
 - **14 of 30 were killed by a named check.** `corpus_judge` named 5, the tier-3 gates 8 more (`discovery`, `strict_replay`, `ledger_parity`) and the full `make dst` 1 more. A bank member runs 17 of the 30, and 14 of those 17 were named. `corpus_judge` on its own named 5 of the 17.
-- **13 of 30 sit on code no bank member runs.** Nothing runs 11 of them, and 2 run only under a `corpus_judge` control. Four branches (the intercept arm, a timeout that allows, the delegated backend and a policy that denies) are not on ADR-003's "Known, and not seen" list.
+- **13 of 30 sit on code no `corpus_judge` bank member runs.** 11 are run by none of its members or controls, and 2 only by one of its controls. Reach was probed under `corpus_judge` alone, so whether another DST gate runs these lines was not measured (amendment A5). Four branches (the intercept arm, a timeout that allows, the delegated backend and a policy that denies) are not on ADR-003's "Known, and not seen" list.
 - **3 ran on a member and no rule at any tier named them.** m11 is the oracle gap: the retry record leaves the returned trace but stays on the wire. m05 and m18 are judged equivalent on every path a run here walks. m18 is a reach gap, because it differs only under a configuration no run uses.
 - **Yield.** 3 by measurement and 2 after judgement. None is on ADR-003's known list. The brief's fixed rule gives "draw again" on the measured count and "the operator decides" on the judged count. The two readings differ by one judgement, on m05.
 - **Recommendation: no second batch yet.** First rule on the four unwalked branches, on m11 (should the retry record's parity be witnessed?) and on m18.
@@ -22,11 +22,12 @@ What it found (`evidence/pilot-dd8a12f1/README.md` has the per-mutant table):
 
 - docs(039): random-mutant pilot on the session driver at dd8a12f1
 - chore(github): PR #337 record
+- docs(039): amendment A5, reach wording narrowed to what was measured
 
-**Reviewers: of the 634 files, only the 54 outside `runs/` are meant to be read.** All are under `.agent/projects/039_systematic_mutation_testing/evidence/pilot-dd8a12f1/`:
+**Reviewers: of the 635 files, 579 are raw output under `runs/`. Only the other 55 evidence files are meant to be read.** All are under `.agent/projects/039_systematic_mutation_testing/evidence/pilot-dd8a12f1/`:
 
 - **Read:** `README.md`, which holds the result, the per-mutant verdict table, deviations and the recommendation.
-- **Check if you want the method:** the other top-level files. These are `population.md`, `operators.md`, `AMENDMENTS.md`, `draw-order.tsv`, `predictions.tsv`, `triage.tsv`, `mutants.tsv` and `sequence.log`, the step log with each step's SHA-256.
+- **Check if you want the method:** the other top-level files. These are `population.md`, `operators.md`, `AMENDMENTS.md`, `draw-order.tsv`, `predictions.tsv`, `triage.tsv`, `mutants.tsv` and `sequence.log`, the step log with each step's SHA-256. `README-pre-a5.md` is the README as first committed, kept by amendment A5.
 - **Open only to check a method or a verdict:**
   - `scripts/`: the tools that enumerate, draw, apply and score the mutants.
   - `runs/<target>/<id>/`: the raw output of one gate run, with its `out.txt`, `rc`, `mutant.diff` and `apply.log`.
@@ -50,7 +51,7 @@ Nothing in the product changes, because this lands only evidence files. 039 gets
 
 ## Test evidence
 
-The population, operators, enumeration, draw and predictions were each fixed and hashed into `sequence.log` before any mutant ran. The four later corrections are dated amendments A1 to A4 in `AMENDMENTS.md`, not edits.
+The population, operators, enumeration, draw and predictions were each fixed and hashed into `sequence.log` before any mutant ran. The five later corrections are dated amendments A1 to A5 in `AMENDMENTS.md`, not silent edits.
 
 - **Calibration.** On the unmutated tree, `make corpus_judge` was green on 18 members (46 s). A comment-only edit was green, with all 190 rows identical. Three of acceptance's known-bad rows, re-anchored by text, each went red on their own rule: `outcome-finish-disagrees`, `provider-calls-exceed-budget` and `tool-dispatches-unbalanced`.
 - **Tier 3 baseline.** All six targets were green on the unmutated tree: `check_core`, `strict_replay`, `discovery`, `stream_parity`, `ledger_parity` and `corpus_pr`.
@@ -60,6 +61,7 @@ The population, operators, enumeration, draw and predictions were each fixed and
 - **Not verified.** The README's *What was not verified* section lists these in full:
   - The four judgements (m05 and m18 equivalent on walked paths, m08 and m26 dead code) rest on reading the source, not on a run that could tell the mutants apart.
   - m01's failing `corpus_pr` row was lost before amendment A4. Its kill rests on `strict_replay` and `discovery`.
+  - Reach was probed under `corpus_judge` only. "Not reached" means none of its 18 members and 5 controls runs the line, not that the DST suite never does.
 - **Commit.** The evidence commit was made with git hooks bypassed, without a reason. No hook is installed for this user. `tools/githooks/pre-commit` run by hand on the commit exits 0.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
