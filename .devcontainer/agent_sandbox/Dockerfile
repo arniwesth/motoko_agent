@@ -477,9 +477,11 @@ RUN echo "installing agent CLIs at npm latest (cache-bust: ${AGENTS_CACHE_BUST:-
         "@anthropic-ai/claude-code@latest" \
         "@openai/codex@latest" \
         "@oh-my-pi/pi-coding-agent@latest" \
+        "@google/gemini-cli@latest" \
     && claude --version \
     && codex --version \
-    && omp --version
+    && omp --version \
+    && gemini --version
 
 # herdr's configuration. See the file for what each setting answers.
 #
