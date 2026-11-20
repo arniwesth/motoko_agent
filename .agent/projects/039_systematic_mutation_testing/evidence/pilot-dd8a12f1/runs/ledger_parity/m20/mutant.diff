@@ -1,0 +1,7 @@
+diff --git a/src/core/tool_phase.ail b/src/core/tool_phase.ail
+index e36e8810..30bf6a63 100644
+--- a/src/core/tool_phase.ail
++++ b/src/core/tool_phase.ail
+@@ -491 +491 @@ export func execute_allowed_tool_call(
+-            let resolution = dispatch_resolution(handle_world.process_limits, call.name, envelope.arguments); let invalid_resolution = match resolution { Some(ProcessInvalid(_)) => resolution, _ => None }; let _ = match invalid_resolution { Some(_) => (), None => emit(start_event) }; -- 041 D7: pure, so it is resolved ahead of Start, and an invalid request has no Start. Joined here so :499 does not move
++            let resolution = dispatch_resolution(handle_world.process_limits, call.name, envelope.arguments); let invalid_resolution = match resolution { Some(ProcessInvalid(_)) => None, _ => resolution }; let _ = match invalid_resolution { Some(_) => (), None => emit(start_event) }; -- 041 D7: pure, so it is resolved ahead of Start, and an invalid request has no Start. Joined here so :499 does not move

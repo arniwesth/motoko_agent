@@ -1,0 +1,32 @@
+file	function	class	why it is in, from the code's structure
+src/core/recovery.ail	should_retry_stream_error	R	decides whether a failed model stream is retried or ends the run
+src/core/step_machine.ail	decide	R	chooses the step's decision, including Fail, Park and AwaitApproval
+src/core/step_machine.ail	call_model_or_fail	R	chooses Fail on the step budget, the cost cap and context exhaustion
+src/core/step_machine.ail	await_approval_from_calls	R	chooses AwaitApproval, or Fail when no call is pending
+src/core/tool_phase.ail	parse_approval_command	R	reads the operator's approval reply into approve, deny, unknown or unparseable
+src/core/tool_phase.ail	resolve_approval	R	turns an approval reply, or its absence, into allowed or denied
+src/core/tool_phase.ail	policy_default_allow	R	decides what an approval timeout means
+src/core/tool_phase.ail	arguments_undecodable	R	decides whether a tool call is refused before dispatch
+src/core/tool_phase.ail	execute_allowed_tool_call	W,R	takes the world and returns the tool's successor; refuses undecodable and invalid requests
+src/core/tool_phase.ail	dispatch_tool_entries_with_builtin	W,R	threads the world through a tool batch; policy deny and pending-approval arms
+src/core/session.ail	derive_session_id	W	takes the boot world and returns its successor
+src/core/session.ail	c2_initial_state_with_counts	W	builds the loop's first state from a world
+src/core/session.ail	c2_finalize	W	takes the terminal world and returns the run's result with its successor
+src/core/session.ail	decision_fail_reason	R	maps a Fail code to the run's termination reason
+src/core/session.ail	c2_continuation	R	builds what a suspended run carries out
+src/core/session.ail	c2_resume_reset	R	the values a resumed run starts from
+src/core/session.ail	c2_state_from_continuation	W,R	builds a resumed run's loop state from a world
+src/core/session.ail	c2_fail	W,R	the failure terminal
+src/core/session.ail	c2_suspend	W,R	the step-budget suspension
+src/core/session.ail	c2_finish_tool_batch	W	hands the loop's world to the next step after a tool batch
+src/core/session.ail	c2_continue_tool_batch	W,R	resumes a tool batch after an approval
+src/core/session.ail	c2_candidate_approved_state	W	builds the next loop state, world included, after an approved candidate
+src/core/session.ail	c2_await_wake_state	W	the same, for a candidate held while waits are open
+src/core/session.ail	wake_matches	R	decides whether a wake reply is accepted or dropped
+src/core/session.ail	apply_wake	R	decides what each wake outcome does to the open waits
+src/core/session.ail	classify_candidate	W,R	a judge's send-back or approval, with the hook's successor world
+src/core/session.ail	c2_loop	W,R	the step loop: every arm either hands the world on or is a recovery branch
+src/core/session.ail	run_v2_traced_from_seed	W	the traced run's entry: hands the boot world to the loop
+src/core/session.ail	witness	W	drains a world's pending requests and returns the cleared successor
+src/core/session.ail	publish_turn_exit_manifest	W	takes the turn's world and returns the publish's successor
+src/core/session.ail	c2_state_from_parked	W,R	builds a park-resumed run's loop state from a world

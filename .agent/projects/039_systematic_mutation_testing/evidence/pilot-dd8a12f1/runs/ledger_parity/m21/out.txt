@@ -1,0 +1,36 @@
+make[1]: Entering directory '/workspaces/motoko_agent-039-pilot-scratch'
+./scripts/dst/run_ledger_parity_wire.sh
+=== ledger_parity wire-vs-trace (D6.4, general) ===
+  ✓ the run published a required set
+  ✓ every subject reported a trace side
+  ✓ the subject count matches the number of trace lines
+  ✓ ContextLimitResolved: projected 9, returned 9
+  ✓ CostExhausted: projected 1, returned 1
+  ✓ DelegatedToolDeferred: projected 1, returned 1
+  ✓ DoneEvent: projected 7, returned 7
+  ✓ ExtToolHandled: projected 3, returned 3
+  ✓ HistoryAppended: projected 27, returned 27
+  ✓ HistorySeeded: projected 9, returned 9
+  ✓ NativeToolCalls: projected 9, returned 9
+  ✓ NativeToolDenied: projected 3, returned 3
+  ✓ NativeToolResults: projected 9, returned 9
+  ✓ ParkEntered: projected 1, returned 1
+  ✗ ProviderCallPrepared: projected 0, returned 18
+      the driver projected 0 and appended 18 — D6.4 requires every projected Logical event to reach the returned trace
+  ✓ ProviderResult: projected 17, returned 17
+  ✓ RunSummary: projected 9, returned 9
+  ✓ StateDelta: projected 17, returned 17
+  ✓ StreamDelta: projected 2, returned 2
+  ✓ ThinkingStreamEnd: projected 18, returned 18
+  ✓ ThinkingStreamStart: projected 18, returned 18
+  ✓ ToolArgumentsInvalid: projected 1, returned 1
+  ✓ ToolPending: projected 1, returned 1
+  ✓ V2ToolDispatchComplete: projected 1, returned 1
+  ✓ V2ToolDispatchStart: projected 1, returned 1
+  ✓ WakeReceived: projected 1, returned 1
+  ✓ WorldRequest: projected 167, returned 167
+  witnessed=24 unwitnessed: CheckpointTaken CompactionExhausted EmptyStopFinalize ErrorEvent ExtInterceptHandled ExtSolverFeedback HistoryReplaced RunSuspended SessionResumed StreamErrorRetry ToolArgumentsUndecodable
+  ✓ the fixture witnesses at least 17 required variants on both channels
+ledger_parity wire gate FAIL
+make[1]: *** [Makefile:351: ledger_parity] Error 1
+make[1]: Leaving directory '/workspaces/motoko_agent-039-pilot-scratch'

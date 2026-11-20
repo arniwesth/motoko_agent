@@ -1,0 +1,7 @@
+diff --git a/src/core/step_machine.ail b/src/core/step_machine.ail
+index e941621c..15da220b 100644
+--- a/src/core/step_machine.ail
++++ b/src/core/step_machine.ail
+@@ -54 +54 @@ pure func await_approval_from_calls(step_idx: int, calls: [ToolCall]) -> StepDec
+-    [] => Fail({ code: "Internal", message: "approval requested without pending call", retryable: false }),
++    [] => Fail({ code: "Internal", message: "approval requested without pending call", retryable: true }),

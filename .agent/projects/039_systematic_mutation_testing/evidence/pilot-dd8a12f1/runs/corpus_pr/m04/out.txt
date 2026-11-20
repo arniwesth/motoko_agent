@@ -1,0 +1,43 @@
+make[1]: Entering directory '/workspaces/motoko_agent-039-pilot-scratch'
+        identity: 8449e4c8cbd9cf6ae2fb0251755bc5e10d296d35c8e3bd165d4ba5a339793d80
+        trajectory: 4848066bfa0d817efea4c5bf9b987351147f3344ba922201f770eac6857fa9ae
+        manifest: driver_only/38
+        classes: provider_protocol_inconsistent_result, approval_denied
+        branches: tool_dispatch_adapter.tool_call_to_envelope/malformed_arguments, session.c2_loop/approval_denied
+        why: first of two witnesses for tool_effect_applied_then_failed — the smallest seed of 260 whose world APPLIED a call that was then reported failed (034 ADR-001 D4)
+    seed-109 [fixed-seed] motoko_driver_only/2 seed 109
+        artifact: .ailang/dst-corpus/motoko_driver_only/2/seed-109.artifact (7641 bytes)
+        identity: 35071035ec46b22e2bcdb8ec418ab971713abb1a99a8ea3860214b07c03e95d5
+        trajectory: 5478fc4e39f0a5c00c094a74b274127dc636cdcd6bdee8f1be884cd3a5c18ad7
+        manifest: driver_only/38
+        classes: ToolCorrelationMismatch, ToolDeadlineExceeded, provider_partial_stream_then_error, approval_denied
+        branches: tool_phase.tool_outcome_message/ToolCorrelationMismatch, tool_phase.tool_outcome_message/ToolDeadlineExceeded, session.c2_loop/stream_error_retry, session.c2_loop/approval_denied
+        why: second witness for ToolDeadlineExceeded, NOT applied
+    seed-165 [fixed-seed] motoko_driver_only/2 seed 165
+        artifact: .ailang/dst-corpus/motoko_driver_only/2/seed-165.artifact (4875 bytes)
+        identity: 05f9457e73ea2bda971009eac2d5a000f2ccf2cfaa230186a07d5b9502a9fa10
+        trajectory: 2afeab9c8834fd0de251849eb76e12efedaa1068f8046522d9b2fb53ac73506f
+        manifest: driver_only/38
+        classes: tool_effect_applied_then_failed, provider_protocol_inconsistent_result, approval_denied
+        branches: tool_phase.tool_outcome_message/ToolFailed, tool_dispatch_adapter.tool_call_to_envelope/malformed_arguments, session.c2_loop/approval_denied
+        why: second witness for tool_effect_applied_then_failed
+    seed-215 [promoted-regression] motoko_driver_only/2 seed 215
+        artifact: .ailang/dst-corpus/motoko_driver_only/2/seed-215.artifact (4262 bytes)
+        identity: 6ebddf82afad31352f8398e47cb18c69e6d0a31dc7a0bd7ab8e768b3edfa0785
+        trajectory: 72bbb46a28774153dd900d27c629b6731bd5d65dc5f161e9a8f19af213d9e61c
+        manifest: driver_only/38
+        classes: ToolFailed, ToolCorrelationMismatch
+        branches: tool_phase.tool_outcome_message/ToolFailed, tool_phase.tool_outcome_message/ToolCorrelationMismatch
+        why: the richest Err-terminating trajectory of 260: SIX fault classes in one run that does NOT end Ok — tool_effect_applied_then_failed, ToolCorrelationMismatch, ToolDeadlineExceeded, provider_partial_stream_then_error, provider_protocol_inconsistent_result and approval_denied — and the LONGEST trajectory of 260 (n=63), the other extreme. D11's bank holds promoted regression programs as well as fixed seeds, and a bank whose every member terminates Ok pins only the happy shape of failure
+    constructed-empty-terminal [constructed-for-class] motoko_constructed/1 seed 0
+        artifact: .ailang/dst-corpus/motoko_constructed/1/seed-0.artifact (2450 bytes)
+        identity: acdba6d66886330d9569eab5caa735766b87e7c65f5d10cdaea607d88910ba20
+        trajectory: de49cdde90edab39b0c6ee805061389b80983e040382b926e2f1146fa11fb665
+        manifest: driver_only/38
+        classes: provider_empty_terminal_response
+        branches: session.c2_loop/empty_stop_finalize
+        why: no generated program can reach it: every generated terminal step carries non-empty prose (`gp<draws>-<arg>`, derived from a draw so that a seed reaching no choice reaches no byte), and `session.c2_loop`'s empty-stop branch is guarded by `trim(info.output) == ""`. Measured: 0 of 260 swept seeds, and 0 `empty_stop_finalize` records on the wire across the whole sweep. Cluster 12's limit — sweeping selects among things that exist and cannot cover a space the producer does not reach
+
+✗ WI-A15 commit 1 FAILED
+make[1]: *** [Makefile:1901: corpus_pr] Error 1
+make[1]: Leaving directory '/workspaces/motoko_agent-039-pilot-scratch'

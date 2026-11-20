@@ -1,0 +1,155 @@
+# Amendments
+
+Each is dated in `sequence.log` with the hash of what replaced what. Nothing hashed before an
+amendment was edited; the earlier file stays beside the later one.
+
+## A1, 2026-11-17, after STEP4 and before the draw: `mutator.py` did not do what `operators.md` says
+
+Found by reading the STEP4 enumeration before any draw, against `operators.md`, which is unchanged.
+
+1. **A type was taken for a list literal.** All 12 list-element candidates in `enumeration/` were
+   the two arguments of `Result[[Message], AIError]` in six type annotations. `operators.md` makes
+   a list literal the site. A `[` right after a name that is not a keyword is now a type
+   application, and everything inside it a type.
+2. **A list literal in a record field was missed.** `_is_type_bracket` read `, field: [` as a
+   parameter annotation, so `emitted: [start_event, complete_event]` (`tool_phase.ail:545`) had no
+   candidate. Only `let x: [T]` and `(x: [T]` are annotations now.
+3. **The applier's own hash check never ran.** It looked for `enumeration-meta.txt` in the
+   evidence root; the enumeration writes it under its own directory. It now reads
+   `enumeration-a1/enumeration-meta.txt` and refuses when the hash is absent. (The runner checks
+   every file's hash against `base.sha256` independently.)
+
+Effect: 409 candidates at 266 sites become 399 at 265 (12 removed, 2 added; the diff of the id
+columns is exactly those 14 lines). The STEP3 script is kept as `scripts/mutator-step3.py`,
+rebuilt by reversing the A1 edits and checked to hash to the STEP3 line (`48bb2c45…`). The new
+planted cases fail against it (`MISSING` the two list elements, `A TYPE WAS TAKEN FOR A LIST
+LITERAL`) and pass against the amended script. `enumeration/` is STEP4 as first run, unedited;
+`enumeration-a1/` is what the draw reads.
+
+## A2, 2026-11-17, during tier 1 and before the scorer read any tier-1 result: the scorer's runtime-failure pattern
+
+While designing the reach probes, a three-line program (`scripts/probe-semantics-test.ail`) showed
+that AILANG v0.60.4 reports an integer division by zero as `Error: execution failed: RT001: integer
+division by zero at <file>:<line>:<col>`, not as acceptance's `panic: division by zero` (v0.47.2).
+`score.py` looked only for `panic:`, so it would have filed a runtime failure as INCOMPLETE: still
+not a kill, but not named as what it is. It now also reads `execution failed` as PANIC. A planted
+case in the new wording is added to the self-test; it reads PANIC with the amended scorer and
+INCOMPLETE with the pre-A2 one (kept as `scripts/score-pre-a2.py`, with its self-test as
+`scripts/score_selftest-pre-a2.py`). The same program showed that a pure `let _ = 1 / (n - n);` whose
+value is never used is still evaluated, which the reach probes rely on.
+
+## A3, 2026-11-17, during tier 1: the scorer counted rows, not members
+
+m06's run printed five `journal-fold-disagrees` findings on each of five members, and `score.py`
+listed the member once per finding ("(25)"). The state (KILL) is unaffected; the member list and its
+count are now distinct members. A planted case with two findings on one member is added. The pre-A3
+scorer is kept as `scripts/score-pre-a3.py`.
+
+## A4, 2026-11-17, during tier 3: keep corpus_pr's whole output
+
+`corpus_pr`'s recipe prints only the last 40 lines of a red run, which hides the failing row
+(ADR-003 *Not decided* item 7). m01's and m04's runs showed only `✗ WI-A15 commit 1 FAILED`.
+`run_gate.sh` now copies the non-wire lines of the recipe's own `/tmp/corpus_pr.out` into
+`runs/corpus_pr/<id>/full.txt`. It was replaced with `mv` (a new file), so the instance running at
+the time was not edited under it. m04's full output was still in `/tmp/corpus_pr.out` and was copied
+by hand right after the amendment, before the next corpus_pr run. m01's had already been
+overwritten; its failing row is not recorded. The pre-A4 runner is kept as `scripts/run_gate-pre-a4.sh`.
+
+## A5, 2026-11-19, after the pilot was committed: "not reached" said more than the probe measured
+
+Found when the operator asked whether the 11 unreached mutants are a weakness of the DST suite.
+The reach probe (tier 2) ran only under `make corpus_judge`, so "not reached" means not reached
+by its 18 members and 5 controls. The README said "11 are run by nothing at all", "No run here
+walks any of them" and "recorded nowhere as unwalked", which reads as the whole suite and every
+record. What it measured is `corpus_judge`'s bank, and the record searched is ADR-003.
+
+Only wording changes. No verdict, count, yield or recommendation does. `README.md` is edited; the
+README as first committed stays beside it as `README-pre-a5.md`, at the hash the FINAL step
+records. The README also gains:
+
+- a text search of `scripts/dst/` for the unwalked branches, marked as unmeasured;
+- a line under *What was not verified*;
+- one sentence in the recommendation: re-running the reach probes under `make dst` would show which
+  of these sites another gate already walks.
+
+## A6, 2026-11-19, after A5 was committed: F1's results added
+
+A5 said reach was probed under `corpus_judge` only and suggested re-running the probes under
+`make dst`. The operator asked for that run. It is follow-up F1: the plan, predictions, scorer and
+reading rules are in `reach-dst-plan.md` and `scripts/score_reach_dst.py`, each hashed in
+`sequence.log` before any sweep result existed. The results are in `reach-dst-scores.tsv` and
+`reach-dst-results.md`.
+
+No verdict, count, yield or kill changes: the verdicts are defined on reach by a bank member, and
+F1 measures reach by the rest of the suite. `README.md` is edited; the README after A5 stays
+beside it as `README-pre-a6.md`. The README gains:
+
+- an F1 clause in the result's reach bullet;
+- F1 notes in the survivor rows for m02, m03, m12, m13, m19, m15, m17, m23, m30, m08 and m26;
+- a subsection, *Follow-up F1*, with F1's table. It replaces the A5 paragraph's unmeasured
+  text search, which became F1's predictions;
+- an updated line under *What was not verified*;
+- one changed sentence in the recommendation: `make dst` already walks the four branches, so the
+  ruling narrows to whether `corpus_judge` should walk them too;
+- F1's files and scripts in the file table, and A5 and A6 in deviation 7.
+
+## A7, 2026-11-20, after A6 was committed: F2's results added
+
+F1 found 8 of the 11 sites `corpus_judge` never walks are walked by another `make dst` target, and
+the README said whether those targets kill the mutants there was the next measurement. The
+operator asked for that run. It is follow-up F2: the plan and predictions are in
+`mutants-dst-plan.md`, hashed in `sequence.log` with `score_dst.py` (unchanged) and its fresh
+self-test before any sweep ran. The results are in `mutants-dst-scores.txt`,
+`mutants-dst-new-rows.txt` and `mutants-dst-results.md`.
+
+No verdict, count or yield of the pilot changes: they are defined on reach by a bank member, and F2
+measures what the rest of the suite kills. `README.md` is edited; the README after A6 stays beside
+it as `README-pre-a7.md`. The README gains:
+
+- an F2 clause in the result's kill bullet (20 of 30 killed somewhere in the suite) and its reach
+  bullet (6 of the 8 killed; m02 and m03 survive);
+- F2's outcome in the verdict table's last column for the eight mutants, and in the survivor rows
+  for m02, m03, m12, m13, m19, m17, m23 and m30;
+- a subsection, *Follow-up F2*, with F2's table, the two survivors and the suite-wide count;
+- F1's and F2's machine time under *Time*;
+- an updated line under *What was not verified*;
+- a changed sentence in the recommendation: F2's kills, and a ruling asked for on m02 and m03;
+- F2's files and script in the file table, A7 in deviation 7, and the scratch worktree's removal
+  (2026-11-20, logged in `sequence.log`) in place of "left clean".
+
+One correction rides along: deviation 7 said "Four amendments" after A5 and A6 were added. It now
+says seven.
+
+## A8, 2026-11-20, after A7 was committed: F3's results, and the suite-wide verdict leads
+
+The operator asked what the pilot tests and why `make dst` was not its focus, then asked for m09
+and m14 to be run under `make dst` and for the write-up to lead with the whole suite. m09 and m14
+are follow-up F3: plan, predictions and one reading rule (a `corpus_judge` CONTROL row red on the
+broken rule counts at the suite level) in `mutants-dst-f3-plan.md`, hashed in `sequence.log` before
+either sweep; results in `mutants-dst-f3-scores.txt`, `mutants-dst-f3-new-rows.txt` and
+`mutants-dst-f3-results.md`. Both were killed.
+
+No verdict, count or yield of the pilot changes, and each is still in the README. What changes is
+the order and the headline. `README.md` is rewritten around the suite-wide verdict; the README after
+A7 stays beside it as `README-pre-a8.md`. In detail:
+
+- a paragraph on what is tested, and a new first section, *The result across the suite*: 22 of 30
+  killed, 5 run with no check naming them, 3 run by nothing, a table of which check killed which
+  mutant, and the counts with and without my judgements;
+- the pilot's result moved to a second section, *within `corpus_judge`*, with its text kept;
+- the verdict table gains a first verdict column, *across `make dst`*. The F2 notes A7 appended to
+  the *named by* column move there, and that column returns to the pilot's text;
+- the survivors table now lists the suite-wide survivors (m11, m02, m03, m05, m18, m15, m08, m26),
+  and a second table lists the mutants `corpus_judge` does not see that the rest of the suite kills;
+- the yield is given two ways, as the brief fixed it and suite-wide, side by side. The suite-wide
+  reading was not fixed before any run; deviation 9 says so;
+- F2's and F3's sections merge into one; F1's section gains a note that its target lists are a
+  lower bound;
+- the per-operator table counts suite-wide verdicts; the per-tier version stays in
+  `README-pre-a8.md`;
+- predictions gain the follow-ups' rows; *Time*, *How it was run*, deviations 2 and 7, *What was
+  not verified* and the file table are updated, and the scratch worktree's second removal is noted;
+- **the recommendation changes.** It was "no second batch yet", because 13 of 30 draws landed where
+  `corpus_judge` does not run. Suite-wide only 3 of 30 do, so it is now "draw a second batch and
+  run it through `make dst`", with rulings on m02, m03, m11 and m18 alongside. The brief's rule as
+  fixed is reported unchanged.

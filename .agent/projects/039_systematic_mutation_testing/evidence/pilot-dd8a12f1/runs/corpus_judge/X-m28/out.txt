@@ -1,0 +1,39 @@
+make[1]: Entering directory '/workspaces/motoko_agent-039-pilot-scratch'
+011 ADR-003 D1 — the invariant set and six two-channel checks on every corpus member's real run (invariant-set/3)
+
+-- each check can fire, and can stay silent --
+  ✓ each run gets one row for each of the six rule ids, in a fixed order
+  ✓ all six are silent on the good input: 4 calls on a budget of 4, a retry at step 2, both counts balanced, ordinals 1 to 5
+  ✓ steps-not-contiguous fires on steps 0, 1, 3, 4 (a gap), and no other check does
+  ✓ steps-not-contiguous fires on steps 1, 2, 3, 4 (not from zero), and no other check does
+  ✓ provider-calls-exceed-budget fires on 5 calls on a budget of 4, and no other check does
+  ✓ retry-at-budget-edge fires on a retry at step 3 of 4, and no other check does
+  ✓ provider-calls-unbalanced fires on 4 prepared records and 3 logged, as 'log below trace', and no other check does
+  ✓ provider-calls-unbalanced fires on 4 prepared records and 5 logged, as 'log above trace', and no other check does
+  ✓ tool-dispatches-unbalanced fires on 1 dispatch start and 0 logged, as 'log below trace', and no other check does
+  ✓ tool-dispatches-unbalanced fires on 1 dispatch start and 2 logged, as 'log above trace', and no other check does
+  ✓ request-ordinals-not-contiguous fires on ordinals 1, 2, 4, 5 (a gap), and no other check does
+  ✓ request-ordinals-not-contiguous fires on ordinals 1 to 5 and a returned world at 4 (a successor dropped after its witness), and no other check does
+  ✓ request-ordinals-not-contiguous fires on ordinals 2 to 5 from a world at 0 (the first request is missing), and no other check does
+SELFCHECK undeclared-budget steps-not-contiguous clean prepared steps 0..3 (4)
+SELFCHECK undeclared-budget provider-calls-exceed-budget not-evaluated the step budget is undeclared, so 4 provider call(s) were held against nothing
+SELFCHECK undeclared-budget retry-at-budget-edge not-evaluated the step budget is undeclared, so the retries at [2] were held against nothing
+SELFCHECK undeclared-budget provider-calls-unbalanced clean trace=4 log=4
+SELFCHECK undeclared-budget tool-dispatches-unbalanced clean trace=1 log=1
+SELFCHECK undeclared-budget request-ordinals-not-contiguous clean ordinals 1..5 (5) from a world at 0 to a world at 5
+  ✓ a run started with a budget of 0 declares none: the two budget rules are NOT EVALUATED and the other four are clean
+  ✓ and not evaluated is not clean, which is what makes it red on a bank member
+  ✓ an empty trace is clean on all six checks, and the guard names it: no prepared call, no request ordinal
+  ✓ the guard is silent on the good input
+  ✓ a bank with no retry and no dispatch is clean on all six checks, and the bank guard names both
+  ✓ the bank guard is silent once a member holds a retry and a dispatch
+
+-- the bank: every member's run, bridged and judged --
+budgets, declared once: step 12 (bank_step_budget(), the value each member's run is started with), retry 11, decision undeclared
+Error: execution failed: RT001: integer division by zero at /workspaces/motoko_agent-039-pilot-scratch/src/core/session.ail:4552:13
+
+  source revision    dd8a12f1ec2f0f302b6619df9a02c1c4ea9b7716 (with uncommitted changes)
+  toolchain version  AILANG v0.60.4
+  trace              /tmp/tmp.KXpxmefhsN (kept: every member's wire, and every row above)
+make[1]: *** [Makefile:2116: corpus_judge] Error 1
+make[1]: Leaving directory '/workspaces/motoko_agent-039-pilot-scratch'

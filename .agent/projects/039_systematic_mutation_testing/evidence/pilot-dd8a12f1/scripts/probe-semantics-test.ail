@@ -1,0 +1,19 @@
+module p
+
+import std/io (println)
+
+func f(n: int) -> string {
+  let _ = 1 / (n - n);
+  "not reached"
+}
+
+func g(n: int) -> string {
+  if n > 100 then { let _ = 1 / (n - n); "big" } else "small"
+}
+
+export func main() -> () ! {IO} {
+  let _ = println("before g");
+  let _ = println(g(3));
+  let _ = println("before f");
+  println(f(3))
+}
