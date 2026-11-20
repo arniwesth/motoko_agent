@@ -11,12 +11,15 @@ the tree was hash-checked against `base.sha256` before and after each run.
 - **30 mutants nobody chose**, drawn from 399 candidate edits in 31 driver functions. Walking the
   seeded order took 38 sites: 8 drawn edits did not type-check and were replaced by the next site.
 - **14 of the 30 were killed by a named check**: 5 by a `corpus_judge` rule, 8 more by the
-  tier-3 gates, 1 more by the full `make dst`.
+  tier-3 gates, 1 more by the full `make dst`. Follow-up F2 kills 6 more under `make dst` (next
+  bullet): **20 of the 30** in all.
 - **13 of the 30 sit on code no bank member runs.** 11 are run by none of `corpus_judge`'s members
   or controls, two of them dead code (my judgement). 2 are run only by one of its controls. Under
   a full `make dst` (follow-up F1, amendment A6), **8 of the 11 are run by another target**, and 3
   by none: m15, on the extension-handled tool path ADR-003 D6 names, and the two dead-code sites.
-  The mutants at those 8 sites were never run under the targets that reach them.
+  Follow-up F2 (amendment A7) then ran the 8 mutants at those sites under a full `make dst`: **6
+  are killed**, each by a check about the broken behaviour, and **m02 and m03 survive**. The suite
+  runs both, and no check notices either.
 - **3 were run by a member and killed by no rule at any tier.** Two of them (m05, m18) change
   nothing that any run here observes, and I judge them equivalent on every path a run here walks.
   The third, **m11, is the one measured gap**: the retry record leaves the returned trace and
@@ -52,13 +55,15 @@ D9's stated blind spot and ADR-003's *Not decided* item 1, measured.
 
 One row per drawn site, in draw order. Rule ids are the gate's. "Killed" means a named check
 about the broken behaviour went red; everything else that went red is in `mutants.tsv`'s
-`tier1_also`, `tier3` and `tier4` columns. Judgements are marked as such.
+`tier1_also`, `tier3` and `tier4` columns. Judgements are marked as such. F2's results under
+`make dst` are added to the last column; the verdict column is defined on reach by a bank member,
+and F2 does not change it.
 
 | rank | mutant | site | function | operator | the edit | verdict | named by, or why not |
 |---|---|---|---|---|---|---|---|
 | 1 | m01 | `session:3834` | `run_v2_traced_from_seed` | SR.world | boot clock read starts from `provider.world`, not the session-id read's successor | **killed**, tier 3 | strict_replay, discovery: env-read-under-recorded (MOTOKO_SESSION_ID) |
-| 2 | m02 | `session:3616` | `c2_loop` | BF.literal | intercept arm journals its messages as replacing the previous entry | not killed: not reached | no member, no control |
-| 3 | m03 | `tool_phase:188` | `policy_default_allow` | BF.literal | `AllowAfterTimeout` means deny | not killed: not reached | no member, no control |
+| 2 | m02 | `session:3616` | `c2_loop` | BF.literal | intercept arm journals its messages as replacing the previous entry | not killed: not reached | no member, no control; F2: not killed under `make dst` |
+| 3 | m03 | `tool_phase:188` | `policy_default_allow` | BF.literal | `AllowAfterTimeout` means deny | not killed: not reached | no member, no control; F2: not killed under `make dst` |
 | 4 | m04 | `tool_phase:500` | `execute_allowed_tool_call` | SR.world | tool timeout env read from `world`: the hook's and the clock read's successors dropped | **killed**, tier 3 | discovery: handle scenario, a dropped successor |
 | 5 | m05 | `session:3243` | `c2_loop` | SR.world | approval arm's ExtCtx world token is the pre-approval world | not killed: reached, no observable difference | judgement: equivalent on every walked path |
 | 6 | m06 | `session:3668` | `c2_loop` | SR.record | tool-calling step's `state_delta` not journaled | **killed**, tier 1 | journal-fold-disagrees on 5 |
@@ -67,22 +72,22 @@ about the broken behaviour went red; everything else that went red is in `mutant
 | 9 | m09 | `tool_phase:515` | `execute_allowed_tool_call` | SR.stmt | `tool_arguments_invalid` not emitted to the wire | not killed: no member reaches it | reached by the invalid-request control, which stayed green |
 | 10 | m10 | `tool_phase:91` | `parse_approval_command` | CF.negate | a deny reason is replaced by "denied by operator" (`==` becomes `!=`) | **killed**, tier 4 | phase_c_l1 (approval protocol), test_coverage (inline test), world_state |
 | 11 | m11 | `session:3523` | `c2_loop` | SR.record | `stream_error_retry` not appended to the returned trace | not killed by a rule: reached, difference not revealed by a rule | only a vacuity guard, control a2 and depth_canary's count pin went red |
-| 12 | m12 | `tool_phase:476` | `execute_allowed_tool_call` | SR.stmt | delegated tool's event not emitted | not killed: not reached | no member, no control |
-| 13 | m13 | `tool_phase:637` | `dispatch_tool_entries_with_builtin` | SR.record | policy-denied call's denial message dropped | not killed: not reached | no member, no control |
+| 12 | m12 | `tool_phase:476` | `execute_allowed_tool_call` | SR.stmt | delegated tool's event not emitted | not killed: not reached | no member, no control; F2: killed by `ledger_parity` |
+| 13 | m13 | `tool_phase:637` | `dispatch_tool_entries_with_builtin` | SR.record | policy-denied call's denial message dropped | not killed: not reached | no member, no control; F2: killed by `journal_resume`'s fold (`pairing`) |
 | 14 | m14 | `session:3052` | `c2_loop` | SR.record | injected user message journaled but not added to the history | not killed: no member reaches it | CONTROL solver-feedback journal-fold-disagrees RED |
 | 15 | m15 | `tool_phase:420` | `execute_allowed_tool_call` | SR.stmt | scratchpad tool's handled event not emitted | not killed: not reached | no member, no control |
 | 16 | m16 | `tool_phase:662` | `dispatch_tool_entries_with_builtin` | SR.record | `tool_pending` dropped from the fold's emitted log | **killed**, tier 3 | ledger_parity: ToolPending projected 1, returned 0 |
-| 17 | m17 | `session:2760` | `c2_await_wake_state` | SR.world | await-wake state keeps the pre-step world | not killed: not reached | no member, no control |
+| 17 | m17 | `session:2760` | `c2_await_wake_state` | SR.world | await-wake state keeps the pre-step world | not killed: not reached | no member, no control; F2: killed by `world_framed_wire` and `park_wake` (stale world) |
 | 18 | - | `session:3670` | `c2_loop` | SR.stmt | drop `let next_state = …` (bound only in a sibling arm) | did not type-check | undefined variable `next_state` |
 | 19 | - | `session:3169` | `c2_loop` | MAS.swap | swap the `Park` and `AwaitApproval` arm bodies | did not type-check | undefined variable `waits` |
 | 20 | m18 | `session:4574` | `publish_turn_exit_manifest` | SR.world | exit render's ports open on the pre-read world | not killed: reached, no observable difference | judgement: equivalent on every walked path |
-| 21 | m19 | `tool_phase:635` | `dispatch_tool_entries_with_builtin` | SR.stmt | policy-denied call's event not emitted | not killed: not reached | no member, no control |
+| 21 | m19 | `tool_phase:635` | `dispatch_tool_entries_with_builtin` | SR.stmt | policy-denied call's event not emitted | not killed: not reached | no member, no control; F2: killed by `ledger_parity` |
 | 22 | - | `session:3601` | `c2_loop` | SR.stmt | drop `let event = ExtInterceptHandled(…)` | did not type-check | undefined variable `event` |
 | 23 | m20 | `tool_phase:491` | `execute_allowed_tool_call` | MAS.swap | `invalid_resolution` match arms swapped | **killed**, tier 3 | ledger_parity: census row `invalid` |
 | 24 | - | `tool_phase:627` | `dispatch_tool_entries_with_builtin` | MAS.swap | swap the policy `Deny` and `Pending` arm bodies | did not type-check | undefined variable `default` |
 | 25 | m21 | `session:3458` | `c2_loop` | SR.stmt | `provider_call_prepared` not emitted to the wire | **killed**, tier 3 | strict_replay, discovery wire witness; ledger_parity ProviderCallPrepared 0 vs 18 |
 | 26 | m22 | `session:2710` | `c2_candidate_approved_state` | BF.literal | approved answer journaled as replacing the previous entry | **killed**, tier 1 | journal-fold-disagrees on 10 |
-| 27 | m23 | `session:2809` | `wake_matches` | BF.literal | a wake reply with OperatorInput/HostError/Aborted is dropped | not killed: not reached | no member, no control |
+| 27 | m23 | `session:2809` | `wake_matches` | BF.literal | a wake reply with OperatorInput/HostError/Aborted is dropped | not killed: not reached | no member, no control; F2: killed by `park_wake` and `park_resume` |
 | 28 | - | `session:3211` | `c2_loop` | MAS.swap | swap the approval `None` and `Some` arm bodies | did not type-check | undefined variable `req` |
 | 29 | - | `session:3437` | `c2_loop` | SR.stmt | drop `let event = CompactionExhausted(…)` | did not type-check | undefined variable `event` |
 | 30 | m24 | `session:2711` | `c2_candidate_approved_state` | SR.record | approved answer's `history_appended` neither journaled nor emitted | **killed**, tier 1 | journal-fold-disagrees on 10 |
@@ -93,7 +98,7 @@ about the broken behaviour went red; everything else that went red is in `mutant
 | 35 | m28 | `session:4552` | `publish_turn_exit_manifest` | SR.world | manifest-name env read's successor dropped | **killed**, tier 3 | strict_replay, discovery: env-read-under-recorded (MOTOKO_EXIT_MANIFEST) |
 | 36 | m29 | `session:3835` | `run_v2_traced_from_seed` | SR.world | boot witness drains `provider.world`: every pre-loop read dropped | **killed**, tier 3 | strict_replay, discovery: env-read-under-recorded (MOTOKO_SESSION_ID); corpus_pr required-class-not-covered |
 | 37 | - | `session:3711` | `c2_loop` | SR.stmt | drop `let appended = …` | did not type-check | undefined variable `appended` |
-| 38 | m30 | `session:2805` | `wake_matches` | BF.connective | wake match: `&&` becomes `||` | not killed: not reached | no member, no control |
+| 38 | m30 | `session:2805` | `wake_matches` | BF.connective | wake match: `&&` becomes `||` | not killed: not reached | no member, no control; F2: killed by `park_resume` and `park_wake` |
 
 ## The survivors, rule against checker
 
@@ -109,9 +114,9 @@ no test was written for any of them.
 | m18 | `publish_turn_exit_manifest`'s comment: the render sees the turn's successor | nothing differs | reached (seed 1), no observable difference. *Judgement*: equivalent while `MOTOKO_EXIT_MANIFEST` is unset (`ext/exit_manifest.ail:203` returns before the ports are used); a run that publishes a manifest would hand its exit intents a world one env read behind |
 | m14 | D4: the journal's fold reproduces the final history | `journal-fold-disagrees` on the `solver-feedback` CONTROL row; the brief counts JUDGE rows only | no member reaches it; the gate's control does and names the rule |
 | m09 | 009 ADR-001 D6.4 parity | the invalid-request control reaches it and stays green: the gate reads only the trace | no member reaches it |
-| m02, m03, m12, m13, m19 | m02: ADR-003 D2 and D4 (m22, the same edit one function over, was killed by `journal-fold-disagrees`). m03, m13: none in ADR-003. m12, m19: 009 ADR-001 D6.4 | not evaluated | **not reached**: the response-intercept arm (m02), an approval timeout that allows (m03), the delegated backend (m12), a policy that denies (m13, m19). No `corpus_judge` run walks any of them. Under `make dst` (F1) all five are walked, by `smoke_driver` and others (m02, m03, m13, m19) and by `ledger_parity`'s delegated scenario (m12) |
+| m02, m03, m12, m13, m19 | m02: ADR-003 D2 and D4 (m22, the same edit one function over, was killed by `journal-fold-disagrees`). m03, m13: none in ADR-003. m12, m19: 009 ADR-001 D6.4 | not evaluated | **not reached**: the response-intercept arm (m02), an approval timeout that allows (m03), the delegated backend (m12), a policy that denies (m13, m19). No `corpus_judge` run walks any of them. Under `make dst` (F1) all five are walked, by `smoke_driver` and others (m02, m03, m13, m19) and by `ledger_parity`'s delegated scenario (m12). F2 ran the mutants there: m12, m13 and m19 are killed, m02 and m03 are not (§ Follow-up F2) |
 | m15 | 009 ADR-001 D6.4 | not evaluated | not reached: the scratchpad tool, "a tool an extension handles" (D6, known). No `make dst` target walks it either (F1) |
-| m17, m23, m30 | D9 (m17); ADR-002 D2's wake match (m23, m30) | not evaluated | not reached: open waits and wakes. Known: "The corpus never parks" (D6's list). Under `make dst` `park_resume` walks all three (F1) |
+| m17, m23, m30 | D9 (m17); ADR-002 D2's wake match (m23, m30) | not evaluated | not reached: open waits and wakes. Known: "The corpus never parks" (D6's list). Under `make dst` `park_resume` walks all three (F1), and F2 kills all three there |
 | m08, m26 | none | not evaluated | not reached. *Judgement*: dead code. m08's `None` arm needs `await_approval` without a pending approval, and the only producer of that reason (`session.ail:3353`) sets one; m26's `[]` arm is called only with pending calls (`step_machine.ail:112-114`). No `make dst` target reaches either (F1), which fits the judgement and does not prove it |
 
 **Counts with and without the judgements.** Of the 30: 14 killed. Of the 16 not killed, 4 rest on
@@ -166,12 +171,54 @@ line. The scorer and its reading rules were fixed and hashed before the sweeps p
 So **"not reached" was a `corpus_judge` finding, not a suite-wide one.** Across the suite, the
 one reach gap among these sites is m15, which ADR-003 D6 already names. The eight mutants at
 reached sites stopped at tier 2 and were never run under these targets (tier 3 ran only on mutants
-a member reaches), so whether those targets kill them is not measured by F1. The predictions came
+a member reaches), so whether those targets kill them is not measured by F1. F2 measures it, below. The predictions came
 from a text search of `scripts/dst/` and held for 8 of 12: m02, m03 and m12 were predicted
 unreached, and m15 was predicted reached. A side observation: `ledger_parity` and
 `world_framed_wire` print only a failed program's `✗` rows and delete the rest, so m12's probe
 crash showed only as a missing frame end. `scripts/run_program.sh` re-ran that one program with its
 output kept to read it, by a rule logged before it ran.
+
+### Follow-up F2: the eight mutants under `make dst`
+
+Run on 2026-11-19 at the operator's request (`mutants-dst-plan.md`, `mutants-dst-results.md`).
+Each of the 8 drawn mutants at F1's reached sites ran through a full `make dst`, by the unchanged
+`run_gate.sh` and `score_dst.py`. The plan and predictions were hashed before the first sweep.
+Every red target's output was read by hand, and a red counts only if a failing check is about the
+broken behaviour, as at tier 4 (deviation 1).
+
+| mutant | the edit | under `make dst` | the check about the broken behaviour |
+|---|---|---|---|
+| m12 | delegated tool's event not emitted | **killed** | `ledger_parity`: `DelegatedToolDeferred: projected 0, returned 1` |
+| m19 | policy-denied call's event not emitted | **killed** | `ledger_parity`: `NativeToolDenied: projected 1, returned 3` |
+| m13 | policy-denied call's denial message dropped | **killed** | `journal_resume`: the journal fold refuses with `pairing`, a tool call left unanswered |
+| m17 | await-wake state keeps the pre-step world | **killed** | `world_framed_wire`: ordinal 15 repeated (stale-world re-request); `park_wake`: stale world |
+| m23 | a wake reply with OperatorInput/HostError/Aborted is dropped | **killed** | `park_wake`'s `operator_input`, `host_error` and `abort` rows; `park_resume`'s `resume_aborted` |
+| m30 | wake match: `&&` becomes `\|\|` | **killed** | `park_resume`'s `resume_dropped`; `park_wake`'s `wrong_handle` rows |
+| m02 | intercept arm journals its messages as replacing the previous entry | not killed | none: nothing red beyond C-base |
+| m03 | `AllowAfterTimeout` means deny | not killed | none: nothing red beyond C-base |
+
+The other reds under m13, m17, m23 and m30 (count pins, a census row, the herdr discovery grade,
+`test_coverage`) are listed in `mutants-dst-results.md` and not counted.
+
+- **m03 is reached, and different only where no run goes.** `default_allow` decides an approval
+  only when the approval read hits EOF, or the reply is unparseable or an unknown command
+  (`resolve_approval`, `tool_phase.ail:98`). No run that reaches the line resolves an approval that way. The fault
+  catalogue already records the gap: its `approval_deadline_exceeded` class
+  (`dst_fault_catalogue.ail:467`) notes that with `default_allow` true "the class is not
+  exercised". This is my reading of the source, not a run that tells the two apart.
+- **m02 is reached, and the difference is in a record no target reads.** It flips the `replace`
+  flag on the intercept arm's journal record. Its twin one function over (m22) was killed by
+  `corpus_judge`'s `journal-fold-disagrees`. Five targets run the arm and none goes red. Whether
+  they never fold that run's journal, or fold it without comparing it with the history, was not
+  checked.
+
+Across the suite, **20 of the 30 are now killed by a named check**. Of the other 10, three run
+under `make dst` with no check noticing (m02, m03, and m11, the pilot's oracle gap), two are judged
+equivalent (m05, m18), one is run by no target (m15), two are judged dead code (m08, m26), and two
+are reached only by `corpus_judge`'s controls and were not run under `make dst` (m09, m14). The
+predictions held for 7 of 8; m03 was predicted killed. The 8 sweeps took 5,537 s, and each
+restored the tree to `base.sha256`. The pilot's verdicts and yield are unchanged, since both are
+defined on reach by a bank member.
 
 ## Per operator
 
@@ -226,7 +273,8 @@ Machine time, from each run's own wall clock (`runs/*/*/rc`):
 A full `make dst` took 9 to 10 minutes here, not the half hour §6 carries from the spike. Elapsed
 time from the base commit's record to the last sweep: 18:43 to 21:50 UTC. Triage (reading each
 red, writing `triage.tsv` and this page) was about an hour and a half, interleaved with the runs
-and not clocked separately.
+and not clocked separately. Follow-ups F1 and F2, on 2026-11-19, added 12 and 8 `make dst` sweeps,
+taking 6,952 s and 5,537 s.
 
 ## How it was run
 
@@ -274,11 +322,11 @@ selftest`).
    the site cannot fail on either.
 6. **Whole functions are the population**, so normal-path statements inside `c2_loop` are sites
    too (m21, for one).
-7. **Four amendments**, each dated, hashed and kept beside what it replaced (`AMENDMENTS.md`):
+7. **Seven amendments**, each dated, hashed and kept beside what it replaced (`AMENDMENTS.md`):
    A1, before the draw, the enumerator against `operators.md` (409 candidates became 399); A2 and
    A3, the scorer (v0.60.4's runtime-error wording; members counted once); A4, the runner keeps
-   `corpus_pr`'s whole output. A5 and A6 came after the pilot was committed: the reach wording,
-   and F1's results.
+   `corpus_pr`'s whole output. A5, A6 and A7 came after the pilot was committed: the reach
+   wording, F1's results and F2's.
 8. **The machine was shared.** Load stayed between 6 and 15 from other sessions. `corpus_pr`
    never failed on its ceiling, so the brief's single re-run was never needed.
 
@@ -295,8 +343,9 @@ selftest`).
 - **Reach was measured to the first member that reaches a site**, not per member.
 - **Reach was probed under `corpus_judge` only** (A5). F1 (A6) measured it under `make dst` for
   11 of the 13 sites no member reaches. m09 and m14 were left out because `corpus_judge`'s own
-  controls reach them. The mutants at the 8 sites F1 finds reached were not run under the targets
-  that reach them.
+  controls reach them. F2 (A7) ran the mutants at the 8 sites F1 finds reached, one sweep each.
+  Its own list of what was not verified is in `mutants-dst-results.md`; it includes why m02
+  survives (whether the targets that run the intercept arm fold that run's journal).
 - **`corpus_pr` writes a fixed `/tmp/corpus_pr.out`.** A concurrent `corpus_pr` from another
   session would have overwritten the file A4 copies; none was seen, and it cannot be excluded.
 - **Whether one mutant per line is enough** (the Google result) under property verdicts. Not
@@ -316,8 +365,10 @@ mainly more of what this one found most of: 13 of 30 landed on branches no bank 
 of them on four branches ADR-003 does not record as unwalked. Those branches (the intercept arm, an allowing
 timeout, the delegated backend, a denying policy) need a ruling first: whether each should be
 walked by a member or a control, or recorded as known and unseen. F1 shows `make dst` already
-walks all four, so the ruling narrows to whether `corpus_judge` should walk them too. Whether the
-targets that walk them kill these mutants is the next measurement. m11 needs its own ruling on
+walks all four, so the ruling narrows to whether `corpus_judge` should walk them too. F2 shows
+the targets that walk them kill m12, m13 and m19, and leave m02 (the intercept arm) and m03 (an
+allowing timeout) alive. Those two need a ruling of their own: whether a check should notice them,
+or they should be recorded as known and unseen (the fault catalogue already records m03's). m11 needs its own ruling on
 whether the retry record's parity should be witnessed, and m18 on whether an exit-manifest
 publication should be walked. After those rulings, a second batch would
 measure the gate that results rather than re-measure the reach gaps this one already shows. If the
@@ -331,11 +382,13 @@ with the next 30 type-checking sites taken from `draw-order.tsv` after rank 38.
 | `sequence.log` | every step, in order, with times and hashes, and every run's integrity check |
 | `base.txt`, `base.sha256` | the base commit and toolchain; the four files' hashes |
 | `population.md`, `population.tsv`, `population-accounting.tsv` | the rule, the 31 functions, all 133 reachable with their verdict |
-| `operators.md`, `AMENDMENTS.md` | the five operators; A1 to A6 |
+| `operators.md`, `AMENDMENTS.md` | the five operators; A1 to A7 |
 | `README-pre-a5.md` | this page as first committed in `94b0f678`, kept beside it by A5 |
 | `README-pre-a6.md` | this page after A5 (`fb1f9779`), kept beside it by A6 |
+| `README-pre-a7.md` | this page after A6 (`2d16ada5`), kept beside it by A7 |
 | `reach-dst-plan.md`, `reach-dst-scores.tsv`, `reach-dst-results.md` | follow-up F1: the plan and predictions, the scorer's readings, the write-up |
 | `runs/program/ledger_parity_dst/X-m12/` | F1's one hand-reading run, with the program's output kept |
+| `mutants-dst-plan.md`, `score-dst-selftest-f2.txt`, `mutants-dst-scores.txt`, `mutants-dst-new-rows.txt`, `mutants-dst-results.md` | follow-up F2: the plan and predictions, the scorer's self-test before F2, its readings, each sweep's failing rows not in C-base, the write-up |
 | `enumeration/`, `enumeration-a1/` | STEP4's enumeration as first run; the amended one the draw used |
 | `draw-order.tsv`, `draw-checked.tsv`, `draw-check.log` | the seeded order of all 265 sites; the 38 walked with their type check |
 | `predictions.tsv` | the predictions, hashed before any gate ran |
@@ -344,6 +397,8 @@ with the next 30 type-checking sites taken from `draw-order.tsv` after rank 38.
 | `triage.tsv` | the judgement per mutant: verdict, stated rule, checker, known list, prediction outcome |
 | `mutants.tsv` | everything per drawn site, assembled by `scripts/assemble.py` from the above |
 | `runs/<target>/<id>/` | each run: `out.txt` (non-wire lines), `mutant.diff`, `apply.log`, `rc`; `corpus_pr` runs after A4 also keep `full.txt` |
-| `scripts/` | `ailsrc.py` (tokenizer), `population.py`, `mutator.py`, `draw.py`, `fixed_edits.py` (controls and probes), `run_gate.sh`, `run_tier3.sh`, `run_tier4.sh`, the scorers and their self-tests, `assemble.py`, and F1's `score_reach_dst.py` and `run_program.sh`; `*-step3.py`, `*-pre-a*.*` are the versions amendments replaced |
+| `scripts/` | `ailsrc.py` (tokenizer), `population.py`, `mutator.py`, `draw.py`, `fixed_edits.py` (controls and probes), `run_gate.sh`, `run_tier3.sh`, `run_tier4.sh`, the scorers and their self-tests, `assemble.py`, F1's `score_reach_dst.py` and `run_program.sh`, and F2's `new_rows_dst.py` (a reading aid written after its sweeps); `*-step3.py`, `*-pre-a*.*` are the versions amendments replaced |
 
-The scratch worktree, `/workspaces/motoko_agent-039-pilot-scratch`, is left clean at `dd8a12f1`.
+Every run used the scratch worktree `/workspaces/motoko_agent-039-pilot-scratch`. It was removed on
+2026-11-20, after F2, clean at `dd8a12f1` (`sequence.log`). To re-run a step, add a detached
+worktree at `dd8a12f1` and point `PILOT_SCRATCH` at it.

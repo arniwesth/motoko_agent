@@ -92,3 +92,30 @@ beside it as `README-pre-a6.md`. The README gains:
 - one changed sentence in the recommendation: `make dst` already walks the four branches, so the
   ruling narrows to whether `corpus_judge` should walk them too;
 - F1's files and scripts in the file table, and A5 and A6 in deviation 7.
+
+## A7, 2026-11-20, after A6 was committed: F2's results added
+
+F1 found 8 of the 11 sites `corpus_judge` never walks are walked by another `make dst` target, and
+the README said whether those targets kill the mutants there was the next measurement. The
+operator asked for that run. It is follow-up F2: the plan and predictions are in
+`mutants-dst-plan.md`, hashed in `sequence.log` with `score_dst.py` (unchanged) and its fresh
+self-test before any sweep ran. The results are in `mutants-dst-scores.txt`,
+`mutants-dst-new-rows.txt` and `mutants-dst-results.md`.
+
+No verdict, count or yield of the pilot changes: they are defined on reach by a bank member, and F2
+measures what the rest of the suite kills. `README.md` is edited; the README after A6 stays beside
+it as `README-pre-a7.md`. The README gains:
+
+- an F2 clause in the result's kill bullet (20 of 30 killed somewhere in the suite) and its reach
+  bullet (6 of the 8 killed; m02 and m03 survive);
+- F2's outcome in the verdict table's last column for the eight mutants, and in the survivor rows
+  for m02, m03, m12, m13, m19, m17, m23 and m30;
+- a subsection, *Follow-up F2*, with F2's table, the two survivors and the suite-wide count;
+- F1's and F2's machine time under *Time*;
+- an updated line under *What was not verified*;
+- a changed sentence in the recommendation: F2's kills, and a ruling asked for on m02 and m03;
+- F2's files and script in the file table, A7 in deviation 7, and the scratch worktree's removal
+  (2026-11-20, logged in `sequence.log`) in place of "left clean".
+
+One correction rides along: deviation 7 said "Four amendments" after A5 and A6 were added. It now
+says seven.

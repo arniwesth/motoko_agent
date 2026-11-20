@@ -1,0 +1,100 @@
+######## m02
+######## m03
+######## m12
+  [ledger_parity] ✗ DelegatedToolDeferred: projected 0, returned 1
+  [ledger_parity] ledger_parity wire gate FAIL
+######## m13
+  [ledger_parity] ✗ the in-process census failed (exit 1); its rows:
+  [ledger_parity] ✗ order: CostExhausted is appended BEFORE the RunSummary, which stays final (D6.1)
+  [ledger_parity] ledger_parity wire gate FAIL
+  [journal_resume] ✗ the first run suspends at its step budget holding 8 messages
+  [journal_resume] ✗ the first run's journal folds
+  [journal_resume] ✗ the fold's boundary is `suspended` and its history is the continuation's
+  [journal_resume] journal_resume FAIL (the first journal did not fold; nothing to resume)
+  [journal_resume] journal_resume FAIL (exit 1)
+  [world_framed_wire] ✗ ledger_parity_dst.ail failed (exit 1); its rows:
+  [world_framed_wire] ✗ order: CostExhausted is appended BEFORE the RunSummary, which stays final (D6.1)
+  [world_framed_wire] world_framed_wire gate FAIL
+  [phase_c_l1] phase_c2_wiring_scenarios FAIL failed=1
+######## m17
+  [driver_plus_herdr] ✗ the DISCOVERY instrument grades the run clean in both directions — 1 finding(s); `discovery` is the only producer that can carry herdr's criterion-2 entries, so a finding here unmakes the record
+  [driver_plus_herdr] HERDR-GRADED: FAIL — the call sequence desynchronised or an effect reached the live world
+  [herdr_graded] ✗ the DISCOVERY instrument grades the run clean in both directions — 1 finding(s); `discovery` is the only producer that can carry herdr's criterion-2 entries, so a finding here unmakes the record
+  [herdr_graded] HERDR-GRADED: FAIL — the call sequence desynchronised or an effect reached the live world
+  [world_framed_wire] ✗ frame parked: ordinal 15 repeated (stale-world re-request)
+  [world_framed_wire] world_framed_wire gate FAIL
+  [park_wake] ✗ success: the final answer is the DoneEvent's
+  [park_wake] ✗ metric (trace): exactly 4 ProviderCallPrepared
+  [park_wake] ✗ metric (program): exactly 4 ProviderIdentity interactions
+  [park_wake] ✗ metric (program): the WakeIdentity sits between the 2nd and 3rd ProviderIdentity
+  [park_wake] ✗ metric verified (trace): at least 5 ProviderCallPrepared
+  [park_wake] ✗ metric verified (program): at least 5 ProviderIdentity
+  [park_wake] ✗ stale world: world ordinals strictly +1 across both parks
+  [park_wake] ✗ duplicate_wake: the late p0 reply is dropped at p1 and re-issued once
+  [park_wake] ✗ duplicate_wake: only the two matching wakes are applied
+  [park_wake] ✗ empty_stop: the run ends Ok with the final answer
+  [park_wake] park_wake_dst FAIL
+  [park_wake] ✗ the in-process fixtures passed (exit 1)
+  [park_wake] ✗ duplicate_wake: one warning per dropped reply (drops=none, warnings=0)
+  [park_wake] park_wake gate FAIL
+  [park_resume] ✗ resume_after_wake: the wake message told the model to call DelegateCheck once; the run ends Ok with the final answer
+  [park_resume] park_resume_dst FAIL
+  [park_resume] ✗ the in-process rows passed (exit 1)
+  [park_resume] park_resume gate FAIL
+######## m19
+  [ledger_parity] ✗ NativeToolDenied: projected 1, returned 3
+  [ledger_parity] ledger_parity wire gate FAIL
+######## m23
+  [test_coverage] ✗ src/core/session.ail: 45/46 passed
+  [test_coverage] ✗ [failing] src/core/session.ail
+  [park_resume] ✗ resume_park_exit: WakeReceived for `w4.r1.0.p0` is HostError("wake_read unbound"), wait_id ""
+  [park_resume] ✗ resume_park_exit: the waits are KEPT — the resumed run's next park `w4.r1.0.p1` still waits on [h1]
+  [park_resume] ✗ resume_park_exit: the model was told the host could not observe the waits
+  [park_resume] ✗ resume_park_exit: the two-frame journal refolds to not Parked
+  [park_resume] ✗ resume_aborted: WakeReceived(aborted) for `w4.r1.0.p0` carries the command
+  [park_resume] ✗ resume_aborted: the two-frame journal folds to open:wake:aborted
+  [park_resume] park_resume_dst FAIL
+  [park_resume] ✗ the in-process rows passed (exit 1)
+  [park_resume] ✗ resume_park_exit: no reply is dropped
+  [park_resume] ✗ resume_aborted: no reply is dropped
+  [park_resume] park_resume gate FAIL
+  [park_wake] ✗ operator_input: the first wake is the operator's
+  [park_wake] ✗ operator_input: the second park still waits on h1
+  [park_wake] ✗ operator_input: the operator's text reached the model, loop-tagged
+  [park_wake] ✗ operator_input: the run ends Ok
+  [park_wake] ✗ host_error: the first wake is HostError, not Lost
+  [park_wake] ✗ host_error: the wait stays open into the second park
+  [park_wake] ✗ host_error: the second park succeeds
+  [park_wake] ✗ host_error: the run ends Ok
+  [park_wake] ✗ stale world: one wake_read witness per wake read (2)
+  [park_wake] ✗ stale world: the second park does not re-read the consumed wake
+  [park_wake] ✗ abort: the run ends Err(ParkCancelled) with message abort
+  [park_wake] ✗ abort: WakeReceived(aborted) carries the command, recorded before the exit
+  [park_wake] ✗ abort: not a suspension
+  [park_wake] ✗ restart: the run ends Err(ParkCancelled) with message restart:dogfood
+  [park_wake] ✗ restart: WakeReceived(aborted) carries restart:dogfood
+  [park_wake] ✗ missing_wake: the FIRST wake is HostError("wake_read unbound") on p0, at the exhaustion point
+  [park_wake] park_wake_dst FAIL
+  [park_wake] ✗ the in-process fixtures passed (exit 1)
+  [park_wake] ✗ restart: the conversation loop's exit emits one session_suspend for dogfood
+  [park_wake] park_wake gate FAIL
+######## m30
+  [test_coverage] ✗ src/core/session.ail: 45/46 passed
+  [test_coverage] ✗ [failing] src/core/session.ail
+  [park_wake] ✗ wrong_handle: the run is suspended, not failed, and its last decision is Fail
+  [park_wake] ✗ wrong_handle: the bound held after at least two issues
+  [park_wake] ✗ wrong_handle: no WakeReceived
+  [park_wake] park_wake_dst FAIL
+  [park_wake] ✗ the in-process fixtures passed (exit 1)
+  [park_wake] ✗ wrong_handle: one warning per dropped reply (drops=1, warnings=0)
+  [park_wake] ✗ wrong_handle: no wake_received reaches the wire
+  [park_wake] park_wake gate FAIL
+  [park_resume] ✗ resume_dropped: one ParkEntered `w4.r1.0.p0` on [h1] and NO WakeReceived
+  [park_resume] ✗ resume_dropped: no run opens and the cursor element was consumed by the dropped read
+  [park_resume] ✗ resume_dropped: the frame returns the folded history, between turns
+  [park_resume] ✗ resume_dropped: the two-frame journal keeps the re-issued park `w4.r1.0.p0` open for the next resume
+  [park_resume] park_resume_dst FAIL
+  [park_resume] ✗ the in-process rows passed (exit 1)
+  [park_resume] ✗ resume_dropped: one warning per dropped reply (drops=1, warnings=0)
+  [park_resume] ✗ resume_dropped: no wake_received reaches the wire
+  [park_resume] park_resume gate FAIL
