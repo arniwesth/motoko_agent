@@ -119,3 +119,37 @@ it as `README-pre-a7.md`. The README gains:
 
 One correction rides along: deviation 7 said "Four amendments" after A5 and A6 were added. It now
 says seven.
+
+## A8, 2026-11-20, after A7 was committed: F3's results, and the suite-wide verdict leads
+
+The operator asked what the pilot tests and why `make dst` was not its focus, then asked for m09
+and m14 to be run under `make dst` and for the write-up to lead with the whole suite. m09 and m14
+are follow-up F3: plan, predictions and one reading rule (a `corpus_judge` CONTROL row red on the
+broken rule counts at the suite level) in `mutants-dst-f3-plan.md`, hashed in `sequence.log` before
+either sweep; results in `mutants-dst-f3-scores.txt`, `mutants-dst-f3-new-rows.txt` and
+`mutants-dst-f3-results.md`. Both were killed.
+
+No verdict, count or yield of the pilot changes, and each is still in the README. What changes is
+the order and the headline. `README.md` is rewritten around the suite-wide verdict; the README after
+A7 stays beside it as `README-pre-a8.md`. In detail:
+
+- a paragraph on what is tested, and a new first section, *The result across the suite*: 22 of 30
+  killed, 5 run with no check naming them, 3 run by nothing, a table of which check killed which
+  mutant, and the counts with and without my judgements;
+- the pilot's result moved to a second section, *within `corpus_judge`*, with its text kept;
+- the verdict table gains a first verdict column, *across `make dst`*. The F2 notes A7 appended to
+  the *named by* column move there, and that column returns to the pilot's text;
+- the survivors table now lists the suite-wide survivors (m11, m02, m03, m05, m18, m15, m08, m26),
+  and a second table lists the mutants `corpus_judge` does not see that the rest of the suite kills;
+- the yield is given two ways, as the brief fixed it and suite-wide, side by side. The suite-wide
+  reading was not fixed before any run; deviation 9 says so;
+- F2's and F3's sections merge into one; F1's section gains a note that its target lists are a
+  lower bound;
+- the per-operator table counts suite-wide verdicts; the per-tier version stays in
+  `README-pre-a8.md`;
+- predictions gain the follow-ups' rows; *Time*, *How it was run*, deviations 2 and 7, *What was
+  not verified* and the file table are updated, and the scratch worktree's second removal is noted;
+- **the recommendation changes.** It was "no second batch yet", because 13 of 30 draws landed where
+  `corpus_judge` does not run. Suite-wide only 3 of 30 do, so it is now "draw a second batch and
+  run it through `make dst`", with rulings on m02, m03, m11 and m18 alongside. The brief's rule as
+  fixed is reported unchanged.
