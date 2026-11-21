@@ -216,9 +216,9 @@ RUN arch="$(uname -m)" \
 # ~/.local/bin is writable and earlier on PATH, so against a determined
 # self-update this is a speed bump, not a control (cf. GH_PROMPT_DISABLED).
 # The bridge listens on 127.0.0.1 by default (container-loopback, auth bypassed by Studio design).
-# Reaching it from the host is a host-side compose decision, not an image one, and it is made in
-# docker-compose.yml's `ports:` block — host 127.0.0.1 only, with the bridge restarted on 0.0.0.0
-# inside (which switches Studio to token auth). See that block for both halves.
+# It is NOT reachable from the host: docker-compose.yml no longer publishes its port (removed
+# 2026-11-21 as unused; Ovis is the browser client now). Publishing it again takes a `ports:` entry
+# AND restarting the bridge on 0.0.0.0 inside, which switches Studio to token auth.
 USER root
 ARG HERDR_STUDIO_VERSION=0.5.2
 ARG HERDR_STUDIO_SHA256_LINUX_ARM64=db54ba1246a75523843a841a0cb9e3f85eced7cbf41c5eed5f347a9bde81e339

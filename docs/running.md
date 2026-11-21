@@ -53,7 +53,6 @@ Panes keep running after you detach, and running `agent.sh` again re-attaches to
 | `agent.sh build` | Rebuild the image and restart |
 | `agent.sh check` | Assert that the container still has the properties below |
 | `agent.sh help` | Everything else |
-| `make studio` | Start Herdr Studio in the container and print its browser URL (run on the host) |
 
 What the sandbox takes away, and why it is where agents run:
 

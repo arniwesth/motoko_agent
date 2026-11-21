@@ -3,7 +3,7 @@ repo: arniwesth/motoko_agent
 pr: 340
 branch: chore/devcontainer-ovis-port
 ticket: null
-title: "feat(agent_sandbox): bake Ovis into the confined image, reachable from the host"
+title: "feat(agent_sandbox): bake Ovis into the confined image; drop Herdr Studio's port"
 ---
 
 ## Summary
@@ -32,6 +32,10 @@ reverts it.
     are not set under `environment:`, because there they would apply to every process in the
     container.
 - **`.devcontainer/docker-compose.yml`:** back to `main` (the first commit, reverted).
+- **Herdr Studio's port removed, as no longer in use:** the `127.0.0.1:8787` entry in `ports:`, the
+  `make studio` target that started the bridge and printed its host URL, and its row in
+  `docs/running.md`. The `herdr-gui` binary stays in the image, reachable only from inside the
+  container; the Dockerfile comment now says so.
 
 Ovis starts with the herdr server through its plugin's `[[startup]]` entry, so nothing else
 launches it.
@@ -63,8 +67,10 @@ gone after a rebuild, like every other login in this image. The token alone is e
 Run in the current `agent_confined` container. Docker is not available inside it, so the image was
 not built.
 
-- Both files parse. `ports` reads `["127.0.0.1:${HERDR_STUDIO_PORT:-8787}:8787",
-  "127.0.0.1:${OVIS_HOST_PORT:-17317}:7317"]`, and `OVIS_TOKEN` is in `environment`.
+- Both files parse. `ports` reads `["127.0.0.1:${OVIS_HOST_PORT:-17317}:7317"]`, and `OVIS_TOKEN` is
+  in `environment`.
+- The Makefile parses (`make -pn` exits 0), and `make studio` now reports no such target. No other
+  file in the tree names `HERDR_STUDIO_PORT` or `make studio`.
 - The `command:` script, with `$$` turned into `$` and run against a scratch HOME:
   - with a token, it writes `HOST=0.0.0.0` and `PORT=7317` to a file with mode 600;
   - a second run does not duplicate them;

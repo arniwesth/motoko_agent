@@ -68,26 +68,22 @@ services:
         if [ -n "$${OVIS_TOKEN:-}" ]; then printf 'HOST=0.0.0.0\nPORT=7317\n' >> "$$env_file"; fi
         exec sleep infinity
     working_dir: /workspaces/motoko_agent
-    # Herdr Studio (herdr-gui) on the HOST's loopback. The dashboard runs INSIDE this container and
-    # defaults to container-loopback, which no published port can reach — Docker DNATs to the container's
-    # eth0 address, and a 127.0.0.1-bound socket only answers its own loopback. So host access takes BOTH:
-    #   1. this entry — host 127.0.0.1:${HERDR_STUDIO_PORT:-8787} forwards into the container, and
-    #   2. starting the bridge on all interfaces inside: `herdr-gui --host 0.0.0.0 --port 8787`
-    #      (or `make studio` from the host — it starts the bridge and prints the login URL, token
-    #      included. A non-loopback bind switches Studio to token auth; read powerfooI/herdr-studio
-    #      SECURITY.md before binding wider than this).
-    # Host side stays loopback-only: only processes on the host itself can connect. `internal: true`
-    # below does NOT block this — published-port ingress is DNAT, not container egress. Tune the host
-    # port with HERDR_STUDIO_PORT; the container side stays 8787.
+    # Ovis (installed in the Dockerfile, bound by `command:` above) on the HOST's loopback. It takes two
+    # halves, because a published port cannot reach a socket bound to the container's loopback: Docker
+    # DNATs to the container's eth0 address. So: this entry forwards host 127.0.0.1:${OVIS_HOST_PORT:-17317}
+    # to 7317 in the container, and `command:` makes Ovis listen on all interfaces there, but only when
+    # OVIS_TOKEN is set. Host side stays loopback-only: only processes on the host itself can connect.
+    # `internal: true` below does NOT block this: published-port ingress is DNAT, not container egress.
+    #
+    # Host port 17317, not 7317, so it does not collide with an Ovis on the host itself. For a phone, put
+    # HTTPS in front of it on the host:
+    #   tailscale serve --bg --https=7317 http://127.0.0.1:17317
+    # That is also why the host side must be loopback and not the container's IP: the sandboxed Tailscale
+    # Mac app cannot open OrbStack's container network, and `serve` pointed there answers with an empty body.
+    #
+    # Herdr Studio (herdr-gui) had a port here too (8787). It was removed on 2026-11-21 as unused; the
+    # binary is still in the image, reachable only from inside the container.
     ports:
-      - "127.0.0.1:${HERDR_STUDIO_PORT:-8787}:8787"
-      # Ovis (installed in the Dockerfile, bound by `command:` above), by the same two halves as Studio:
-      # host 127.0.0.1:${OVIS_HOST_PORT:-17317} forwards to 7317 in the container, where Ovis listens on all
-      # interfaces only when OVIS_TOKEN is set. Host port 17317, not 7317, so it does not collide with an
-      # Ovis on the host itself. For a phone, put HTTPS in front of it on the host:
-      #   tailscale serve --bg --https=7317 http://127.0.0.1:17317
-      # That is also why the host side must be loopback and not the container's IP: the sandboxed Tailscale
-      # Mac app cannot open OrbStack's container network, and `serve` pointed there answers with an empty body.
       - "127.0.0.1:${OVIS_HOST_PORT:-17317}:7317"
 
     # EGRESS BOUNDARY. This service is on an `internal: true` network ONLY, so Docker/OrbStack installs NO
