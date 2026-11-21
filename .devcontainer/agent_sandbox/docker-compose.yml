@@ -80,9 +80,6 @@ services:
     #   tailscale serve --bg --https=7317 http://127.0.0.1:17317
     # That is also why the host side must be loopback and not the container's IP: the sandboxed Tailscale
     # Mac app cannot open OrbStack's container network, and `serve` pointed there answers with an empty body.
-    #
-    # Herdr Studio (herdr-gui) had a port here too (8787). It was removed on 2026-11-21 as unused; the
-    # binary is still in the image, reachable only from inside the container.
     ports:
       - "127.0.0.1:${OVIS_HOST_PORT:-17317}:7317"
 

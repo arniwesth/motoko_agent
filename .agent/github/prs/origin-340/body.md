@@ -3,7 +3,7 @@ repo: arniwesth/motoko_agent
 pr: 340
 branch: chore/devcontainer-ovis-port
 ticket: null
-title: "feat(agent_sandbox): bake Ovis into the confined image; drop Herdr Studio's port"
+title: "feat(agent_sandbox): bake Ovis into the confined image; remove Herdr Studio"
 ---
 
 ## Summary
@@ -32,10 +32,11 @@ reverts it.
     are not set under `environment:`, because there they would apply to every process in the
     container.
 - **`.devcontainer/docker-compose.yml`:** back to `main` (the first commit, reverted).
-- **Herdr Studio's port removed, as no longer in use:** the `127.0.0.1:8787` entry in `ports:`, the
-  `make studio` target that started the bridge and printed its host URL, and its row in
-  `docs/running.md`. The `herdr-gui` binary stays in the image, reachable only from inside the
-  container; the Dockerfile comment now says so.
+- **Herdr Studio removed entirely, as no longer in use.** Ovis replaces it as the browser client.
+  This removes the `herdr-gui` install block in the Dockerfile (its pinned release, checksums and the
+  `xz-utils` it installed only for itself), the `127.0.0.1:8787` entry in `ports:`, the `make studio`
+  target, and its row in `docs/running.md`. Historical records under `.agent/projects/` that mention it
+  are left as they are.
 
 Ovis starts with the herdr server through its plugin's `[[startup]]` entry, so nothing else
 launches it.
@@ -70,7 +71,9 @@ not built.
 - Both files parse. `ports` reads `["127.0.0.1:${OVIS_HOST_PORT:-17317}:7317"]`, and `OVIS_TOKEN` is
   in `environment`.
 - The Makefile parses (`make -pn` exits 0), and `make studio` now reports no such target. No other
-  file in the tree names `HERDR_STUDIO_PORT` or `make studio`.
+  file outside `.agent/` mentions `herdr-gui`, `herdr-studio`, `HERDR_STUDIO` or port 8787. The step
+  that installed Studio ran as root, and the next step sets `USER root` itself, so no other step's
+  user changes.
 - The `command:` script, with `$$` turned into `$` and run against a scratch HOME:
   - with a token, it writes `HOST=0.0.0.0` and `PORT=7317` to a file with mode 600;
   - a second run does not duplicate them;
