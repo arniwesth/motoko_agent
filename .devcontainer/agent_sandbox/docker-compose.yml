@@ -51,7 +51,7 @@ services:
     # listens. It FAILS CLOSED. Ovis on a non-loopback address with no OVIS_TOKEN serves every request, and
     # anyone who reaches it can type into the herdr panes (measured on 0.5.9: it logs a warning, then answers
     # 200). So HOST=0.0.0.0 is written only when the token is there; without one, any earlier HOST/PORT is
-    # removed and Ovis stays on the container's loopback, which the published port below cannot reach.
+    # removed and Ovis stays on the container's loopback, which the ovis-relay service below cannot reach.
     #
     # Written to ~/.config/ovis/env, Ovis's own settings file, and NOT set under `environment:`: HOST and PORT
     # there would apply to every process in the container. Runs at every container start, before agent.sh
@@ -68,20 +68,10 @@ services:
         if [ -n "$${OVIS_TOKEN:-}" ]; then printf 'HOST=0.0.0.0\nPORT=7317\n' >> "$$env_file"; fi
         exec sleep infinity
     working_dir: /workspaces/motoko_agent
-    # Ovis (installed in the Dockerfile, bound by `command:` above) on the HOST's loopback. It takes two
-    # halves, because a published port cannot reach a socket bound to the container's loopback: Docker
-    # DNATs to the container's eth0 address. So: this entry forwards host 127.0.0.1:${OVIS_HOST_PORT:-17317}
-    # to 7317 in the container, and `command:` makes Ovis listen on all interfaces there, but only when
-    # OVIS_TOKEN is set. Host side stays loopback-only: only processes on the host itself can connect.
-    # `internal: true` below does NOT block this: published-port ingress is DNAT, not container egress.
-    #
-    # Host port 17317, not 7317, so it does not collide with an Ovis on the host itself. For a phone, put
-    # HTTPS in front of it on the host:
-    #   tailscale serve --bg --https=7317 http://127.0.0.1:17317
-    # That is also why the host side must be loopback and not the container's IP: the sandboxed Tailscale
-    # Mac app cannot open OrbStack's container network, and `serve` pointed there answers with an empty body.
-    ports:
-      - "127.0.0.1:${OVIS_HOST_PORT:-17317}:7317"
+    # NO `ports:` HERE, and none will work. Docker publishes no port for a container whose only network is
+    # `internal: true` (below): the entry is accepted and nothing listens on the host. Measured 2026-11-21 on
+    # OrbStack: `lsof -iTCP:17317 -sTCP:LISTEN` on the Mac was empty. Ovis reaches the host through the
+    # `ovis-relay` service instead, which sits on a routed network as well and owns the published port.
 
     # EGRESS BOUNDARY. This service is on an `internal: true` network ONLY, so Docker/OrbStack installs NO
     # gateway and NO NAT for it: the agent has no route to any private network the host may be attached to
@@ -382,6 +372,52 @@ services:
     #
     # Nobody has taken that decision; it is written out here so that taking it is one edit and not a design
     # session.
+
+  # ----------------------------------------------------------------------------------------------------------
+  # ovis-relay — Ovis (in the agent) on the HOST's loopback, at 127.0.0.1:${OVIS_HOST_PORT:-17317}.
+  #
+  # Why a relay: the agent is on `confined_internal` only, and Docker publishes no port for such a
+  # container. This one is on that network AND on the routed `confined_egress`, so its published port
+  # works; it forwards every connection to agent:7317 by name. A name, not an IP, so a recreated agent
+  # with a new address needs nothing changed: socat opens the agent side per connection, in the forked
+  # child, and resolves the name then.
+  #
+  # Ovis listens on all interfaces only when OVIS_TOKEN is set (the agent's `command:`). Without it the
+  # relay connects to a closed port and the host sees a reset — the fail-closed default holds.
+  #
+  # Host side is loopback only: only processes on the host itself can connect. For a phone, put HTTPS in
+  # front of it on the host, which `agent.sh ovis` does:
+  #   tailscale serve --bg --https=7317 http://127.0.0.1:17317
+  # Loopback and not a container IP, because the sandboxed Tailscale Mac app cannot open OrbStack's
+  # container network; `serve` pointed there answers 502 with an empty body. Host port 17317, not 7317,
+  # so it does not collide with an Ovis on the host itself.
+  #
+  # What it adds to the boundary: a second dual-homed container, but not a second exit. Its only action is
+  # to connect to agent:7317. The agent can reach it on 7317, which leads back to the agent itself.
+  #
+  # PINNED BY DIGEST like egress-proxy. The multi-arch INDEX for `alpine/socat:1.8.1.1` (built 2026-06-20;
+  # amd64, arm, arm64, ppc64le, s390x). Its ENTRYPOINT is `socat`, so `command:` is arguments only.
+  # Re-resolve with:  docker buildx imagetools inspect alpine/socat:<tag>
+  ovis-relay:
+    image: alpine/socat@sha256:7f9a06753033f2b7de18edc2353f2c15153413d95a039163c6db270fc7a6c3b0
+    command: ["TCP-LISTEN:7317,fork,reuseaddr", "TCP:agent:7317"]
+    networks:
+      - confined_internal
+      - confined_egress
+    ports:
+      - "127.0.0.1:${OVIS_HOST_PORT:-17317}:7317"
+    # No depends_on: the relay needs the agent only when a connection arrives, and `agent.sh ovis` starts
+    # it with `--no-deps` so that adding it to a running stack never recreates the agent (which would end
+    # every herdr session).
+    user: "65534:65534"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 64m
+    pids_limit: 256
+    restart: unless-stopped
 
   # ----------------------------------------------------------------------------------------------------------
   # egress-proxy — the agent's SINGLE exit to the outside.
