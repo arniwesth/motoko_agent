@@ -53,16 +53,24 @@ services:
     # 200). So HOST=0.0.0.0 is written only when the token is there; without one, any earlier HOST/PORT is
     # removed and Ovis stays on the container's loopback, which the ovis-relay service below cannot reach.
     #
-    # Written to ~/.config/ovis/env, Ovis's own settings file, and NOT set under `environment:`: HOST and PORT
-    # there would apply to every process in the container. Runs at every container start, before agent.sh
-    # starts the herdr server whose [[startup]] entry starts Ovis, so the file is in place when Ovis reads it.
+    # Written to the `env` file in herdr's config directory for the Ovis plugin, and NOT set under
+    # `environment:`: HOST and PORT there would apply to every process in the container. That directory is
+    # the one Ovis reads. herdr starts Ovis through the plugin's [[startup]] entry with
+    # HERDR_PLUGIN_CONFIG_DIR set to it, and an `ovis start` from a shell asks `herdr plugin config-dir` for it
+    # and uses it once it holds an `env`. ~/.config/ovis/env, where this used to write, is read only when
+    # that directory has none, so herdr's Ovis never saw HOST and listened on 127.0.0.1 (measured on 0.5.9,
+    # 2026-11-21: the server ran with HOST=127.0.0.1 and the relay got an empty reply). `herdr plugin
+    # config-dir` needs no running server; the literal path is the fallback. Runs at every container start,
+    # before agent.sh starts the herdr server, so the file is in place when Ovis reads it.
     # `$$` is compose's escape for a literal `$`: the shell, not compose, expands OVIS_TOKEN.
     command:
       - sh
       - -c
       - |
-        mkdir -p "$$HOME/.config/ovis"
-        env_file="$$HOME/.config/ovis/env"
+        cfg_dir="$$(herdr plugin config-dir devswha.ovis 2>/dev/null)"
+        [ -n "$$cfg_dir" ] || cfg_dir="$$HOME/.config/herdr/plugins/config/devswha.ovis"
+        mkdir -p "$$cfg_dir"
+        env_file="$$cfg_dir/env"
         touch "$$env_file" && chmod 600 "$$env_file"
         sed -i '/^HOST=/d; /^PORT=/d' "$$env_file"
         if [ -n "$${OVIS_TOKEN:-}" ]; then printf 'HOST=0.0.0.0\nPORT=7317\n' >> "$$env_file"; fi

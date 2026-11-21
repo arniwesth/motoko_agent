@@ -147,6 +147,11 @@ herdr session has started it yet. Then it runs `tailscale serve` so a phone on y
 `https://<this machine>.<tailnet>.ts.net:7317`. `agent.sh ovis status` reports both halves and changes
 nothing. `agent.sh ovis off` stops serving to the tailnet.
 
+On the host itself, open `http://127.0.0.1:17317`. The container's IP changes whenever the stack is
+recreated, and 7317 is Ovis's port inside the container, not on the host. A socat relay started by hand
+on 17317, from before `agent.sh ovis` existed, takes the port ahead of `ovis-relay`. `agent.sh ovis`
+stops it, and `agent.sh ovis status` names it.
+
 The container must be created with the token, so after adding it to `.env` run `agent.sh stop` first. That
 ends every herdr session. `agent.sh ovis` says so if it finds a container without the token.
 
