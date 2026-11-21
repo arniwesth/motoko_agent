@@ -3,7 +3,7 @@ repo: arniwesth/motoko_agent
 pr: 340
 branch: chore/devcontainer-ovis-port
 ticket: null
-title: "feat(agent_sandbox): bake Ovis into the confined image; remove Herdr Studio"
+title: "feat(agent_sandbox): Ovis baked in, served by `agent.sh ovis`; remove Herdr Studio"
 ---
 
 ## Summary
@@ -31,6 +31,20 @@ reverts it.
     is set, then runs `sleep infinity` as before. Without a token it removes those lines. HOST and PORT
     are not set under `environment:`, because there they would apply to every process in the
     container.
+- **`agent_sandbox/agent.sh`:** a new `ovis` command for the host half, which was typed by hand
+  before.
+  - `agent.sh ovis` (or `ovis on`) refuses without `OVIS_TOKEN` in `.env`, printing a freshly
+    generated one to paste. It stops a leftover `socat` relay on the host port, brings the stack up,
+    and refuses if the running container was created without the token; recreating it would end
+    every herdr session. It starts Ovis if no herdr session has, waits for `/api/health` on
+    `127.0.0.1:17317`, and points `tailscale serve --https=7317` at that port, replacing any stale
+    target. Finally it prints the tailnet URL.
+  - `agent.sh ovis status` reports both halves and changes nothing. `agent.sh ovis off` stops serving
+    to the tailnet.
+  - The Tailscale CLI is found on PATH or inside `/Applications/Tailscale.app`. Written for bash 3.2
+    and BSD userland like the rest of the script: no `jq`, `mapfile` or GNU-only flags.
+- **Docs:** the command in `agent.sh help`, the sandbox README (with a short "Ovis, from a phone"
+  section), and `docs/running.md`.
 - **`.devcontainer/docker-compose.yml`:** back to `main` (the first commit, reverted).
 - **Herdr Studio removed entirely, as no longer in use.** Ovis replaces it as the browser client.
   This removes the `herdr-gui` install block in the Dockerfile (its pinned release, checksums and the
@@ -50,12 +64,10 @@ container service from the host.
 
 ## Predicted outcome
 
-After adding `OVIS_TOKEN=<token>` to the repo-root `.env` and running `agent.sh build`:
-
-- `curl -sI http://127.0.0.1:17317/` on the host returns `200`.
-- `tailscale serve --bg --https=7317 http://127.0.0.1:17317` serves Ovis to a phone on the tailnet.
-  This works with no `socat` relay and does not depend on the container's IP.
-- The browser asks for the token once.
+After adding `OVIS_TOKEN=<token>` to the repo-root `.env` and running `agent.sh build`, one
+command on the host, `agent.sh ovis`, prints `https://<mac>.<tailnet>.ts.net:7317`. A phone on the
+tailnet opens that address and the browser asks for the token once. No `socat` relay is involved, and
+nothing depends on the container's IP. `agent.sh ovis status` then shows both halves answering.
 
 Without `OVIS_TOKEN`, the published port does not answer: Ovis listens on the container's loopback
 only.
@@ -86,6 +98,14 @@ not built.
   today (SHA-256 `a2a289a8…911e`).
 - The route this PR bakes in worked by hand: Ovis on `0.0.0.0` with a token, a `socat` relay on the
   Mac's `127.0.0.1:17317`, and `tailscale serve` pointed at the relay. It loaded on an iPhone.
+- `agent.sh`: `bash -n` passes, and `agent.sh help` lists the new command. Its helpers, extracted and
+  run in this container:
+  - `.env` parsing reads quoted values, a leading `export`, an empty value and an absent key correctly;
+  - the host port is taken from the environment, then `.env`, then defaults to 17317;
+  - the reachability check answers for the live Ovis and fails for a closed port;
+  - the URL is pulled out of `tailscale serve status`-shaped output.
+  shellcheck is not installed here. `agent.sh ovis` itself refuses to run inside a container, as the
+  whole script does, so its Docker and Tailscale steps have not been run.
 - **Not run:** `agent.sh build`, and therefore the installer in a fresh image. The step's own checks
   (`herdr plugin list` names `devswha.ovis`, and both binaries exist) fail the build if the install
   goes wrong.

@@ -23,6 +23,7 @@
 #   agent.sh stop                     # stop and remove the container
 #   agent.sh logs                     # follow container logs
 #   agent.sh check                    # run the R9 acceptance sweep against the running service
+#   agent.sh ovis [on|off|status]     # Ovis (phone client) on this machine and, over HTTPS, the tailnet
 #   agent.sh help                     # this block, coloured on a terminal
 #
 # (Written `agent.sh` for brevity; invoke it by path — `.devcontainer/agent_sandbox/agent.sh …` — or alias
@@ -376,6 +377,142 @@ resolve_term() {
 # the flag `attach` passes, and the flag is built inline at its one use site.
 herdr_session_name() { printf '%s' "${SESSION:-default}"; }
 
+# ---------------------------------------------------------------------------------------------------- ovis
+# OVIS, THE PHONE CLIENT, END TO END FROM THE HOST. The container half is fixed by the image and
+# docker-compose.yml: Ovis is installed, listens on all interfaces only when OVIS_TOKEN is set, and is
+# published on the host's 127.0.0.1:${OVIS_HOST_PORT:-17317}. This is the host half, which is the part
+# that used to be typed by hand: check that the published port answers, and put Tailscale's HTTPS in
+# front of it so a phone on the tailnet can open it.
+#
+# Tailscale is pointed at the host's LOOPBACK and never at the container's IP: the sandboxed Tailscale Mac
+# app cannot open OrbStack's container network, and `serve` aimed there answers every request with an
+# empty body, which Safari saves as an empty document.txt.
+#
+# The value of OVIS_HOST_PORT comes from the environment first, then from .env, the same two places compose
+# reads it from. OVIS_TAILNET_PORT is the HTTPS port on the tailnet (default 7317), so 443 stays free.
+ovis_env_value() {  # the last `KEY=value` for $1 in .env, without quotes; empty if absent
+  sed -n -E "s/^[[:space:]]*(export[[:space:]]+)?$1=[\"']?([^\"']*)[\"']?[[:space:]]*\$/\\2/p" \
+    "${REPO_ROOT}/.env" | tail -n 1
+}
+ovis_host_port() {
+  local p="${OVIS_HOST_PORT:-$(ovis_env_value OVIS_HOST_PORT)}"
+  printf '%s' "${p:-17317}"
+}
+ovis_tailnet_port() { printf '%s' "${OVIS_TAILNET_PORT:-7317}"; }
+
+# The Tailscale CLI: on PATH, else inside the Mac app (the App Store and standalone builds both ship it
+# there, and neither puts it on PATH by default).
+ovis_tailscale() {
+  if command -v tailscale >/dev/null 2>&1; then printf 'tailscale'; return; fi
+  local app="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+  [[ -x "$app" ]] && printf '%s' "$app"
+}
+
+# Whether Ovis answers on the published port. /api/health is public in Ovis, so this needs no token and
+# proves only reachability; the token is checked by Ovis itself on everything else.
+ovis_answers() {
+  curl -fsS -m 3 -o /dev/null --noproxy '*' "http://127.0.0.1:$(ovis_host_port)/api/health" 2>/dev/null
+}
+
+# The https:// address `tailscale serve` is serving on OVIS_TAILNET_PORT, read from its own status output so
+# no JSON parser is needed (bash 3.2 and BSD userland are the floor here; jq is not guaranteed on a Mac).
+ovis_tailnet_url() {
+  local ts="$1"
+  "$ts" serve status 2>/dev/null | grep -Eo "https://[^ ]+:$(ovis_tailnet_port)" | head -n 1
+}
+
+ovis_cmd() {
+  local sub="${1:-on}"
+  local port ts url
+  port="$(ovis_host_port)"
+  ts="$(ovis_tailscale || true)"
+  case "$sub" in
+    on)
+      # 1. A token, or Ovis stays on the container's loopback by design and nothing below can reach it.
+      #    Checked for presence only; the value is never printed.
+      if [[ -z "${OVIS_TOKEN:-}" && -z "$(ovis_env_value OVIS_TOKEN)" ]]; then
+        die "OVIS_TOKEN is not set in ${REPO_ROOT}/.env.
+Without it Ovis listens on the container's loopback only, which is the safe default and also unreachable.
+Add a line like this to .env, then run this command again:
+  OVIS_TOKEN=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom 2>/dev/null | head -c 32)
+(that value was generated just now; any long random string works, and every browser enters it once)"
+      fi
+
+      # 2. The hand-started relay from before this command existed. It holds the host port compose needs,
+      #    so the container cannot publish it while the relay runs. Named precisely so nothing else is hit.
+      if pgrep -f "socat TCP-LISTEN:${port}" >/dev/null 2>&1; then
+        echo "stopping the old socat relay on 127.0.0.1:${port} (compose publishes this port now)" >&2
+        pkill -f "socat TCP-LISTEN:${port}" || true
+        sleep 1
+      fi
+
+      ensure_up
+
+      # 3. The container must have been CREATED with the token. Adding it to .env later does not reach a
+      #    running container; compose only reads .env when it creates one. Recreating would end every herdr
+      #    session, so this says so instead of doing it.
+      compose exec -T -u "$CONTAINER_USER" "$SERVICE" sh -c 'test -n "${OVIS_TOKEN:-}"' \
+        || die "the running container was created before OVIS_TOKEN was in .env, so Ovis inside it has no
+token and stays on loopback. Recreate the container (this ends every herdr session in it):
+  $(basename "$0") stop && $(basename "$0") ovis"
+
+      # 4. Ovis itself. It starts with the herdr server (its plugin's [[startup]] entry), so with no session
+      #    attached since the container came up it is not running yet. `ovis start` detaches, and is a no-op
+      #    when it is already running.
+      if ! ovis_answers; then
+        echo "starting Ovis in the container" >&2
+        compose exec -T -u "$CONTAINER_USER" -w "$WORKDIR" "$SERVICE" ovis start >/dev/null 2>&1 || true
+        local i
+        for i in 1 2 3 4 5 6 7 8 9 10; do ovis_answers && break; sleep 1; done
+      fi
+      ovis_answers || die "Ovis does not answer on http://127.0.0.1:${port}.
+Look inside the container:  $(basename "$0") run ovis status
+  and its settings file:    $(basename "$0") run cat /home/${CONTAINER_USER}/.config/ovis/env
+(the file should hold HOST=0.0.0.0 and PORT=7317; docker-compose.yml's command: writes them at start)"
+      echo "Ovis answers on http://127.0.0.1:${port} (this machine only)"
+
+      # 5. HTTPS on the tailnet. Turned off first so a stale target (the old relay, a container IP) is
+      #    replaced rather than kept; `off` on a port with nothing configured is harmless.
+      if [[ -z "$ts" ]]; then
+        echo "Tailscale CLI not found, so nothing was served to the tailnet."
+        echo "Install Tailscale, or put its CLI on PATH, and run this again to reach Ovis from a phone."
+        return 0
+      fi
+      "$ts" serve --https="$(ovis_tailnet_port)" off >/dev/null 2>&1 || true
+      "$ts" serve --bg --https="$(ovis_tailnet_port)" "http://127.0.0.1:${port}" >/dev/null \
+        || die "tailscale serve failed. If it says HTTPS is not enabled, turn on HTTPS certificates for
+your tailnet in the Tailscale admin console (DNS page), then run this again."
+      url="$(ovis_tailnet_url "$ts")"
+      echo "Ovis on your tailnet: ${url:-https://<this machine>.<tailnet>.ts.net:$(ovis_tailnet_port)}"
+      echo "Open it on the phone (Tailscale on) and enter the token once. Stop serving with: $(basename "$0") ovis off"
+      ;;
+    off)
+      # Only the tailnet half. Ovis keeps running in the container and stays reachable on this machine's
+      # loopback; it goes when the container does.
+      [[ -n "$ts" ]] || die "Tailscale CLI not found — nothing to turn off."
+      "$ts" serve --https="$(ovis_tailnet_port)" off >/dev/null 2>&1 || true
+      echo "no longer serving Ovis on the tailnet (port $(ovis_tailnet_port)); it is still on http://127.0.0.1:${port} here"
+      ;;
+    status)
+      # Read-only: starts nothing, changes nothing.
+      if ovis_answers; then echo "local:   http://127.0.0.1:${port} answers"
+      else echo "local:   http://127.0.0.1:${port} does not answer"; fi
+      if [[ -z "$ts" ]]; then echo "tailnet: Tailscale CLI not found"
+      else
+        url="$(ovis_tailnet_url "$ts")"
+        if [[ -n "$url" ]]; then echo "tailnet: ${url}"
+        else echo "tailnet: not served (turn it on with: $(basename "$0") ovis)"; fi
+      fi
+      ;;
+    *)
+      die "usage: $(basename "$0") ovis [on|off|status]
+  on      (default) check Ovis answers, start it if needed, serve it on the tailnet over HTTPS
+  off     stop serving it on the tailnet; it stays on this machine's loopback
+  status  what answers where, changing nothing"
+      ;;
+  esac
+}
+
 cmd="${1:-attach}"
 [[ $# -gt 0 ]] && shift || true
 
@@ -510,9 +647,12 @@ Build at the versions already pinned with: $(basename "$0") build"
     running || die "service is not running — start it with: $(basename "$0")"
     exec "${HERE}/checks/r9-container.sh"
     ;;
+  ovis)
+    ovis_cmd "$@"
+    ;;
   *)
     die "unknown command: ${cmd}
-try: attach | bootstrap | shell | run | sessions | kill | build | upgrade | stop | logs | check | help
+try: attach | bootstrap | shell | run | sessions | kill | build | upgrade | stop | logs | check | ovis | help
 A session is selected by a leading 'session=<name>', e.g. $(basename "$0") session=review kill"
     ;;
 esac
