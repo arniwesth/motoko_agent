@@ -47,7 +47,26 @@ services:
     # Own tag. Sharing the operator profile's image name would rebuild that image out from under it.
     image: motoko_agent_confined/dev:1.0
 
-    command: sleep infinity
+    # Before the usual `sleep infinity`, one decision about Ovis (installed in the Dockerfile): where it
+    # listens. It FAILS CLOSED. Ovis on a non-loopback address with no OVIS_TOKEN serves every request, and
+    # anyone who reaches it can type into the herdr panes (measured on 0.5.9: it logs a warning, then answers
+    # 200). So HOST=0.0.0.0 is written only when the token is there; without one, any earlier HOST/PORT is
+    # removed and Ovis stays on the container's loopback, which the published port below cannot reach.
+    #
+    # Written to ~/.config/ovis/env, Ovis's own settings file, and NOT set under `environment:`: HOST and PORT
+    # there would apply to every process in the container. Runs at every container start, before agent.sh
+    # starts the herdr server whose [[startup]] entry starts Ovis, so the file is in place when Ovis reads it.
+    # `$$` is compose's escape for a literal `$`: the shell, not compose, expands OVIS_TOKEN.
+    command:
+      - sh
+      - -c
+      - |
+        mkdir -p "$$HOME/.config/ovis"
+        env_file="$$HOME/.config/ovis/env"
+        touch "$$env_file" && chmod 600 "$$env_file"
+        sed -i '/^HOST=/d; /^PORT=/d' "$$env_file"
+        if [ -n "$${OVIS_TOKEN:-}" ]; then printf 'HOST=0.0.0.0\nPORT=7317\n' >> "$$env_file"; fi
+        exec sleep infinity
     working_dir: /workspaces/motoko_agent
     # Herdr Studio (herdr-gui) on the HOST's loopback. The dashboard runs INSIDE this container and
     # defaults to container-loopback, which no published port can reach — Docker DNATs to the container's
@@ -62,6 +81,14 @@ services:
     # port with HERDR_STUDIO_PORT; the container side stays 8787.
     ports:
       - "127.0.0.1:${HERDR_STUDIO_PORT:-8787}:8787"
+      # Ovis (installed in the Dockerfile, bound by `command:` above), by the same two halves as Studio:
+      # host 127.0.0.1:${OVIS_HOST_PORT:-17317} forwards to 7317 in the container, where Ovis listens on all
+      # interfaces only when OVIS_TOKEN is set. Host port 17317, not 7317, so it does not collide with an
+      # Ovis on the host itself. For a phone, put HTTPS in front of it on the host:
+      #   tailscale serve --bg --https=7317 http://127.0.0.1:17317
+      # That is also why the host side must be loopback and not the container's IP: the sandboxed Tailscale
+      # Mac app cannot open OrbStack's container network, and `serve` pointed there answers with an empty body.
+      - "127.0.0.1:${OVIS_HOST_PORT:-17317}:7317"
 
     # EGRESS BOUNDARY. This service is on an `internal: true` network ONLY, so Docker/OrbStack installs NO
     # gateway and NO NAT for it: the agent has no route to any private network the host may be attached to
@@ -207,6 +234,11 @@ services:
       LINEAR_API_KEY: ${LINEAR_API_KEY:-}
       AWS_BEARER_TOKEN_BEDROCK: ${AWS_BEARER_TOKEN_BEDROCK:-}
       AWS_REGION: ${AWS_REGION:-}
+      # Ovis's access token: every browser or phone enters it once. Empty or unset, `command:` above keeps
+      # Ovis on loopback. It is in the environment, so every process here can read it, the agents included.
+      # That grants them nothing new: anything that can read it is already inside the container and can drive
+      # herdr directly. What it guards is the published port.
+      OVIS_TOKEN: ${OVIS_TOKEN:-}
       # The 016_github_ops machine-user PAT. Deliberately NOT named GH_TOKEN/GITHUB_TOKEN: `gh` prefers those
       # over the credentials stored by `gh auth login` and says nothing about it, so exporting it under that
       # name would make the operator's own `make pr` run as the bot and silently invert ADR-001 D1 (identity

@@ -9,25 +9,6 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
-    # Ovis (https://ovis.sh), the browser and phone client for herdr, served on the host.
-    #
-    # Ovis listens on 7317 inside the container. Without a published port the host reaches it
-    # only at the container's own IP, and on OrbStack that address is visible to the Mac and
-    # nothing else: the sandboxed Tailscale Mac app cannot open it, so `tailscale serve` pointed
-    # there returns an empty response. Publishing it puts it on the host's localhost, where both
-    # a browser and `tailscale serve --bg --https=7317 http://127.0.0.1:17317` can reach it.
-    #
-    # Host port 17317, not 7317, so it does not collide with an Ovis running on the host itself.
-    # Bound to 127.0.0.1 on the host so it is not offered to the LAN; reach it from other devices
-    # through `tailscale serve`, which adds HTTPS.
-    #
-    # Ovis must listen on more than the container's loopback for this to reach it. That is set in
-    # the container, not here: `~/.config/ovis/env` with HOST=0.0.0.0, PORT=7317 and an
-    # OVIS_TOKEN, which Ovis then requires from every client. HOST and PORT are deliberately not
-    # set under `environment:`: they would apply to every process in the container, not only Ovis.
-    ports:
-      - "127.0.0.1:17317:7317"
-
     # The repository-root .env, delivered whole.
     #
     # WHY THIS REPLACED A CURATED `environment:` LIST (2026-08-22). That list named seven keys as

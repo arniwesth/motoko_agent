@@ -591,6 +591,39 @@ ARG HERDR_PROJECTS_REF=v1.2.1
 RUN herdr plugin install eliasstravik/herdr-projects --ref "${HERDR_PROJECTS_REF}" --yes \
     && herdr plugin list | grep -q herdr-projects
 
+# ---------------------------------------------------------------------------- Ovis (install)
+# The browser and phone client for herdr (github.com/devswha/ovis): the herdr sessions, from a phone. It is
+# a herdr plugin whose [[startup]] entry starts its server whenever the herdr server starts, so nothing
+# else has to launch it. Installed at BUILD time for the same reason as the plugins above: nothing mounts
+# /home/motoko, so the `curl … | sh` install the project documents vanishes on the next rebuild.
+#
+# PINNED, at two levels. The installer is fetched from the tag, not from ovis.sh (which serves whatever is
+# latest), and checked against a SHA-256 read from that file on 2026-11-21. The installer then pins the
+# release itself: OVIS_REF picks it, and the installer refuses a release whose manifest is not signed by
+# the key it carries, or whose binaries differ in size or SHA-256 from that manifest. To upgrade, bump both
+# ARGs after reading the diff between the tags.
+#
+# AUTO-UPDATE STAYS OFF, which is Ovis's default (only OVIS_AUTO_UPDATE=1 turns it on): the same rule as
+# herdr.toml's `[update]`, an agent must not upgrade its own harness. Settings → Updates in the app can
+# still install a release into ~/.local/share/ovis, so this is a speed bump, not a control.
+#
+# WHAT IS NOT BAKED: where it listens and its token. Both are runtime, in docker-compose.yml, next to the
+# port they go with. With neither, it listens on the container's loopback only and nothing outside reaches
+# it. No account or paired device is baked either: the token alone lets a browser in.
+#
+# OVIS_NO_OPEN and CI keep the installer from opening a browser or starting anything; with no herdr server
+# running at build time it only installs and links.
+ARG OVIS_REF=v0.5.9
+ARG OVIS_INSTALL_SHA256=a2a289a8774a29dec9e0ae7f39b05b403e0163a6783adb073ec4be905d87911e
+RUN curl -fsSL -o /tmp/ovis-install.sh \
+      "https://raw.githubusercontent.com/devswha/ovis/${OVIS_REF}/install.sh" \
+    && printf '%s  /tmp/ovis-install.sh\n' "${OVIS_INSTALL_SHA256}" | sha256sum -c - \
+    && OVIS_REF="${OVIS_REF}" OVIS_NO_OPEN=1 CI=1 sh /tmp/ovis-install.sh </dev/null \
+    && rm -f /tmp/ovis-install.sh \
+    && herdr plugin list | grep -q devswha.ovis \
+    && test -x /home/${USERNAME}/.local/share/ovis/bin/ovis-server \
+    && test -x /home/${USERNAME}/.local/bin/ovis
+
 
 
 # ---------------------------------------------------------------------------- the hand tools, wired up
