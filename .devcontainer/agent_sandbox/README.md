@@ -129,8 +129,23 @@ Note that herdr cannot *launch* Motoko (`agent start --kind` is a fixed list) â€
 .devcontainer/agent_sandbox/agent.sh upgrade          # move the agent-browser pin, rewrite versions.env, rebuild
 .devcontainer/agent_sandbox/agent.sh stop             # stop and remove the container
 .devcontainer/agent_sandbox/agent.sh check            # the R9 sweep
+.devcontainer/agent_sandbox/agent.sh ovis             # Ovis on this machine, and over HTTPS on the tailnet
 .devcontainer/agent_sandbox/agent.sh help             # the header block of the script, coloured
 ```
+
+### Ovis, from a phone
+
+[Ovis](https://github.com/devswha/ovis) is a browser and phone client for herdr, baked into the image. It
+needs one line in the repo-root `.env`, `OVIS_TOKEN=<a long random string>`, which every browser enters
+once. Without it Ovis stays on the container's loopback and nothing outside can reach it.
+
+`agent.sh ovis` does the host side. It checks that Ovis answers on `127.0.0.1:17317`, and starts it if no
+herdr session has started it yet. Then it runs `tailscale serve` so a phone on your tailnet opens it at
+`https://<this machine>.<tailnet>.ts.net:7317`. `agent.sh ovis status` reports both halves and changes
+nothing. `agent.sh ovis off` stops serving to the tailnet.
+
+The container must be created with the token, so after adding it to `.env` run `agent.sh stop` first. That
+ends every herdr session. `agent.sh ovis` says so if it finds a container without the token.
 
 A **session** is a whole herdr server with its own panes, sockets and persisted state. You usually want one,
 with several panes in it â€” a second session is for work that must be genuinely independent.

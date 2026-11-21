@@ -52,8 +52,8 @@ Panes keep running after you detach, and running `agent.sh` again re-attaches to
 | `agent.sh stop` | Stop and remove the container, ending every session |
 | `agent.sh build` | Rebuild the image and restart |
 | `agent.sh check` | Assert that the container still has the properties below |
+| `agent.sh ovis` | Serve Ovis, the phone client, on this machine and over HTTPS on your tailnet (needs `OVIS_TOKEN` in `.env`) |
 | `agent.sh help` | Everything else |
-| `make studio` | Start Herdr Studio in the container and print its browser URL (run on the host) |
 
 What the sandbox takes away, and why it is where agents run:
 

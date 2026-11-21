@@ -178,70 +178,6 @@ RUN arch="$(uname -m)" \
     && rm -f /tmp/herdr \
     && herdr --version
 
-# ---------------------------------------------------------------------------- Herdr Studio (herdr-gui)
-# Web/PWA client for Herdr (powerfooI/herdr-studio, MIT): local socket
-# bridge + React dashboard for workspaces, tabs, panes, terminals, agents,
-# files, and diffs. Verified end to end in the running container 2026-09-06:
-# source build (bun install root+web+server, build:web,
-# compile:linux-arm64) produced herdr-gui 0.5.2, which served the dashboard
-# on 127.0.0.1:8787 with Herdr 0.8.2 reachable, and rendered correctly via
-# agent-browser (snapshot + screenshot).
-#
-# PREBUILT RELEASE ARCHIVE, not a source build: web/ + server/ need three
-# `bun install`s and a ~16s Vite build, and the result is a ~92 MB static
-# binary identical to what the release publishes -- so compiling from source
-# here would burn build minutes to reproduce a published artifact. The
-# release archive ships exactly one binary plus a VERSION file (measured
-# 2026-09-06: herdr-gui-linux-<arch>/{herdr-gui,VERSION}).
-#
-# PINNED BY VERSION ARG WITH PER-ARCH SHA256 DEFAULTS HERE, deliberately NOT
-# in versions.env. That file is the set of pins `agent.sh upgrade`
-# re-resolves from upstream on demand, which is right for the harness --
-# herdr and the agent CLIs -- and wrong for a companion GUI whose version
-# nobody is racing. This is the same call PLAYWRIGHT_VERSION and the hand
-# tools already make, and the same reason HERDR_SIDEBAR_REF is pinned by
-# tag rather than auto-resolved: bumping it should mean someone read the
-# diff. To upgrade: bump the three defaults below and rebuild.
-#
-# INTEGRITY follows the herdr block above: the release publishes a
-# `<archive>.sha256` beside each archive, and the pinned hashes below were
-# read from those files (v0.5.2, 2026-09-06; the arm64 archive was
-# additionally downloaded and its digest recomputed to match). `sha256sum -c`
-# fails the build on a corrupted or truncated download, and the VERSION grep
-# fails it on a mislabelled archive.
-#
-# INSTALLED AS ROOT into /usr/local/bin, for the same reason herdr is:
-# what the operator installed cannot be overwritten in place, so
-# `agent.sh build` remains the upgrade path. Same caveat too --
-# ~/.local/bin is writable and earlier on PATH, so against a determined
-# self-update this is a speed bump, not a control (cf. GH_PROMPT_DISABLED).
-# The bridge listens on 127.0.0.1 by default (container-loopback, auth bypassed by Studio design).
-# Reaching it from the host is a host-side compose decision, not an image one, and it is made in
-# docker-compose.yml's `ports:` block — host 127.0.0.1 only, with the bridge restarted on 0.0.0.0
-# inside (which switches Studio to token auth). See that block for both halves.
-USER root
-ARG HERDR_STUDIO_VERSION=0.5.2
-ARG HERDR_STUDIO_SHA256_LINUX_ARM64=db54ba1246a75523843a841a0cb9e3f85eced7cbf41c5eed5f347a9bde81e339
-ARG HERDR_STUDIO_SHA256_LINUX_X64=84de7f4499e4158ddf4b643512675f34efb9a382ca0488529b3b612ff30ebf1a
-RUN set -eu; \
-    arch="$(uname -m)"; \
-    case "$arch" in \
-      aarch64|arm64) plat=linux-arm64; sha="${HERDR_STUDIO_SHA256_LINUX_ARM64}" ;; \
-      x86_64|amd64)  plat=linux-x64;   sha="${HERDR_STUDIO_SHA256_LINUX_X64}" ;; \
-      *) echo "no herdr-studio release asset for $arch" >&2; exit 1 ;; \
-    esac; \
-    if ! command -v xz >/dev/null; then apt-get update && apt-get install -y --no-install-recommends xz-utils && rm -rf /var/lib/apt/lists/*; fi; \
-    archive="herdr-gui-v${HERDR_STUDIO_VERSION}-${plat}.tar.xz"; \
-    curl -fsSL -o "/tmp/${archive}" \
-      "https://github.com/powerfooI/herdr-studio/releases/download/v${HERDR_STUDIO_VERSION}/${archive}"; \
-    printf '%s  /tmp/%s\n' "${sha}" "${archive}" | sha256sum -c -; \
-    tar -xJf "/tmp/${archive}" -C /tmp "herdr-gui-${plat}/herdr-gui" "herdr-gui-${plat}/VERSION"; \
-    grep -qx "herdr-gui ${HERDR_STUDIO_VERSION} ${plat}" "/tmp/herdr-gui-${plat}/VERSION"; \
-    install -o root -g root -m 0755 "/tmp/herdr-gui-${plat}/herdr-gui" /usr/local/bin/herdr-gui; \
-    rm -rf "/tmp/${archive}" "/tmp/herdr-gui-${plat}"; \
-    herdr-gui --version
-
-
 # ---------------------------------------------------------------------------- headless web access
 # `agent-browser` (vercel-labs) — browser automation built for agents rather than for test suites:
 # a native Rust binary plus a persistent daemon driving Chromium over CDP. It NEVER touches the
@@ -590,6 +526,39 @@ ARG HERDR_PROJECTS_REF=v1.2.1
 # download fails the build rather than leaving a plugin with no program.
 RUN herdr plugin install eliasstravik/herdr-projects --ref "${HERDR_PROJECTS_REF}" --yes \
     && herdr plugin list | grep -q herdr-projects
+
+# ---------------------------------------------------------------------------- Ovis (install)
+# The browser and phone client for herdr (github.com/devswha/ovis): the herdr sessions, from a phone. It is
+# a herdr plugin whose [[startup]] entry starts its server whenever the herdr server starts, so nothing
+# else has to launch it. Installed at BUILD time for the same reason as the plugins above: nothing mounts
+# /home/motoko, so the `curl … | sh` install the project documents vanishes on the next rebuild.
+#
+# PINNED, at two levels. The installer is fetched from the tag, not from ovis.sh (which serves whatever is
+# latest), and checked against a SHA-256 read from that file on 2026-11-21. The installer then pins the
+# release itself: OVIS_REF picks it, and the installer refuses a release whose manifest is not signed by
+# the key it carries, or whose binaries differ in size or SHA-256 from that manifest. To upgrade, bump both
+# ARGs after reading the diff between the tags.
+#
+# AUTO-UPDATE STAYS OFF, which is Ovis's default (only OVIS_AUTO_UPDATE=1 turns it on): the same rule as
+# herdr.toml's `[update]`, an agent must not upgrade its own harness. Settings → Updates in the app can
+# still install a release into ~/.local/share/ovis, so this is a speed bump, not a control.
+#
+# WHAT IS NOT BAKED: where it listens and its token. Both are runtime, in docker-compose.yml, next to the
+# port they go with. With neither, it listens on the container's loopback only and nothing outside reaches
+# it. No account or paired device is baked either: the token alone lets a browser in.
+#
+# OVIS_NO_OPEN and CI keep the installer from opening a browser or starting anything; with no herdr server
+# running at build time it only installs and links.
+ARG OVIS_REF=v0.5.9
+ARG OVIS_INSTALL_SHA256=a2a289a8774a29dec9e0ae7f39b05b403e0163a6783adb073ec4be905d87911e
+RUN curl -fsSL -o /tmp/ovis-install.sh \
+      "https://raw.githubusercontent.com/devswha/ovis/${OVIS_REF}/install.sh" \
+    && printf '%s  /tmp/ovis-install.sh\n' "${OVIS_INSTALL_SHA256}" | sha256sum -c - \
+    && OVIS_REF="${OVIS_REF}" OVIS_NO_OPEN=1 CI=1 sh /tmp/ovis-install.sh </dev/null \
+    && rm -f /tmp/ovis-install.sh \
+    && herdr plugin list | grep -q devswha.ovis \
+    && test -x /home/${USERNAME}/.local/share/ovis/bin/ovis-server \
+    && test -x /home/${USERNAME}/.local/bin/ovis
 
 
 
