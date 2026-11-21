@@ -10,11 +10,18 @@ claude:
 	clear
 	claude --dangerously-skip-permissions --model claude-opus-5
 
+agy:
+	clear
+	agy --dangerously-skip-permissions
+
 install_codex:
 	curl -fsSL https://chatgpt.com/codex/install.sh | sh	
 
 install_claude:
 	curl -fsSL https://claude.ai/install.sh | bash
+
+install_agy:
+	curl -fsSL https://antigravity.google/cli/install.sh | bash
 
 prune:
 	docker system prune -a
