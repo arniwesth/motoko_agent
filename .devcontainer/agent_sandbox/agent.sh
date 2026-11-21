@@ -418,6 +418,25 @@ ovis_answers() {
   curl -fsS -m 3 -o /dev/null --noproxy '*' "http://127.0.0.1:$(ovis_host_port)/api/health" 2>/dev/null
 }
 
+# PIDs of any socat listening on the host's port $1, space-separated: a relay started by hand before this
+# command existed. It holds the port ahead of the ovis-relay container's forward (measured 2026-11-21 on the
+# Mac: lsof showed `socat1` on 127.0.0.1:17317 and curl there got an empty reply, while the container
+# answered). Found by its listening socket, not by its command line, which varies: Homebrew's binary is
+# `socat1`, and options or a lowercase address can come before the listen address. pgrep is the fallback
+# for a host without lsof.
+ovis_stray_socat() {
+  local pid
+  if command -v lsof >/dev/null 2>&1; then
+    for pid in $(lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null); do
+      case "$(ps -o comm= -p "$pid" 2>/dev/null)" in
+        *socat*) printf '%s ' "$pid" ;;
+      esac
+    done
+  else
+    for pid in $(pgrep -if "socat.*listen:$1" 2>/dev/null); do printf '%s ' "$pid"; done
+  fi
+}
+
 # The https:// address `tailscale serve` is serving on OVIS_TAILNET_PORT, read from its own status output so
 # no JSON parser is needed (bash 3.2 and BSD userland are the floor here; jq is not guaranteed on a Mac).
 ovis_tailnet_url() {
@@ -427,7 +446,7 @@ ovis_tailnet_url() {
 
 ovis_cmd() {
   local sub="${1:-on}"
-  local port ts url
+  local port ts url stray
   port="$(ovis_host_port)"
   ts="$(ovis_tailscale || true)"
   case "$sub" in
@@ -442,12 +461,16 @@ Add a line like this to .env, then run this command again:
 (that value was generated just now; any long random string works, and every browser enters it once)"
       fi
 
-      # 2. The hand-started relay from before this command existed. It holds the host port compose needs,
-      #    so the container cannot publish it while the relay runs. Named precisely so nothing else is hit.
-      if pgrep -f "socat TCP-LISTEN:${port}" >/dev/null 2>&1; then
-        echo "stopping the old socat relay on 127.0.0.1:${port} (compose publishes this port now)" >&2
-        pkill -f "socat TCP-LISTEN:${port}" || true
+      # 2. The hand-started relay from before this command existed. It holds the host port ahead of the
+      #    ovis-relay container's forward. Only a socat listening on this exact port is stopped, so nothing
+      #    else is hit. The relay container is then restarted, so its forward takes the freed port.
+      stray="$(ovis_stray_socat "$port")"
+      if [[ -n "$stray" ]]; then
+        echo "stopping the old socat relay on 127.0.0.1:${port} (pid ${stray% }); the ${OVIS_RELAY_SERVICE} container publishes this port now" >&2
+        # Unquoted on purpose: one argument per PID.
+        kill $stray 2>/dev/null || true
         sleep 1
+        compose restart "$OVIS_RELAY_SERVICE" >/dev/null 2>&1 || true
       fi
 
       ensure_up
@@ -478,9 +501,12 @@ token and stays on loopback. Recreate the container (this ends every herdr sessi
       fi
       ovis_answers || die "Ovis does not answer on http://127.0.0.1:${port}.
 Look inside the container:  $(basename "$0") run ovis status
-  and its settings file:    $(basename "$0") run cat /home/${CONTAINER_USER}/.config/ovis/env
+  and its settings file:    $(basename "$0") run cat /home/${CONTAINER_USER}/.config/herdr/plugins/config/devswha.ovis/env
 (the file should hold HOST=0.0.0.0 and PORT=7317; docker-compose.yml's command: writes them at start)
-  and the relay's log:      ${COMPOSE[*]} logs ${OVIS_RELAY_SERVICE}"
+  and the relay's log:      ${COMPOSE[*]} logs ${OVIS_RELAY_SERVICE}
+If the file is right but Ovis started before it was, Ovis listens on the container's loopback only.
+Restart Ovis, which leaves the herdr sessions running:
+  $(basename "$0") run ovis stop && $(basename "$0") ovis"
       echo "Ovis answers on http://127.0.0.1:${port} (this machine only)"
 
       # 5. HTTPS on the tailnet. Turned off first so a stale target (the old relay, a container IP) is
@@ -509,6 +535,8 @@ your tailnet in the Tailscale admin console (DNS page), then run this again."
       # Read-only: starts nothing, changes nothing.
       if ovis_answers; then echo "local:   http://127.0.0.1:${port} answers"
       else echo "local:   http://127.0.0.1:${port} does not answer"; fi
+      stray="$(ovis_stray_socat "$port")"
+      [[ -z "$stray" ]] || echo "         a hand-started socat (pid ${stray% }) holds 127.0.0.1:${port} ahead of the ${OVIS_RELAY_SERVICE} container; $(basename "$0") ovis stops it"
       if [[ -z "$ts" ]]; then echo "tailnet: Tailscale CLI not found"
       else
         url="$(ovis_tailnet_url "$ts")"
