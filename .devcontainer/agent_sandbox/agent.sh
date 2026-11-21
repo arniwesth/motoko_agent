@@ -92,6 +92,9 @@ IMAGE="motoko_agent_confined/dev:1.0"
 # here because "is the stack up" has to mean both containers: an agent running beside a dead proxy looks
 # healthy and fails every network call with a timeout that reads like a broken internet connection.
 EGRESS_SERVICE="egress-proxy"
+# Owns Ovis's published port (docker-compose.yml, ovis-relay). Not part of "is the stack up": only
+# `agent.sh ovis` needs it, and that command starts it.
+OVIS_RELAY_SERVICE="ovis-relay"
 CONTAINER_USER="motoko"
 WORKDIR="/workspaces/motoko_agent"
 SESSION="${AGENT_HERDR_SESSION:-}"
@@ -379,10 +382,11 @@ herdr_session_name() { printf '%s' "${SESSION:-default}"; }
 
 # ---------------------------------------------------------------------------------------------------- ovis
 # OVIS, THE PHONE CLIENT, END TO END FROM THE HOST. The container half is fixed by the image and
-# docker-compose.yml: Ovis is installed, listens on all interfaces only when OVIS_TOKEN is set, and is
-# published on the host's 127.0.0.1:${OVIS_HOST_PORT:-17317}. This is the host half, which is the part
-# that used to be typed by hand: check that the published port answers, and put Tailscale's HTTPS in
-# front of it so a phone on the tailnet can open it.
+# docker-compose.yml: Ovis is installed, listens on all interfaces only when OVIS_TOKEN is set, and the
+# ovis-relay service publishes it on the host's 127.0.0.1:${OVIS_HOST_PORT:-17317} (the agent itself
+# cannot publish a port: its only network is internal). This is the host half, which is the part that
+# used to be typed by hand: start the relay, check that the published port answers, and put Tailscale's
+# HTTPS in front of it so a phone on the tailnet can open it.
 #
 # Tailscale is pointed at the host's LOOPBACK and never at the container's IP: the sandboxed Tailscale Mac
 # app cannot open OrbStack's container network, and `serve` aimed there answers every request with an
@@ -448,6 +452,13 @@ Add a line like this to .env, then run this command again:
 
       ensure_up
 
+      # The relay that owns the published port. ensure_up returns early on a running stack, so a stack
+      # started before the relay existed would never get it. `--no-deps` creates or starts the relay alone:
+      # without it compose would also recreate the agent if its config drifted, ending every herdr session.
+      compose up -d --no-deps "$OVIS_RELAY_SERVICE" >/dev/null 2>&1 \
+        || die "could not start the ${OVIS_RELAY_SERVICE} service, which publishes Ovis on 127.0.0.1:${port}.
+See why with:  ${COMPOSE[*]} up --no-deps ${OVIS_RELAY_SERVICE}"
+
       # 3. The container must have been CREATED with the token. Adding it to .env later does not reach a
       #    running container; compose only reads .env when it creates one. Recreating would end every herdr
       #    session, so this says so instead of doing it.
@@ -468,7 +479,8 @@ token and stays on loopback. Recreate the container (this ends every herdr sessi
       ovis_answers || die "Ovis does not answer on http://127.0.0.1:${port}.
 Look inside the container:  $(basename "$0") run ovis status
   and its settings file:    $(basename "$0") run cat /home/${CONTAINER_USER}/.config/ovis/env
-(the file should hold HOST=0.0.0.0 and PORT=7317; docker-compose.yml's command: writes them at start)"
+(the file should hold HOST=0.0.0.0 and PORT=7317; docker-compose.yml's command: writes them at start)
+  and the relay's log:      ${COMPOSE[*]} logs ${OVIS_RELAY_SERVICE}"
       echo "Ovis answers on http://127.0.0.1:${port} (this machine only)"
 
       # 5. HTTPS on the tailnet. Turned off first so a stale target (the old relay, a container IP) is

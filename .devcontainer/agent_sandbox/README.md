@@ -139,7 +139,10 @@ Note that herdr cannot *launch* Motoko (`agent start --kind` is a fixed list) �
 needs one line in the repo-root `.env`, `OVIS_TOKEN=<a long random string>`, which every browser enters
 once. Without it Ovis stays on the container's loopback and nothing outside can reach it.
 
-`agent.sh ovis` does the host side. It checks that Ovis answers on `127.0.0.1:17317`, and starts it if no
+`agent.sh ovis` does the host side. It starts the `ovis-relay` service, a socat container that owns the
+published port `127.0.0.1:17317` and forwards it to the agent. The agent cannot publish a port itself,
+because its only network is internal. Starting the relay never recreates the agent, so a running stack
+keeps its herdr sessions. Then it checks that Ovis answers on `127.0.0.1:17317`, and starts Ovis if no
 herdr session has started it yet. Then it runs `tailscale serve` so a phone on your tailnet opens it at
 `https://<this machine>.<tailnet>.ts.net:7317`. `agent.sh ovis status` reports both halves and changes
 nothing. `agent.sh ovis off` stops serving to the tailnet.
@@ -312,8 +315,11 @@ its host is attached to, as that host. That is a different category of control, 
 
 `agent` sits on a single `internal: true` network. Docker installs **no gateway and no NAT** for such a
 network, so there is no route off-box at all: not to the internet, not to the host's own address range,
-not into RFC1918 or CGNAT space. The one container dual-homed onto both that network and a routed one is
-`egress-proxy`, a squid forward proxy, and the agent's `HTTP(S)_PROXY` points at it. It never decrypts —
+not into RFC1918 or CGNAT space. The one exit dual-homed onto both that network and a routed one is
+`egress-proxy`, a squid forward proxy, and the agent's `HTTP(S)_PROXY` points at it. (`ovis-relay` is
+dual-homed too, but inbound only: it publishes Ovis on the host's loopback and connects to nothing but
+`agent:7317`. It is also why the agent has no `ports:` of its own: Docker publishes none for a container on
+an internal network alone.) It never decrypts —
 clients issue `CONNECT host:443` and it decides by destination — so there is no CA to install and no
 credential exposed to it.
 
