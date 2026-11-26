@@ -36,7 +36,7 @@
 
 module src/core/journal
 
-import std/ai (Message, ToolCall, ImagePart)
+import std/ai (Message, ToolCall, ImagePart, MediaPart, Image, File)
 import std/crypto (sha256Hex)
 import std/json (Json, jo, ja, kv, js, jb, jint, encode, decode, get, has, asString, asArray, asObject, getString, getInt, getBool, getArray)
 import std/string (split, endsWith)
@@ -364,13 +364,39 @@ export pure func image_json(i: ImagePart) -> Json {
 -- would produce entries its own reader refuses; and a field that is present and
 -- empty is distinguishable from a schema that never had it, which is what the
 -- refusal's field name has to mean.
+-- A Message's media in the journal (std/ai v0.61.0, ailang #2458, replaced
+-- `images: [ImagePart]` with `media: [MediaPart]`). THE ON-DISK FORMAT DID NOT
+-- CHANGE for anything a journal held before: the key stays "images", and a
+-- default-resolution Image encodes as the same {source, mime} object, so every
+-- recorded journal still decodes and every chain digest is unchanged. The new
+-- shapes are additive: an Image with an explicit resolution adds "resolution";
+-- a File is tagged "kind":"file" and carries all four of its fields.
+export pure func media_json(p: MediaPart) -> Json {
+  match p {
+    Image(i) =>
+      if i.resolution == "" then image_json({ source: i.source, mime: i.mime })
+      else jo([
+        kv("source", js(i.source)),
+        kv("mime", js(i.mime)),
+        kv("resolution", js(i.resolution))
+      ]),
+    File(f) => jo([
+      kv("kind", js("file")),
+      kv("uri", js(f.uri)),
+      kv("mime", js(f.mime)),
+      kv("resolution", js(f.resolution)),
+      kv("options", js(f.options))
+    ])
+  }
+}
+
 export pure func message_json(m: Message) -> Json {
   jo([
     kv("role", js(m.role)),
     kv("content", js(m.content)),
     kv("tool_calls", ja(List.map(tool_call_json, m.tool_calls))),
     kv("tool_call_id", js(m.tool_call_id)),
-    kv("images", ja(List.map(image_json, m.images)))
+    kv("images", ja(List.map(media_json, m.media)))
   ])
 }
 
@@ -447,11 +473,52 @@ pure func image_of_json(j: Json, where: string) -> Result[ImagePart, string] {
   }
 }
 
+-- An optional string key: absent is "", present and not a string refuses.
+@allow_empty_ok("an absent optional media key is its default: no \"kind\" is an Image, no \"resolution\" is the provider default")
+pure func opt_media_string(j: Json, key: string, where: string) -> Result[string, string] {
+  match get(j, key) {
+    None => Ok(""),
+    Some(_) => req_string(j, key, where)
+  }
+}
+
+-- The inverse of media_json. No "kind" is an Image (every journal written
+-- before #2458); "file" is a File; any other kind refuses rather than guess.
+pure func media_of_json(j: Json, where: string) -> Result[MediaPart, string] {
+  match opt_media_string(j, "kind", where) {
+    Err(e) => Err(e),
+    Ok(kind) =>
+      if kind == "" then
+        match image_of_json(j, where) {
+          Err(e) => Err(e),
+          Ok(i) => match opt_media_string(j, "resolution", where) {
+            Err(e) => Err(e),
+            Ok(res) => Ok(Image({ source: i.source, mime: i.mime, resolution: res }))
+          }
+        }
+      else if kind == "file" then
+        match req_string(j, "uri", where) {
+          Err(e) => Err(e),
+          Ok(uri) => match req_string(j, "mime", where) {
+            Err(e) => Err(e),
+            Ok(mime) => match req_string(j, "resolution", where) {
+              Err(e) => Err(e),
+              Ok(res) => match req_string(j, "options", where) {
+                Err(e) => Err(e),
+                Ok(opts) => Ok(File({ uri: uri, mime: mime, resolution: res, options: opts }))
+              }
+            }
+          }
+        }
+      else Err("${where}.kind: unknown media kind \"${kind}\"")
+  }
+}
+
 @allow_empty_ok("a text-only message carries no images — [] is what every message in a history without vision inputs decodes to")
-pure func images_of_json(xs: [Json], where: string) -> Result[[ImagePart], string] {
+pure func images_of_json(xs: [Json], where: string) -> Result[[MediaPart], string] {
   match xs {
     [] => Ok([]),
-    j :: rest => match image_of_json(j, where) {
+    j :: rest => match media_of_json(j, where) {
       Err(e) => Err(e),
       Ok(i) => match images_of_json(rest, where) {
         Err(e) => Err(e),
@@ -482,7 +549,7 @@ export pure func message_of_json_at(j: Json, where: string) -> Result[Message, s
                     content: content,
                     tool_calls: calls,
                     tool_call_id: tool_call_id,
-                    images: images
+                    media: images
                   };
                   Ok(m)
                 }
@@ -2406,7 +2473,7 @@ export pure func resume_view_json(p: ResumePlan) -> Json {
 -- ============================================================================
 
 pure func msg(role: string, content: string) -> Message {
-  { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
+  { role: role, content: content, tool_calls: [], tool_call_id: "", media: [] }
 }
 
 pure func tool_calls_eq(a: [ToolCall], b: [ToolCall]) -> bool {
@@ -2419,12 +2486,25 @@ pure func tool_calls_eq(a: [ToolCall], b: [ToolCall]) -> bool {
   }
 }
 
-pure func images_eq(a: [ImagePart], b: [ImagePart]) -> bool {
+pure func media_part_eq(x: MediaPart, y: MediaPart) -> bool {
+  match x {
+    Image(a) => match y {
+      Image(b) => a.source == b.source && a.mime == b.mime && a.resolution == b.resolution,
+      File(_) => false
+    },
+    File(a) => match y {
+      File(b) => a.uri == b.uri && a.mime == b.mime && a.resolution == b.resolution && a.options == b.options,
+      Image(_) => false
+    }
+  }
+}
+
+pure func images_eq(a: [MediaPart], b: [MediaPart]) -> bool {
   match a {
     [] => match b { [] => true, _ => false },
     x :: xs => match b {
       [] => false,
-      y :: ys => x.source == y.source && x.mime == y.mime && images_eq(xs, ys)
+      y :: ys => media_part_eq(x, y) && images_eq(xs, ys)
     }
   }
 }
@@ -2434,7 +2514,7 @@ pure func message_eq(a: Message, b: Message) -> bool {
     && a.content == b.content
     && a.tool_call_id == b.tool_call_id
     && tool_calls_eq(a.tool_calls, b.tool_calls)
-    && images_eq(a.images, b.images)
+    && images_eq(a.media, b.media)
 }
 
 pure func round_trips(m: Message) -> bool {
@@ -2456,14 +2536,14 @@ pure func test_message_codec_round_trips_every_role() -> bool
       content: "on it",
       tool_calls: [{ id: "call_1", name: "BashExec", arguments: "{\"command\":\"ls\"}" }],
       tool_call_id: "",
-      images: []
+      media: []
     };
     let tool_m: Message = {
       role: "tool",
       content: "AGENTS.md\nREADME.md",
       tool_calls: [],
       tool_call_id: "call_1",
-      images: []
+      media: []
     };
     round_trips(system_m)
       && round_trips(user_m)
@@ -2482,14 +2562,14 @@ pure func test_message_codec_round_trips_two_images() -> bool
       content: "what is in these",
       tool_calls: [],
       tool_call_id: "",
-      images: [
-        { source: "iVBORw0KGgoAAAA=", mime: "image/png" },
-        { source: "/9j/4AAQSkZJRg==", mime: "image/jpeg" }
+      media: [
+        Image({ source: "iVBORw0KGgoAAAA=", mime: "image/png", resolution: "" }),
+        Image({ source: "/9j/4AAQSkZJRg==", mime: "image/jpeg", resolution: "" })
       ]
     };
     match message_of_json(message_json(m)) {
       Err(_) => false,
-      Ok(back) => message_eq(m, back) && List.length(back.images) == 2
+      Ok(back) => message_eq(m, back) && List.length(back.media) == 2
     }
   }
 
@@ -2638,7 +2718,7 @@ pure func test_continuation_history_gate_refuses() -> bool
     let interleaved = [msg("system", "s"), msg("user", "u"), msg("system", "late")];
     let unanswered: [Message] = [
       msg("system", "s"),
-      { role: "tool", content: "result", tool_calls: [], tool_call_id: "", images: [] }
+      { role: "tool", content: "result", tool_calls: [], tool_call_id: "", media: [] }
     ];
     not messages_head_prefix_ok(interleaved)
       && messages_head_prefix_ok([msg("system", "s"), msg("user", "u")])
@@ -2697,12 +2777,12 @@ pure func t_assistant_calls() -> Message {
     content: "",
     tool_calls: [{ id: "call_1", name: "BashExec", arguments: "{\"command\":\"ls\"}" }],
     tool_call_id: "",
-    images: []
+    media: []
   }
 }
 
 pure func t_tool_result() -> Message {
-  { role: "tool", content: "AGENTS.md", tool_calls: [], tool_call_id: "call_1", images: [] }
+  { role: "tool", content: "AGENTS.md", tool_calls: [], tool_call_id: "call_1", media: [] }
 }
 
 pure func t_seed() -> [Message] { [t_sys(), t_user()] }
@@ -2942,10 +3022,10 @@ pure func test_refusal_head_prefix_and_transcript() -> bool
     -- shape that separates the two rules.
     let blank_call: Message = {
       role: "assistant", content: "", tool_calls: [{ id: "", name: "BashExec", arguments: "{}" }],
-      tool_call_id: "", images: []
+      tool_call_id: "", media: []
     };
     let blank_result: Message = {
-      role: "tool", content: "out", tool_calls: [], tool_call_id: "", images: []
+      role: "tool", content: "out", tool_calls: [], tool_call_id: "", media: []
     };
     let d1 = chain_digest_after(t_seed_digest(), blank_call);
     let d2 = chain_digest_after(d1, blank_result);
@@ -2964,7 +3044,7 @@ pure func test_refusal_pairing_is_the_folds_own_rule() -> bool
   tests [((), true)]
   {
     let stray: Message = {
-      role: "tool", content: "out", tool_calls: [], tool_call_id: "call_9", images: []
+      role: "tool", content: "out", tool_calls: [], tool_call_id: "call_9", media: []
     };
     let d = chain_digest_after(chain_digest_after(t_seed_digest(), t_assistant_calls()), stray);
     let rs = [t_start(), t_seeded(),
@@ -3030,7 +3110,7 @@ pure func t_augmented_assistant() -> Message {
     content: "running ls",
     tool_calls: [{ id: "call_1", name: "BashExec", arguments: "{\"command\":\"ls\"}" }],
     tool_call_id: "",
-    images: []
+    media: []
   }
 }
 
@@ -3117,7 +3197,7 @@ pure func test_trailing_unpaired_call_is_stripped_and_reported() -> bool
         { id: "call_1", name: "BashExec", arguments: "{}" },
         { id: "call_2", name: "BashExec", arguments: "{}" }
       ],
-      tool_call_id: "", images: []
+      tool_call_id: "", media: []
     };
     let d_a = chain_digest_after(t_seed_digest(), two_calls);
     let d_t = chain_digest_after(d_a, t_tool_result());
@@ -3155,7 +3235,7 @@ pure func t_image_message(source: string) -> Message {
   {
     role: "user", content: "what is in this",
     tool_calls: [], tool_call_id: "",
-    images: [{ source: source, mime: "image/png" }]
+    media: [Image({ source: source, mime: "image/png", resolution: "" })]
   }
 }
 

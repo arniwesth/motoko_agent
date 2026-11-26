@@ -8,7 +8,7 @@
 
 module src/eval/journal/testdata/digest_fixtures
 
-import std/ai (Message, ToolCall, ImagePart)
+import std/ai (Message, ToolCall, Image)
 
 export type MessageFixture = { name: string, msgs: [Message], payload: string, system: string, raw: string }
 
@@ -22,13 +22,13 @@ export pure func fx_msgs_plain() -> [Message] {
   [
     { role: "system", content: "You are a synthetic fixture.", tool_call_id: "",
     tool_calls: [],
-    images: [] },
+    media: [] },
     { role: "user", content: "List the files.", tool_call_id: "",
     tool_calls: [],
-    images: [] },
+    media: [] },
     { role: "assistant", content: "Done.", tool_call_id: "",
     tool_calls: [],
-    images: [] }
+    media: [] }
   ]
 }
 
@@ -36,10 +36,10 @@ export pure func fx_msgs_no_system() -> [Message] {
   [
     { role: "user", content: "List the files.", tool_call_id: "",
     tool_calls: [],
-    images: [] },
+    media: [] },
     { role: "assistant", content: "ok", tool_call_id: "",
     tool_calls: [],
-    images: [] }
+    media: [] }
   ]
 }
 
@@ -47,19 +47,19 @@ export pure func fx_msgs_two_system_then_late_system() -> [Message] {
   [
     { role: "system", content: "You are a synthetic fixture.", tool_call_id: "",
     tool_calls: [],
-    images: [] },
+    media: [] },
     { role: "system", content: "Second pinned line.", tool_call_id: "",
     tool_calls: [],
-    images: [] },
+    media: [] },
     { role: "user", content: "List the files.", tool_call_id: "",
     tool_calls: [],
-    images: [] },
+    media: [] },
     { role: "system", content: "not pinned: after a user message", tool_call_id: "",
     tool_calls: [],
-    images: [] },
+    media: [] },
     { role: "assistant", content: "x", tool_call_id: "",
     tool_calls: [],
-    images: [] }
+    media: [] }
   ]
 }
 
@@ -67,22 +67,22 @@ export pure func fx_msgs_tool_calls() -> [Message] {
   [
     { role: "system", content: "You are a synthetic fixture.", tool_call_id: "",
     tool_calls: [],
-    images: [] },
+    media: [] },
     { role: "user", content: "List the files.", tool_call_id: "",
     tool_calls: [],
-    images: [] },
+    media: [] },
     { role: "assistant", content: "", tool_call_id: "",
     tool_calls: [
       { id: "call_1", name: "BashExec", arguments: "{\"command\":\"ls\"}" },
       { id: "call_2", name: "ReadFile", arguments: "{ \"path\" : \"a.txt\", \"lines\": [1, 2] }" }
     ],
-    images: [] },
+    media: [] },
     { role: "tool", content: "a.txt\nb.txt", tool_call_id: "call_1",
     tool_calls: [],
-    images: [] },
+    media: [] },
     { role: "tool", content: "alpha", tool_call_id: "call_2",
     tool_calls: [],
-    images: [] }
+    media: [] }
   ]
 }
 
@@ -90,12 +90,12 @@ export pure func fx_msgs_image() -> [Message] {
   [
     { role: "system", content: "You are a synthetic fixture.", tool_call_id: "",
     tool_calls: [],
-    images: [] },
+    media: [] },
     { role: "user", content: "what is in this", tool_call_id: "",
     tool_calls: [],
-    images: [
-      { source: "iVBORw0KGgoAAAA=", mime: "image/png" },
-      { source: "https://example.invalid/x.jpg", mime: "image/jpeg" }
+    media: [
+      Image({ source: "iVBORw0KGgoAAAA=", mime: "image/png", resolution: "" }),
+      Image({ source: "https://example.invalid/x.jpg", mime: "image/jpeg", resolution: "" })
     ] }
   ]
 }
@@ -104,12 +104,12 @@ export pure func fx_msgs_image_swapped() -> [Message] {
   [
     { role: "system", content: "You are a synthetic fixture.", tool_call_id: "",
     tool_calls: [],
-    images: [] },
+    media: [] },
     { role: "user", content: "what is in this", tool_call_id: "",
     tool_calls: [],
-    images: [
-      { source: "/9j/4AAQSkZJRg==", mime: "image/png" },
-      { source: "https://example.invalid/x.jpg", mime: "image/jpeg" }
+    media: [
+      Image({ source: "/9j/4AAQSkZJRg==", mime: "image/png", resolution: "" }),
+      Image({ source: "https://example.invalid/x.jpg", mime: "image/jpeg", resolution: "" })
     ] }
   ]
 }
@@ -118,10 +118,10 @@ export pure func fx_msgs_make_n() -> [Message] {
   [
     { role: "system", content: "You are a synthetic fixture.", tool_call_id: "",
     tool_calls: [],
-    images: [] },
+    media: [] },
     { role: "tool", content: "make[3]: Entering directory '/w'\nmake[12]: Leaving directory '/w'\nmake[21]: kept", tool_call_id: "call_9",
     tool_calls: [],
-    images: [] }
+    media: [] }
   ]
 }
 
@@ -129,10 +129,10 @@ export pure func fx_msgs_make_n_renumbered() -> [Message] {
   [
     { role: "system", content: "You are a synthetic fixture.", tool_call_id: "",
     tool_calls: [],
-    images: [] },
+    media: [] },
     { role: "tool", content: "make[7]: Entering directory '/w'\nmake[20]: Leaving directory '/w'\nmake[21]: kept", tool_call_id: "call_9",
     tool_calls: [],
-    images: [] }
+    media: [] }
   ]
 }
 
@@ -140,10 +140,10 @@ export pure func fx_msgs_unicode_and_escapes() -> [Message] {
   [
     { role: "system", content: "tab\there \"quoted\" back\\slash", tool_call_id: "",
     tool_calls: [],
-    images: [] },
+    media: [] },
     { role: "user", content: "héllo € 😀\u{d}\nend \u{1}", tool_call_id: "",
     tool_calls: [],
-    images: [] }
+    media: [] }
   ]
 }
 

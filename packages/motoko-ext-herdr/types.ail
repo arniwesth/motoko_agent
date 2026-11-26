@@ -1868,10 +1868,6 @@ export pure func sweep_report(stale: [string], closing: bool) -> string
     }
   }
 
-pure func length_of(xs: [string]) -> int {
-  match xs { [] => 0, _ :: rest => 1 + length_of(rest) }
-}
-
 -- One sentinel per run, so the sweep reports once and not on every tool call.
 -- Keyed by the session clock alone: the pane id carries a colon and this is a
 -- filename, and two runs in one workdir cannot share a millisecond.

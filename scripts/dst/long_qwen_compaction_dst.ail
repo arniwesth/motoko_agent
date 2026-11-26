@@ -87,7 +87,7 @@ func budget() -> BudgetPlan {
 }
 
 func msg(role: string, content: string) -> Message {
-  { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
+  { role: role, content: content, tool_calls: [], tool_call_id: "", media: [] }
 }
 
 func abi_msg(role: string, content: string) -> Msg {
@@ -97,11 +97,11 @@ func abi_msg(role: string, content: string) -> Msg {
 -- WI-B2a. `ExtPorts.ai_step` takes `[Msg]` (4 fields); `Ports.model_step` takes
 -- `[Message]` (5, since v0.33.0 added `images`). The `ai_step` bridge below
 -- crosses that seam, so it needs the same converter WI-B3 settled elsewhere:
--- ADD `images: []`, because `Msg` has no vision parts to copy and dropping the
+-- ADD `media: []`, because `Msg` has no vision parts to copy and dropping the
 -- field is only correct in the other direction. Mirrors `compaction_ai.msg_to_message`.
 func msg_to_message(m: Msg) -> Message {
   { role: m.role, content: m.content, tool_calls: m.tool_calls,
-    tool_call_id: m.tool_call_id, images: [] }
+    tool_call_id: m.tool_call_id, media: [] }
 }
 
 func msgs_to_messages(ms: [Msg]) -> [Message] {
@@ -269,7 +269,7 @@ func highest_agent_idx_from_markers(msgs: [Message], n: int) -> int {
 
 func step_result(content: string, calls: [ToolCall], finish: string) -> StepResult {
   {
-    message: { role: "assistant", content: content, tool_calls: [], tool_call_id: "", images: [] },
+    message: { role: "assistant", content: content, tool_calls: [], tool_call_id: "", media: [] },
     tool_calls: calls,
     finish_reason: finish,
     input_tokens: 100,

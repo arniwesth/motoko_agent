@@ -6,7 +6,7 @@
 
 module src/core/phase_vocab
 
-import std/ai (Message, ToolCall, ImagePart, StepResult)
+import std/ai (Message, ToolCall, MediaPart, Image, File, StepResult)
 import std/crypto (sha256Hex)
 import std/json (Json, jo, ja, kv, js, jnum, jb, encode, get, asString, asNumber, asBool, asObject)
 import std/list as List (length, map)
@@ -322,11 +322,25 @@ pure func canonical_message_body(m: Message) -> string {
   "${frame("role", m.role)}${frame("content", m.content)}${frame("tool_call_id", m.tool_call_id)}${frame("tool_calls_len", show(List.length(m.tool_calls)))}${canonical_tool_calls(m.tool_calls)}"
 }
 
-pure func canonical_images(images: [ImagePart]) -> string {
+-- std/ai v0.61.0 (ailang #2458) made a message's attachments `[MediaPart]`.
+-- A default-resolution Image frames exactly as an ImagePart did, so every chain
+-- digest over a pre-#2458 history is unchanged; the new shapes get their own
+-- tags (`ir{` an Image with a resolution, `fm{` a File), and the length-prefixed
+-- frames keep the concatenation injective.
+pure func canonical_media_part(p: MediaPart) -> string {
+  match p {
+    Image(i) =>
+      if i.resolution == "" then "im{${frame("source", i.source)}${frame("mime", i.mime)}}"
+      else "ir{${frame("source", i.source)}${frame("mime", i.mime)}${frame("resolution", i.resolution)}}",
+    File(f) =>
+      "fm{${frame("uri", f.uri)}${frame("mime", f.mime)}${frame("resolution", f.resolution)}${frame("options", f.options)}}"
+  }
+}
+
+pure func canonical_images(images: [MediaPart]) -> string {
   match images {
-    [] => "im-end;"
-    i :: rest =>
-      "im{${frame("source", i.source)}${frame("mime", i.mime)}}${canonical_images(rest)}"
+    [] => "im-end;",
+    p :: rest => "${canonical_media_part(p)}${canonical_images(rest)}"
   }
 }
 
@@ -355,7 +369,7 @@ pure func canonical_images(images: [ImagePart]) -> string {
 -- the trailing `m-end;` of a full list is NOT part of a single frame, because a
 -- frame is concatenated onto a previous digest and never onto another frame.
 export pure func canonical_message_frame(m: Message) -> string {
-  "m{${canonical_message_body(m)}${canonical_images(m.images)}}"
+  "m{${canonical_message_body(m)}${canonical_images(m.media)}}"
 }
 
 export pure func digest_messages(msgs: [Message]) -> string {
@@ -382,7 +396,7 @@ export func checkpoint(h: History, plan: CheckpointPlan)
     MkHistory(xs) => {
       let pinned = take_system_prefix(xs);
       let summary_msg: Message =
-        { role: "assistant", content: "[CHECKPOINT] ${plan.summary}", tool_calls: [], tool_call_id: "", images: [] };
+        { role: "assistant", content: "[CHECKPOINT] ${plan.summary}", tool_calls: [], tool_call_id: "", media: [] };
       let rebuilt = MkHistory(pinned ++ [summary_msg]);
       {
         history: rebuilt,
@@ -776,7 +790,7 @@ export pure func checkpoint_would_relieve(h: History, plan: CheckpointPlan, limi
 pure func calibrated_falls_back_without_anchor() -> bool
   tests [((), true)]
   {
-    let msgs = [{ role: "user", content: "0123456789012345", tool_calls: [], tool_call_id: "", images: [] }];
+    let msgs = [{ role: "user", content: "0123456789012345", tool_calls: [], tool_call_id: "", media: [] }];
     let t: TokenTelemetry = { last_input_tokens: 0, last_output_tokens: 0, last_estimated_input_tokens: 0 };
     -- 16 chars => raw estimate 4 tokens; /100 limit *100 == 4%
     calibrated_usage_percent(msgs, 100, t) == 4
@@ -788,7 +802,7 @@ pure func calibrated_falls_back_without_anchor() -> bool
 pure func calibrated_applies_affine_overhead() -> bool
   tests [((), true)]
   {
-    let msgs = [{ role: "user", content: "0123456789012345", tool_calls: [], tool_call_id: "", images: [] }];
+    let msgs = [{ role: "user", content: "0123456789012345", tool_calls: [], tool_call_id: "", media: [] }];
     let t: TokenTelemetry = { last_input_tokens: 200, last_output_tokens: 0, last_estimated_input_tokens: 100 };
     calibrated_usage_percent(msgs, 100, t) == 82
   }
@@ -799,7 +813,7 @@ pure func calibrated_applies_affine_overhead() -> bool
 pure func calibrated_floors_at_raw() -> bool
   tests [((), true)]
   {
-    let msgs = [{ role: "user", content: "0123456789012345", tool_calls: [], tool_call_id: "", images: [] }];
+    let msgs = [{ role: "user", content: "0123456789012345", tool_calls: [], tool_call_id: "", media: [] }];
     let t: TokenTelemetry = { last_input_tokens: 100, last_output_tokens: 0, last_estimated_input_tokens: 400 };
     calibrated_usage_percent(msgs, 100, t) == 4
   }
@@ -1527,7 +1541,7 @@ export func msgs_to_messages(msgs: [Msg]) -> [Message] {
       content: m.content,
       tool_calls: m.tool_calls,
       tool_call_id: m.tool_call_id,
-      images: []
+      media: []
     } :: msgs_to_messages(rest))
   }
 }
@@ -1541,7 +1555,7 @@ export func step_result_to_message(result: StepResult) -> Message {
     content: result.message.content,
     tool_calls: result.tool_calls,
     tool_call_id: "",
-    images: []
+    media: []
   }
 }
 
@@ -1612,7 +1626,7 @@ export func tool_result_message(call: ToolCall, content: string) -> Message {
     content: cap_tool_message_content(content),
     tool_calls: [],
     tool_call_id: call.id,
-    images: []
+    media: []
   }
 }
 
@@ -1627,7 +1641,7 @@ export func envelope_to_tool_message(envelope: ToolResultEnvelope) -> Message {
     content: result_env_model_content(envelope),
     tool_calls: [],
     tool_call_id: envelope.tool_call_id,
-    images: []
+    media: []
   }
 }
 
@@ -1640,7 +1654,7 @@ export func handled_tool_message(call_id: string, env: ToolResultEnvelope) -> Me
     content: result_env_model_content(env),
     tool_calls: [],
     tool_call_id: call_id,
-    images: []
+    media: []
   }
 }
 
@@ -1649,7 +1663,7 @@ export func handled_tool_message(call_id: string, env: ToolResultEnvelope) -> Me
 -- ============================================================================
 
 pure func mk_msg(role: string, content: string) -> Message {
-  { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
+  { role: role, content: content, tool_calls: [], tool_call_id: "", media: [] }
 }
 
 pure func test_empty_delta_is_identity_shape() -> bool
@@ -1747,7 +1761,7 @@ pure func test_ledger_trace_records_wire_and_stage_passed() -> bool
   }
 
 pure func long_msg(content: string) -> Message {
-  { role: "user", content: content, tool_calls: [], tool_call_id: "", images: [] }
+  { role: "user", content: content, tool_calls: [], tool_call_id: "", media: [] }
 }
 
 pure func test_seal_compacted_payload_repins_and_seals() -> bool
@@ -2016,7 +2030,7 @@ pure func test_step_result_to_message_copies_tool_calls() -> bool
   {
     let call: ToolCall = { id: "tc-1", name: "ReadFile", arguments: "{}" };
     let result: StepResult = {
-      message: { role: "assistant", content: "use tool", tool_calls: [], tool_call_id: "", images: [] },
+      message: { role: "assistant", content: "use tool", tool_calls: [], tool_call_id: "", media: [] },
       tool_calls: [call],
       finish_reason: "tool_calls",
       input_tokens: 1,

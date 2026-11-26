@@ -563,7 +563,7 @@ func resume_from_journal(cfg: RuntimeConfig, inv: InvocationConfig, ext_runtime:
           let settings = run_settings_for(cfg, task, inv.ailang_built, cwd);
           let budget = compute_budget_plan(ext_runtime, task, run_model, cwd, 0, settings);
           let system_msg = build_system_msg(ext_runtime, raw_system, task, run_model, cwd, budget, env_url);
-          let system_message = match msgs_to_messages([system_msg]) { m :: _ => m, [] => { role: "system", content: "", tool_calls: [], tool_call_id: "", images: [] } };
+          let system_message = match msgs_to_messages([system_msg]) { m :: _ => m, [] => { role: "system", content: "", tool_calls: [], tool_call_id: "", media: [] } };
           let resume_count = resume_count_env();
           let invocation: ResumeInvocation = {
             workdir: invoked_workdir(cwd),

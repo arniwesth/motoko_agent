@@ -48,7 +48,7 @@
 
 module src/eval/journal/digests
 
-import std/ai (Message, ToolCall, ImagePart)
+import std/ai (Message, ToolCall, MediaPart, Image, File)
 import std/crypto (sha256Hex)
 import std/json (Json, decode, encode)
 import std/list as List (length, map, foldl)
@@ -152,17 +152,27 @@ export pure func eval_system_prefix_digest(payload: [Message]) -> string {
 -- ============================================================================
 
 -- SOURCE src/core/phase_vocab.ail L325-331 B13611-13821 sha256:eb0218ad2e0972cf3b35c4eaeead3094f00720e73614dcf919474ecb6d62b793 symbol=canonical_images
-pure func ev_canonical_images(images: [ImagePart]) -> string {
+pure func ev_canonical_images(images: [MediaPart]) -> string {
   match images {
-    [] => "im-end;"
-    i :: rest =>
-      "im{${ev_frame("source", i.source)}${ev_frame("mime", i.mime)}}${ev_canonical_images(rest)}"
+    [] => "im-end;",
+    p :: rest => "${ev_canonical_media_part(p)}${ev_canonical_images(rest)}"
+  }
+}
+
+-- Evaluator copy of phase_vocab.canonical_media_part (ailang #2458).
+pure func ev_canonical_media_part(p: MediaPart) -> string {
+  match p {
+    Image(i) =>
+      if i.resolution == "" then "im{${ev_frame("source", i.source)}${ev_frame("mime", i.mime)}}"
+      else "ir{${ev_frame("source", i.source)}${ev_frame("mime", i.mime)}${ev_frame("resolution", i.resolution)}}",
+    File(f) =>
+      "fm{${ev_frame("uri", f.uri)}${ev_frame("mime", f.mime)}${ev_frame("resolution", f.resolution)}${ev_frame("options", f.options)}}"
   }
 }
 
 -- SOURCE src/core/phase_vocab.ail L357-359 B15382-15514 sha256:1b15e3972a51bebb4f7b8cfe2550bbd0b06764b5bec0992fd8d6bc97c4ce6add symbol=canonical_message_frame
 pure func ev_canonical_message_frame(m: Message) -> string {
-  "m{${ev_canonical_message_body(m)}${ev_canonical_images(m.images)}}"
+  "m{${ev_canonical_message_body(m)}${ev_canonical_images(m.media)}}"
 }
 
 -- SOURCE src/core/journal.ail L244-246 B11063-11153 sha256:8d9c6702f1293257ecce81ba254241392ff39eff6e59f8cc6865086bf9130a53 symbol=chain_digest_base

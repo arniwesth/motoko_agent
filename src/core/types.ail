@@ -9,13 +9,14 @@ export func version() -> string = "0.2.0"
 
 -- Msg is structurally identical to motoko_ext_abi.Msg (post v2.1.0). It is NO
 -- LONGER identical to std/ai.Message: as of AILANG v0.33.0 Message carries a
--- fifth field, `images: [ImagePart]`, and Msg deliberately stays at four.
+-- fifth field (`images: [ImagePart]` from v0.33.0, renamed `media: [MediaPart]`
+-- in v0.61.0, ailang #2458), and Msg deliberately stays at four.
 --
 -- That deliberate difference makes the two types a SEAM rather than an alias,
 -- and the seam runs in both directions. Values must be converted explicitly —
 -- an implicit crossing that compiled before v0.33.0 is now a type error:
---   phase_vocab.msgs_to_messages : [Msg] -> [Message]  adds `images: []`
---   session.messages_to_msgs     : [Message] -> [Msg]  DROPS `images`
+--   phase_vocab.msgs_to_messages : [Msg] -> [Message]  adds `media: []`
+--   session.messages_to_msgs     : [Message] -> [Msg]  DROPS `media`
 -- Dropping vision parts at the seam is the settled decision: widening Msg (here
 -- or in motoko_ext_abi) is a versioned-surface change, not a migration detail.
 --
