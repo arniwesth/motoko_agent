@@ -115,7 +115,7 @@ export func decide(s: StepState, pol: StepPolicy) -> StepDecision {
     else RunTools({ entries: plan_native(s.pending_tool_calls) })
   }
   else if s.last_finish_reason == "solver_feedback"
-  then InjectUserMessage({ role: "user", content: s.last_response_text, tool_calls: [], tool_call_id: "", images: [] })
+  then InjectUserMessage({ role: "user", content: s.last_response_text, tool_calls: [], tool_call_id: "", media: [] })
   -- PLAN-002 W4 Part 1 (ADR-002 D2). THE ARM READS `open_waits`: no stop-class
   -- reason, blank `stop` included, finalizes while a wait is open, whatever
   -- stage 3 did. It is also the arm a re-issue re-enters, and it precedes
@@ -143,7 +143,7 @@ export func decide(s: StepState, pol: StepPolicy) -> StepDecision {
 }
 
 func msg(role: string, content: string) -> Message {
-  { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
+  { role: role, content: content, tool_calls: [], tool_call_id: "", media: [] }
 }
 
 -- Fixtures name their arm (ADR-001 D1 rule 5). `fixture_unmeasured` is the

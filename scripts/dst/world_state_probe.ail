@@ -144,7 +144,7 @@ import src/core/ports (RequestWitness, ToolExec, ModelStep, context_reader_of)
 -- ---------------------------------------------------------------------------
 
 func msg(role: string, content: string) -> Message {
-  { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
+  { role: role, content: content, tool_calls: [], tool_call_id: "", media: [] }
 }
 
 func history() -> [Message] { [msg("system", "s"), msg("user", "u")] }
@@ -863,7 +863,7 @@ func assert_tool_offer_class() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, 
   let ext = Session.ext_ports_of(p, w, "").ai_step(world_to_token(w), "offer-probe-model", [ask]);
   let ext_text = match ext.result { Ok(t) => t, Err(e) => "Err(${e})" };
   let quiet = func(_c: StreamChunk) -> () ! {IO, Trace} { () };
-  let turn: Message = { role: "user", content: "do the task", tool_calls: [], tool_call_id: "", images: [] };
+  let turn: Message = { role: "user", content: "do the task", tool_calls: [], tool_call_id: "", media: [] };
   let drv = dispatch_step(p, w, "offer-probe-model", [turn], quiet);
   let drv_text = match drv.result { Ok(r) => r.message.content, Err(e) => "Err(${e.code})" };
   let catalogue = List.length(tools_with_extensions(empty_rt()));
@@ -890,7 +890,7 @@ func assert_tool_offer_class() -> bool ! {AI, Clock, Env, FS, IO, Net, Process, 
 -- replay strictly, so a comparator that rejected everything cannot pass.
 func recorded_offer_log(w: WorldState, offer: ToolOffer) -> [Interaction] ! {AI, Clock, Env, FS, IO, Process, Trace} {
   let quiet = func(_c: StreamChunk) -> () ! {IO} { () };
-  let turn: Message = { role: "user", content: "do the task", tool_calls: [], tool_call_id: "", images: [] };
+  let turn: Message = { role: "user", content: "do the task", tool_calls: [], tool_call_id: "", media: [] };
   recording_ports(empty_rt()).model_step(w, "offer-probe-model", [turn], offer, quiet).next_state.log
 }
 

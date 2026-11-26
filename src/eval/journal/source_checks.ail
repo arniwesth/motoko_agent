@@ -122,7 +122,7 @@
 
 module src/eval/journal/source_checks
 
-import std/ai (Message, ToolCall, ImagePart)
+import std/ai (Message, ToolCall, MediaPart, Image, File)
 import std/json (Json, jo, kv, js, jint, decode, get, getString, getInt)
 import std/list as List (length, map, foldl)
 import std/option (Option, Some, None)
@@ -185,16 +185,23 @@ pure func sc_calls_eq(a: [ToolCall], b: [ToolCall]) -> bool {
   }
 }
 
-pure func sc_images_eq(a: [ImagePart], b: [ImagePart]) -> bool {
+pure func sc_media_part_eq(x: MediaPart, y: MediaPart) -> bool {
+  match x {
+    Image(a) => (match y { Image(b) => a.source == b.source && a.mime == b.mime && a.resolution == b.resolution, File(_) => false }),
+    File(a) => (match y { File(b) => a.uri == b.uri && a.mime == b.mime && a.resolution == b.resolution && a.options == b.options, Image(_) => false })
+  }
+}
+
+pure func sc_images_eq(a: [MediaPart], b: [MediaPart]) -> bool {
   match a {
     [] => (match b { [] => true, _ => false }),
-    x :: xs => match b { [] => false, y :: ys => x.source == y.source && x.mime == y.mime && sc_images_eq(xs, ys) }
+    x :: xs => match b { [] => false, y :: ys => sc_media_part_eq(x, y) && sc_images_eq(xs, ys) }
   }
 }
 
 export pure func message_eq(a: Message, b: Message) -> bool {
   a.role == b.role && a.content == b.content && a.tool_call_id == b.tool_call_id
-    && sc_calls_eq(a.tool_calls, b.tool_calls) && sc_images_eq(a.images, b.images)
+    && sc_calls_eq(a.tool_calls, b.tool_calls) && sc_images_eq(a.media, b.media)
 }
 
 -- ============================================================================
@@ -639,7 +646,7 @@ pure func sx_lines(f: SourceCheckFixture) -> [Json] {
 }
 
 pure func sx_msg(role: string, content: string) -> Message {
-  { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
+  { role: role, content: content, tool_calls: [], tool_call_id: "", media: [] }
 }
 
 -- The source chain equals the generator's (recorded prefix and appends) on

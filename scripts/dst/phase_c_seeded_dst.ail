@@ -11,7 +11,7 @@ import std/io (println, exit)
 import std/json (jo)
 import std/list (length, foldl)
 import std/option (Some, None)
-import std/rand (rand_seed, rand_int)
+import std/rand (randSeed, randInt)
 import std/result (Result, Ok, Err)
 import src/core/context_limit (ContextLimit, Unknown, ProfileKeyAbsent, CatalogueAbsent, resolve_bounded_from_catalogue)
 import std/string (repeat, stringToInt)
@@ -63,7 +63,7 @@ import src/core/test/dst_harness (
 )
 
 func msg(role: string, content: string) -> Message {
-  { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
+  { role: role, content: content, tool_calls: [], tool_call_id: "", media: [] }
 }
 
 func system_msgs(n: int, content: string) -> [Message] {
@@ -178,11 +178,11 @@ func state_from_msgs(msgs: [Message]) -> Result[StepState, string] {
 }
 
 func run_seal_boundary(seed: int) -> bool ! {IO, Rand} {
-  let _ = rand_seed(seed);
-  let n_systems = rand_int(0, 2);
-  let n_tail = rand_int(1, 8);
-  let content_len = rand_int(40, 400);
-  let require_system_prompt = rand_int(0, 1) == 1;
+  let _ = randSeed(seed);
+  let n_systems = randInt(0, 2);
+  let n_tail = randInt(1, 8);
+  let content_len = randInt(40, 400);
+  let require_system_prompt = randInt(0, 1) == 1;
   let exhausted = exhaustion_pct();
   let pct = pick_int([exhausted - 5, exhausted - 1, exhausted, exhausted + 5]);
   let msgs = generated_msgs(n_systems, n_tail, content_len);
@@ -301,10 +301,10 @@ func check_checkpoint_decision(
 }
 
 func run_checkpoint_pressure(seed: int) -> bool ! {IO, Rand} {
-  let _ = rand_seed(seed);
-  let checkpoint_pct = rand_int(50, 99);
-  let n_tail = rand_int(2, 10);
-  let content_len = rand_int(40, 400);
+  let _ = randSeed(seed);
+  let checkpoint_pct = randInt(50, 99);
+  let n_tail = randInt(2, 10);
+  let content_len = randInt(40, 400);
   let target_usage = pick_int([
     checkpoint_pct - 10,
     checkpoint_pct - 1,
@@ -355,10 +355,10 @@ func run_checkpoint_pressure(seed: int) -> bool ! {IO, Rand} {
 }
 
 func run_split_prefix(seed: int) -> bool ! {IO, Rand} {
-  let _ = rand_seed(seed);
-  let n_systems = rand_int(0, 4);
-  let n_tail = rand_int(0, 12);
-  let content_len = rand_int(10, 200);
+  let _ = randSeed(seed);
+  let n_systems = randInt(0, 4);
+  let n_tail = randInt(0, 12);
+  let content_len = randInt(10, 200);
   let msgs = generated_msgs(n_systems, n_tail, content_len);
   let split = split_for_compaction(msgs);
   let segment = segment_messages(split.segment);
@@ -401,7 +401,7 @@ func run_split_prefix(seed: int) -> bool ! {IO, Rand} {
 func generated_stages(n: int, index: int) -> [PreStepStage] ! {Rand} {
   if n <= 0 then []
   else {
-    let choice = rand_int(0, 2);
+    let choice = randInt(0, 2);
     let outcome =
       if choice == 0 then StageApplied("gen")
       else if choice == 1 then StageRejected("gen")
@@ -476,9 +476,9 @@ func stage_outcomes_trace(stages: [PreStepStage]) -> string {
 }
 
 func run_stage_records(seed: int) -> bool ! {IO, Rand} {
-  let _ = rand_seed(seed);
-  let n_stages = rand_int(1, 8);
-  let step = rand_int(0, 20);
+  let _ = randSeed(seed);
+  let n_stages = randInt(1, 8);
+  let step = randInt(0, 20);
   let stages = generated_stages(n_stages, 0);
   let records = records_for(step, stages);
   let trace = [

@@ -149,7 +149,7 @@ pure func generated_world(seed: int, chunk_draw_hi: int) -> WorldState {
 -- ============================================================================
 
 pure func msg(role: string, content: string) -> Message {
-  { role: role, content: content, tool_calls: [], tool_call_id: "", images: [] }
+  { role: role, content: content, tool_calls: [], tool_call_id: "", media: [] }
 }
 pure func history() -> [Message] { [msg("system", "s"), msg("user", "u")] }
 pure func budget() -> BudgetPlan { { total: 10, solver: 6, verifier: 4 } }

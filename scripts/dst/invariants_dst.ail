@@ -1012,16 +1012,16 @@ pure func p_calls() -> [ToolCall] {
 }
 
 pure func p_seed() -> [Message] {
-  [{ role: "system", content: "you are motoko", tool_calls: [], tool_call_id: "", images: [] },
-   { role: "user", content: "do the task", tool_calls: [], tool_call_id: "", images: [] }]
+  [{ role: "system", content: "you are motoko", tool_calls: [], tool_call_id: "", media: [] },
+   { role: "user", content: "do the task", tool_calls: [], tool_call_id: "", media: [] }]
 }
 
 pure func p_assistant(calls: [ToolCall]) -> Message {
-  { role: "assistant", content: "p0", tool_calls: calls, tool_call_id: "", images: [] }
+  { role: "assistant", content: "p0", tool_calls: calls, tool_call_id: "", media: [] }
 }
 
 pure func p_tool_msg(id: string, content: string) -> Message {
-  { role: "tool", content: content, tool_calls: [], tool_call_id: id, images: [] }
+  { role: "tool", content: content, tool_calls: [], tool_call_id: id, media: [] }
 }
 
 pure func p_nth_call(cs: [ToolCall], k: int) -> ToolCall {
@@ -1561,7 +1561,7 @@ func scenario_mutants_family_9_to_13() -> bool ! {IO} {
 }
 
 pure func final_with_history() -> FinalState {
-  { history: [{ role: "system", content: "you are motoko", tool_calls: [], tool_call_id: "", images: [] }],
+  { history: [{ role: "system", content: "you are motoko", tool_calls: [], tool_call_id: "", media: [] }],
     cumulative: zero_runtime_status_counts(),
     telemetry: zero_token_telemetry(),
     ext_artifacts: empty_ext_artifacts() }

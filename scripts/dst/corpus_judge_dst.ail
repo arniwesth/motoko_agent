@@ -1016,7 +1016,7 @@ pure func undisclosed(r: LedgerRecord) -> LedgerRecord {
   match r {
     WireRecord(HistoryAppended(i)) =>
       if contains(encode(i.message), "process_request_invalid")
-      then WireRecord(HistoryAppended({ i | message: message_json({ role: "tool", content: "{\"error\":true}", tool_calls: [], tool_call_id: "bad", images: [] }) }))
+      then WireRecord(HistoryAppended({ i | message: message_json({ role: "tool", content: "{\"error\":true}", tool_calls: [], tool_call_id: "bad", media: [] }) }))
       else r,
     _ => r
   }

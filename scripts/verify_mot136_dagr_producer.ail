@@ -365,13 +365,6 @@ func arr_field(o: Json, key: string) -> [Json] {
 
 func events(w: ExtWorld) -> int { count_of(arr_field(doc_of(w), "events")) }
 
-func sfield(o: Json, key: string) -> string {
-  match get(o, key) {
-    None => "",
-    Some(v) => match asString(v) { Some(x) => x, None => "" }
-  }
-}
-
 func in_state(xs: [Json], state: string) -> int {
   match xs {
     [] => 0,

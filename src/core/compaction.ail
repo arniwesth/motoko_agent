@@ -141,7 +141,7 @@ func estimate_tokens_rounds_up() -> bool
   tests [((), true)]
   {
     estimate_tokens_messages([
-      { role: "user", content: "abcde", tool_calls: [], tool_call_id: "", images: [] }
+      { role: "user", content: "abcde", tool_calls: [], tool_call_id: "", media: [] }
     ]) == 2
   }
 
@@ -149,7 +149,7 @@ func usage_percent_unknown_limit_is_zero() -> bool
   tests [((), true)]
   {
     usage_percent_with_limit([
-      { role: "user", content: "abcd", tool_calls: [], tool_call_id: "", images: [] }
+      { role: "user", content: "abcd", tool_calls: [], tool_call_id: "", media: [] }
     ], 0) == 0
   }
 
@@ -157,6 +157,6 @@ func usage_percent_with_explicit_limit() -> bool
   tests [((), true)]
   {
     usage_percent_with_limit([
-      { role: "user", content: "abcd", tool_calls: [], tool_call_id: "", images: [] }
+      { role: "user", content: "abcd", tool_calls: [], tool_call_id: "", media: [] }
     ], 10) == 10
   }

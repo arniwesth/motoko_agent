@@ -1063,7 +1063,7 @@ pure func test_m4_hybrid_predicate_true_admits() -> bool
 pure func test_m4_predicate_ignores_hybrid_calls() -> bool
   tests [((), true)]
   {
-    let hyb: Message = { role: "assistant", content: "", tool_calls: [{ id: "hybrid-step-1", name: "BashExec", arguments: "{}" }], tool_call_id: "", images: [] };
+    let hyb: Message = { role: "assistant", content: "", tool_calls: [{ id: "hybrid-step-1", name: "BashExec", arguments: "{}" }], tool_call_id: "", media: [] };
     let nat: Message = { hyb | tool_calls: [{ id: "hybrid-step-2", name: "BashExec", arguments: "{}" }, { id: "call_1", name: "BashExec", arguments: "{}" }] };
     let usr: Message = { hyb | role: "user", tool_calls: [{ id: "call_2", name: "BashExec", arguments: "{}" }] };
     not eval_session_emitted_native_tool_call([hyb, usr])

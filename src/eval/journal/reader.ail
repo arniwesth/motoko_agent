@@ -92,7 +92,7 @@
 
 module src/eval/journal/reader
 
-import std/ai (Message, ToolCall, ImagePart)
+import std/ai (Message, ToolCall, ImagePart, MediaPart, Image, File)
 import std/json (Json, jo, ja, encode, decode, get, has, asString, asArray, asObject, asNumber, getString, getInt, getBool, getArray)
 import std/list as List (length, map, foldl)
 import std/option (Option, Some, None)
@@ -389,11 +389,51 @@ pure func ev_image_of_json(j: Json, where: string) -> Result[ImagePart, string] 
 }
 
 -- SOURCE src/core/journal.ail L453-464 B20228-20544 sha256:e1d2a7c03034e4dcbc45a85c23b932c170a693542ff0380ac8e4f90d73c2296e symbol=images_of_json
+-- Evaluator copy of journal.opt_media_string / journal.media_of_json (std/ai
+-- v0.61.0, ailang #2458: Message.images -> Message.media). Same on-disk format.
+@allow_empty_ok("an absent optional media key is its default: no \"kind\" is an Image, no \"resolution\" is the provider default")
+pure func ev_opt_media_string(j: Json, key: string, where: string) -> Result[string, string] {
+  match get(j, key) {
+    None => Ok(""),
+    Some(_) => ev_req_string(j, key, where)
+  }
+}
+
+pure func ev_media_of_json(j: Json, where: string) -> Result[MediaPart, string] {
+  match ev_opt_media_string(j, "kind", where) {
+    Err(e) => Err(e),
+    Ok(kind) =>
+      if kind == "" then
+        match ev_image_of_json(j, where) {
+          Err(e) => Err(e),
+          Ok(i) => match ev_opt_media_string(j, "resolution", where) {
+            Err(e) => Err(e),
+            Ok(res) => Ok(Image({ source: i.source, mime: i.mime, resolution: res }))
+          }
+        }
+      else if kind == "file" then
+        match ev_req_string(j, "uri", where) {
+          Err(e) => Err(e),
+          Ok(uri) => match ev_req_string(j, "mime", where) {
+            Err(e) => Err(e),
+            Ok(mime) => match ev_req_string(j, "resolution", where) {
+              Err(e) => Err(e),
+              Ok(res) => match ev_req_string(j, "options", where) {
+                Err(e) => Err(e),
+                Ok(opts) => Ok(File({ uri: uri, mime: mime, resolution: res, options: opts }))
+              }
+            }
+          }
+        }
+      else Err("${where}.kind: unknown media kind \"${kind}\"")
+  }
+}
+
 @allow_empty_ok("a text-only message carries no images — [] is what every message in a history without vision inputs decodes to")
-pure func ev_images_of_json(xs: [Json], where: string) -> Result[[ImagePart], string] {
+pure func ev_images_of_json(xs: [Json], where: string) -> Result[[MediaPart], string] {
   match xs {
     [] => Ok([]),
-    j :: rest => match ev_image_of_json(j, where) {
+    j :: rest => match ev_media_of_json(j, where) {
       Err(e) => Err(e),
       Ok(i) => match ev_images_of_json(rest, where) {
         Err(e) => Err(e),
@@ -425,7 +465,7 @@ pure func ev_message_of_json_at(j: Json, where: string) -> Result[Message, strin
                     content: content,
                     tool_calls: calls,
                     tool_call_id: tool_call_id,
-                    images: images
+                    media: images
                   };
                   Ok(m)
                 }

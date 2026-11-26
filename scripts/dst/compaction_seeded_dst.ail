@@ -11,7 +11,7 @@ import std/env (getEnvOr)
 import std/io (println, exit)
 import std/list (length)
 import std/option (Some, None)
-import std/rand (rand_seed, rand_int)
+import std/rand (randSeed, randInt)
 import std/result (Result, Ok, Err)
 import std/string (repeat, stringToInt)
 import pkg/sunholo/motoko_ext_abi/types (PureCtx, pure_ctx, Msg, PreStepDecision, PassThrough, PassThroughObserved, Compacted)
@@ -88,10 +88,10 @@ func tool_heavy_msgs(n_tools: int, content_len: int) -> [Msg] {
 }
 
 func run_rng_canary() -> bool ! {IO, Rand} {
-  let _ = rand_seed(12345);
-  let first = rand_int(0, 2147483646);
-  let second = rand_int(0, 2147483646);
-  let third = rand_int(0, 2147483646);
+  let _ = randSeed(12345);
+  let first = randInt(0, 2147483646);
+  let second = randInt(0, 2147483646);
+  let third = randInt(0, 2147483646);
   let stable =
     first == 1822635083
       && second == 1385358943
@@ -153,9 +153,9 @@ func check_tool_heavy(
 }
 
 func run_tool_heavy(seed: int) -> bool ! {IO, Rand} {
-  let _ = rand_seed(seed);
-  let n_tools = rand_int(3, 30);
-  let content_len = rand_int(40, 400);
+  let _ = randSeed(seed);
+  let n_tools = randInt(3, 30);
+  let content_len = randInt(40, 400);
   let pct = pick_int([
     elide_tier_pct() - 5,
     elide_tier_pct() + 5,

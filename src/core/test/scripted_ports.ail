@@ -233,7 +233,7 @@ func bounded_exchange(context_window: int, max_output_tokens: int, content: stri
   ports.model_step(
     scripted_world_state([scripted_step()]),
     "bounded-test-model",
-    [{ role: "user", content: content, tool_calls: [], tool_call_id: "", images: [] }],
+    [{ role: "user", content: content, tool_calls: [], tool_call_id: "", media: [] }],
     AgentTools,
     on_chunk
   )
@@ -244,7 +244,7 @@ func test_bounded_scripted_ports_accepts_exact_boundary_and_consumes_step() -> b
   {
     let content = "abcdefghijklmnopqrstuvwx"; -- 24 chars = 6 tokens.
     let exchange = bounded_exchange(10, 4, content);
-    scripted_provider_input_tokens([{ role: "user", content: content, tool_calls: [], tool_call_id: "", images: [] }]) == 6
+    scripted_provider_input_tokens([{ role: "user", content: content, tool_calls: [], tool_call_id: "", media: [] }]) == 6
       && match exchange.result {
         Ok(_) => List.length(exchange.next_state.script) == 0,
         Err(_) => false
